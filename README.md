@@ -102,6 +102,7 @@ Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`, g
 - `docs/repository-setup.md` — repo baseline, scripts, ignore policy, and follow-up setup notes.
 - `docs/route-access-flow.md` — app-side route access, consent, assigned route, native map handoff, delivery event, proof media, and offline queue boundary.
 - `docs/release-readiness.md` — production distribution, store/privacy disclosure, physical-device smoke evidence, and release blockers.
+- `docs/release-evidence-manifest.template.md` — copy-only external evidence manifest template for release candidates.
 - `docs/store-privacy-disclosure-draft.md` — non-final App Store / Google Play privacy disclosure worksheet for owner/legal review.
 - `docs/physical-device-smoke-runbook.md` — executable iPhone/Android smoke sequence and external evidence capture rules.
 - `CONTRIBUTING.md` — human workflow, validation, privacy review points, and generated-file guardrails.

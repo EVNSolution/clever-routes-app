@@ -18,6 +18,8 @@ Record these values in the external release evidence store before testing:
 - delivery-server environment and whether synthetic or production-approved data is used
 - tester, date, and evidence storage location
 
+Use `docs/release-evidence-manifest.template.md` as the external manifest shape for these values and for each smoke row's evidence references. Copy it outside git before filling it.
+
 Do not proceed if any of these are missing:
 
 - owner-approved distribution path for the device under test
@@ -100,6 +102,7 @@ Keep logs minimal. Do not copy raw access tokens, phone numbers beyond approved 
 The release smoke gate is complete only when:
 
 - every row in `docs/release-readiness.md` has iPhone and Android evidence references in the external evidence store
+- the external copy of `docs/release-evidence-manifest.template.md` is filled for the release candidate
 - blockers are either fixed in follow-up PRs or explicitly accepted by the owner
 - store/private distribution policy and privacy disclosure copy are approved
 - EAS build records point to committed source
