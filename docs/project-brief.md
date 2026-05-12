@@ -186,6 +186,8 @@ MVP와 확장 경계:
 ### 시나리오 5: 배송 종료와 기록 정리
 
 - 배송원이 `배송 종료` 또는 route 완료 상태에 도달하면 앱은 위치 이벤트 송신을 중단한다.
+- 현재 앱은 delivery_active 이후 `Finish delivery` 동작에서 continuous location task를 중단하고 `ROUTE_COMPLETED` 이벤트를 기록한다.
+- `ROUTE_COMPLETED` 기록이 실패하면 route completion event를 offline queue에 남기고, 기록 성공 시에만 해당 route의 local retry item을 cleanup한다.
 - 앱은 마지막 sync 상태를 표시하고, 전송 실패 이벤트가 있으면 재시도 또는 미전송 안내를 제공한다.
 - 이후 앱 재실행 시에는 당일 route 상태와 driver session/access 상태를 서버에서 다시 확인한다.
 
@@ -362,7 +364,7 @@ unidentified
 - input data: route context, E.164 phone, consent decisions, current date/device context
 - output data: company guidance, consent record, assigned route/stop display state, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
-- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, and richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events with native photo URI capture, proof media upload references, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, route cleanup, and session reset; delivery server local/manual proof-media cleanup runner exists; token refresh/re-auth, production proof-media object storage/access/scanning hardening, deployed cleanup evidence, and physical-device background smoke evidence remain follow-up work
+- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events, and `ROUTE_COMPLETED` delivery finish event with native photo URI capture, proof media upload references, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, recorded route cleanup, and session reset; delivery server local/manual proof-media cleanup runner exists; token refresh/re-auth, production proof-media object storage/access/scanning hardening, deployed cleanup evidence, and physical-device background smoke evidence remain follow-up work
 
 ## 검증 초안
 
@@ -402,5 +404,6 @@ unidentified
 18. Add app-side offline queue retention/discard thresholds after repeated failure, route completion, or driver sign-out/session reset. — completed
 19. Add release-readiness checklist for physical iOS/Android smoke matrix and production store/privacy disclosure evidence. — completed as documentation checklist; real device/store evidence remains pending
 20. Add EAS preview/production native build-profile scaffolding for iOS/Android release evidence. — completed
-21. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
-22. Add context-monorepo service document once production runtime/API boundaries are confirmed.
+21. Implement delivery finish with `ROUTE_COMPLETED`, tracking stop, and route-scoped local queue cleanup. — completed
+22. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
+23. Add context-monorepo service document once production runtime/API boundaries are confirmed.

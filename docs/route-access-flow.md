@@ -21,7 +21,8 @@ The app now has an interactive route access screen for the first driver-facing f
 11. After `delivery_active`, the app records a `ROUTE_STARTED` driver event and can sync a foreground `LOCATION_UPDATED` event through the driver event API boundary.
 12. After `delivery_active`, the app can request background location permission and start/stop a named continuous location task that streams batched `LOCATION_UPDATED` events through the same driver event boundary.
 13. After `delivery_active`, each stop card can record delivered/failed proof metadata as `STOP_DELIVERED` or `STOP_FAILED`; the app captures note, failure reason, uploaded photo media references, signature drawing evidence, and barcode scan evidence through proof-media and driver event API boundaries.
-14. `NO_ASSIGNED_ROUTE` and API errors stay in safe user-visible states without exposing other tenant/driver data.
+14. Delivery finish stops the continuous location task, records or queues a `ROUTE_COMPLETED` driver event, and discards route-scoped local retry items only after route completion is recorded.
+15. `NO_ASSIGNED_ROUTE` and API errors stay in safe user-visible states without exposing other tenant/driver data.
 
 ## Local mock boundary
 
@@ -94,7 +95,7 @@ The expected response shape matches `clever-delivery-server/docs/api/driver-assi
 - `NO_ASSIGNED_ROUTE` returns a safe empty state.
 - HTTP/API failures stay in `consent_recorded` with a retry message.
 
-The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records `ROUTE_STARTED`, foreground one-shot `LOCATION_UPDATED`, continuous/background-capable `LOCATION_UPDATED`, `STOP_DELIVERED`, and `STOP_FAILED` events to `POST /driver/events` with the active driver bearer token. Stop proof now stores metadata (`proof` payload with note/reason/source, uploaded photo media references, signature drawing evidence, and barcode scan evidence). The durable app-side offline queue can retain failed `ROUTE_STARTED`, `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, and proof media upload attempts for retry or discard across app restarts; production proof-media storage hardening and physical-device background smoke evidence remain later slices. Duplicate event responses are treated idempotently as recorded.
+The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records `ROUTE_STARTED`, foreground one-shot `LOCATION_UPDATED`, continuous/background-capable `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, and `ROUTE_COMPLETED` events to `POST /driver/events` with the active driver bearer token. Stop proof now stores metadata (`proof` payload with note/reason/source, uploaded photo media references, signature drawing evidence, and barcode scan evidence). The durable app-side offline queue can retain failed `ROUTE_STARTED`, `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, `ROUTE_COMPLETED`, and proof media upload attempts for retry or discard across app restarts; production proof-media storage hardening and physical-device background smoke evidence remain later slices. Duplicate event responses are treated idempotently as recorded.
 
 ## Durable offline queue boundary
 
@@ -108,7 +109,9 @@ Production app-side discard policy is now explicit in `OFFLINE_SUBMISSION_QUEUE_
 - maximum local queue age: `72 hours`
 - before each retry, items older than the policy window or already at the attempt limit are discarded without hitting the live server
 - after a failed retry reaches the attempt limit, the item is discarded instead of being retained indefinitely
-- route completion can call `discardRouteSubmissions(routePlanId)` to remove local retry items scoped to the completed route while leaving unrelated route or unscoped items intact
+- delivery finish calls `finishDeliveryAfterActive()` to stop continuous tracking and record or queue a `ROUTE_COMPLETED` event
+- after route completion is recorded, delivery finish calls `discardRouteSubmissions(routePlanId)` to remove local retry items scoped to the completed route while leaving unrelated route or unscoped items intact
+- if route completion recording fails, the `ROUTE_COMPLETED` event is queued and route-scoped items are not discarded in that branch
 - driver sign-out/session reset can call `clear()` to remove every pending local retry item from durable storage
 
 This policy only governs app-side AsyncStorage metadata and file URI references. Server-side proof-media storage, signed retrieval, malware scanning, and retention/deletion evidence remain server/release work.
