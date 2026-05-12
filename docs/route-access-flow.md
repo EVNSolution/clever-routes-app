@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document records the current app-side route access, consent, and assigned-route UX boundary. Product scenarios remain in `docs/project-brief.md`; server contract details are owned by `clever-delivery-server/docs/api/driver-route-access.md`, `clever-delivery-server/docs/api/driver-consents.md`, and `clever-delivery-server/docs/api/driver-assigned-route.md`.
+This document records the current app-side route access, consent, assigned-route, and delivery-start event UX boundary. Product scenarios remain in `docs/project-brief.md`; server contract details are owned by `clever-delivery-server/docs/api/driver-route-access.md`, `clever-delivery-server/docs/api/driver-consents.md`, and `clever-delivery-server/docs/api/driver-assigned-route.md`.
 
 ## Current app behavior
 
@@ -17,7 +17,9 @@ The app now has an interactive route access screen for the first driver-facing f
 7. Successful consent moves the visible state to `consent_recorded`.
 8. Assigned route loading calls an `AssignedRouteService` boundary shaped like delivery-server `GET /driver/assigned-route`.
 9. `ASSIGNED_ROUTE` renders route summary and ordered stop cards, then moves the visible state to `route_ready`.
-10. `NO_ASSIGNED_ROUTE` and API errors stay in safe user-visible states without exposing other tenant/driver data.
+10. Delivery start requests foreground location permission and moves to `delivery_active` only when permission is granted.
+11. After `delivery_active`, the app records a `ROUTE_STARTED` driver event through the driver event API boundary.
+12. `NO_ASSIGNED_ROUTE` and API errors stay in safe user-visible states without exposing other tenant/driver data.
 
 ## Local mock boundary
 
@@ -90,11 +92,11 @@ The expected response shape matches `clever-delivery-server/docs/api/driver-assi
 - `NO_ASSIGNED_ROUTE` returns a safe empty state.
 - HTTP/API failures stay in `consent_recorded` with a retry message.
 
-The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission.
+The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records a `ROUTE_STARTED` event to `POST /driver/events` with the active driver bearer token. Duplicate event responses are treated idempotently as recorded.
 
 ## Runtime API mode
 
-By default the app uses local mock services. Setting `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switches route+phone lookup to the live delivery-server `POST /driver/route-access/lookup` API. A successful `INVITED` lookup stores the returned short-lived `driverAccess` token in Expo SecureStore via `src/expoSecureDriverAccessTokenStore.ts`. The app clears denied lookup sessions and clears expired or malformed persisted token payloads before reuse. Downstream live consent and assigned-route API clients are built from the active route lookup token via `src/driverApiClients.ts`.
+By default the app uses local mock services. Setting `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switches route+phone lookup to the live delivery-server `POST /driver/route-access/lookup` API. A successful `INVITED` lookup stores the returned short-lived `driverAccess` token in Expo SecureStore via `src/expoSecureDriverAccessTokenStore.ts`. The app clears denied lookup sessions and clears expired or malformed persisted token payloads before reuse. Downstream live consent, assigned-route, and driver-event API clients are built from the active route lookup token via `src/driverApiClients.ts`.
 
 The persisted payload stores only the driver token and route access identifiers required for downstream consent/assigned-route calls. It does not change the server-owned token TTL, refresh policy, tenant boundary, or route/stop authorization checks.
 
@@ -102,4 +104,4 @@ The persisted payload stores only the driver token and route access identifiers 
 
 - Define release environment profiles and any server-side token refresh/re-auth UX beyond the current short-lived token TTL.
 - Add dedicated stop action/proof-of-delivery flows after the route-ready screen.
-- Add background location service/task setup and GPS event streaming after foreground delivery start is proven. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.
+- Add background location service/task setup and GPS `LOCATION_UPDATED` streaming after foreground delivery start and route-started event recording are proven. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.
