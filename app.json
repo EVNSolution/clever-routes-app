@@ -18,6 +18,9 @@
     "extra": {
       "projectStartIssue": "EVNSolution/clever-change-control#145",
       "changeControlIssue": "EVNSolution/clever-change-control#146"
-    }
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
   }
 }

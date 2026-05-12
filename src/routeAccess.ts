@@ -256,7 +256,7 @@ function isCompanyGuidance(value: unknown): value is RouteAccessCompanyGuidance 
   );
 }
 
-function isDriverAccessToken(value: unknown): value is DriverAccessToken {
+export function isDriverAccessToken(value: unknown): value is DriverAccessToken {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }

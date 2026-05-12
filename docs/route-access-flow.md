@@ -73,11 +73,11 @@ Content-Type: application/json
 }
 ```
 
-The app-side response boundary accepts only `CONSENT_RECORDED` evidence and never treats consent submission as an assigned route/stop read. Production route+phone lookup now returns the server-issued driver access token; live production wiring still needs environment/base URL selection and secure token persistence rules.
+The app-side response boundary accepts only `CONSENT_RECORDED` evidence and never treats consent submission as an assigned route/stop read. Production route+phone lookup returns the server-issued driver access token, and live mode builds the consent client from that token after persisting it through native secure storage.
 
 ## Assigned route API client boundary
 
-`src/assignedRoute.ts` exports `createAssignedRouteApiClient({ baseUrl, accessToken, fetchImpl })`, and `src/driverApiClients.ts` can build both consent and assigned-route API clients from the `driverAccess` token returned by route lookup. The assigned-route client gets:
+`src/assignedRoute.ts` exports `createAssignedRouteApiClient({ baseUrl, accessToken, fetchImpl })`, and `src/driverApiClients.ts` can build both consent and assigned-route API clients from either the fresh route lookup `driverAccess` token or an active persisted token. The assigned-route client gets:
 
 ```http
 GET /driver/assigned-route?routeContext=11111111-1111-4111-8111-111111111111
@@ -94,12 +94,12 @@ The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. It still
 
 ## Runtime API mode
 
-By default the app uses local mock services. Setting `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switches route+phone lookup to the live delivery-server `POST /driver/route-access/lookup` API. Downstream consent and assigned-route API clients can then be built from the returned `driverAccess` token via `src/driverApiClients.ts`.
+By default the app uses local mock services. Setting `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switches route+phone lookup to the live delivery-server `POST /driver/route-access/lookup` API. A successful `INVITED` lookup stores the returned short-lived `driverAccess` token in Expo SecureStore via `src/expoSecureDriverAccessTokenStore.ts`. The app clears denied lookup sessions and clears expired or malformed persisted token payloads before reuse. Downstream live consent and assigned-route API clients are built from the active route lookup token via `src/driverApiClients.ts`.
 
-This slice intentionally keeps token handoff in memory. Secure persistence, expiry refresh UX, and production release configuration remain separate hardening work.
+The persisted payload stores only the driver token and route access identifiers required for downstream consent/assigned-route calls. It does not change the server-owned token TTL, refresh policy, tenant boundary, or route/stop authorization checks.
 
 ## Follow-up
 
-- Define secure token persistence/expiry handling and release environment profiles.
+- Define release environment profiles and any server-side token refresh/re-auth UX beyond the current short-lived token TTL.
 - Add dedicated stop action/proof-of-delivery flows after the route-ready screen.
 - Keep foreground/background location permission and collection out of this flow until the `delivery_active` slice.

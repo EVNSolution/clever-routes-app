@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createDriverApiClientsFromRouteAccess } from './driverApiClients';
+import {
+  createDriverApiClientsFromPersistedDriverAccess,
+  createDriverApiClientsFromRouteAccess,
+} from './driverApiClients';
 import { sampleInvitedRouteAccess } from './routeAccess';
 
 describe('driver API client token handoff', () => {
@@ -52,6 +55,34 @@ describe('driver API client token handoff', () => {
     assert.deepEqual(
       requests.map((request) => request.headers.Authorization),
       ['Bearer fixture-driver-access-token', 'Bearer fixture-driver-access-token'],
+    );
+  });
+
+  it('builds downstream clients from active persisted driver access', async () => {
+    const requests: { headers: Record<string, string>; url: string }[] = [];
+    const clients = createDriverApiClientsFromPersistedDriverAccess({
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async (url, init) => {
+        requests.push({ headers: init?.headers ?? {}, url: String(url) });
+        return {
+          ok: true,
+          json: async () => ({ data: { status: 'NO_ASSIGNED_ROUTE' }, error: null }),
+        };
+      },
+      persistedAccess: {
+        driverAccess: sampleInvitedRouteAccess.driverAccess,
+        routeAccess: sampleInvitedRouteAccess.routeAccess,
+      },
+    });
+
+    await clients.assignedRouteService.getAssignedRoute({
+      routeContext: sampleInvitedRouteAccess.routeAccess.routeContext,
+    });
+
+    assert.equal(requests[0]?.headers.Authorization, 'Bearer fixture-driver-access-token');
+    assert.equal(
+      requests[0]?.url,
+      'https://delivery.example.com/driver/assigned-route?routeContext=11111111-1111-4111-8111-111111111111',
     );
   });
 });

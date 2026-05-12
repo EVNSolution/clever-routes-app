@@ -34,7 +34,7 @@ The app includes an interactive route access screen:
 - assigned route mock/API boundary for delivery-server `GET /driver/assigned-route`
 - route summary and ordered stop cards after consent moves the flow to `route_ready`
 - safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
-- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup; secure token persistence, OS location permission, delivery start, and location collection left for follow-up slices
+- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup, native secure storage for the short-lived driver token, and live downstream consent/assigned-route clients; OS location permission, delivery start, and location collection left for follow-up slices
 
 See `docs/route-access-flow.md` for the app-side route access, consent, and assigned-route mock/API boundary.
 
@@ -48,7 +48,7 @@ npm install
 npm run start
 ```
 
-Optional live API mode:
+Optional live API mode (route lookup saves the returned short-lived driver token through Expo SecureStore and clears expired/invalid persisted tokens before reuse):
 
 ```bash
 EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://delivery.example.com npm run start

@@ -310,7 +310,7 @@ unidentified
 - 선행 계약:
   - legal copy source
   - consent versioning
-  - delivery server consent record endpoint: app API boundary is implemented; production token/session wiring remains before live use
+  - delivery server consent record endpoint: app API boundary is implemented; live mode uses the route+phone `driverAccess` token for consent submission
   - foreground/background location 권한 요청 시점과 거절/재요청 UX
 - 산출물:
   - consent screen: implemented in local Expo flow
@@ -335,7 +335,7 @@ unidentified
 - 완료 기준:
   - invited phone → consent accepted → today's route 확인 smoke flow가 가능하다.
   - route 없음/error 상태가 사용자에게 명확히 표시된다.
-  - live server calls can use route+phone `driverAccess` token handoff; production environment/base URL switch and secure token persistence remain later release work.
+  - live server calls can use route+phone `driverAccess` token handoff through native secure storage with expiry clearing; token refresh/re-auth remains later server/session work.
 
 ### 5단계: release evidence and context sync
 
@@ -360,7 +360,7 @@ unidentified
 - input data: route context, E.164 phone, consent decisions, current date/device context
 - output data: company guidance, consent record, assigned route/stop display state, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
-- public contract: delivery server route access lookup, consent record, and assigned route read are implemented as app-side boundaries; stop detail/actions, driver session issuance, and location event contracts remain follow-up work
+- public contract: delivery server route access lookup, consent record, and assigned route read are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads; stop detail/actions, token refresh/re-auth, and location event contracts remain follow-up work
 
 ## 검증 초안
 
@@ -383,10 +383,10 @@ unidentified
 1. Merge mobile framework bootstrap and base navigation PR into `dev`. — completed
 2. Define driver-facing delivery server API contract for route+phone access and company guidance. — completed in `clever-delivery-server#48`
 3. Implement route+phone access and company guidance UX against the agreed mock/API boundary. — completed
-4. Implement consent record app UX/API boundary. — completed; production token/session wiring remains pending
+4. Implement consent record app UX/API boundary. — completed
 5. Implement assigned route screen and app API boundary. — completed
-6. Implement driver access token handoff. — current slice
-7. Implement real environment/base URL switch. — current slice
-8. Implement secure token persistence/expiry handling.
+6. Implement driver access token handoff. — completed
+7. Implement real environment/base URL switch. — completed
+8. Implement secure token persistence/expiry handling. — completed in this slice
 9. Implement stop actions plus delivery-active/location permission slice.
 10. Add context-monorepo service document once production runtime/API boundaries are confirmed.
