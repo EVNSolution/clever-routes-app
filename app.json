@@ -9,11 +9,13 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.evns.cleverdriverapp"
+      "bundleIdentifier": "com.evns.cleverdriverapp",
+      "buildNumber": "1"
     },
     "android": {
       "package": "com.evns.cleverdriverapp",
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "versionCode": 1
     },
     "extra": {
       "projectStartIssue": "EVNSolution/clever-change-control#145",

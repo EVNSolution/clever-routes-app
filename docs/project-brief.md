@@ -400,6 +400,7 @@ unidentified
 16. Add binary proof media upload/native capture: photo file upload, signature drawing, barcode scanning. — completed as app-side boundary
 17. Add offline queue/retry policy for driver events and proof media. — completed as durable app-side queue boundary
 18. Add app-side offline queue retention/discard thresholds after repeated failure, route completion, or driver sign-out/session reset. — completed
-18. Add release-readiness checklist for physical iOS/Android smoke matrix and production store/privacy disclosure evidence. — completed as documentation checklist; real device/store evidence remains pending
-19. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
-20. Add context-monorepo service document once production runtime/API boundaries are confirmed.
+19. Add release-readiness checklist for physical iOS/Android smoke matrix and production store/privacy disclosure evidence. — completed as documentation checklist; real device/store evidence remains pending
+20. Add EAS preview/production native build-profile scaffolding for iOS/Android release evidence. — completed
+21. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
+22. Add context-monorepo service document once production runtime/API boundaries are confirmed.

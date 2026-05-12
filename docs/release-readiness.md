@@ -6,12 +6,24 @@ This document tracks the non-code evidence needed before a production iOS/Androi
 
 ## Distribution decision
 
-The app targets native iPhone and Android phone runtime. The release channel is still pending owner decision:
+The app targets native iPhone and Android phone runtime. `eas.json` now defines build-profile scaffolding, but the final release channel is still pending owner decision:
 
 - App Store/TestFlight and Google Play testing or production tracks
 - Apple Business Manager Custom Apps and managed Google Play/private app for restricted driver distribution
 
 Do not add final store listing copy, screenshots, signing ownership, or public license terms without an explicit owner decision.
+
+## Native build profile matrix
+
+The native binary build path uses Expo EAS profiles:
+
+| Profile | Command | Intended evidence | Owner-controlled prerequisites |
+| --- | --- | --- | --- |
+| `preview` Android | `npx eas-cli build --platform android --profile preview` | Internal `.apk` install for Android physical-device smoke | Expo account/project access, EAS `preview` environment values, device/tester distribution decision |
+| `preview` iOS | `npx eas-cli build --platform ios --profile preview` | Internal iPhone smoke build through EAS internal distribution | Expo account/project access, Apple team/signing authority, registered devices or approved internal distribution path, EAS `preview` environment values |
+| `production` all | `npx eas-cli build --platform all --profile production` | Store/TestFlight/Play candidate archives | Expo account/project access, Apple/Google store authority, production signing, EAS `production` environment values, approved privacy/store copy |
+
+`cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied to committed source. `cli.appVersionSource` is `remote`; initial local `ios.buildNumber` and `android.versionCode` are set to `1` before the first EAS remote version sync, while production builds use `autoIncrement` to avoid duplicate store build numbers.
 
 ## Physical-device smoke matrix
 
@@ -58,4 +70,5 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 - Production proof-media object storage ownership, signed retrieval/access-control, malware scanning/private evidence storage, and deployed cleanup/scheduler evidence.
 - Physical iOS/Android device smoke evidence for background tracking and proof capture.
 - Store/private distribution policy and privacy disclosure copy.
+- Owner-controlled Expo/EAS project, Apple/Google signing credentials, and EAS preview/production environment values must be configured outside git before native builds run.
 - Context-monorepo service document after production runtime/API boundaries are confirmed.
