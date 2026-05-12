@@ -43,7 +43,8 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 - Driver identifiers: route context, phone lookup, server-issued driver access token, route assignment identifiers.
 - Proof media: photo file, signature metadata, barcode metadata, and related stop/route identifiers.
 - Offline queue: non-secret retry metadata and file URI references retained locally until retry/discard policy runs.
-- Retention/deletion: production thresholds for proof media and offline queue items are still pending server/release policy.
+- Offline queue app-side policy: pending driver event/proof-media retry items are discarded after five retained attempts, after 72 hours, when the completed route is explicitly purged, or when driver sign-out/session reset clears local retry state.
+- Retention/deletion: production thresholds for server-owned proof media are still pending server/release policy.
 - Support contact: company/operator support contact must be available in route guidance or store support metadata.
 
 ## Evidence storage policy
@@ -55,7 +56,6 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 ## Release blockers still open
 
 - Production proof-media storage ownership, retention, deletion, and access-control evidence.
-- Production durable offline queue retention/discard thresholds after repeated failure, route completion, or driver sign-out.
 - Physical iOS/Android device smoke evidence for background tracking and proof capture.
 - Store/private distribution policy and privacy disclosure copy.
 - Context-monorepo service document after production runtime/API boundaries are confirmed.

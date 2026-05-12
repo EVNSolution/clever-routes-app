@@ -102,6 +102,17 @@ The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From the
 
 The queue stores retry metadata, driver event payloads, and proof media file URI references. It does not store driver access tokens; token persistence remains isolated in Expo SecureStore through `src/expoSecureDriverAccessTokenStore.ts`. AsyncStorage is treated as unencrypted app storage, so the queue is not a replacement for server-side proof storage or secret storage.
 
+Production app-side discard policy is now explicit in `OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY`:
+
+- maximum retained retry attempts: `5`
+- maximum local queue age: `72 hours`
+- before each retry, items older than the policy window or already at the attempt limit are discarded without hitting the live server
+- after a failed retry reaches the attempt limit, the item is discarded instead of being retained indefinitely
+- route completion can call `discardRouteSubmissions(routePlanId)` to remove local retry items scoped to the completed route while leaving unrelated route or unscoped items intact
+- driver sign-out/session reset can call `clear()` to remove every pending local retry item from durable storage
+
+This policy only governs app-side AsyncStorage metadata and file URI references. Server-side proof-media storage, signed retrieval, malware scanning, and retention/deletion evidence remain server/release work.
+
 ## Proof media upload boundary
 
 `src/proofMediaUpload.ts` exports `createProofMediaUploadApiClient({ baseUrl, accessToken, fetchImpl })`, which posts captured proof photos as multipart form data:
@@ -154,5 +165,5 @@ The persisted payload stores only the driver token and route access identifiers 
 ## Follow-up
 
 - Define release environment profiles and any server-side token refresh/re-auth UX beyond the current short-lived token TTL.
-- Add production proof-media storage retention/deletion evidence and production retention/discard thresholds for durable queue items after repeated failure, route completion, or driver sign-out.
+- Add production proof-media storage retention/deletion evidence.
 - Add physical-device background tracking smoke evidence and production privacy disclosures for updates emitted while the app process cannot reach the live delivery server. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.

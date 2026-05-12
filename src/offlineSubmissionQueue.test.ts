@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import { createMockDriverEventService } from './driverEvents';
 import {
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
+  OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY,
   createInMemoryOfflineSubmissionQueue,
   createPersistentOfflineSubmissionQueue,
   retryOfflineSubmissions,
@@ -103,6 +104,7 @@ describe('offline submission queue', () => {
     });
 
     assert.deepEqual(result, {
+      discarded: 0,
       failed: 0,
       retried: 2,
       succeeded: 2,
@@ -131,6 +133,7 @@ describe('offline submission queue', () => {
     });
 
     assert.deepEqual(result, {
+      discarded: 0,
       failed: 1,
       retried: 1,
       succeeded: 0,
@@ -233,7 +236,7 @@ describe('offline submission queue', () => {
     });
     await queue.whenPersisted();
 
-    assert.deepEqual(result, { failed: 1, retried: 2, succeeded: 1 });
+    assert.deepEqual(result, { discarded: 0, failed: 1, retried: 2, succeeded: 1 });
     const stored = JSON.parse(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
       items: { attempts: number; kind: string; lastError?: string; queueItemId: string }[];
     };
@@ -299,6 +302,162 @@ describe('offline submission queue', () => {
     await queue.whenPersisted();
 
     assert.deepEqual(JSON.parse(values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}'), {
+      items: [],
+      version: 1,
+    });
+  });
+
+  it('discards expired queued submissions before retrying live services', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue({
+      initialItems: [
+        {
+          attempts: 0,
+          enqueuedAt: '2026-05-09T10:59:59.999Z',
+          event: {
+            clientEventId: 'old-event',
+            eventType: 'STOP_DELIVERED',
+            occurredAt: new Date('2026-05-09T10:59:59.999Z'),
+            routePlanId: 'route-1',
+          },
+          kind: 'driver_event',
+          queueItemId: 'driver-event:old-event',
+        },
+        {
+          attempts: 0,
+          enqueuedAt: '2026-05-12T10:00:00.000Z',
+          event: {
+            clientEventId: 'fresh-event',
+            eventType: 'STOP_DELIVERED',
+            occurredAt: new Date('2026-05-12T10:00:00.000Z'),
+            routePlanId: 'route-1',
+          },
+          kind: 'driver_event',
+          queueItemId: 'driver-event:fresh-event',
+        },
+      ],
+    });
+    const recordedEventIds: string[] = [];
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: {
+        recordDriverEvent: async (event) => {
+          recordedEventIds.push(event.clientEventId);
+          return {
+            duplicate: false,
+            eventId: event.clientEventId,
+            status: 'recorded',
+          };
+        },
+      },
+      now: () => new Date('2026-05-12T11:00:00.000Z'),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => {
+          throw new Error('unexpected proof upload');
+        },
+      },
+      queue,
+    });
+
+    assert.deepEqual(result, {
+      discarded: 1,
+      failed: 0,
+      retried: 2,
+      succeeded: 1,
+    });
+    assert.deepEqual(recordedEventIds, ['fresh-event']);
+    assert.deepEqual(queue.listPending(), []);
+    assert.equal(OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY.maxAgeMs, 72 * 60 * 60 * 1000);
+  });
+
+  it('discards queued submissions after the maximum retained retry attempts', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'stop-1',
+      fileName: 'stop-1.jpg',
+      routePlanId: 'route-1',
+      source: 'camera',
+      uri: 'file:///proof/stop-1.jpg',
+    });
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => {
+          throw new Error('still offline');
+        },
+      },
+      queue,
+      retryPolicy: {
+        maxAgeMs: OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY.maxAgeMs,
+        maxAttempts: 1,
+      },
+    });
+
+    assert.deepEqual(result, {
+      discarded: 1,
+      failed: 0,
+      retried: 1,
+      succeeded: 0,
+    });
+    assert.deepEqual(queue.listPending(), []);
+  });
+
+  it('discards route-scoped queued submissions when a route is completed', () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-1-event',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-05-12T11:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'stop-1',
+      fileName: 'stop-1.jpg',
+      routePlanId: 'route-1',
+      source: 'camera',
+      uri: 'file:///proof/stop-1.jpg',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-2-event',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-05-12T11:00:00.000Z'),
+      routePlanId: 'route-2',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'unscoped-event',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-05-12T11:00:00.000Z'),
+    });
+
+    assert.equal(queue.discardRouteSubmissions('route-1'), 2);
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+      'driver-event:route-2-event',
+      'driver-event:unscoped-event',
+    ]);
+  });
+
+  it('clears every queued submission on driver sign-out or session reset and persists it', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    queue.enqueueDriverEvent({
+      clientEventId: 'event-1',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-05-12T11:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'stop-1',
+      fileName: 'stop-1.jpg',
+      routePlanId: 'route-1',
+      source: 'camera',
+      uri: 'file:///proof/stop-1.jpg',
+    });
+
+    assert.equal(queue.clear(), 2);
+    await queue.whenPersisted();
+
+    assert.deepEqual(queue.listPending(), []);
+    assert.deepEqual(JSON.parse(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}'), {
       items: [],
       version: 1,
     });

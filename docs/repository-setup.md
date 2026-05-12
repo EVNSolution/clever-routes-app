@@ -11,7 +11,7 @@ This document records the repo baseline for the `clever-driver-app` implementati
 - Package manager: npm with `package-lock.json`
 - Node floor: `.nvmrc` pins `20.19.4`; `package.json` allows Node `>=20.19.4`
 - Entry point: `index.ts` registering `App.tsx`
-- Current implementation depth: local Expo route+phone lookup, company guidance, consent gate, assigned-route screen, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, native proof photo URI capture, proof media upload references, signature/barcode proof capture, richer stop delivered/failed proof metadata controls, and durable app-side offline queue/retry for driver events and proof media; production proof-media storage hardening, physical-device background smoke evidence, and store/privacy disclosure evidence remain later slices
+- Current implementation depth: local Expo route+phone lookup, company guidance, consent gate, assigned-route screen, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, native proof photo URI capture, proof media upload references, signature/barcode proof capture, richer stop delivered/failed proof metadata controls, durable app-side offline queue/retry for driver events and proof media, and explicit app-side offline queue retention/discard thresholds; production proof-media storage hardening, physical-device background smoke evidence, and store/privacy disclosure evidence remain later slices
 
 ## Scripts
 
@@ -66,9 +66,9 @@ These items are intentionally left for later issues because they affect API, com
 2. Server-issued driver session/access token refresh or re-auth UX after the current short-lived route+phone lookup token expires.
 3. Route invite/deep-link URL format and route access code format.
 4. Consent legal copy source and consent version contract.
-5. Production proof media storage policy: persistent photo/signature/barcode storage ownership, offline queue retention, and retry/discard rules.
+5. Production proof media storage policy: persistent photo/signature/barcode storage ownership, access, retention, and deletion rules.
 6. Store disclosure matrix and production privacy copy for continuous background location; tracked in `docs/release-readiness.md`.
 7. EAS/App Store/Play Store build profile and signing ownership.
 8. Minimum supported iOS/Android versions and physical-device background-location smoke matrix; tracked in `docs/release-readiness.md`.
-9. Production retention/discard thresholds for durable offline queue items after repeated failure, route completion, or driver sign-out.
+9. Physical-device validation of app-side offline retry/discard behavior after network loss, route completion, and driver sign-out/session reset.
 10. Public license/reuse terms, if the owner decides to grant them.

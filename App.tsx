@@ -758,7 +758,7 @@ function formatDeliveryActiveGuard(currentFlowState: DriverFlowState, canStartDe
 }
 
 function formatOfflineQueueRetryResult(result: OfflineSubmissionRetryResult): string {
-  return `Offline retry: ${result.succeeded}/${result.retried} synced, ${result.failed} still pending.`;
+  return `Offline retry: ${result.succeeded}/${result.retried} synced, ${result.discarded} discarded by policy, ${result.failed} still pending.`;
 }
 
 function formatOfflineQueueRestoreStatus(status: OfflineQueueRestoreStatus): string {
