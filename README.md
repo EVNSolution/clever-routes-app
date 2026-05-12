@@ -88,6 +88,13 @@ npx expo install --check
 git diff --check
 ```
 
+GitHub Actions runs the PR/push subset in `.github/workflows/ci.yml` for
+`dev` and `main`: dependency install, workspace checks, lint, native release
+preflight, non-secret release evidence seed rendering, app bundle export, npm
+audit, Expo dependency alignment, and diff whitespace checks. CI does not run
+EAS binary builds and does not replace Apple/Google signing, store/private
+distribution approval, privacy/legal approval, or physical-device smoke evidence.
+
 `npm run build` exports Android and iOS JavaScript bundles into ignored `dist/` folders. It is not an App Store/Play Store binary build. Native binary candidates are described by `eas.json`:
 
 ```bash

@@ -10,7 +10,7 @@ This document records the repo baseline for the `clever-driver-app` implementati
 - Target runtime: native iOS and Android app
 - Package manager: npm with `package-lock.json`
 - Node floor: `.nvmrc` pins `20.19.4`; `package.json` allows Node `>=20.19.4`
-- Text normalization: `.editorconfig` sets UTF-8, LF, final newline, trailing-whitespace trim, and two-space indentation for source/docs files; `.gitattributes` normalizes reviewed text files to LF and marks evidence/release/signing artifact patterns as binary
+- Text normalization: `.editorconfig` sets UTF-8, LF, final newline, trailing-whitespace trim, and two-space indentation for source/docs files; `.gitattributes` normalizes reviewed TypeScript/JavaScript/Markdown/YAML/JSON/shell text files to LF and marks evidence/release/signing artifact patterns as binary
 - Entry point: `index.ts` registering `App.tsx`
 - Current implementation depth: local Expo route+phone lookup, company guidance, safe multi-company ambiguity guidance, consent gate, assigned-route screen, stop-card OS map handoff, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode, live downstream `401` expired-token recovery through secure-token clearing plus route+phone re-lookup guidance, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, native proof photo URI capture, proof media upload references, local proof-media smoke mock modes, scanner-rejected proof photo recapture guidance, signature/barcode proof capture, richer stop delivered/failed proof metadata controls, durable app-side offline queue/retry for driver events and retryable proof media, explicit app-side offline queue retention/discard thresholds, delivery finish `ROUTE_COMPLETED` cleanup, driver session reset/sign-out cleanup for secure access plus queued retry state, and EAS preview/production native build-profile scaffolding; delivery-server now has a proof-media scan rejection hook and local cleanup runner, while server-issued token refresh/strong re-auth, production proof-media object storage/signed access/deployed scanner evidence, physical-device background smoke evidence, owner-controlled signing/store setup, and store/privacy disclosure evidence remain later slices
 
@@ -21,7 +21,7 @@ This document records the repo baseline for the `clever-driver-app` implementati
 | `npm run start` | Start Expo local dev server |
 | `npm run ios` | Start Expo and launch iOS target when available |
 | `npm run android` | Start Expo and launch Android target when available |
-| `npm run test` | Run Node test runner over TypeScript tests through `tsx` |
+| `npm run test` | Enumerate `src/**/*.test.ts` files with `scripts/run-tests.mjs`, then run the Node test runner through `tsx` without shell-glob dependence |
 | `npm run typecheck` | Run TypeScript without emitting build outputs |
 | `npm run lint` | Run Expo ESLint config |
 | `npm run check:workspace` | Run typecheck and tests together |
@@ -29,6 +29,20 @@ This document records the repo baseline for the `clever-driver-app` implementati
 | `npm run release:evidence:seed` | Print a non-secret release evidence seed from the committed source revision |
 | `npm run release:evidence:verify -- <manifest-path>` | Validate a completed external release evidence manifest copy before release approval |
 | `npm run build` | Export Android and iOS JS bundles to ignored `dist/` folders |
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on pull requests to `dev`/`main` and pushes to
+`dev`/`main`. The workflow uses the Node version from `.nvmrc`, installs from
+`package-lock.json` with `npm ci`, then runs the same source-controlled gates
+used before release-sensitive PRs: `npm run check:workspace`, `npm run lint`,
+`npm run check:native-release`, `npm run release:evidence:seed`, `npm run
+build`, `npm audit --audit-level=moderate`, `npx expo install --check`, and
+`git diff --check`.
+
+The workflow intentionally stays secret-free. It exports JS bundles only; it does
+not run EAS binary builds, access Apple/Google signing credentials, or collect
+physical-device/store/privacy evidence.
 
 ## Native build profiles
 
@@ -86,6 +100,7 @@ Before opening an implementation PR, re-check these repo baseline files together
 - `eas.json`: preview/internal and production/store profile settings, EAS environment names, require-commit policy, and app version source match the release evidence plan.
 - `npm run check:native-release`: local native release config preflight passes, while external owner-controlled blockers remain tracked in `docs/release-readiness.md`.
 - `npm run release:evidence:verify -- <external-manifest-path>`: completed external release evidence manifests are checked before release approval; the completed manifest itself stays out of git.
+- `.github/workflows/ci.yml`: PR/push CI keeps local source-controlled gates aligned with the documented release-sensitive validation commands.
 - `.github/PULL_REQUEST_TEMPLATE.md`: target issue, change-control issue, concurrent-work gate, validation evidence, and context/wiki completion fields are filled before issue closure.
 - `CONTRIBUTING.md` and `SECURITY.md`: human workflow, security/privacy reporting, sensitive evidence handling, and generated-file guardrails stay current.
 - `docs/release-readiness.md`: physical-device smoke matrix, store/privacy disclosure checklist, and release blockers match current runtime behavior.
@@ -104,5 +119,5 @@ These items are intentionally left for later issues because they affect API, com
 7. Expo/EAS project ownership, App Store/Play Store signing ownership, and credential rotation policy.
 8. Minimum supported iOS/Android versions and physical-device background-location smoke matrix; tracked in `docs/release-readiness.md`.
 9. Physical-device validation of app-side offline retry/discard behavior after network loss, route completion, tracking stop, and the explicit driver session reset/sign-out action.
-10. GitHub Actions CI, CODEOWNERS, and additional branch/ruleset automation after the control-plane preflight/admin decision required by `AGENTS.md`.
+10. CODEOWNERS and additional branch/ruleset automation after the control-plane admin decision required by `AGENTS.md`.
 11. Public license/reuse terms, if the owner decides to grant them.
