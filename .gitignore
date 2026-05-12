@@ -1,0 +1,53 @@
+# Local agent/runtime state
+.omx/
+
+# Dependencies
+node_modules/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build and coverage outputs
+dist/
+build/
+coverage/
+.turbo/
+.cache/
+
+# Expo / React Native candidate outputs
+.expo/
+.expo-shared/
+web-build/
+*.jsbundle
+
+# Native mobile generated dependencies/build outputs
+android/.gradle/
+android/app/build/
+ios/build/
+ios/Pods/
+
+# Native mobile build artifacts
+*.apk
+*.aab
+*.ipa
+*.app
+*.dSYM/
+
+# Package manager caches
+.npm/
+.pnpm-store/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
