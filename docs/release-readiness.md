@@ -44,7 +44,7 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 - Proof media: photo file, signature metadata, barcode metadata, and related stop/route identifiers.
 - Offline queue: non-secret retry metadata and file URI references retained locally until retry/discard policy runs.
 - Offline queue app-side policy: pending driver event/proof-media retry items are discarded after five retained attempts, after 72 hours, when the completed route is explicitly purged, or when driver sign-out/session reset clears local retry state.
-- Retention/deletion: production thresholds for server-owned proof media are still pending server/release policy.
+- Server proof-media retention/deletion support: `clever-delivery-server` now has `DRIVER_PROOF_MEDIA_RETENTION_DAYS` and `npm run driver:proof-media:cleanup` for local/manual or cron-style cleanup; production deployment evidence is still pending.
 - Support contact: company/operator support contact must be available in route guidance or store support metadata.
 
 ## Evidence storage policy
@@ -55,7 +55,7 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 
 ## Release blockers still open
 
-- Production proof-media storage ownership, retention, deletion, and access-control evidence.
+- Production proof-media object storage ownership, signed retrieval/access-control, malware scanning/private evidence storage, and deployed cleanup/scheduler evidence.
 - Physical iOS/Android device smoke evidence for background tracking and proof capture.
 - Store/private distribution policy and privacy disclosure copy.
 - Context-monorepo service document after production runtime/API boundaries are confirmed.

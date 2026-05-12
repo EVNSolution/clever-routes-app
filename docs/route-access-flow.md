@@ -165,5 +165,5 @@ The persisted payload stores only the driver token and route access identifiers 
 ## Follow-up
 
 - Define release environment profiles and any server-side token refresh/re-auth UX beyond the current short-lived token TTL.
-- Add production proof-media storage retention/deletion evidence.
+- Add production proof-media object storage, signed access, malware scanning/private evidence storage, and deployed cleanup/scheduler evidence. The delivery server already exposes a local/manual cleanup runner via `npm run driver:proof-media:cleanup`.
 - Add physical-device background tracking smoke evidence and production privacy disclosures for updates emitted while the app process cannot reach the live delivery server. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.
