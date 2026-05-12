@@ -48,7 +48,7 @@ Content-Type: application/json
 }
 ```
 
-The expected response shape matches `clever-delivery-server/docs/api/driver-route-access.md`.
+The expected response shape matches `clever-delivery-server/docs/api/driver-route-access.md`. `INVITED` responses must include `driverAccess` token evidence (`accessToken`, `tokenType`, `expiresAt`, `ttlSeconds`, and `use`) so later consent and assigned-route clients can use the server-issued driver bearer token.
 
 ## Consent API client boundary
 
@@ -73,11 +73,11 @@ Content-Type: application/json
 }
 ```
 
-The app-side response boundary accepts only `CONSENT_RECORDED` evidence and never treats consent submission as an assigned route/stop read. Production wiring still needs the server-issued driver access token/session boundary after route+phone lookup.
+The app-side response boundary accepts only `CONSENT_RECORDED` evidence and never treats consent submission as an assigned route/stop read. Production route+phone lookup now returns the server-issued driver access token; live production wiring still needs environment/base URL selection and secure token persistence rules.
 
 ## Assigned route API client boundary
 
-`src/assignedRoute.ts` exports `createAssignedRouteApiClient({ baseUrl, accessToken, fetchImpl })`, which gets:
+`src/assignedRoute.ts` exports `createAssignedRouteApiClient({ baseUrl, accessToken, fetchImpl })`, and `src/driverApiClients.ts` can build both consent and assigned-route API clients from the `driverAccess` token returned by route lookup. The assigned-route client gets:
 
 ```http
 GET /driver/assigned-route?routeContext=11111111-1111-4111-8111-111111111111
@@ -95,7 +95,6 @@ The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. It still
 ## Follow-up
 
 - Add environment/base URL wiring for the real delivery server.
-- Replace local mock services with API clients under an environment switch.
-- Add server-issued driver access token/session wiring for real consent and assigned-route API calls.
+- Replace local mock services with API clients under an environment switch and define secure token persistence/expiry handling.
 - Add dedicated stop action/proof-of-delivery flows after the route-ready screen.
 - Keep foreground/background location permission and collection out of this flow until the `delivery_active` slice.

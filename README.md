@@ -30,10 +30,11 @@ The app includes an interactive route access screen:
 - company/shop/route guidance for `INVITED`
 - app-side consent gate for required location-information and personal-information consent
 - local mock service and API client boundary for delivery-server `POST /driver/consents`
+- driver access token parsing from route lookup and API-client handoff helper
 - assigned route mock/API boundary for delivery-server `GET /driver/assigned-route`
 - route summary and ordered stop cards after consent moves the flow to `route_ready`
 - safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
-- real driver session/token issuance, OS location permission, delivery start, and location collection left for follow-up slices
+- live environment/base URL switch, secure token persistence, OS location permission, delivery start, and location collection left for follow-up slices
 
 See `docs/route-access-flow.md` for the app-side route access, consent, and assigned-route mock/API boundary.
 

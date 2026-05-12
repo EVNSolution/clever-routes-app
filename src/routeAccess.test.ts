@@ -37,6 +37,8 @@ describe('driver route access UX flow', () => {
     assert.equal(result.flowState, 'company_context_confirmed');
     assert.equal(result.nextState, 'consent_required');
     assert.equal(result.companyGuidance.companyDisplayName, 'Tomatono Toronto');
+    assert.equal(result.driverAccess.tokenType, 'Bearer');
+    assert.equal(result.driverAccess.accessToken, 'fixture-driver-access-token');
     assert.equal(JSON.stringify(result).includes('address1'), false);
     assert.equal(JSON.stringify(result).includes('deliveryStop'), false);
   });
@@ -84,4 +86,60 @@ describe('driver route access UX flow', () => {
       },
     ]);
   });
+
+  it('parses driver access token from invited lookup responses', async () => {
+    const client = createRouteAccessApiClient({
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'INVITED',
+            routeAccess: sampleInvitedRouteAccess.routeAccess,
+            companyGuidance: sampleInvitedRouteAccess.companyGuidance,
+            driverAccess: {
+              accessToken: 'server-issued-driver-jwt',
+              expiresAt: '2026-05-12T06:55:00.000Z',
+              tokenType: 'Bearer',
+              ttlSeconds: 900,
+              use: 'consent_and_assigned_route',
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.lookupRouteAccess({
+      routeContext: '11111111-1111-4111-8111-111111111111',
+      phoneE164: '+14165550123',
+    });
+
+    assert.equal(result.status, 'INVITED');
+    assert.equal(result.driverAccess.accessToken, 'server-issued-driver-jwt');
+    assert.equal(result.driverAccess.use, 'consent_and_assigned_route');
+  });
+
+  it('rejects invited lookup responses without driver access token evidence', async () => {
+    const client = createRouteAccessApiClient({
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'INVITED',
+            routeAccess: sampleInvitedRouteAccess.routeAccess,
+            companyGuidance: sampleInvitedRouteAccess.companyGuidance,
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.lookupRouteAccess({ routeContext: 'route-context', phoneE164: '+14165550123' }),
+      /Invalid route access response/u,
+    );
+  });
+
 });
