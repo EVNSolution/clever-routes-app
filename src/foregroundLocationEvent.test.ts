@@ -6,6 +6,7 @@ import {
   recordForegroundLocationUpdateAfterDeliveryStart,
   type ForegroundLocationSnapshotService,
 } from './foregroundLocationEvent';
+import { createInMemoryOfflineSubmissionQueue } from './offlineSubmissionQueue';
 
 function createLocationService(): ForegroundLocationSnapshotService & { requests: number } {
   return {
@@ -60,5 +61,29 @@ describe('foreground location update event flow', () => {
       occurredAt: new Date('2026-05-12T07:05:00.000Z'),
       routePlanId: 'route-1',
     });
+  });
+
+  it('queues foreground LOCATION_UPDATED when event submission fails', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const locationService = createLocationService();
+
+    const result = await recordForegroundLocationUpdateAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: {
+        recordDriverEvent: async () => {
+          throw new Error('network offline');
+        },
+      },
+      locationService,
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(result.kind, 'queued');
+    assert.equal(result.reason, 'record_failed');
+    assert.equal(locationService.requests, 1);
+    const pending = queue.listPending();
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'LOCATION_UPDATED');
   });
 });

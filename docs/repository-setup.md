@@ -11,7 +11,7 @@ This document records the repo baseline for the `clever-driver-app` implementati
 - Package manager: npm with `package-lock.json`
 - Node floor: `.nvmrc` pins `20.19.4`; `package.json` allows Node `>=20.19.4`
 - Entry point: `index.ts` registering `App.tsx`
-- Current implementation depth: local Expo route+phone lookup, company guidance, consent gate, assigned-route screen, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, native proof photo URI capture, proof media upload references, signature/barcode proof capture, and richer stop delivered/failed proof metadata controls; offline queueing, production proof-media storage hardening, and physical-device background smoke evidence remain later slices
+- Current implementation depth: local Expo route+phone lookup, company guidance, consent gate, assigned-route screen, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, native proof photo URI capture, proof media upload references, signature/barcode proof capture, richer stop delivered/failed proof metadata controls, and app-side offline queue/retry for driver events and proof media; production proof-media storage hardening and physical-device background smoke evidence remain later slices
 
 ## Scripts
 
@@ -45,6 +45,16 @@ Generated `android/` and `ios/` source directories are not globally ignored. If 
 
 `package.json` currently overrides transitive `postcss` to `8.5.10` because the Expo SDK 54 Metro dependency range otherwise resolves to a moderate npm audit finding. The override keeps `npm audit --audit-level=moderate` clean without using `npm audit fix --force`, which would apply a breaking Expo downgrade. Re-check this override when Expo updates its transitive Metro/PostCSS dependency.
 
+## Pre-PR baseline audit
+
+Before opening an implementation PR, re-check these repo baseline files together with the code diff:
+
+- `.gitignore`: generated Expo/native outputs, signing artifacts, local env files, package caches, and agent/runtime state stay ignored; `android/` and `ios/` source directories are intentionally not globally ignored.
+- `.env.example`: every bundled `EXPO_PUBLIC_*` runtime key used by the app is documented, and secret `.env*` files stay ignored.
+- `package.json` / `package-lock.json`: scripts, Node floor, Expo SDK dependencies, and audit overrides match the implementation.
+- `app.json`: bundle/package identifiers, permission copy, plugins, and background-location settings match the current native capability slice.
+- `.github/PULL_REQUEST_TEMPLATE.md`: target issue, change-control issue, concurrent-work gate, validation evidence, and context/wiki completion fields are filled before issue closure.
+
 ## Follow-up setup decisions
 
 These items are intentionally left for later issues because they affect API, compliance, release, or device behavior beyond this bootstrap:
@@ -57,4 +67,4 @@ These items are intentionally left for later issues because they affect API, com
 6. Store disclosure matrix and production privacy copy for continuous background location.
 7. EAS/App Store/Play Store build profile and signing ownership.
 8. Minimum supported iOS/Android versions and physical-device background-location smoke matrix.
-9. Offline queue/retry/discard policy for driver events emitted while the app cannot reach the live server.
+9. Production persistence decision for the app-side offline queue if in-memory retry is insufficient for store builds.

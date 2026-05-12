@@ -6,6 +6,7 @@ import {
   createMockDriverEventService,
   recordRouteStartedAfterDeliveryStart,
 } from './driverEvents';
+import { createInMemoryOfflineSubmissionQueue } from './offlineSubmissionQueue';
 
 describe('driver event API boundary', () => {
   it('posts route started events with driver bearer token evidence', async () => {
@@ -122,5 +123,27 @@ describe('driver event API boundary', () => {
     assert.equal(blocked.kind, 'blocked');
     assert.equal(recorded.kind, 'recorded');
     assert.deepEqual(service.recordedEvents.map((event) => event.eventType), ['ROUTE_STARTED']);
+  });
+
+  it('queues route started when the live event submission fails', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+
+    const result = await recordRouteStartedAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: {
+        recordDriverEvent: async () => {
+          throw new Error('network offline');
+        },
+      },
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(result.kind, 'queued');
+    assert.equal(result.reason, 'record_failed');
+    const pending = queue.listPending();
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]?.kind, 'driver_event');
+    assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'ROUTE_STARTED');
   });
 });

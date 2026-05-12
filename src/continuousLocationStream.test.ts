@@ -8,6 +8,7 @@ import {
   stopContinuousLocationUpdates,
   type ContinuousLocationStreamService,
 } from './continuousLocationStream';
+import { createInMemoryOfflineSubmissionQueue } from './offlineSubmissionQueue';
 
 const activeDelivery = {
   flowState: 'delivery_active',
@@ -138,6 +139,39 @@ describe('continuous location streaming', () => {
         routePlanId: 'route-1',
       },
     ]);
+  });
+
+  it('queues failed continuous LOCATION_UPDATED batch items for retry', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const originalDateNow = Date.now;
+    Date.now = () => new Date('2026-05-12T08:45:30.000Z').getTime();
+
+    try {
+      const result = await recordContinuousLocationUpdateBatch({
+        driverEventService: {
+          recordDriverEvent: async () => {
+            throw new Error('network offline');
+          },
+        },
+        locations: [
+          { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-05-12T08:45:00.000Z') },
+          { latitude: 43.654, longitude: -79.384, occurredAt: new Date('2026-05-12T08:46:00.000Z') },
+        ],
+        offlineQueue: queue,
+        routePlanId: 'route-1',
+      });
+
+      assert.deepEqual(result, { kind: 'recorded', queuedCount: 2, recordedCount: 0 });
+      const pending = queue.listPending();
+      assert.equal(pending.length, 2);
+      assert.deepEqual(pending.map((item) => item.queueItemId), [
+        'driver-event:continuous-location-2026-05-12T08:45:00.000Z-0',
+        'driver-event:continuous-location-2026-05-12T08:46:00.000Z-1',
+      ]);
+      assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'LOCATION_UPDATED');
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 
   it('stops the named continuous location task', async () => {

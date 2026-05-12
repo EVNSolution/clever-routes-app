@@ -36,7 +36,7 @@ The app includes an interactive route access screen:
 - explicit delivery start action that requests OS foreground location permission before `delivery_active`
 - route started, foreground one-shot location update, continuous background-capable location streaming, native proof photo URI capture, proof media upload references, signature/barcode proof capture, and richer stop delivered/failed proof-event mock/API boundaries for delivery-server `POST /driver/events` after delivery_active succeeds
 - safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
-- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup, native secure storage for the short-lived driver token, and live downstream consent/assigned-route/driver-event/proof-media clients; offline queueing, production proof-media storage hardening, and physical store/device smoke evidence left for follow-up slices
+- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup, native secure storage for the short-lived driver token, and live downstream consent/assigned-route/driver-event/proof-media clients; app-side offline queue/retry for pending driver events and proof media; production proof-media storage hardening and physical store/device smoke evidence left for follow-up slices
 
 See `docs/route-access-flow.md` for the app-side route access, consent, and assigned-route mock/API boundary.
 
@@ -71,9 +71,14 @@ npm run lint
 npm run typecheck
 npm run test
 npm run build
+npm audit --audit-level=moderate
+npx expo install --check
+git diff --check
 ```
 
 `npm run build` exports Android and iOS JavaScript bundles into ignored `dist/` folders. It is not an App Store/Play Store binary build.
+
+Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`, generated outputs remain ignored, and `.env.example` still documents every public runtime env key used by the app.
 
 ## Documentation map
 
