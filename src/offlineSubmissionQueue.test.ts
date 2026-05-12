@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import { createDriverApiHttpError } from './driverApiError';
 import { createMockDriverEventService } from './driverEvents';
+import { createProofMediaRejectedError } from './proofMediaUpload';
 import {
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
   OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY,
@@ -172,6 +173,35 @@ describe('offline submission queue', () => {
     });
     assert.equal(queue.listPending()[0]?.attempts, 1);
     assert.equal(queue.listPending()[0]?.lastError, 'Proof media upload failed with HTTP 401');
+  });
+
+  it('discards scanner-rejected queued proof media instead of retrying it', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'stop-1',
+      fileName: 'stop-1.jpg',
+      routePlanId: 'route-1',
+      source: 'camera',
+      uri: 'file:///proof/stop-1.jpg',
+    });
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => {
+          throw createProofMediaRejectedError();
+        },
+      },
+      queue,
+    });
+
+    assert.deepEqual(result, {
+      discarded: 1,
+      failed: 0,
+      retried: 1,
+      succeeded: 0,
+    });
+    assert.equal(queue.listPending().length, 0);
   });
 
   it('discards queued submissions by item id', () => {

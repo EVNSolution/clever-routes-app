@@ -122,7 +122,7 @@ The expected response shape matches `clever-delivery-server/docs/api/driver-assi
 - `NO_ASSIGNED_ROUTE` returns a safe empty state.
 - HTTP/API failures stay in `consent_recorded` with a retry message.
 
-The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. Stop cards expose `Open map`, which hands off to the OS map handler with coordinates first and formatted address fallback without committing to a provider SDK. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records `ROUTE_STARTED`, foreground one-shot `LOCATION_UPDATED`, continuous/background-capable `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, and `ROUTE_COMPLETED` events to `POST /driver/events` with the active driver bearer token. Stop proof now stores metadata (`proof` payload with note/reason/source, uploaded photo media references, signature drawing evidence, and barcode scan evidence). The durable app-side offline queue can retain failed `ROUTE_STARTED`, `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, `ROUTE_COMPLETED`, and proof media upload attempts for retry or discard across app restarts; delivery-server has a proof-media scan rejection hook, while production object storage/signed access/deployed scanner evidence and physical-device background smoke evidence remain later slices. Duplicate event responses are treated idempotently as recorded.
+The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. Stop cards expose `Open map`, which hands off to the OS map handler with coordinates first and formatted address fallback without committing to a provider SDK. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records `ROUTE_STARTED`, foreground one-shot `LOCATION_UPDATED`, continuous/background-capable `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, and `ROUTE_COMPLETED` events to `POST /driver/events` with the active driver bearer token. Stop proof now stores metadata (`proof` payload with note/reason/source, uploaded photo media references, signature drawing evidence, and barcode scan evidence). The durable app-side offline queue can retain failed `ROUTE_STARTED`, `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, `ROUTE_COMPLETED`, and retryable proof media upload attempts for retry or discard across app restarts. Scanner-rejected proof media is not treated as retryable; delivery-server has a proof-media scan rejection hook, while production object storage/signed access/deployed scanner evidence and physical-device background smoke evidence remain later slices. Duplicate event responses are treated idempotently as recorded.
 
 ## Durable offline queue boundary
 
@@ -136,12 +136,13 @@ Production app-side discard policy is now explicit in `OFFLINE_SUBMISSION_QUEUE_
 - maximum local queue age: `72 hours`
 - before each retry, items older than the policy window or already at the attempt limit are discarded without hitting the live server
 - after a failed retry reaches the attempt limit, the item is discarded instead of being retained indefinitely
+- if a queued proof media upload receives `422 PROOF_MEDIA_REJECTED`, the app discards that queued file reference instead of retrying it again
 - delivery finish calls `finishDeliveryAfterActive()` to stop continuous tracking and record or queue a `ROUTE_COMPLETED` event
 - after route completion is recorded, delivery finish calls `discardRouteSubmissions(routePlanId)` to remove local retry items scoped to the completed route while leaving unrelated route or unscoped items intact
 - if route completion recording fails, the `ROUTE_COMPLETED` event is queued and route-scoped items are not discarded in that branch
 - the runtime guard panel exposes `Reset driver session`, which stops continuous tracking, clears the secure driver access token, clears route/session UI state, and calls `clear()` to remove every pending local retry item from durable storage
 
-This policy only governs app-side AsyncStorage metadata and file URI references. Server-side proof-media scan rejection hook support exists, but production object storage, signed retrieval, deployed scanner evidence, and retention/deletion deployment evidence remain server/release work.
+This policy only governs app-side AsyncStorage metadata and file URI references. Server-side proof-media scan rejection hook support exists and the app handles that rejection as non-retryable, but production object storage, signed retrieval, deployed scanner evidence, and retention/deletion deployment evidence remain server/release work.
 
 ## Proof media upload boundary
 
@@ -179,6 +180,8 @@ The expected success envelope returns durable media evidence:
 ```
 
 The app includes only successfully uploaded media references in `STOP_DELIVERED` / `STOP_FAILED` proof payloads. Failed or cancelled capture/upload branches remain visible in the UI but are not converted into durable proof evidence.
+
+If the live server returns `422` with the Driver API error code `PROOF_MEDIA_REJECTED`, the app maps it to a safe driver-facing message: "Proof photo was rejected by the safety scan. Capture another proof photo." The app does not expose scanner internals, does not create a durable media reference, and does not queue that photo for offline retry. The same non-retryable discard applies when an already queued proof media upload receives the scanner rejection during offline retry.
 
 ## Signature and barcode proof boundary
 

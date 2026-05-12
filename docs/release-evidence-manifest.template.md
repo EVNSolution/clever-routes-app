@@ -71,6 +71,7 @@ Use sanitized references to external screenshots/videos/logs only.
 | Delivery start foreground location permission | pending | pending | pending | pending | pending |
 | Continuous/background-capable location task | pending | pending | pending | pending | pending |
 | Proof photo capture from camera/library | pending | pending | pending | pending | pending |
+| Proof media scan rejection UX | pending | pending | pending | pending | pending |
 | Signature and barcode proof capture | pending | pending | pending | pending | pending |
 | Offline queue retry/discard UI after network loss | pending | pending | pending | pending | pending |
 | Token expiry, invalid persisted token, or live downstream `401` recovery | pending | pending | pending | pending | pending |

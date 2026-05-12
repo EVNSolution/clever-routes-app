@@ -3,6 +3,8 @@ import { describe, it } from 'node:test';
 
 import {
   createProofMediaUploadApiClient,
+  createProofMediaRejectedError,
+  shouldQueueFailedProofMediaUpload,
   uploadCapturedProofPhoto,
   type ProofMediaUploadRequest,
 } from './proofMediaUpload';
@@ -141,5 +143,75 @@ describe('proof media upload', () => {
       message: 'Proof media upload failed: Driver session expired. Look up the route with route context and phone again. (HTTP 401)',
       reason: 'driver_access_expired',
     });
+  });
+
+  it('surfaces scanner-rejected proof media as a safe non-retryable upload state', async () => {
+    const service = createProofMediaUploadApiClient({
+      accessToken: 'driver-token',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: false,
+        status: 422,
+        json: async () => ({
+          data: null,
+          error: { code: 'PROOF_MEDIA_REJECTED', message: 'Proof media rejected by safety scan' },
+        }),
+      }),
+    });
+
+    const result = await uploadCapturedProofPhoto({
+      captureResult: { kind: 'captured', source: 'camera', uri: 'file:///proof/stop-1.jpg' },
+      uploadRequest: {
+        deliveryStopId: 'stop-1',
+        fileName: 'stop-1.jpg',
+        routePlanId: 'route-1',
+      },
+      uploadService: service,
+    });
+
+    assert.deepEqual(result, {
+      kind: 'upload_failed',
+      message: 'Proof photo was rejected by the safety scan. Capture another proof photo.',
+      reason: 'proof_media_rejected',
+    });
+    assert.equal(shouldQueueFailedProofMediaUpload(result), false);
+  });
+
+  it('keeps generic and expired-access proof media failures retryable', () => {
+    assert.equal(
+      shouldQueueFailedProofMediaUpload({
+        kind: 'upload_failed',
+        message: 'Proof media upload failed: network down',
+      }),
+      true,
+    );
+    assert.equal(
+      shouldQueueFailedProofMediaUpload({
+        kind: 'upload_failed',
+        message: 'Proof media upload failed: Driver session expired. Look up the route with route context and phone again. (HTTP 401)',
+        reason: 'driver_access_expired',
+      }),
+      true,
+    );
+    assert.equal(
+      shouldQueueFailedProofMediaUpload({
+        kind: 'upload_failed',
+        message: 'Proof photo was rejected by the safety scan. Capture another proof photo.',
+        reason: 'proof_media_rejected',
+      }),
+      false,
+    );
+    assert.equal(
+      shouldQueueFailedProofMediaUpload({
+        kind: 'skipped',
+        message: 'Proof photo was not captured, so no media upload was attempted.',
+        reason: 'photo_not_captured',
+      }),
+      false,
+    );
+  });
+
+  it('can create a scanner rejection error for offline retry discard paths', () => {
+    assert.equal(createProofMediaRejectedError().message, 'Proof photo was rejected by the safety scan. Capture another proof photo.');
   });
 });

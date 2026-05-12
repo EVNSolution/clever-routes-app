@@ -1,6 +1,10 @@
 import type { DriverEventInput, DriverEventService, DriverEventType } from './driverEvents';
 import { getDriverApiRequiresRouteLookup } from './driverApiError';
-import type { ProofMediaUploadRequest, ProofMediaUploadService } from './proofMediaUpload';
+import {
+  isProofMediaRejectedError,
+  type ProofMediaUploadRequest,
+  type ProofMediaUploadService,
+} from './proofMediaUpload';
 
 export const OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY = '@clever-driver/offline-submission-queue-v1';
 export const OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY = {
@@ -212,6 +216,13 @@ export async function retryOfflineSubmissions(input: {
       input.queue.discard(item.queueItemId);
       succeeded += 1;
     } catch (error) {
+      if (item.kind === 'proof_media' && isProofMediaRejectedError(error)) {
+        if (input.queue.discard(item.queueItemId)) {
+          discarded += 1;
+        }
+        continue;
+      }
+
       requiresRouteLookup ??= getDriverApiRequiresRouteLookup(error);
       input.queue.recordRetryFailure(item.queueItemId, error instanceof Error ? error.message : 'unknown error');
       const updatedItem = input.queue.listPending().find((pendingItem) => pendingItem.queueItemId === item.queueItemId);

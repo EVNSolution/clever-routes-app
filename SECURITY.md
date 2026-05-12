@@ -16,6 +16,7 @@ Security review for this app includes:
 - location permission and foreground/background tracking behavior
 - proof photo, signature, and barcode capture flows
 - offline queue retry metadata and retention behavior
+- scanner-rejected proof media discard behavior
 - environment variables, mobile signing files, and release artifacts
 
 ## Current supported branches
@@ -30,7 +31,8 @@ Security review for this app includes:
 - Expired, malformed, or live downstream `401` driver access must be cleared from native secure storage before route context + phone re-lookup.
 - `.env*` files, signing artifacts, generated binaries, and local runtime state must remain ignored.
 - AsyncStorage queue payloads are not encrypted and must not become a secret store.
-- Production proof-media object storage/signed access, deployed scanner evidence, queue retention/discard thresholds, and store privacy disclosures remain release-gating work tracked in `docs/release-readiness.md`.
+- Scanner-rejected proof media must not be converted into durable proof evidence or retained for repeated retry.
+- Production proof-media object storage/signed access, deployed scanner evidence, deployed cleanup evidence, physical-device smoke evidence, and store privacy disclosures remain release-gating work tracked in `docs/release-readiness.md`.
 
 ## Evidence handling
 
