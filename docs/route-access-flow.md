@@ -94,7 +94,13 @@ The expected response shape matches `clever-delivery-server/docs/api/driver-assi
 - `NO_ASSIGNED_ROUTE` returns a safe empty state.
 - HTTP/API failures stay in `consent_recorded` with a retry message.
 
-The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records `ROUTE_STARTED`, foreground one-shot `LOCATION_UPDATED`, continuous/background-capable `LOCATION_UPDATED`, `STOP_DELIVERED`, and `STOP_FAILED` events to `POST /driver/events` with the active driver bearer token. Stop proof now stores metadata (`proof` payload with note/reason/source, uploaded photo media references, signature drawing evidence, and barcode scan evidence). The app-side offline queue can retain failed `ROUTE_STARTED`, `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, and proof media upload attempts for retry or discard; production proof-media storage hardening and physical-device background smoke evidence remain later slices. Duplicate event responses are treated idempotently as recorded.
+The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records `ROUTE_STARTED`, foreground one-shot `LOCATION_UPDATED`, continuous/background-capable `LOCATION_UPDATED`, `STOP_DELIVERED`, and `STOP_FAILED` events to `POST /driver/events` with the active driver bearer token. Stop proof now stores metadata (`proof` payload with note/reason/source, uploaded photo media references, signature drawing evidence, and barcode scan evidence). The durable app-side offline queue can retain failed `ROUTE_STARTED`, `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, and proof media upload attempts for retry or discard across app restarts; production proof-media storage hardening and physical-device background smoke evidence remain later slices. Duplicate event responses are treated idempotently as recorded.
+
+## Durable offline queue boundary
+
+`src/offlineSubmissionQueue.ts` owns queue identity, retry bookkeeping, malformed payload recovery, and storage serialization for pending driver events/proof media upload attempts. `src/expoOfflineSubmissionQueueStorage.ts` adapts the queue to Expo-compatible AsyncStorage.
+
+The queue stores retry metadata, driver event payloads, and proof media file URI references. It does not store driver access tokens; token persistence remains isolated in Expo SecureStore through `src/expoSecureDriverAccessTokenStore.ts`. AsyncStorage is treated as unencrypted app storage, so the queue is not a replacement for server-side proof storage or secret storage.
 
 ## Proof media upload boundary
 
@@ -148,5 +154,5 @@ The persisted payload stores only the driver token and route access identifiers 
 ## Follow-up
 
 - Define release environment profiles and any server-side token refresh/re-auth UX beyond the current short-lived token TTL.
-- Add production proof-media storage retention/deletion evidence and decide whether the app-side offline queue needs durable on-device persistence beyond the current in-memory MVP queue.
-- Add physical-device background tracking smoke evidence, production privacy disclosures, and durable on-device persistence policy for updates emitted while the app process cannot reach the live delivery server. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.
+- Add production proof-media storage retention/deletion evidence and production retention/discard thresholds for durable queue items after repeated failure, route completion, or driver sign-out.
+- Add physical-device background tracking smoke evidence and production privacy disclosures for updates emitted while the app process cannot reach the live delivery server. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.
