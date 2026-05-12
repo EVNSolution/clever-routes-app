@@ -112,6 +112,100 @@ Clever/Tomatono 배송 운영에는 관리자 콘솔과 delivery server는 준�
 4. stop detail에서 주소, 순서, 지도 이동 준비 정보 확인
 5. MVP 이후 위치 업데이트 송신과 delivery status update 확장
 
+## 핵심 사용자 시나리오
+
+### 시나리오 1: 앱 첫 실행과 전화번호 접근
+
+- 배송원이 iPhone 또는 Android phone에서 앱을 실행한다.
+- 앱은 관리자 기능 없이 배송원용 시작 화면을 보여준다.
+- 배송원은 전화번호를 입력한다.
+- 앱은 서버에 phone lookup을 요청해 초대된 배송원인지 확인한다.
+- 초대된 배송원이면 동의 단계로 이동한다.
+- 초대되지 않은 번호, 비활성 driver, 차단된 driver는 route 데이터를 받지 못하고 안내 화면에 머문다.
+- MVP 문서 기준 인증은 `전화번호 + 초대 상태 확인`까지로 둔다. OTP, deep link invite token, 강한 session 인증은 driver API contract 후속 이슈에서 결정한다.
+
+### 시나리오 2: 동의 gate
+
+- 앱은 route 조회 전에 위치정보 처리 동의와 개인정보 이용 동의를 요구한다.
+- 동의 문구와 consent version은 서버 또는 legal copy source와 맞춘다.
+- 동의 제출은 서버 consent record API에 기록되어야 한다.
+- 동의 성공 전에는 assigned route 화면으로 이동하지 않는다.
+- 법적/서비스 동의와 OS 위치 권한 요청은 분리한다. OS foreground/background 위치 권한은 기본적으로 배송 시작 액션 이후 요청한다.
+
+### 시나리오 3: 당일 assigned route 확인
+
+- 동의가 완료된 배송원은 당일 자신에게 배정된 route를 조회한다.
+- 앱은 route summary, stop list, stop detail을 배송원에게 보여준다.
+- stop detail은 주소, 순서, 배송 준비에 필요한 지도 이동 정보를 포함한다.
+- route/stop 조회는 서버의 assigned driver 또는 active session boundary를 통과해야 한다.
+- 서버 compliance 기준상 driver assigned route read와 stop detail read는 위치정보가 driver app으로 반환되는 `PROVIDE` 성격의 동작으로 본다.
+
+### 시나리오 4: 배송 시작과 위치 서비스
+
+- 배송원은 route를 확인한 뒤 명시적으로 `배송 시작`을 누른다.
+- 앱은 이 시점부터 foreground location 권한을 요청하고, 필요한 경우 background location 권한을 단계적으로 요청한다.
+- 위치 수집과 위치 이벤트 송신은 `배송 시작` 이후에만 허용한다.
+- 위치 이벤트는 서버 driver event/location update API로 전송한다.
+- 서버 compliance 기준상 driver GPS update는 위치정보 `COLLECT` 성격의 동작으로 본다.
+- 배송 시작 전에는 background location 수집을 하지 않는다.
+
+### 시나리오 5: 배송 종료와 기록 정리
+
+- 배송원이 `배송 종료` 또는 route 완료 상태에 도달하면 앱은 위치 이벤트 송신을 중단한다.
+- 앱은 마지막 sync 상태를 표시하고, 전송 실패 이벤트가 있으면 재시도 또는 미전송 안내를 제공한다.
+- 이후 앱 재실행 시에는 당일 route 상태와 driver session/access 상태를 서버에서 다시 확인한다.
+
+## 상태 흐름
+
+문서 기준 상태 흐름은 아래 순서로 둔다.
+
+```text
+unidentified
+  -> invited
+  -> consent_required
+  -> consent_recorded
+  -> route_ready
+  -> delivery_active
+  -> delivery_finished
+```
+
+- `unidentified`: 앱 첫 실행 또는 session 없음. 전화번호 입력 전 상태.
+- `invited`: 서버가 초대된 배송원으로 확인했지만 필수 동의가 끝나지 않은 상태.
+- `consent_required`: 위치정보/개인정보 동의가 필요하거나 consent version이 갱신된 상태.
+- `consent_recorded`: 서버가 필수 동의를 기록했고 route 조회가 가능한 상태.
+- `route_ready`: 당일 assigned route를 확인할 수 있으나 아직 위치 수집은 시작하지 않은 상태.
+- `delivery_active`: 배송원이 `배송 시작`을 눌렀고 위치 권한/서비스가 활성화되는 상태.
+- `delivery_finished`: 배송이 종료되어 위치 이벤트 송신을 중단한 상태.
+
+불변 조건:
+
+- 동의 기록 전에는 assigned route를 표시하지 않는다.
+- `delivery_active` 전에는 driver GPS location event를 서버에 보내지 않는다.
+- 위치 권한 거부 또는 철회 상태에서는 `delivery_active`로 진입하지 않고 복구 안내를 보여준다.
+- route/stop data는 서버가 확인한 assigned driver boundary 밖으로 노출하지 않는다.
+
+## 실패/예외 시나리오
+
+- 초대되지 않은 전화번호: 가입/관리자 문의 안내를 보여주고 route/consent API로 진행하지 않는다.
+- 비활성 또는 차단된 driver: 접근 불가 안내를 보여주고 session을 만들지 않는다.
+- consent submit 실패: route 화면으로 이동하지 않고 재시도와 지원 문의 안내를 제공한다.
+- OS 위치 권한 거부: route 확인은 유지하되 배송 시작은 막고 설정 이동/재시도 안내를 제공한다.
+- OS 위치 권한 철회: active delivery 중이면 위치 송신을 중단하고 서버에 가능한 상태 이벤트를 보낸 뒤 복구 안내를 제공한다.
+- 당일 route 없음: "오늘 배정된 route 없음" 상태를 표시하고 자동으로 다른 driver/route를 노출하지 않는다.
+- 서버/API 장애: 현재 화면의 민감 데이터 확대 표시를 피하고 재시도 가능한 오류 상태로 둔다.
+- 네트워크 불안정: 위치 이벤트는 안전한 범위에서 재시도 대상으로 관리하되, 중복 전송과 민감 payload logging을 피한다.
+
+## Server contract 필요 항목
+
+후속 server/API 이슈에서 아래 driver-facing contract를 정의해야 한다.
+
+- phone lookup: 전화번호를 기준으로 invited/not-found/disabled/blocked 상태를 구분한다.
+- consent record: consent type, consent version, driver identity, timestamp, device/app context를 서버에 기록한다.
+- assigned route read: 당일 route summary와 stop list를 assigned driver boundary 안에서만 반환한다.
+- stop detail read: 배송 준비에 필요한 주소/순서/지도 이동 정보를 반환하되 다른 driver route 접근은 차단한다.
+- driver event/location update: `배송 시작` 이후 foreground/background 위치 이벤트와 delivery status event를 수집한다.
+- access/usage logging: route/stop read는 위치정보 `PROVIDE`, GPS update는 위치정보 `COLLECT`로 분류할 수 있도록 서버 compliance log와 맞춘다.
+
 ## 구현 계획 v0
 
 이 계획은 코드 구현 전에 repo 역할과 순서를 고정하기 위한 초안이다. 각 단계는 별도 target issue와 GitHub Development linked branch에서 진행한다.
