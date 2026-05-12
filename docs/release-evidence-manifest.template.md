@@ -106,6 +106,7 @@ Result values: `pass`, `fail`, `blocked`, or `not-run`.
 | Google Play Data safety answers reviewed | pending | pending | pending | pending |
 | Background location review rationale approved | pending | pending | pending | pending |
 | Photo/video permission review approved | pending | pending | pending | pending |
+| Google Play minimum-scope permission review completed | pending | pending | pending | Location/photo-video reviewed; Contacts permissions absent in native manifest |
 | Store/private distribution path approved | pending | pending | pending | pending |
 | Public `LICENSE` / reuse terms decision | pending | pending | pending | pending |
 
@@ -116,6 +117,7 @@ Result values: `pass`, `fail`, `blocked`, or `not-run`.
 | Every physical-device smoke row has iPhone and Android evidence | pending | pending |
 | Store/private distribution path approved | pending | pending |
 | Privacy disclosure copy approved | pending | pending |
+| Current Google Play minimum-scope permission review complete | pending | Location/photo-video reviewed and Contacts permissions absent |
 | Local native release preflight passes | pending | Run `npm run check:native-release` from the source commit before EAS builds |
 | EAS build records point to committed source | pending | pending |
 | Generated artifacts and sensitive evidence kept outside git | pending | pending |
