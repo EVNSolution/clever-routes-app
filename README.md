@@ -47,6 +47,7 @@ See `docs/route-access-flow.md` for the app-side route access, consent, assigned
 - Human contribution workflow is documented in `CONTRIBUTING.md`.
 - Security/privacy reporting and evidence handling are documented in `SECURITY.md`.
 - Production release, store disclosure, and physical-device smoke evidence are tracked in `docs/release-readiness.md`.
+- `.editorconfig` fixes UTF-8/LF/two-space defaults for reviewed source/docs files; `.gitattributes` normalizes source-controlled text and keeps evidence/release/signing artifacts binary if an owner-approved exception ever appears.
 - A public `LICENSE` file has not been selected yet; do not add reuse terms without an explicit owner decision.
 
 ## Local setup
@@ -103,7 +104,7 @@ Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`, g
 ## Documentation map
 
 - `docs/project-brief.md` — product role, MVP scenarios, platform decision, and implementation sequencing.
-- `docs/repository-setup.md` — repo baseline, scripts, ignore policy, and follow-up setup notes.
+- `docs/repository-setup.md` — repo baseline, scripts, ignore policy, text normalization policy, and follow-up setup notes.
 - `docs/route-access-flow.md` — app-side route access, consent, assigned route, native map handoff, delivery event, proof media, and offline queue boundary.
 - `docs/release-readiness.md` — production distribution, store/privacy disclosure, physical-device smoke evidence, and release blockers.
 - `docs/release-evidence-manifest.template.md` — copy-only external evidence manifest template for release candidates.

@@ -24,7 +24,7 @@ Optional live API mode uses only public Expo runtime configuration:
 EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://delivery.example.com npm run start
 ```
 
-Do not commit `.env*` files other than `.env.example`.
+Do not commit `.env*` files other than `.env.example`. Keep source/docs/config files UTF-8/LF with final newlines as defined by `.editorconfig` and `.gitattributes`.
 
 ## Required checks before PR
 
@@ -53,7 +53,7 @@ git diff --check
 
 ## Generated and sensitive files
 
-Generated Expo/native outputs, signing artifacts, local env files, local runtime state, dependency folders, and build/test artifacts must stay untracked. Review `.gitignore` before adding native build tooling or release signing files.
+Generated Expo/native outputs, signing artifacts, local env files, local runtime state, dependency folders, and build/test artifacts must stay untracked. Review `.gitignore`, `.gitattributes`, and `.editorconfig` before adding native build tooling, release signing files, or evidence workflows.
 
 ## License
 

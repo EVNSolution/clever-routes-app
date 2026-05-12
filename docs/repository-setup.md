@@ -10,6 +10,7 @@ This document records the repo baseline for the `clever-driver-app` implementati
 - Target runtime: native iOS and Android app
 - Package manager: npm with `package-lock.json`
 - Node floor: `.nvmrc` pins `20.19.4`; `package.json` allows Node `>=20.19.4`
+- Text normalization: `.editorconfig` sets UTF-8, LF, final newline, trailing-whitespace trim, and two-space indentation for source/docs files; `.gitattributes` normalizes reviewed text files to LF and marks evidence/release/signing artifact patterns as binary
 - Entry point: `index.ts` registering `App.tsx`
 - Current implementation depth: local Expo route+phone lookup, company guidance, safe multi-company ambiguity guidance, consent gate, assigned-route screen, stop-card OS map handoff, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode, live downstream `401` expired-token recovery through secure-token clearing plus route+phone re-lookup guidance, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, native proof photo URI capture, proof media upload references, local proof-media smoke mock modes, scanner-rejected proof photo recapture guidance, signature/barcode proof capture, richer stop delivered/failed proof metadata controls, durable app-side offline queue/retry for driver events and retryable proof media, explicit app-side offline queue retention/discard thresholds, delivery finish `ROUTE_COMPLETED` cleanup, driver session reset/sign-out cleanup for secure access plus queued retry state, and EAS preview/production native build-profile scaffolding; delivery-server now has a proof-media scan rejection hook and local cleanup runner, while server-issued token refresh/strong re-auth, production proof-media object storage/signed access/deployed scanner evidence, physical-device background smoke evidence, owner-controlled signing/store setup, and store/privacy disclosure evidence remain later slices
 
@@ -42,7 +43,9 @@ The EAS config intentionally does not commit Expo project IDs, Apple/Google cred
 
 `npm run check:native-release` must pass before EAS build evidence or release-sensitive PRs. This preflight is intentionally source-controlled and secret-free: it checks bundle/package identity, native version pins, permission plugin copy, preview/production profile shape, and `.env.example` coverage. It does not prove Expo/EAS project ownership, Apple/Google signing authority, store/private distribution approval, privacy copy approval, or the public license decision.
 
-## Ignore policy reviewed
+## File hygiene policy reviewed
+
+`.editorconfig` and `.gitattributes` are source-controlled so contributors and release reviewers see the same text-file defaults across macOS/Linux/Windows clients. The policy is intentionally small: normalize reviewed source/docs/config files to UTF-8/LF with final newlines, keep two-space indentation where this repo already uses it, and treat evidence media, release binaries, and signing/credential-like artifacts as binary if an explicit owner-approved exception ever requires tracking one.
 
 `.gitignore` is configured to keep generated or sensitive local state out of git:
 
@@ -66,6 +69,7 @@ Generated `android/` and `ios/` source directories are not globally ignored. If 
 
 Before opening an implementation PR, re-check these repo baseline files together with the code diff:
 
+- `.editorconfig` / `.gitattributes`: UTF-8/LF/final-newline defaults and binary patterns for evidence, release, and signing artifacts stay aligned with the repo hygiene policy.
 - `.gitignore`: generated Expo/native outputs, signing artifacts, local env files, package caches, compiler artifacts, and agent/runtime state stay ignored; `android/` and `ios/` source directories are intentionally not globally ignored.
 - physical-device evidence: screenshots, videos, logs, generated binaries, signing files, credentials, and production PII stay outside git; keep only sanitized references in issues/PRs.
 - `.env.example`: every bundled `EXPO_PUBLIC_*` runtime key used by the app is documented, and secret `.env*` files stay ignored.
