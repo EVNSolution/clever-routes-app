@@ -14,6 +14,11 @@ Recommended external filename:
 release-evidence-manifest-<yyyyMMdd>-<shortsha>.md
 ```
 
+Before filling a copied manifest, run `npm run release:evidence:seed` from the
+committed source revision and paste its non-secret output into the external
+evidence workspace as the starting audit record. The seed does not replace real
+EAS build URLs, physical-device results, or owner/legal approvals.
+
 ## Release candidate identity
 
 | Field | Value |
