@@ -46,7 +46,7 @@ release-evidence-manifest-<yyyyMMdd>-<shortsha>.md
 | Driver route fixture reference | pending |
 | Shop/company fixture reference | pending |
 | Proof-media storage backend | local filesystem / object storage / other |
-| Proof-media malware scanning evidence | pending / n/a |
+| Proof-media scanner deployment evidence | pending / n/a |
 | Proof-media cleanup scheduler evidence | pending / n/a |
 
 ## Device matrix

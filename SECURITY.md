@@ -30,7 +30,7 @@ Security review for this app includes:
 - Expired, malformed, or live downstream `401` driver access must be cleared from native secure storage before route context + phone re-lookup.
 - `.env*` files, signing artifacts, generated binaries, and local runtime state must remain ignored.
 - AsyncStorage queue payloads are not encrypted and must not become a secret store.
-- Production proof-media storage, queue retention/discard thresholds, and store privacy disclosures remain release-gating work tracked in `docs/release-readiness.md`.
+- Production proof-media object storage/signed access, deployed scanner evidence, queue retention/discard thresholds, and store privacy disclosures remain release-gating work tracked in `docs/release-readiness.md`.
 
 ## Evidence handling
 

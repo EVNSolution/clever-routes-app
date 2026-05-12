@@ -180,7 +180,7 @@ MVP와 확장 경계:
 - 위치 수집과 위치 이벤트 송신은 `배송 시작` 이후에만 허용한다.
 - 배송 시작 이벤트는 서버 driver event API에 `ROUTE_STARTED`로 기록한다. foreground one-shot GPS 위치 업데이트와 continuous/background-capable GPS update는 `LOCATION_UPDATED`로 전송할 수 있다.
 - `delivery_active` 이후 continuous tracking action은 background location permission과 native task availability를 확인한 뒤 named task를 시작하고, task batch를 서버 driver event API의 `LOCATION_UPDATED`로 기록한다.
-- `delivery_active` 이후 stop card에서 배송 완료/실패를 누르면 앱은 서버 driver event API에 `STOP_DELIVERED` 또는 `STOP_FAILED`를 기록한다. 현재 proof는 note, failure reason, Expo ImagePicker 기반 photo capture, proof media upload reference, signature drawing evidence, barcode scan evidence와 app-side offline queue/retry를 포함하며 production proof-media storage hardening은 후속 slice에서 다룬다.
+- `delivery_active` 이후 stop card에서 배송 완료/실패를 누르면 앱은 서버 driver event API에 `STOP_DELIVERED` 또는 `STOP_FAILED`를 기록한다. 현재 proof는 note, failure reason, Expo ImagePicker 기반 photo capture, proof media upload reference, signature drawing evidence, barcode scan evidence와 app-side offline queue/retry를 포함한다. Delivery server에는 proof-media scan rejection hook이 있으며, production object storage/signed access/deployed scanner evidence는 후속 slice에서 다룬다.
 - 서버 compliance 기준상 driver GPS `LOCATION_UPDATED`는 위치정보 `COLLECT` 성격의 동작으로 본다.
 - 배송 시작 전에는 background location 수집을 하지 않는다.
 
@@ -366,7 +366,7 @@ unidentified
 - input data: route context, E.164 phone, consent decisions, current date/device context
 - output data: company guidance, consent record, assigned route/stop display state, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
-- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events, and `ROUTE_COMPLETED` delivery finish event with native photo URI capture, proof media upload references, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads or live downstream `401`, which returns the driver to route context + phone lookup; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, recorded route cleanup, and session reset; delivery server local/manual proof-media cleanup runner exists; token refresh/strong re-auth, production proof-media object storage/access/scanning hardening, deployed cleanup evidence, and physical-device background smoke evidence remain follow-up work
+- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events, and `ROUTE_COMPLETED` delivery finish event with native photo URI capture, proof media upload references, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads or live downstream `401`, which returns the driver to route context + phone lookup; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, recorded route cleanup, and session reset; delivery server proof-media scan rejection hook and local/manual cleanup runner exist; token refresh/strong re-auth, production proof-media object storage/signed access/deployed scanner evidence, deployed cleanup evidence, and physical-device background smoke evidence remain follow-up work
 
 ## 검증 초안
 
@@ -382,7 +382,7 @@ unidentified
 - consent legal copy source and production version registry
 - dedicated native map provider SDK choice and background location policy for post-MVP
 - minimum supported iOS/Android versions and physical-device background-location smoke matrix
-- production proof-media object storage/access/scanning policy and deployed cleanup release evidence
+- production proof-media object storage/signed access/scanner backend policy and deployed cleanup release evidence
 
 ## 다음 작업 목록
 
