@@ -49,13 +49,39 @@ Clever/Tomatono 배송 운영에는 관리자 콘솔과 delivery server는 준�
 
 배송원이 전화번호 기반으로 접근하고, 위치정보 및 개인정보 이용 동의를 완료한 뒤, 당일 자신에게 배정된 route를 확인해 배송을 준비할 수 있는 1차 MVP 앱을 만든다.
 
+## 플랫폼 전략
+
+1차 플랫폼 기준은 iPhone과 Android phone에서 동작하는 native mobile app이다.
+
+판단 이유:
+
+- 배송원 앱은 위치 권한, 위치 처리 동의 기록, 개인정보 이용 기록, 접근 로그, 보안 상태 처리가 필요하다.
+- MVP 이후 foreground/background location service, push notification, device permission state, 불안정한 네트워크 대응이 중요해질 가능성이 높다.
+- PWA/web app은 접근성은 좋지만 background/foreground service, 위치 권한 UX, store/MDM 기반 배포 통제, 기기별 권한 동작의 예측 가능성이 native app보다 약하다.
+
+기본 방향:
+
+- implementation target: iOS + Android cross-platform native app
+- preferred framework candidate: Expo/React Native 계열 우선 검토
+- distribution candidates:
+  - App Store/TestFlight and Google Play testing/production tracks
+  - driver 대상이 제한된 경우 Apple Business Manager Custom Apps and managed Google Play/private app
+- PWA/web app: 공식 앱 설치 전 임시 접근, 운영 fallback, 또는 admin/support 보조 화면으로만 검토한다. driver MVP의 본선 플랫폼으로 두지 않는다.
+
+플랫폼 결정 완료 기준:
+
+- iOS/Android foreground location 권한 요청과 consent UX를 구현할 수 있다.
+- background location 또는 background task가 필요한 후속 단계에서 store review/privacy disclosure 리스크를 추적할 수 있다.
+- App Store/Play Store 공개 배포와 private/internal 배포 중 운영 정책에 맞는 경로를 선택할 수 있다.
+- local build, test, smoke evidence를 PR 검증에 포함할 수 있다.
+
 ## 제약
 
 - 서버가 route/order/driver canonical source of truth다.
 - 모바일 앱은 배송원용 UX에 집중하고 관리자 기능을 포함하지 않는다.
 - 위치정보 동의, 개인정보 이용 동의, 접근 로그/이용 기록 요구사항은 delivery server의 compliance 계획과 호응해야 한다.
 - 구현 작업은 target issue와 linked branch를 통해 진행한다.
-- 본 bootstrap 범위는 repo 준비까지이며 앱 프레임워크/인증 상세 구현은 후속 이슈에서 결정한다.
+- 본 bootstrap 범위는 repo 준비와 플랫폼 방향 고정까지이며 앱 프레임워크/인증 상세 구현은 후속 이슈에서 결정한다.
 
 ## 초기 범위
 
@@ -75,8 +101,8 @@ Clever/Tomatono 배송 운영에는 관리자 콘솔과 delivery server는 준�
 
 - primary user: 배송원/드라이버
 - operator or admin: Shopify embedded admin console을 쓰는 Tomatono/Clever 운영자
-- runtime environment: mobile app runtime, delivery server API, Shopify-backed admin context
-- deploy target: pending; likely Expo/EAS or native mobile distribution after framework decision
+- runtime environment: iOS/Android mobile app runtime, delivery server API, Shopify-backed admin context
+- deploy target: pending; likely App Store/TestFlight + Google Play tracks, or private/internal distribution through Apple Business Manager and managed Google Play after 운영 정책 확정
 
 ## 기능 초안
 
@@ -109,6 +135,7 @@ Clever/Tomatono 배송 운영에는 관리자 콘솔과 delivery server는 준�
   - framework: Expo/React Native 계열 우선 검토
   - package manager와 Node/runtime version
   - 앱 라우팅 방식과 기본 화면 구조
+  - iOS/Android permission, privacy disclosure, background capability 설정 위치
 - 산출물:
   - 앱 skeleton
   - lint/typecheck/test/build 또는 start command
@@ -139,6 +166,7 @@ Clever/Tomatono 배송 운영에는 관리자 콘솔과 delivery server는 준�
   - legal copy source
   - consent versioning
   - delivery server consent record endpoint
+  - foreground/background location 권한 요청 시점과 거절/재요청 UX
 - 산출물:
   - consent screen
   - required consent state machine
