@@ -16,6 +16,16 @@ export type RouteAccessCompanyGuidance = {
   timezone: string | null;
 };
 
+export type RouteAccessAmbiguousMatch = {
+  companyDisplayName: string;
+  deliveryDate: string;
+  operatorSupportContact?: string | null;
+  pickupGuidance?: string | null;
+  routeName: string;
+  shopDomain: string;
+  timezone: string | null;
+};
+
 export type DriverAccessToken = {
   accessToken: string;
   expiresAt: string;
@@ -34,6 +44,11 @@ export type RouteAccessLookupResult =
       };
       driverAccess: DriverAccessToken;
       companyGuidance: RouteAccessCompanyGuidance;
+    }
+  | {
+      status: 'MULTIPLE_MATCHES';
+      matches: RouteAccessAmbiguousMatch[];
+      resolutionHint?: string | null;
     }
   | { status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND' };
 
@@ -54,6 +69,13 @@ export type RouteAccessSubmissionResult =
       flowState: Extract<DriverFlowState, 'company_context_confirmed'>;
       nextState: 'consent_required';
       routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess'];
+    }
+  | {
+      kind: 'multiple_matches';
+      flowState: Extract<DriverFlowState, 'route_context_entered'>;
+      matches: RouteAccessAmbiguousMatch[];
+      message: string;
+      resolutionHint: string | null;
     }
   | {
       kind: 'denied';
@@ -100,6 +122,31 @@ export const sampleInvitedRouteAccess: Extract<RouteAccessLookupResult, { status
   },
 };
 
+export const sampleMultipleRouteAccess: Extract<RouteAccessLookupResult, { status: 'MULTIPLE_MATCHES' }> = {
+  status: 'MULTIPLE_MATCHES',
+  matches: [
+    {
+      companyDisplayName: 'Tomatono Toronto',
+      deliveryDate: '2026-05-12',
+      operatorSupportContact: '+14165550000',
+      pickupGuidance: 'Use the route-specific invite link from dispatch.',
+      routeName: 'Tuesday AM Route',
+      shopDomain: 'tomatono.myshopify.com',
+      timezone: 'America/Toronto',
+    },
+    {
+      companyDisplayName: 'North Market',
+      deliveryDate: '2026-05-12',
+      operatorSupportContact: '+14165550001',
+      pickupGuidance: 'Confirm the North Market route code before continuing.',
+      routeName: 'North PM Route',
+      shopDomain: 'north-market.myshopify.com',
+      timezone: 'America/Toronto',
+    },
+  ],
+  resolutionHint: 'Use the route-specific invite link/code from dispatch.',
+};
+
 export function createMockRouteAccessService(
   result: RouteAccessLookupResult = sampleInvitedRouteAccess,
 ): RouteAccessService {
@@ -136,6 +183,16 @@ export async function submitRouteAccess(
     };
   }
 
+  if (lookup.status === 'MULTIPLE_MATCHES') {
+    return {
+      kind: 'multiple_matches',
+      flowState: 'route_context_entered',
+      matches: lookup.matches,
+      message: getRouteAccessMultipleMatchesMessage(),
+      resolutionHint: lookup.resolutionHint ?? null,
+    };
+  }
+
   return {
     kind: 'denied',
     message: getRouteAccessDeniedMessage(lookup.status),
@@ -156,6 +213,10 @@ export function getRouteAccessValidationMessage(
   }
 }
 
+export function getRouteAccessMultipleMatchesMessage(): string {
+  return 'Multiple company routes match this phone. Use the route-specific link/code or contact dispatch.';
+}
+
 export function getRouteAccessDeniedMessage(status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND'): string {
   switch (status) {
     case 'NOT_FOUND':
@@ -166,6 +227,17 @@ export function getRouteAccessDeniedMessage(status: 'BLOCKED' | 'DISABLED' | 'NO
       return 'This driver profile is blocked. Contact dispatch before continuing.';
   }
 }
+
+const MULTIPLE_MATCHES_RESPONSE_KEYS = new Set(['matches', 'resolutionHint', 'status']);
+const MULTIPLE_MATCH_KEYS = new Set([
+  'companyDisplayName',
+  'deliveryDate',
+  'operatorSupportContact',
+  'pickupGuidance',
+  'routeName',
+  'shopDomain',
+  'timezone',
+]);
 
 export function createRouteAccessApiClient(input: {
   baseUrl: string;
@@ -214,6 +286,21 @@ function isRouteAccessLookupResult(value: unknown): value is RouteAccessLookupRe
     return true;
   }
 
+  if (status === 'MULTIPLE_MATCHES') {
+    if (!hasOnlyKeys(value, MULTIPLE_MATCHES_RESPONSE_KEYS)) {
+      return false;
+    }
+
+    const matches = (value as { matches?: unknown }).matches;
+    const resolutionHint = (value as { resolutionHint?: unknown }).resolutionHint;
+    return (
+      Array.isArray(matches) &&
+      matches.length > 0 &&
+      matches.every(isRouteAccessAmbiguousMatch) &&
+      (resolutionHint === undefined || nullableString(resolutionHint))
+    );
+  }
+
   if (status !== 'INVITED') {
     return false;
   }
@@ -256,6 +343,27 @@ function isCompanyGuidance(value: unknown): value is RouteAccessCompanyGuidance 
   );
 }
 
+function isRouteAccessAmbiguousMatch(value: unknown): value is RouteAccessAmbiguousMatch {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  if (!hasOnlyKeys(value, MULTIPLE_MATCH_KEYS)) {
+    return false;
+  }
+
+  const match = value as Record<string, unknown>;
+  return (
+    typeof match.companyDisplayName === 'string' &&
+    typeof match.deliveryDate === 'string' &&
+    optionalNullableString(match.operatorSupportContact) &&
+    optionalNullableString(match.pickupGuidance) &&
+    typeof match.routeName === 'string' &&
+    typeof match.shopDomain === 'string' &&
+    nullableString(match.timezone)
+  );
+}
+
 export function isDriverAccessToken(value: unknown): value is DriverAccessToken {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
@@ -277,4 +385,12 @@ export function isDriverAccessToken(value: unknown): value is DriverAccessToken 
 
 function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
+}
+
+function optionalNullableString(value: unknown): value is string | null | undefined {
+  return value === undefined || nullableString(value);
+}
+
+function hasOnlyKeys(value: object, allowedKeys: Set<string>): boolean {
+  return Object.keys(value).every((key) => allowedKeys.has(key));
 }

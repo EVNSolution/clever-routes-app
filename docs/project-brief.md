@@ -331,7 +331,7 @@ unidentified
 - 선행 계약:
   - assigned route 조회 endpoint: delivery-server `GET /driver/assigned-route` and app API boundary are implemented
   - route/stop response shape: route summary and ordered stop cards are implemented in the local Expo flow
-  - no-route, multiple-route, API error 상태 처리 기준: no-route and API error states are implemented; multiple-route remains a server-side safe-empty/route-context concern
+  - no-route, multiple-route, API error 상태 처리 기준: no-route and API error states are implemented; multi-company/multiple-route ambiguity is now an app-visible safe guidance state that shows only non-sensitive company/route display context and requires a route-specific link/code before route details
 - 산출물:
   - today's route screen: implemented after consent with local mock/API boundary
   - stop list and stop detail screen: implemented as ordered stop cards for route-ready MVP

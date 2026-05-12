@@ -12,17 +12,18 @@ The app now has an interactive route access screen for the first driver-facing f
 2. App validates both fields before lookup.
 3. App calls a `RouteAccessService` boundary shaped like delivery-server `POST /driver/route-access/lookup`.
 4. `INVITED` renders company/shop/route guidance and moves the visible state to `consent_required`.
-5. `NOT_FOUND`, `DISABLED`, and `BLOCKED` render safe denial messages without route/stop/customer data.
-6. Consent gate records required `LOCATION_INFORMATION` and `PERSONAL_INFORMATION` consent via a `DriverConsentService` boundary.
-7. Successful consent moves the visible state to `consent_recorded`.
-8. Assigned route loading calls an `AssignedRouteService` boundary shaped like delivery-server `GET /driver/assigned-route`.
-9. `ASSIGNED_ROUTE` renders route summary, ordered stop cards, and per-stop OS map handoff, then moves the visible state to `route_ready`.
-10. Delivery start requests foreground location permission and moves to `delivery_active` only when permission is granted.
-11. After `delivery_active`, the app records a `ROUTE_STARTED` driver event and can sync a foreground `LOCATION_UPDATED` event through the driver event API boundary.
-12. After `delivery_active`, the app can request background location permission and start/stop a named continuous location task that streams batched `LOCATION_UPDATED` events through the same driver event boundary.
-13. After `delivery_active`, each stop card can record delivered/failed proof metadata as `STOP_DELIVERED` or `STOP_FAILED`; the app captures note, failure reason, uploaded photo media references, signature drawing evidence, and barcode scan evidence through proof-media and driver event API boundaries.
-14. Delivery finish stops the continuous location task, records or queues a `ROUTE_COMPLETED` driver event, and discards route-scoped local retry items only after route completion is recorded.
-15. `NO_ASSIGNED_ROUTE` and API errors stay in safe user-visible states without exposing other tenant/driver data.
+5. `MULTIPLE_MATCHES` renders only non-sensitive company/route display context and asks the driver to use a route-specific link/code or contact dispatch before continuing.
+6. `NOT_FOUND`, `DISABLED`, and `BLOCKED` render safe denial messages without route/stop/customer data.
+7. Consent gate records required `LOCATION_INFORMATION` and `PERSONAL_INFORMATION` consent via a `DriverConsentService` boundary.
+8. Successful consent moves the visible state to `consent_recorded`.
+9. Assigned route loading calls an `AssignedRouteService` boundary shaped like delivery-server `GET /driver/assigned-route`.
+10. `ASSIGNED_ROUTE` renders route summary, ordered stop cards, and per-stop OS map handoff, then moves the visible state to `route_ready`.
+11. Delivery start requests foreground location permission and moves to `delivery_active` only when permission is granted.
+12. After `delivery_active`, the app records a `ROUTE_STARTED` driver event and can sync a foreground `LOCATION_UPDATED` event through the driver event API boundary.
+13. After `delivery_active`, the app can request background location permission and start/stop a named continuous location task that streams batched `LOCATION_UPDATED` events through the same driver event boundary.
+14. After `delivery_active`, each stop card can record delivered/failed proof metadata as `STOP_DELIVERED` or `STOP_FAILED`; the app captures note, failure reason, uploaded photo media references, signature drawing evidence, and barcode scan evidence through proof-media and driver event API boundaries.
+15. Delivery finish stops the continuous location task, records or queues a `ROUTE_COMPLETED` driver event, and discards route-scoped local retry items only after route completion is recorded.
+16. `NO_ASSIGNED_ROUTE` and API errors stay in safe user-visible states without exposing other tenant/driver data.
 
 ## Local mock boundary
 
@@ -31,6 +32,7 @@ The app now has an interactive route access screen for the first driver-facing f
 The route access screen exposes mock modes:
 
 - `INVITED`
+- `MULTIPLE_MATCHES`
 - `NOT_FOUND`
 - `DISABLED`
 - `BLOCKED`
@@ -54,6 +56,31 @@ Content-Type: application/json
 ```
 
 The expected response shape matches `clever-delivery-server/docs/api/driver-route-access.md`. `INVITED` responses must include `driverAccess` token evidence (`accessToken`, `tokenType`, `expiresAt`, `ttlSeconds`, and `use`) so later consent and assigned-route clients can use the server-issued driver bearer token.
+
+If a route context and phone number can still match multiple company/route assignments, the client accepts a safe ambiguous response:
+
+```json
+{
+  "data": {
+    "status": "MULTIPLE_MATCHES",
+    "matches": [
+      {
+        "companyDisplayName": "Tomatono Toronto",
+        "shopDomain": "tomatono.myshopify.com",
+        "routeName": "Tuesday AM Route",
+        "deliveryDate": "2026-05-12",
+        "timezone": "America/Toronto",
+        "pickupGuidance": "Use the route-specific invite link from dispatch.",
+        "operatorSupportContact": "+14165550000"
+      }
+    ],
+    "resolutionHint": "Use the route-specific invite link/code from dispatch."
+  },
+  "error": null
+}
+```
+
+`MULTIPLE_MATCHES` must not include `driverAccess`, `routePlanId`, delivery stops, customer addresses, coordinates, order data, or proof data. The app stays at the route-context entry boundary and asks the driver to use a route-specific link/code or contact dispatch before route details can be shown.
 
 ## Consent API client boundary
 
@@ -167,6 +194,7 @@ The persisted payload stores only the driver token and route access identifiers 
 
 ## Follow-up
 
+- Sync `clever-delivery-server/docs/api/driver-route-access.md` and server implementation for `MULTIPLE_MATCHES` if the backend introduces shared company/route access codes. The current server UUID `RoutePlan.id` context can remain a single-match or `NOT_FOUND` path.
 - Define release environment profiles and any server-side token refresh/re-auth UX beyond the current short-lived token TTL.
 - Add production proof-media object storage, signed access, malware scanning/private evidence storage, and deployed cleanup/scheduler evidence. The delivery server already exposes a local/manual cleanup runner via `npm run driver:proof-media:cleanup`.
 - Add physical-device background tracking smoke evidence and production privacy disclosures for updates emitted while the app process cannot reach the live delivery server. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.
