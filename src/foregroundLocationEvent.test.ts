@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { createDriverApiHttpError } from './driverApiError';
 import { createMockDriverEventService } from './driverEvents';
 import {
   recordForegroundLocationUpdateAfterDeliveryStart,
@@ -85,5 +86,27 @@ describe('foreground location update event flow', () => {
     const pending = queue.listPending();
     assert.equal(pending.length, 1);
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'LOCATION_UPDATED');
+  });
+
+  it('marks queued foreground LOCATION_UPDATED as requiring route lookup when live event returns unauthorized', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const locationService = createLocationService();
+
+    const result = await recordForegroundLocationUpdateAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: {
+        recordDriverEvent: async () => {
+          throw createDriverApiHttpError({ endpoint: 'Driver event record', status: 401 });
+        },
+      },
+      locationService,
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(result.kind, 'queued');
+    assert.equal(result.requiresRouteLookup, true);
+    assert.match(result.message, /Driver session expired/iu);
+    assert.match(result.message, /HTTP 401/iu);
   });
 });

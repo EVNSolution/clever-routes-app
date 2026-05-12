@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { createDriverApiHttpError } from './driverApiError';
 import { createMockDriverEventService } from './driverEvents';
 import { createInMemoryOfflineSubmissionQueue } from './offlineSubmissionQueue';
 import { recordStopProofEventAfterDeliveryStart } from './stopProofEvents';
@@ -206,5 +207,30 @@ describe('stop proof event flow', () => {
     assert.equal(result.reason, 'record_failed');
     assert.equal(queue.listPending().length, 1);
     assert.equal(queue.listPending()[0]?.kind, 'driver_event');
+  });
+
+  it('marks queued stop proof events as requiring route lookup when live event returns unauthorized', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+
+    const result = await recordStopProofEventAfterDeliveryStart({
+      deliveryStart: activeDelivery,
+      driverEventService: {
+        recordDriverEvent: async () => {
+          throw createDriverApiHttpError({ endpoint: 'Driver event record', status: 401 });
+        },
+      },
+      input: {
+        action: 'delivered',
+        deliveryStopId: 'stop-1',
+        note: 'Queue until re-authenticated',
+        routePlanId: 'route-1',
+      },
+      offlineQueue: queue,
+    });
+
+    assert.equal(result.kind, 'queued');
+    assert.equal(result.requiresRouteLookup, true);
+    assert.match(result.message, /Driver session expired/iu);
+    assert.match(result.message, /HTTP 401/iu);
   });
 });

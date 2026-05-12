@@ -71,6 +71,38 @@ describe('driver consent gate UX flow', () => {
     });
   });
 
+  it('tells the driver to look up the route again when live consent returns unauthorized', async () => {
+    const client = createDriverConsentApiClient({
+      accessToken: 'expired-driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          data: null,
+          error: { code: 'UNAUTHORIZED', message: 'Invalid driver bearer token' },
+        }),
+      }),
+    });
+
+    const result = await submitDriverConsent(
+      {
+        appContext: null,
+        deviceContext: null,
+        now: () => new Date('2026-05-12T06:20:00.000Z'),
+        routeContext: 'route-context',
+      },
+      client,
+    );
+
+    assert.deepEqual(result, {
+      flowState: 'consent_required',
+      kind: 'consent_error',
+      message: 'Driver session expired. Look up the route with route context and phone again.',
+      reason: 'driver_access_expired',
+    });
+  });
+
   it('posts consent records to the delivery-server consent endpoint', async () => {
     const requests: { body: unknown; headers: Record<string, string>; method: string; url: string }[] = [];
     const client = createDriverConsentApiClient({

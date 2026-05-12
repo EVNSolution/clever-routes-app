@@ -1,4 +1,9 @@
 import type { DeliveryStartResult } from './deliveryStart';
+import {
+  createDriverApiHttpError,
+  formatDriverApiErrorForDriver,
+  getDriverApiRequiresRouteLookup,
+} from './driverApiError';
 import type { OfflineSubmissionQueue } from './offlineSubmissionQueue';
 
 export type DriverEventType =
@@ -38,7 +43,7 @@ export type MockDriverEventService = DriverEventService & {
 export type RouteStartedRecordResult =
   | DriverEventRecordResult & { kind: 'recorded' }
   | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
-  | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed' };
+  | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed'; requiresRouteLookup?: true };
 
 export type FetchLike = (
   input: string,
@@ -88,7 +93,10 @@ export function createDriverEventsApiClient(input: {
       });
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(`Driver event record failed with HTTP ${response.status ?? 'unknown'}`);
+        throw createDriverApiHttpError({
+          endpoint: 'Driver event record',
+          status: response.status,
+        });
       }
 
       return readDriverEventRecordEnvelope(payload);
@@ -129,9 +137,10 @@ export async function recordRouteStartedAfterDeliveryStart(input: {
     const queued = input.offlineQueue.enqueueDriverEvent(event);
     return {
       kind: 'queued',
-      message: `Route started event queued for retry: ${error instanceof Error ? error.message : 'unknown error'}`,
+      message: `Route started event queued for retry: ${formatDriverApiErrorForDriver(error)}`,
       queueItemId: queued.queueItemId,
       reason: 'record_failed',
+      ...(getDriverApiRequiresRouteLookup(error) === undefined ? {} : { requiresRouteLookup: true as const }),
     };
   }
 }

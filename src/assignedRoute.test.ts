@@ -88,6 +88,36 @@ describe('driver assigned route UX flow', () => {
     });
   });
 
+  it('keeps route details hidden and asks for route lookup again when live assigned-route returns unauthorized', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'expired-driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          data: null,
+          error: { code: 'UNAUTHORIZED', message: 'Invalid driver bearer token' },
+        }),
+      }),
+    });
+
+    const result = await loadAssignedRouteAfterConsent(
+      {
+        consentState: 'consent_recorded',
+        routeContext: '11111111-1111-4111-8111-111111111111',
+      },
+      client,
+    );
+
+    assert.deepEqual(result, {
+      flowState: 'consent_recorded',
+      kind: 'route_error',
+      message: 'Driver session expired. Look up the route with route context and phone again.',
+      reason: 'driver_access_expired',
+    });
+  });
+
   it('gets assigned route from the delivery-server contract endpoint', async () => {
     const requests: { headers: Record<string, string>; method: string; url: string }[] = [];
     const client = createAssignedRouteApiClient({

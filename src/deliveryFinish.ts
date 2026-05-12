@@ -1,5 +1,6 @@
 import { CONTINUOUS_LOCATION_TASK_NAME, type ContinuousLocationStreamService } from './continuousLocationStream';
 import type { DeliveryStartResult } from './deliveryStart';
+import { formatDriverApiErrorForDriver, getDriverApiRequiresRouteLookup } from './driverApiError';
 import type { DriverEventService } from './driverEvents';
 import type { DriverFlowState } from './driverFlow';
 import type { OfflineSubmissionQueue } from './offlineSubmissionQueue';
@@ -26,6 +27,7 @@ export type DeliveryFinishResult =
       message: string;
       queueItemId: string;
       reason: 'record_failed';
+      requiresRouteLookup?: true;
       stoppedTaskName: string;
     };
 
@@ -84,9 +86,10 @@ export async function finishDeliveryAfterActive(input: {
     return {
       flowState: 'delivery_finished',
       kind: 'queued',
-      message: `Delivery finished locally and route completion was queued for retry: ${error instanceof Error ? error.message : 'unknown error'}`,
+      message: `Delivery finished locally and route completion was queued for retry: ${formatDriverApiErrorForDriver(error)}`,
       queueItemId: queued.queueItemId,
       reason: 'record_failed',
+      ...(getDriverApiRequiresRouteLookup(error) === undefined ? {} : { requiresRouteLookup: true as const }),
       stoppedTaskName: taskName,
     };
   }

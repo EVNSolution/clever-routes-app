@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import type { ContinuousLocationStreamService } from './continuousLocationStream';
 import { finishDeliveryAfterActive } from './deliveryFinish';
+import { createDriverApiHttpError } from './driverApiError';
 import { createMockDriverEventService } from './driverEvents';
 import { createInMemoryOfflineSubmissionQueue } from './offlineSubmissionQueue';
 
@@ -106,6 +107,34 @@ describe('delivery finish route cleanup', () => {
     assert.equal(pending[0]?.kind, 'driver_event');
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'ROUTE_COMPLETED');
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.routePlanId : null, 'route-1');
+  });
+
+  it('marks queued route completion as requiring route lookup when live event returns unauthorized', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const stream = createMockStreamService();
+
+    const result = await finishDeliveryAfterActive({
+      deliveryStart: {
+        flowState: 'delivery_active',
+        kind: 'delivery_active',
+        locationPermission: 'foreground',
+        message: 'active',
+      },
+      driverEventService: {
+        recordDriverEvent: async () => {
+          throw createDriverApiHttpError({ endpoint: 'Driver event record', status: 401 });
+        },
+      },
+      now: new Date('2026-05-12T08:36:00.000Z'),
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+      streamService: stream.service,
+    });
+
+    assert.equal(result.kind, 'queued');
+    assert.equal(result.requiresRouteLookup, true);
+    assert.match(result.message, /Driver session expired/iu);
+    assert.match(result.message, /HTTP 401/iu);
   });
 
   it('discards route-scoped queued submissions only after route completion is recorded', async () => {

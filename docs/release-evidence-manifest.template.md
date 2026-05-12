@@ -73,7 +73,7 @@ Use sanitized references to external screenshots/videos/logs only.
 | Proof photo capture from camera/library | pending | pending | pending | pending | pending |
 | Signature and barcode proof capture | pending | pending | pending | pending | pending |
 | Offline queue retry/discard UI after network loss | pending | pending | pending | pending | pending |
-| Token expiry or invalid persisted token recovery | pending | pending | pending | pending | pending |
+| Token expiry, invalid persisted token, or live downstream `401` recovery | pending | pending | pending | pending | pending |
 | Driver session reset/sign-out cleanup | pending | pending | pending | pending | pending |
 | Delivery finish or route completion cleanup | pending | pending | pending | pending | pending |
 

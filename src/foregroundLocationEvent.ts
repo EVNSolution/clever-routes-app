@@ -1,4 +1,5 @@
 import type { DeliveryStartResult } from './deliveryStart';
+import { formatDriverApiErrorForDriver, getDriverApiRequiresRouteLookup } from './driverApiError';
 import type { DriverEventInput, DriverEventRecordResult, DriverEventService } from './driverEvents';
 import type { OfflineSubmissionQueue } from './offlineSubmissionQueue';
 
@@ -15,7 +16,7 @@ export type ForegroundLocationSnapshotService = {
 export type ForegroundLocationUpdateResult =
   | (DriverEventRecordResult & { kind: 'recorded' })
   | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
-  | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed' };
+  | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed'; requiresRouteLookup?: true };
 
 export async function recordForegroundLocationUpdateAfterDeliveryStart(input: {
   deliveryStart: DeliveryStartResult;
@@ -54,9 +55,10 @@ export async function recordForegroundLocationUpdateAfterDeliveryStart(input: {
     const queued = input.offlineQueue.enqueueDriverEvent(event);
     return {
       kind: 'queued',
-      message: `Foreground location event queued for retry: ${error instanceof Error ? error.message : 'unknown error'}`,
+      message: `Foreground location event queued for retry: ${formatDriverApiErrorForDriver(error)}`,
       queueItemId: queued.queueItemId,
       reason: 'record_failed',
+      ...(getDriverApiRequiresRouteLookup(error) === undefined ? {} : { requiresRouteLookup: true as const }),
     };
   }
 }
