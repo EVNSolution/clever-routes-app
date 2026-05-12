@@ -69,7 +69,9 @@ import {
 } from './src/proofBarcodeCapture';
 import {
   createInMemoryOfflineSubmissionQueue,
+  createPersistentOfflineSubmissionQueue,
   retryOfflineSubmissions,
+  type OfflineSubmissionQueue,
   type OfflineSubmissionRetryResult,
 } from './src/offlineSubmissionQueue';
 import {
@@ -89,6 +91,7 @@ import {
 } from './src/expoContinuousLocationStreamService';
 import { createExpoProofPhotoCaptureService } from './src/expoProofPhotoCaptureService';
 import { createExpoProofBarcodeCaptureService } from './src/expoProofBarcodeCaptureService';
+import { createExpoOfflineSubmissionQueueStorage } from './src/expoOfflineSubmissionQueueStorage';
 import {
   createDriverRuntimeServices,
   readDriverRuntimeConfig,
@@ -113,6 +116,7 @@ const SAMPLE_PHONE_E164 = '+14165550123';
 type MockMode = RouteAccessLookupResult['status'];
 type ConsentMockMode = 'success' | 'failure';
 type AssignedRouteMockMode = 'assigned' | 'failure' | 'none';
+type OfflineQueueRestoreStatus = 'failed' | 'loading' | 'ready';
 type StopProofDraft = {
   failureReason: StopProofFailureReason;
   note: string;
@@ -144,6 +148,8 @@ export default function App() {
   const [proofBarcodeCaptureResults, setProofBarcodeCaptureResults] = useState<Record<string, ProofBarcodeCaptureResult>>({});
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
   const [offlineQueueRetryResult, setOfflineQueueRetryResult] = useState<OfflineSubmissionRetryResult | null>(null);
+  const [offlineQueueRestoreStatus, setOfflineQueueRestoreStatus] = useState<OfflineQueueRestoreStatus>('loading');
+  const [offlineSubmissionQueue, setOfflineSubmissionQueue] = useState<OfflineSubmissionQueue>(() => createInMemoryOfflineSubmissionQueue());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecordingConsent, setIsRecordingConsent] = useState(false);
   const [isLoadingAssignedRoute, setIsLoadingAssignedRoute] = useState(false);
@@ -167,7 +173,7 @@ export default function App() {
   const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
   const proofBarcodeCaptureService = useMemo(() => createExpoProofBarcodeCaptureService(), []);
   const proofMediaUploadService = useMemo(() => createMockProofMediaUploadService(), []);
-  const offlineSubmissionQueue = useMemo(() => createInMemoryOfflineSubmissionQueue(), []);
+  const offlineSubmissionQueueStorage = useMemo(() => createExpoOfflineSubmissionQueueStorage(), []);
 
   const runtimeConfig = useMemo(
     () => readDriverRuntimeConfig({
@@ -175,6 +181,27 @@ export default function App() {
     }),
     [],
   );
+
+  useEffect(() => {
+    let isMounted = true;
+    createPersistentOfflineSubmissionQueue({ storage: offlineSubmissionQueueStorage })
+      .then((queue) => {
+        if (isMounted) {
+          setOfflineSubmissionQueue(queue);
+          setOfflineQueueCount(queue.listPending().length);
+          setOfflineQueueRestoreStatus('ready');
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setOfflineQueueRestoreStatus('failed');
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [offlineSubmissionQueueStorage]);
 
   useEffect(() => {
     let isMounted = true;
@@ -607,6 +634,7 @@ export default function App() {
             value={runtimeConfig.mode === 'live' ? runtimeConfig.deliveryServerBaseUrl : 'local mock services'}
           />
           <GuardRow label="Secure driver token" value={formatDriverAccessRestoreStatus(driverAccessRestoreStatus)} />
+          <GuardRow label="Offline queue storage" value={formatOfflineQueueRestoreStatus(offlineQueueRestoreStatus)} />
           <GuardRow label="Offline queue" value={`${offlineQueueCount} pending submission${offlineQueueCount === 1 ? '' : 's'}`} />
           {offlineQueueRetryResult !== null ? (
             <Text style={offlineQueueRetryResult.failed === 0 ? styles.deliveryStartSuccessText : styles.routeWarningText}>
@@ -731,6 +759,17 @@ function formatDeliveryActiveGuard(currentFlowState: DriverFlowState, canStartDe
 
 function formatOfflineQueueRetryResult(result: OfflineSubmissionRetryResult): string {
   return `Offline retry: ${result.succeeded}/${result.retried} synced, ${result.failed} still pending.`;
+}
+
+function formatOfflineQueueRestoreStatus(status: OfflineQueueRestoreStatus): string {
+  switch (status) {
+    case 'failed':
+      return 'durable queue unavailable; using session memory';
+    case 'loading':
+      return 'loading durable queue';
+    case 'ready':
+      return 'durable queue ready';
+  }
 }
 
 function toInvitedRouteAccess(

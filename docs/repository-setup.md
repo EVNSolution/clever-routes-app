@@ -11,7 +11,7 @@ This document records the repo baseline for the `clever-driver-app` implementati
 - Package manager: npm with `package-lock.json`
 - Node floor: `.nvmrc` pins `20.19.4`; `package.json` allows Node `>=20.19.4`
 - Entry point: `index.ts` registering `App.tsx`
-- Current implementation depth: local Expo route+phone lookup, company guidance, consent gate, assigned-route screen, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, native proof photo URI capture, proof media upload references, signature/barcode proof capture, richer stop delivered/failed proof metadata controls, and app-side offline queue/retry for driver events and proof media; production proof-media storage hardening and physical-device background smoke evidence remain later slices
+- Current implementation depth: local Expo route+phone lookup, company guidance, consent gate, assigned-route screen, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, native proof photo URI capture, proof media upload references, signature/barcode proof capture, richer stop delivered/failed proof metadata controls, and durable app-side offline queue/retry for driver events and proof media; production proof-media storage hardening and physical-device background smoke evidence remain later slices
 
 ## Scripts
 
@@ -67,4 +67,4 @@ These items are intentionally left for later issues because they affect API, com
 6. Store disclosure matrix and production privacy copy for continuous background location.
 7. EAS/App Store/Play Store build profile and signing ownership.
 8. Minimum supported iOS/Android versions and physical-device background-location smoke matrix.
-9. Production persistence decision for the app-side offline queue if in-memory retry is insufficient for store builds.
+9. Production retention/discard thresholds for durable offline queue items after repeated failure, route completion, or driver sign-out.
