@@ -85,6 +85,10 @@ import {
   type DriverFlowState,
 } from './src/driverFlow';
 import { createDriverApiClientsFromRouteAccess } from './src/driverApiClients';
+import {
+  resetDriverSession,
+  type DriverSessionResetResult,
+} from './src/driverSessionReset';
 import { type DriverAccessRestoreResult } from './src/driverAccessTokenStore';
 import { createExpoSecureDriverAccessTokenStore } from './src/expoSecureDriverAccessTokenStore';
 import { createExpoForegroundLocationPermissionService } from './src/expoLocationPermissionService';
@@ -153,6 +157,7 @@ export default function App() {
   const [proofBarcodeCaptureResults, setProofBarcodeCaptureResults] = useState<Record<string, ProofBarcodeCaptureResult>>({});
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
   const [offlineQueueRetryResult, setOfflineQueueRetryResult] = useState<OfflineSubmissionRetryResult | null>(null);
+  const [sessionResetResult, setSessionResetResult] = useState<DriverSessionResetResult | null>(null);
   const [offlineQueueRestoreStatus, setOfflineQueueRestoreStatus] = useState<OfflineQueueRestoreStatus>('loading');
   const [offlineSubmissionQueue, setOfflineSubmissionQueue] = useState<OfflineSubmissionQueue>(() => createInMemoryOfflineSubmissionQueue());
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -170,6 +175,7 @@ export default function App() {
   const [capturingProofSignatureId, setCapturingProofSignatureId] = useState<string | null>(null);
   const [capturingProofBarcodeId, setCapturingProofBarcodeId] = useState<string | null>(null);
   const [isRetryingOfflineQueue, setIsRetryingOfflineQueue] = useState(false);
+  const [isResettingSession, setIsResettingSession] = useState(false);
   const [driverAccessRestoreStatus, setDriverAccessRestoreStatus] = useState<DriverAccessRestoreResult['kind']>('missing');
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
@@ -311,6 +317,7 @@ export default function App() {
 
   async function handleLookup() {
     setIsSubmitting(true);
+    setSessionResetResult(null);
     setConsentSubmission(null);
     setAssignedRouteSubmission(null);
     setDeliveryStartResult(null);
@@ -657,6 +664,41 @@ export default function App() {
     }
   }
 
+  async function handleResetDriverSession() {
+    setIsResettingSession(true);
+    try {
+      registerContinuousLocationTaskHandler(null);
+      await stopContinuousLocationUpdates({ streamService: continuousLocationStreamService });
+      const result = await resetDriverSession({
+        driverAccessTokenStore,
+        offlineQueue: offlineSubmissionQueue,
+      });
+
+      setRouteContext('');
+      setPhoneE164('');
+      setSubmission(null);
+      setConsentSubmission(null);
+      setAssignedRouteSubmission(null);
+      setDeliveryStartResult(null);
+      setDeliveryFinishResult(null);
+      setRouteStartedEventResult(null);
+      setLocationUpdateResult(null);
+      setContinuousLocationResult(null);
+      setStopProofResults({});
+      setStopProofDrafts({});
+      setProofPhotoCaptureResults({});
+      setProofMediaUploadResults({});
+      setProofSignatureCaptureResults({});
+      setProofBarcodeCaptureResults({});
+      setOfflineQueueRetryResult(null);
+      setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
+      setDriverAccessRestoreStatus('missing');
+      setSessionResetResult(result);
+    } finally {
+      setIsResettingSession(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
@@ -686,6 +728,9 @@ export default function App() {
               {formatOfflineQueueRetryResult(offlineQueueRetryResult)}
             </Text>
           ) : null}
+          {sessionResetResult !== null ? (
+            <Text style={styles.deliveryStartSuccessText}>{formatDriverSessionResetResult(sessionResetResult)}</Text>
+          ) : null}
           <Pressable
             accessibilityRole="button"
             disabled={isRetryingOfflineQueue || offlineQueueCount === 0}
@@ -697,6 +742,16 @@ export default function App() {
             ) : (
               <Text style={styles.secondaryButtonText}>Retry queued submissions</Text>
             )}
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={isResettingSession}
+            onPress={handleResetDriverSession}
+            style={[styles.stopActionDangerButton, isResettingSession && styles.buttonDisabled]}
+          >
+            <Text style={styles.stopActionButtonText}>
+              {isResettingSession ? 'Resetting…' : 'Reset driver session'}
+            </Text>
           </Pressable>
         </View>
 
@@ -811,6 +866,10 @@ function formatDeliveryActiveGuard(currentFlowState: DriverFlowState, canStartDe
 
 function formatOfflineQueueRetryResult(result: OfflineSubmissionRetryResult): string {
   return `Offline retry: ${result.succeeded}/${result.retried} synced, ${result.discarded} discarded by policy, ${result.failed} still pending.`;
+}
+
+function formatDriverSessionResetResult(result: DriverSessionResetResult): string {
+  return `Driver session reset: secure access cleared, ${result.clearedOfflineSubmissions} queued submission${result.clearedOfflineSubmissions === 1 ? '' : 's'} cleared.`;
 }
 
 function formatOfflineQueueRestoreStatus(status: OfflineQueueRestoreStatus): string {
