@@ -9,7 +9,7 @@
     "ios": "expo start --ios",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test": "node scripts/run-tests.mjs",
     "check:native-release": "tsx src/nativeReleasePreflightCli.ts",
     "release:evidence:seed": "tsx src/releaseEvidenceSeedCli.ts",
     "release:evidence:verify": "tsx src/releaseEvidenceVerifierCli.ts",
