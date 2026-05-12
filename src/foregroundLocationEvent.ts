@@ -1,5 +1,6 @@
 import type { DeliveryStartResult } from './deliveryStart';
-import type { DriverEventRecordResult, DriverEventService } from './driverEvents';
+import type { DriverEventInput, DriverEventRecordResult, DriverEventService } from './driverEvents';
+import type { OfflineSubmissionQueue } from './offlineSubmissionQueue';
 
 export type ForegroundLocationSnapshot = {
   latitude: number;
@@ -13,12 +14,14 @@ export type ForegroundLocationSnapshotService = {
 
 export type ForegroundLocationUpdateResult =
   | (DriverEventRecordResult & { kind: 'recorded' })
-  | { kind: 'blocked'; message: string; reason: 'delivery_not_active' };
+  | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
+  | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed' };
 
 export async function recordForegroundLocationUpdateAfterDeliveryStart(input: {
   deliveryStart: DeliveryStartResult;
   driverEventService: DriverEventService;
   locationService: ForegroundLocationSnapshotService;
+  offlineQueue?: OfflineSubmissionQueue;
   routePlanId: string | null;
 }): Promise<ForegroundLocationUpdateResult> {
   if (input.deliveryStart.kind !== 'delivery_active') {
@@ -30,16 +33,32 @@ export async function recordForegroundLocationUpdateAfterDeliveryStart(input: {
   }
 
   const location = await input.locationService.getCurrentForegroundLocation();
-  const result = await input.driverEventService.recordDriverEvent({
+  const event: DriverEventInput = {
     clientEventId: createClientEventId('location-updated'),
     eventType: 'LOCATION_UPDATED',
     latitude: location.latitude,
     longitude: location.longitude,
     occurredAt: location.recordedAt,
     routePlanId: input.routePlanId,
-  });
+  };
 
-  return { ...result, kind: 'recorded' };
+  try {
+    const result = await input.driverEventService.recordDriverEvent(event);
+
+    return { ...result, kind: 'recorded' };
+  } catch (error) {
+    if (input.offlineQueue === undefined) {
+      throw error;
+    }
+
+    const queued = input.offlineQueue.enqueueDriverEvent(event);
+    return {
+      kind: 'queued',
+      message: `Foreground location event queued for retry: ${error instanceof Error ? error.message : 'unknown error'}`,
+      queueItemId: queued.queueItemId,
+      reason: 'record_failed',
+    };
+  }
 }
 
 function createClientEventId(prefix: string): string {

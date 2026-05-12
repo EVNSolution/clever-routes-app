@@ -1,5 +1,6 @@
 import type { DeliveryStartResult } from './deliveryStart';
 import type { DriverEventRecordResult, DriverEventService, DriverEventType } from './driverEvents';
+import type { OfflineSubmissionQueue } from './offlineSubmissionQueue';
 import type { ProofBarcodeReference } from './proofBarcodeCapture';
 import type { ProofMediaReference } from './proofMediaUpload';
 import type { ProofSignatureReference } from './proofSignatureCapture';
@@ -22,12 +23,14 @@ export type StopProofEventInput = {
 
 export type StopProofEventResult =
   | (DriverEventRecordResult & { kind: 'recorded' })
-  | { kind: 'blocked'; message: string; reason: 'delivery_not_active' };
+  | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
+  | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed' };
 
 export async function recordStopProofEventAfterDeliveryStart(input: {
   deliveryStart: DeliveryStartResult;
   driverEventService: DriverEventService;
   input: StopProofEventInput;
+  offlineQueue?: OfflineSubmissionQueue;
 }): Promise<StopProofEventResult> {
   if (input.deliveryStart.kind !== 'delivery_active') {
     return {
@@ -37,16 +40,32 @@ export async function recordStopProofEventAfterDeliveryStart(input: {
     };
   }
 
-  const result = await input.driverEventService.recordDriverEvent({
+  const event = {
     clientEventId: createClientEventId(`stop-${input.input.action}`),
     deliveryStopId: input.input.deliveryStopId,
     eventType: getStopProofEventType(input.input.action),
     occurredAt: input.input.occurredAt ?? new Date(),
     payload: { proof: getStopProofPayload(input.input) },
     routePlanId: input.input.routePlanId,
-  });
+  };
 
-  return { ...result, kind: 'recorded' };
+  try {
+    const result = await input.driverEventService.recordDriverEvent(event);
+
+    return { ...result, kind: 'recorded' };
+  } catch (error) {
+    if (input.offlineQueue === undefined) {
+      throw error;
+    }
+
+    const queued = input.offlineQueue.enqueueDriverEvent(event);
+    return {
+      kind: 'queued',
+      message: `Stop proof event queued for retry: ${error instanceof Error ? error.message : 'unknown error'}`,
+      queueItemId: queued.queueItemId,
+      reason: 'record_failed',
+    };
+  }
 }
 
 function getStopProofEventType(action: StopProofAction): Extract<DriverEventType, 'STOP_DELIVERED' | 'STOP_FAILED'> {

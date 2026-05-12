@@ -1,4 +1,5 @@
 import type { DeliveryStartResult } from './deliveryStart';
+import type { OfflineSubmissionQueue } from './offlineSubmissionQueue';
 
 export type DriverEventType =
   | 'LOCATION_UPDATED'
@@ -36,7 +37,8 @@ export type MockDriverEventService = DriverEventService & {
 
 export type RouteStartedRecordResult =
   | DriverEventRecordResult & { kind: 'recorded' }
-  | { kind: 'blocked'; message: string; reason: 'delivery_not_active' };
+  | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
+  | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed' };
 
 export type FetchLike = (
   input: string,
@@ -97,6 +99,7 @@ export function createDriverEventsApiClient(input: {
 export async function recordRouteStartedAfterDeliveryStart(input: {
   deliveryStart: DeliveryStartResult;
   driverEventService: DriverEventService;
+  offlineQueue?: OfflineSubmissionQueue;
   routePlanId: string | null;
 }): Promise<RouteStartedRecordResult> {
   if (input.deliveryStart.kind !== 'delivery_active') {
@@ -107,14 +110,30 @@ export async function recordRouteStartedAfterDeliveryStart(input: {
     };
   }
 
-  const result = await input.driverEventService.recordDriverEvent({
+  const event: DriverEventInput = {
     clientEventId: createClientEventId('route-started'),
     eventType: 'ROUTE_STARTED',
     occurredAt: new Date(),
     routePlanId: input.routePlanId,
-  });
+  };
 
-  return { ...result, kind: 'recorded' };
+  try {
+    const result = await input.driverEventService.recordDriverEvent(event);
+
+    return { ...result, kind: 'recorded' };
+  } catch (error) {
+    if (input.offlineQueue === undefined) {
+      throw error;
+    }
+
+    const queued = input.offlineQueue.enqueueDriverEvent(event);
+    return {
+      kind: 'queued',
+      message: `Route started event queued for retry: ${error instanceof Error ? error.message : 'unknown error'}`,
+      queueItemId: queued.queueItemId,
+      reason: 'record_failed',
+    };
+  }
 }
 
 function createClientEventId(prefix: string): string {

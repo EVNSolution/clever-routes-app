@@ -1,5 +1,6 @@
 import type { DeliveryStartResult } from './deliveryStart';
-import type { DriverEventService } from './driverEvents';
+import type { DriverEventInput, DriverEventService } from './driverEvents';
+import type { OfflineSubmissionQueue } from './offlineSubmissionQueue';
 
 export const CONTINUOUS_LOCATION_TASK_NAME = 'clever-driver-continuous-location';
 
@@ -35,6 +36,7 @@ export type ContinuousLocationBatchItem = {
 
 export type ContinuousLocationBatchRecordResult = {
   kind: 'recorded';
+  queuedCount?: number;
   recordedCount: number;
 };
 
@@ -96,21 +98,39 @@ export async function startContinuousLocationUpdatesAfterDeliveryStart(input: {
 export async function recordContinuousLocationUpdateBatch(input: {
   driverEventService: DriverEventService;
   locations: ContinuousLocationBatchItem[];
+  offlineQueue?: OfflineSubmissionQueue;
   routePlanId: string | null;
 }): Promise<ContinuousLocationBatchRecordResult> {
-  for (const location of input.locations) {
-    await input.driverEventService.recordDriverEvent({
-      clientEventId: createClientEventId('continuous-location'),
+  let queuedCount = 0;
+  let recordedCount = 0;
+
+  for (const [index, location] of input.locations.entries()) {
+    const event: DriverEventInput = {
+      clientEventId: createContinuousLocationClientEventId(location, index),
       eventType: 'LOCATION_UPDATED',
       latitude: location.latitude,
       longitude: location.longitude,
       occurredAt: location.occurredAt,
       payload: { source: 'continuous-location-stream' },
       routePlanId: input.routePlanId,
-    });
+    };
+
+    try {
+      await input.driverEventService.recordDriverEvent(event);
+      recordedCount += 1;
+    } catch (error) {
+      if (input.offlineQueue === undefined) {
+        throw error;
+      }
+
+      input.offlineQueue.enqueueDriverEvent(event);
+      queuedCount += 1;
+    }
   }
 
-  return { kind: 'recorded', recordedCount: input.locations.length };
+  return queuedCount > 0
+    ? { kind: 'recorded', queuedCount, recordedCount }
+    : { kind: 'recorded', recordedCount };
 }
 
 export async function stopContinuousLocationUpdates(input: {
@@ -122,6 +142,6 @@ export async function stopContinuousLocationUpdates(input: {
   return { kind: 'stopped', taskName };
 }
 
-function createClientEventId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}`;
+function createContinuousLocationClientEventId(location: ContinuousLocationBatchItem, index: number): string {
+  return `continuous-location-${location.occurredAt.toISOString()}-${index}`;
 }

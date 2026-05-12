@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { createMockDriverEventService } from './driverEvents';
+import { createInMemoryOfflineSubmissionQueue } from './offlineSubmissionQueue';
 import { recordStopProofEventAfterDeliveryStart } from './stopProofEvents';
 
 const activeDelivery = {
@@ -179,5 +180,31 @@ describe('stop proof event flow', () => {
         type: 'DELIVERED_NOTE',
       },
     });
+  });
+
+  it('queues stop proof driver event when the live event submission fails', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+
+    const result = await recordStopProofEventAfterDeliveryStart({
+      deliveryStart: activeDelivery,
+      driverEventService: {
+        recordDriverEvent: async () => {
+          throw new Error('network offline');
+        },
+      },
+      input: {
+        action: 'delivered',
+        deliveryStopId: 'stop-1',
+        note: 'Queue until online',
+        occurredAt: new Date('2026-05-12T11:05:00.000Z'),
+        routePlanId: 'route-1',
+      },
+      offlineQueue: queue,
+    });
+
+    assert.equal(result.kind, 'queued');
+    assert.equal(result.reason, 'record_failed');
+    assert.equal(queue.listPending().length, 1);
+    assert.equal(queue.listPending()[0]?.kind, 'driver_event');
   });
 });

@@ -68,6 +68,11 @@ import {
   type ProofBarcodeCaptureResult,
 } from './src/proofBarcodeCapture';
 import {
+  createInMemoryOfflineSubmissionQueue,
+  retryOfflineSubmissions,
+  type OfflineSubmissionRetryResult,
+} from './src/offlineSubmissionQueue';
+import {
   canEnterDeliveryActive,
   canRevealRouteDetails,
   DRIVER_FLOW_STATES,
@@ -137,6 +142,8 @@ export default function App() {
   const [proofMediaUploadResults, setProofMediaUploadResults] = useState<Record<string, ProofMediaUploadResult>>({});
   const [proofSignatureCaptureResults, setProofSignatureCaptureResults] = useState<Record<string, ProofSignatureCaptureResult>>({});
   const [proofBarcodeCaptureResults, setProofBarcodeCaptureResults] = useState<Record<string, ProofBarcodeCaptureResult>>({});
+  const [offlineQueueCount, setOfflineQueueCount] = useState(0);
+  const [offlineQueueRetryResult, setOfflineQueueRetryResult] = useState<OfflineSubmissionRetryResult | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecordingConsent, setIsRecordingConsent] = useState(false);
   const [isLoadingAssignedRoute, setIsLoadingAssignedRoute] = useState(false);
@@ -150,6 +157,7 @@ export default function App() {
   const [uploadingProofMediaId, setUploadingProofMediaId] = useState<string | null>(null);
   const [capturingProofSignatureId, setCapturingProofSignatureId] = useState<string | null>(null);
   const [capturingProofBarcodeId, setCapturingProofBarcodeId] = useState<string | null>(null);
+  const [isRetryingOfflineQueue, setIsRetryingOfflineQueue] = useState(false);
   const [driverAccessRestoreStatus, setDriverAccessRestoreStatus] = useState<DriverAccessRestoreResult['kind']>('missing');
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
@@ -159,6 +167,7 @@ export default function App() {
   const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
   const proofBarcodeCaptureService = useMemo(() => createExpoProofBarcodeCaptureService(), []);
   const proofMediaUploadService = useMemo(() => createMockProofMediaUploadService(), []);
+  const offlineSubmissionQueue = useMemo(() => createInMemoryOfflineSubmissionQueue(), []);
 
   const runtimeConfig = useMemo(
     () => readDriverRuntimeConfig({
@@ -255,14 +264,16 @@ export default function App() {
           submission,
         }),
         locations,
+        offlineQueue: offlineSubmissionQueue,
         routePlanId: activeRoutePlanId,
       });
+      setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
     });
 
     return () => {
       registerContinuousLocationTaskHandler(null);
     };
-  }, [activeRoutePlanId, deliveryStartResult, driverEventService, runtimeConfig, submission]);
+  }, [activeRoutePlanId, deliveryStartResult, driverEventService, offlineSubmissionQueue, runtimeConfig, submission]);
 
   async function handleLookup() {
     setIsSubmitting(true);
@@ -349,15 +360,18 @@ export default function App() {
       if (deliveryStart.kind === 'delivery_active') {
         setIsRecordingRouteStarted(true);
         try {
-          setRouteStartedEventResult(await recordRouteStartedAfterDeliveryStart({
+          const routeStartedResult = await recordRouteStartedAfterDeliveryStart({
             deliveryStart,
             driverEventService: getDriverEventServiceForCurrentSubmission({
               driverEventService,
               runtimeConfig,
               submission,
             }),
+            offlineQueue: offlineSubmissionQueue,
             routePlanId: activeRoutePlanId,
-          }));
+          });
+          setRouteStartedEventResult(routeStartedResult);
+          setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
         } finally {
           setIsRecordingRouteStarted(false);
         }
@@ -379,7 +393,7 @@ export default function App() {
 
     setIsRecordingLocationUpdate(true);
     try {
-      setLocationUpdateResult(await recordForegroundLocationUpdateAfterDeliveryStart({
+      const locationResult = await recordForegroundLocationUpdateAfterDeliveryStart({
         deliveryStart: effectiveDeliveryStart,
         driverEventService: getDriverEventServiceForCurrentSubmission({
           driverEventService,
@@ -387,8 +401,11 @@ export default function App() {
           submission,
         }),
         locationService: foregroundLocationSnapshotService,
+        offlineQueue: offlineSubmissionQueue,
         routePlanId: activeRoutePlanId,
-      }));
+      });
+      setLocationUpdateResult(locationResult);
+      setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
     } finally {
       setIsRecordingLocationUpdate(false);
     }
@@ -449,19 +466,28 @@ export default function App() {
         updateStopProofDraft(stop.deliveryStopId, { photoUri: result.uri });
       }
       setUploadingProofMediaId(stop.deliveryStopId);
+      const uploadRequest = {
+        deliveryStopId: stop.deliveryStopId,
+        fileName: getFileNameFromUri(result.kind === 'captured' ? result.uri : '', stop.deliveryStopId),
+        routePlanId: activeRoutePlanId ?? '',
+      };
       const uploadResult = await uploadCapturedProofPhoto({
         captureResult: result,
-        uploadRequest: {
-          deliveryStopId: stop.deliveryStopId,
-          fileName: getFileNameFromUri(result.kind === 'captured' ? result.uri : '', stop.deliveryStopId),
-          routePlanId: activeRoutePlanId ?? '',
-        },
+        uploadRequest,
         uploadService: getProofMediaUploadServiceForCurrentSubmission({
           proofMediaUploadService,
           runtimeConfig,
           submission,
         }),
       });
+      if (uploadResult.kind === 'upload_failed' && result.kind === 'captured') {
+        offlineSubmissionQueue.enqueueProofMediaUpload({
+          ...uploadRequest,
+          source: result.source,
+          uri: result.uri,
+        });
+        setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
+      }
       setProofMediaUploadResults((current) => ({ ...current, [stop.deliveryStopId]: uploadResult }));
     } finally {
       setCapturingProofPhotoId(null);
@@ -527,10 +553,35 @@ export default function App() {
           routePlanId: activeRoutePlanId ?? '',
           signatures: getCapturedProofSignatures(proofSignatureCaptureResults[stop.deliveryStopId]),
         },
+        offlineQueue: offlineSubmissionQueue,
       });
+      setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
       setStopProofResults((current) => ({ ...current, [proofKey]: result }));
     } finally {
       setRecordingStopProofId(null);
+    }
+  }
+
+  async function handleRetryOfflineQueue() {
+    setIsRetryingOfflineQueue(true);
+    try {
+      const result = await retryOfflineSubmissions({
+        driverEventService: getDriverEventServiceForCurrentSubmission({
+          driverEventService,
+          runtimeConfig,
+          submission,
+        }),
+        proofMediaUploadService: getProofMediaUploadServiceForCurrentSubmission({
+          proofMediaUploadService,
+          runtimeConfig,
+          submission,
+        }),
+        queue: offlineSubmissionQueue,
+      });
+      setOfflineQueueRetryResult(result);
+      setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
+    } finally {
+      setIsRetryingOfflineQueue(false);
     }
   }
 
@@ -556,6 +607,24 @@ export default function App() {
             value={runtimeConfig.mode === 'live' ? runtimeConfig.deliveryServerBaseUrl : 'local mock services'}
           />
           <GuardRow label="Secure driver token" value={formatDriverAccessRestoreStatus(driverAccessRestoreStatus)} />
+          <GuardRow label="Offline queue" value={`${offlineQueueCount} pending submission${offlineQueueCount === 1 ? '' : 's'}`} />
+          {offlineQueueRetryResult !== null ? (
+            <Text style={offlineQueueRetryResult.failed === 0 ? styles.deliveryStartSuccessText : styles.routeWarningText}>
+              {formatOfflineQueueRetryResult(offlineQueueRetryResult)}
+            </Text>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            disabled={isRetryingOfflineQueue || offlineQueueCount === 0}
+            onPress={handleRetryOfflineQueue}
+            style={[styles.secondaryButton, (isRetryingOfflineQueue || offlineQueueCount === 0) && styles.buttonDisabled]}
+          >
+            {isRetryingOfflineQueue ? (
+              <ActivityIndicator color="#0f172a" />
+            ) : (
+              <Text style={styles.secondaryButtonText}>Retry queued submissions</Text>
+            )}
+          </Pressable>
         </View>
 
         <View style={styles.cardLight}>
@@ -658,6 +727,10 @@ function formatDeliveryActiveGuard(currentFlowState: DriverFlowState, canStartDe
   }
 
   return canStartDelivery ? 'ready to start' : 'requires route_ready + foreground permission';
+}
+
+function formatOfflineQueueRetryResult(result: OfflineSubmissionRetryResult): string {
+  return `Offline retry: ${result.succeeded}/${result.retried} synced, ${result.failed} still pending.`;
 }
 
 function toInvitedRouteAccess(
@@ -1294,11 +1367,17 @@ function DeliveryStartCard({
       {routeStartedEventResult?.kind === 'recorded' ? (
         <Text style={styles.deliveryStartSuccessText}>Route started event recorded: {routeStartedEventResult.eventId}</Text>
       ) : null}
+      {routeStartedEventResult?.kind === 'queued' ? (
+        <Text style={styles.routeWarningText}>Route started event queued: {routeStartedEventResult.queueItemId}</Text>
+      ) : null}
       {isRecordingLocationUpdate ? (
         <Text style={styles.routeHelpText}>Recording foreground location update…</Text>
       ) : null}
       {locationUpdateResult?.kind === 'recorded' ? (
         <Text style={styles.deliveryStartSuccessText}>Foreground location update recorded: {locationUpdateResult.eventId}</Text>
+      ) : null}
+      {locationUpdateResult?.kind === 'queued' ? (
+        <Text style={styles.routeWarningText}>Foreground location update queued: {locationUpdateResult.queueItemId}</Text>
       ) : null}
       {continuousLocationResult !== null ? (
         <Text style={continuousLocationResult.kind === 'streaming' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
@@ -1623,8 +1702,14 @@ function AssignedRouteStopCard({
           {deliveredResult?.kind === 'recorded' ? (
             <Text style={styles.deliveryStartSuccessText}>Delivered event: {deliveredResult.eventId}</Text>
           ) : null}
+          {deliveredResult?.kind === 'queued' ? (
+            <Text style={styles.routeWarningText}>Delivered event queued: {deliveredResult.queueItemId}</Text>
+          ) : null}
           {failedResult?.kind === 'recorded' ? (
             <Text style={styles.routeWarningText}>Failed event: {failedResult.eventId}</Text>
+          ) : null}
+          {failedResult?.kind === 'queued' ? (
+            <Text style={styles.routeWarningText}>Failed event queued: {failedResult.queueItemId}</Text>
           ) : null}
           <View style={styles.stopActionRow}>
             <Pressable
