@@ -112,7 +112,7 @@ Production app-side discard policy is now explicit in `OFFLINE_SUBMISSION_QUEUE_
 - delivery finish calls `finishDeliveryAfterActive()` to stop continuous tracking and record or queue a `ROUTE_COMPLETED` event
 - after route completion is recorded, delivery finish calls `discardRouteSubmissions(routePlanId)` to remove local retry items scoped to the completed route while leaving unrelated route or unscoped items intact
 - if route completion recording fails, the `ROUTE_COMPLETED` event is queued and route-scoped items are not discarded in that branch
-- driver sign-out/session reset can call `clear()` to remove every pending local retry item from durable storage
+- the runtime guard panel exposes `Reset driver session`, which stops continuous tracking, clears the secure driver access token, clears route/session UI state, and calls `clear()` to remove every pending local retry item from durable storage
 
 This policy only governs app-side AsyncStorage metadata and file URI references. Server-side proof-media storage, signed retrieval, malware scanning, and retention/deletion evidence remain server/release work.
 
