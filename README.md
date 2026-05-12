@@ -27,7 +27,7 @@ The app includes an interactive route access screen:
 
 - route context + E.164 phone validation before lookup
 - local mock service for delivery-server `POST /driver/route-access/lookup`
-- company/shop/route guidance for `INVITED`
+- company/shop/route guidance for `INVITED`, plus safe multi-company ambiguity guidance that does not expose route/stop/customer data or driver access tokens
 - app-side consent gate for required location-information and personal-information consent
 - local mock service and API client boundary for delivery-server `POST /driver/consents`
 - driver access token parsing from route lookup and API-client handoff helper

@@ -118,6 +118,7 @@ import {
 } from './src/driverConsent';
 import {
   createMockRouteAccessService,
+  sampleMultipleRouteAccess,
   sampleInvitedRouteAccess,
   submitRouteAccess,
   type RouteAccessLookupResult,
@@ -247,7 +248,11 @@ export default function App() {
     }
 
     const result: RouteAccessLookupResult =
-      mockMode === 'INVITED' ? sampleInvitedRouteAccess : { status: mockMode };
+      mockMode === 'INVITED'
+        ? sampleInvitedRouteAccess
+        : mockMode === 'MULTIPLE_MATCHES'
+          ? sampleMultipleRouteAccess
+          : { status: mockMode };
     return createMockRouteAccessService(result);
   }, [mockMode, runtimeConfig]);
 
@@ -1078,7 +1083,7 @@ function MockModePicker({
   mockMode: MockMode;
   setMockMode(value: MockMode): void;
 }) {
-  const modes: MockMode[] = ['INVITED', 'NOT_FOUND', 'DISABLED', 'BLOCKED'];
+  const modes: MockMode[] = ['INVITED', 'MULTIPLE_MATCHES', 'NOT_FOUND', 'DISABLED', 'BLOCKED'];
   return (
     <View style={styles.mockPanel}>
       <Text style={styles.inputLabel}>Local mock response</Text>
@@ -1209,6 +1214,38 @@ function RouteAccessResultCard({
         <Text style={styles.cardKickerDark}>{result.status}</Text>
         <Text style={styles.cardTitleDark}>Assignment not available</Text>
         <Text style={styles.cardBodyDark}>{result.message}</Text>
+      </View>
+    );
+  }
+
+  if (result.kind === 'multiple_matches') {
+    return (
+      <View style={styles.warningCard}>
+        <Text style={styles.cardKickerDark}>MULTIPLE_MATCHES</Text>
+        <Text style={styles.cardTitleDark}>Use a route-specific link or code</Text>
+        <Text style={styles.cardBodyDark}>{result.message}</Text>
+        {result.resolutionHint !== null ? (
+          <Text style={styles.cardBodyDark}>{result.resolutionHint}</Text>
+        ) : null}
+        {result.matches.map((match) => (
+          <View
+            key={`${match.shopDomain}-${match.routeName}-${match.deliveryDate}`}
+            style={styles.ambiguousMatchCard}
+          >
+            <Text style={styles.ambiguousMatchTitle}>{match.companyDisplayName}</Text>
+            <Text style={styles.ambiguousMatchText}>{match.routeName}</Text>
+            <Text style={styles.ambiguousMatchText}>
+              {match.deliveryDate} · {match.timezone ?? 'timezone pending'}
+            </Text>
+            <Text style={styles.ambiguousMatchText}>{match.shopDomain}</Text>
+            {match.operatorSupportContact ? (
+              <Text style={styles.ambiguousMatchText}>Support: {match.operatorSupportContact}</Text>
+            ) : null}
+          </View>
+        ))}
+        <Text style={styles.cardBodyDark}>
+          Route details, customer addresses, proof controls, and driver access are blocked until exactly one company route is confirmed.
+        </Text>
       </View>
     );
   }
@@ -2254,6 +2291,25 @@ const styles = StyleSheet.create({
     color: '#9a3412',
     fontSize: 15,
     lineHeight: 22,
+  },
+  ambiguousMatchCard: {
+    backgroundColor: '#ffedd5',
+    borderColor: '#fdba74',
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 4,
+    padding: 12,
+  },
+  ambiguousMatchTitle: {
+    color: '#7c2d12',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  ambiguousMatchText: {
+    color: '#9a3412',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
   },
   infoRow: {
     borderTopColor: '#1e293b',

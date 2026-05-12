@@ -52,6 +52,42 @@ describe('driver route access UX flow', () => {
     assert.equal(getRouteAccessDeniedMessage('BLOCKED'), 'This driver profile is blocked. Contact dispatch before continuing.');
   });
 
+  it('maps multiple company matches to safe route-specific link guidance', async () => {
+    const result = await submitRouteAccess(
+      { routeContext: 'shared-dispatch-code', phoneE164: '+14165550123' },
+      createMockRouteAccessService({
+        status: 'MULTIPLE_MATCHES',
+        matches: [
+          {
+            companyDisplayName: 'Tomatono Toronto',
+            deliveryDate: '2026-05-12',
+            routeName: 'Tuesday AM Route',
+            shopDomain: 'tomatono.myshopify.com',
+            timezone: 'America/Toronto',
+          },
+          {
+            companyDisplayName: 'North Market',
+            deliveryDate: '2026-05-12',
+            routeName: 'North PM Route',
+            shopDomain: 'north-market.myshopify.com',
+            timezone: 'America/Toronto',
+          },
+        ],
+        resolutionHint: 'Use the route-specific invite link/code from dispatch.',
+      }),
+    );
+
+    assert.equal(result.kind, 'multiple_matches');
+    assert.equal(result.flowState, 'route_context_entered');
+    assert.equal(result.matches.length, 2);
+    assert.equal(result.matches[0].companyDisplayName, 'Tomatono Toronto');
+    assert.equal(result.message, 'Multiple company routes match this phone. Use the route-specific link/code or contact dispatch.');
+    assert.equal(JSON.stringify(result).includes('routePlanId'), false);
+    assert.equal(JSON.stringify(result).includes('accessToken'), false);
+    assert.equal(JSON.stringify(result).includes('deliveryStop'), false);
+    assert.equal(JSON.stringify(result).includes('address1'), false);
+  });
+
   it('posts lookup requests to the delivery-server contract endpoint', async () => {
     const requests: { body: unknown; method: string; url: string }[] = [];
     const client = createRouteAccessApiClient({
@@ -118,6 +154,77 @@ describe('driver route access UX flow', () => {
     assert.equal(result.status, 'INVITED');
     assert.equal(result.driverAccess.accessToken, 'server-issued-driver-jwt');
     assert.equal(result.driverAccess.use, 'consent_and_assigned_route');
+  });
+
+  it('parses multiple match lookup responses without requiring a driver token', async () => {
+    const client = createRouteAccessApiClient({
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'MULTIPLE_MATCHES',
+            matches: [
+              {
+                companyDisplayName: 'Tomatono Toronto',
+                deliveryDate: '2026-05-12',
+                routeName: 'Tuesday AM Route',
+                shopDomain: 'tomatono.myshopify.com',
+                timezone: 'America/Toronto',
+              },
+            ],
+            resolutionHint: 'Use the route-specific invite link/code from dispatch.',
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.lookupRouteAccess({
+      routeContext: 'shared-dispatch-code',
+      phoneE164: '+14165550123',
+    });
+
+    assert.equal(result.status, 'MULTIPLE_MATCHES');
+    assert.equal(result.matches.length, 1);
+    assert.equal(JSON.stringify(result).includes('accessToken'), false);
+  });
+
+  it('rejects multiple match lookup responses that include route or token evidence', async () => {
+    const client = createRouteAccessApiClient({
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'MULTIPLE_MATCHES',
+            driverAccess: {
+              accessToken: 'must-not-be-present',
+              expiresAt: '2026-05-12T06:55:00.000Z',
+              tokenType: 'Bearer',
+              ttlSeconds: 900,
+              use: 'consent_and_assigned_route',
+            },
+            matches: [
+              {
+                companyDisplayName: 'Tomatono Toronto',
+                deliveryDate: '2026-05-12',
+                routeName: 'Tuesday AM Route',
+                routePlanId: '11111111-1111-4111-8111-111111111111',
+                shopDomain: 'tomatono.myshopify.com',
+                timezone: 'America/Toronto',
+              },
+            ],
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.lookupRouteAccess({ routeContext: 'shared-dispatch-code', phoneE164: '+14165550123' }),
+      /Invalid route access response/u,
+    );
   });
 
   it('rejects invited lookup responses without driver access token evidence', async () => {
