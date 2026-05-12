@@ -30,6 +30,20 @@ This document records the repo baseline for the `clever-driver-app` implementati
 | `npm run release:evidence:verify -- <manifest-path>` | Validate a completed external release evidence manifest copy before release approval |
 | `npm run build` | Export Android and iOS JS bundles to ignored `dist/` folders |
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on pull requests to `dev`/`main` and pushes to
+`dev`/`main`. The workflow uses the Node version from `.nvmrc`, installs from
+`package-lock.json` with `npm ci`, then runs the same source-controlled gates
+used before release-sensitive PRs: `npm run check:workspace`, `npm run lint`,
+`npm run check:native-release`, `npm run release:evidence:seed`, `npm run
+build`, `npm audit --audit-level=moderate`, `npx expo install --check`, and
+`git diff --check`.
+
+The workflow intentionally stays secret-free. It exports JS bundles only; it does
+not run EAS binary builds, access Apple/Google signing credentials, or collect
+physical-device/store/privacy evidence.
+
 ## Native build profiles
 
 `eas.json` defines the source-controlled native build profile scaffold:
@@ -86,6 +100,7 @@ Before opening an implementation PR, re-check these repo baseline files together
 - `eas.json`: preview/internal and production/store profile settings, EAS environment names, require-commit policy, and app version source match the release evidence plan.
 - `npm run check:native-release`: local native release config preflight passes, while external owner-controlled blockers remain tracked in `docs/release-readiness.md`.
 - `npm run release:evidence:verify -- <external-manifest-path>`: completed external release evidence manifests are checked before release approval; the completed manifest itself stays out of git.
+- `.github/workflows/ci.yml`: PR/push CI keeps local source-controlled gates aligned with the documented release-sensitive validation commands.
 - `.github/PULL_REQUEST_TEMPLATE.md`: target issue, change-control issue, concurrent-work gate, validation evidence, and context/wiki completion fields are filled before issue closure.
 - `CONTRIBUTING.md` and `SECURITY.md`: human workflow, security/privacy reporting, sensitive evidence handling, and generated-file guardrails stay current.
 - `docs/release-readiness.md`: physical-device smoke matrix, store/privacy disclosure checklist, and release blockers match current runtime behavior.
