@@ -100,9 +100,27 @@ Run `npm run check:native-release` before EAS builds or release PRs. It validate
 
 Run `npm run release:evidence:seed` from the committed source revision selected for EAS/device testing. It prints a non-secret Markdown seed with commit, app version/build identifiers, EAS build commands, preflight status, external blocker list, and tracking issues so the completed evidence manifest can be filled in the approved external evidence store.
 
+After the copied external manifest has real EAS URLs/references, iPhone and
+Android physical-device results, and owner/legal approvals, validate a local
+working copy before the release decision:
+
+```bash
+npm run release:evidence:verify -- /path/to/external/release-evidence-manifest-<date>-<sha>.md
+```
+
+The verifier rejects remaining `pending` placeholders, missing device/store
+approval rows, a non-`approved` release decision, and common sensitive or binary
+artifact patterns. It does not replace real external evidence collection, owner
+approval, or the rule that completed manifests stay out of git.
+
 Preview builds are for internal physical-device evidence collection. Production builds are store/TestFlight/Play candidates and require owner-controlled Expo, Apple, Google, signing, and environment-variable setup before execution.
 
-Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`, generated outputs and physical-device evidence artifacts remain ignored, `.env.example` still documents every public runtime env key used by the app, and `npm run check:native-release` passes for release-sensitive config changes.
+Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`,
+generated outputs and physical-device evidence artifacts remain ignored,
+completed release evidence manifests, screenshots, videos, logs, app binaries,
+and signing material stay outside git, `.env.example` still documents every
+public runtime env key used by the app, and `npm run check:native-release`
+passes for release-sensitive config changes.
 
 ## Documentation map
 

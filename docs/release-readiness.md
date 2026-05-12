@@ -47,6 +47,20 @@ output into the approved external evidence store before filling EAS URLs, device
 results, owner/legal approvals, and evidence references. Do not commit completed
 manifests or binary artifacts.
 
+After the external manifest is filled, validate a local working copy before the
+release decision:
+
+```bash
+npm run release:evidence:verify -- /path/to/external/release-evidence-manifest-<date>-<sha>.md
+```
+
+The verifier is intentionally secret-free and read-only: it checks for remaining
+`pending` placeholders, required iPhone/Android smoke evidence rows,
+store/privacy approvals, an `approved` release decision, and common sensitive or
+binary artifact patterns. It does not prove that external screenshots, videos,
+store-console records, signing authority, or owner/legal approvals are genuine;
+those remain owner-controlled release gates.
+
 ## Physical-device smoke matrix
 
 Before production release, capture evidence on at least one real iPhone and one real Android phone. Use synthetic driver/route data unless production validation is explicitly approved. Execute `docs/physical-device-smoke-runbook.md` for the step order, evidence naming, and external storage rules. Copy `docs/release-evidence-manifest.template.md` into the external evidence store for the release candidate and fill it there; do not commit completed evidence manifests.
@@ -92,6 +106,7 @@ See `docs/store-privacy-disclosure-draft.md` for the current non-final App Store
 - Do not commit large binary evidence, generated app bundles, signing artifacts, or production PII to this repo.
 - If an evidence artifact is necessary but sensitive, reference the private storage location in the change-control issue instead of committing it.
 - Completed copies of `docs/release-evidence-manifest.template.md` belong in the external evidence store, not in git.
+- Run `npm run release:evidence:verify -- <external-manifest-path>` against a local copy before marking the release candidate approved, then keep only the verifier result and sanitized evidence references in issues/PRs.
 
 ## Release blockers still open
 
