@@ -68,6 +68,12 @@ Clever/Tomatono 배송 운영에는 관리자 콘솔과 delivery server는 준�
   - driver 대상이 제한된 경우 Apple Business Manager Custom Apps and managed Google Play/private app
 - PWA/web app: 공식 앱 설치 전 임시 접근, 운영 fallback, 또는 admin/support 보조 화면으로만 검토한다. driver MVP의 본선 플랫폼으로 두지 않는다.
 
+MVP와 확장 경계:
+
+- route 조회 MVP는 전화번호 접근, 동의 기록, 당일 assigned route 확인까지를 최소 기능으로 둔다.
+- foreground/background location service는 앱 플랫폼 선택의 핵심 요구사항이지만, 실제 위치 이벤트 송신은 별도 구현 이슈에서 `delivery_active` slice로 분리할 수 있다.
+- 후속 이슈가 scope를 확장하지 않는 한 framework bootstrap PR은 background location을 실제 수집하지 않고 권한/설정 위치와 테스트 가능성만 준비한다.
+
 플랫폼 결정 완료 기준:
 
 - iOS/Android foreground location 권한 요청과 consent UX를 구현할 수 있다.
@@ -122,7 +128,9 @@ Clever/Tomatono 배송 운영에는 관리자 콘솔과 delivery server는 준�
 - 앱은 서버에 phone lookup을 요청해 초대된 배송원인지 확인한다.
 - 초대된 배송원이면 동의 단계로 이동한다.
 - 초대되지 않은 번호, 비활성 driver, 차단된 driver는 route 데이터를 받지 못하고 안내 화면에 머문다.
-- MVP 문서 기준 인증은 `전화번호 + 초대 상태 확인`까지로 둔다. OTP, deep link invite token, 강한 session 인증은 driver API contract 후속 이슈에서 결정한다.
+- MVP 문서 기준 첫 관문은 `전화번호 + 초대 상태 확인`으로 둔다.
+- phone lookup만으로 production route/stop 데이터를 노출하지 않는다. 서버는 후속 driver API contract에서 driver-scoped short-lived session/access token 또는 동등한 접근 경계를 정의해야 한다.
+- OTP, deep link invite token, managed identity 같은 강한 인증은 driver API contract 후속 이슈에서 결정한다.
 
 ### 시나리오 2: 동의 gate
 
@@ -135,9 +143,10 @@ Clever/Tomatono 배송 운영에는 관리자 콘솔과 delivery server는 준�
 ### 시나리오 3: 당일 assigned route 확인
 
 - 동의가 완료된 배송원은 당일 자신에게 배정된 route를 조회한다.
+- `당일` 기준은 기기 local date가 아니라 서버가 관리하는 shop/route timezone의 `deliveryDate`로 둔다.
 - 앱은 route summary, stop list, stop detail을 배송원에게 보여준다.
 - stop detail은 주소, 순서, 배송 준비에 필요한 지도 이동 정보를 포함한다.
-- route/stop 조회는 서버의 assigned driver 또는 active session boundary를 통과해야 한다.
+- route/stop 조회는 서버의 tenant boundary와 assigned driver 또는 active session boundary를 통과해야 한다.
 - 서버 compliance 기준상 driver assigned route read와 stop detail read는 위치정보가 driver app으로 반환되는 `PROVIDE` 성격의 동작으로 본다.
 
 ### 시나리오 4: 배송 시작과 위치 서비스
@@ -188,20 +197,22 @@ unidentified
 
 - 초대되지 않은 전화번호: 가입/관리자 문의 안내를 보여주고 route/consent API로 진행하지 않는다.
 - 비활성 또는 차단된 driver: 접근 불가 안내를 보여주고 session을 만들지 않는다.
+- service/legal consent 철회 또는 consent version 갱신: `consent_required`로 되돌리고 route 화면 진입을 막는다.
 - consent submit 실패: route 화면으로 이동하지 않고 재시도와 지원 문의 안내를 제공한다.
 - OS 위치 권한 거부: route 확인은 유지하되 배송 시작은 막고 설정 이동/재시도 안내를 제공한다.
 - OS 위치 권한 철회: active delivery 중이면 위치 송신을 중단하고 서버에 가능한 상태 이벤트를 보낸 뒤 복구 안내를 제공한다.
 - 당일 route 없음: "오늘 배정된 route 없음" 상태를 표시하고 자동으로 다른 driver/route를 노출하지 않는다.
 - 서버/API 장애: 현재 화면의 민감 데이터 확대 표시를 피하고 재시도 가능한 오류 상태로 둔다.
-- 네트워크 불안정: 위치 이벤트는 안전한 범위에서 재시도 대상으로 관리하되, 중복 전송과 민감 payload logging을 피한다.
+- 네트워크 불안정: 위치 이벤트는 안전한 범위에서 재시도 대상으로 관리하되, 중복 전송과 민감 payload logging을 피한다. 후속 구현은 idempotency key, local queue 보존 범위, 실패 폐기 기준을 정해야 한다.
 
 ## Server contract 필요 항목
 
 후속 server/API 이슈에서 아래 driver-facing contract를 정의해야 한다.
 
 - phone lookup: 전화번호를 기준으로 invited/not-found/disabled/blocked 상태를 구분한다.
+- driver session/access boundary: phone lookup 성공 후 route/stop read에 사용할 driver-scoped session/access token 또는 동등한 서버 검증 경계를 정의한다.
 - consent record: consent type, consent version, driver identity, timestamp, device/app context를 서버에 기록한다.
-- assigned route read: 당일 route summary와 stop list를 assigned driver boundary 안에서만 반환한다.
+- assigned route read: shop/shopDomain tenant boundary와 assigned driver boundary 안에서만 shop/route timezone 기준 당일 route summary와 stop list를 반환한다.
 - stop detail read: 배송 준비에 필요한 주소/순서/지도 이동 정보를 반환하되 다른 driver route 접근은 차단한다.
 - driver event/location update: `배송 시작` 이후 foreground/background 위치 이벤트와 delivery status event를 수집한다.
 - access/usage logging: route/stop read는 위치정보 `PROVIDE`, GPS update는 위치정보 `COLLECT`로 분류할 수 있도록 서버 compliance log와 맞춘다.
@@ -244,7 +255,7 @@ unidentified
 - 선행 계약:
   - E.164 phone normalization 기준
   - delivery server의 driver-facing phone lookup endpoint
-  - invited/not-found/disabled/error 상태 코드
+  - invited/not-found/disabled/blocked/error 상태 코드
 - 산출물:
   - phone input screen
   - validation and API error state rendering
@@ -322,6 +333,8 @@ unidentified
 - driver authentication/session method after phone lookup
 - consent record API shape and legal copy source
 - map provider and background location policy for post-MVP
+- minimum supported iOS/Android versions and physical-device background-location smoke matrix
+- local queue/idempotency policy for failed driver location events
 
 ## 다음 작업 목록
 
