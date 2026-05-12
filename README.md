@@ -32,13 +32,13 @@ The app includes an interactive route access screen:
 - local mock service and API client boundary for delivery-server `POST /driver/consents`
 - driver access token parsing from route lookup and API-client handoff helper
 - assigned route mock/API boundary for delivery-server `GET /driver/assigned-route`
-- route summary and ordered stop cards after consent moves the flow to `route_ready`
+- route summary, ordered stop cards, and OS map handoff after consent moves the flow to `route_ready`
 - explicit delivery start action that requests OS foreground location permission before `delivery_active`
 - route started, foreground one-shot location update, continuous background-capable location streaming, native proof photo URI capture, proof media upload references, signature/barcode proof capture, richer stop delivered/failed proof-event mock/API boundaries, and route-completed delivery finish cleanup for delivery-server `POST /driver/events` after delivery_active succeeds
 - safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
 - live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup, native secure storage for the short-lived driver token, and live downstream consent/assigned-route/driver-event/proof-media clients; durable app-side offline queue/retry for pending driver events and proof media using AsyncStorage-backed non-secret queue metadata, with app-side discard thresholds for repeated failure, stale age, recorded route completion cleanup, and an explicit driver session reset action that clears secure access plus queued retry state; delivery-server local/manual proof-media cleanup support; production proof-media object storage/access/scanning hardening, deployed cleanup evidence, physical-device smoke evidence, and store/privacy disclosure evidence left for follow-up slices
 
-See `docs/route-access-flow.md` for the app-side route access, consent, and assigned-route mock/API boundary.
+See `docs/route-access-flow.md` for the app-side route access, consent, assigned-route, native map handoff, and delivery evidence boundary.
 
 
 ## Repository guardrails
@@ -100,7 +100,7 @@ Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`, g
 
 - `docs/project-brief.md` — product role, MVP scenarios, platform decision, and implementation sequencing.
 - `docs/repository-setup.md` — repo baseline, scripts, ignore policy, and follow-up setup notes.
-- `docs/route-access-flow.md` — app-side route access, consent, assigned route, delivery event, proof media, and offline queue boundary.
+- `docs/route-access-flow.md` — app-side route access, consent, assigned route, native map handoff, delivery event, proof media, and offline queue boundary.
 - `docs/release-readiness.md` — production distribution, store/privacy disclosure, physical-device smoke evidence, and release blockers.
 - `CONTRIBUTING.md` — human workflow, validation, privacy review points, and generated-file guardrails.
 - `SECURITY.md` — vulnerability reporting, sensitive evidence handling, and current data-handling expectations.

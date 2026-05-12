@@ -167,8 +167,8 @@ MVP와 확장 경계:
 
 - 동의가 완료된 배송원은 당일 자신에게 배정된 route를 조회한다.
 - `당일` 기준은 기기 local date가 아니라 서버가 관리하는 shop/route timezone의 `deliveryDate`로 둔다.
-- 앱은 route summary, stop list, stop detail을 배송원에게 보여준다.
-- stop detail은 주소, 순서, 배송 준비에 필요한 지도 이동 정보를 포함한다.
+- 앱은 route summary, stop list, stop detail과 OS map handoff를 배송원에게 보여준다.
+- stop detail은 주소, 순서, 배송 준비에 필요한 지도 이동 정보를 포함하며 좌표 우선/주소 fallback 방식으로 OS map 앱을 연다.
 - route/stop 조회는 서버의 tenant boundary와 assigned driver 또는 active session boundary를 통과해야 한다.
 - 서버 compliance 기준상 driver assigned route read와 stop detail read는 위치정보가 driver app으로 반환되는 `PROVIDE` 성격의 동작으로 본다.
 
@@ -335,7 +335,7 @@ unidentified
 - 산출물:
   - today's route screen: implemented after consent with local mock/API boundary
   - stop list and stop detail screen: implemented as ordered stop cards for route-ready MVP
-  - 주소/순서/지도 이동 준비 정보 표시: address, sequence, phone, and coordinate text are shown; native map launch remains a later UX slice
+  - 주소/순서/지도 이동 준비 정보 표시: address, sequence, phone, coordinate text, and OS map handoff are implemented; provider SDK selection remains a later product decision
 - 완료 기준:
   - invited phone → consent accepted → today's route 확인 smoke flow가 가능하다.
   - route 없음/error 상태가 사용자에게 명확히 표시된다.
@@ -378,7 +378,7 @@ unidentified
 - driver authentication/session method after route+phone lookup
 - route invite link/code format beyond current RoutePlan UUID-shaped route context
 - consent legal copy source and production version registry
-- native map launch/provider and background location policy for post-MVP
+- dedicated native map provider SDK choice and background location policy for post-MVP
 - minimum supported iOS/Android versions and physical-device background-location smoke matrix
 - production proof-media object storage/access/scanning policy and deployed cleanup release evidence
 
