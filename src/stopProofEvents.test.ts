@@ -45,6 +45,7 @@ describe('stop proof event flow', () => {
         deliveryStopId: 'stop-1',
         note: 'Left with concierge',
         occurredAt: new Date('2026-05-12T07:10:00.000Z'),
+        photoUris: ['file:///proof/stop-1.jpg'],
         routePlanId: 'route-1',
       },
     });
@@ -57,6 +58,7 @@ describe('stop proof event flow', () => {
       occurredAt: new Date('2026-05-12T07:10:00.000Z'),
       payload: {
         proof: {
+          media: [{ kind: 'photo', uri: 'file:///proof/stop-1.jpg' }],
           note: 'Left with concierge',
           source: 'driver-app-mvp',
           type: 'DELIVERED_NOTE',

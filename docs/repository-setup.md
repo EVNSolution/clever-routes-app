@@ -11,7 +11,7 @@ This document records the repo baseline for the `clever-driver-app` implementati
 - Package manager: npm with `package-lock.json`
 - Node floor: `.nvmrc` pins `20.19.4`; `package.json` allows Node `>=20.19.4`
 - Entry point: `index.ts` registering `App.tsx`
-- Current implementation depth: local Expo route+phone lookup, company guidance, consent gate, assigned-route screen, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, and text-only stop delivered/failed proof events; rich proof media, offline queueing, and physical-device background smoke evidence remain later slices
+- Current implementation depth: local Expo route+phone lookup, company guidance, consent gate, assigned-route screen, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, and richer stop delivered/failed proof metadata controls; binary proof media upload, signature/barcode native capture, offline queueing, and physical-device background smoke evidence remain later slices
 
 ## Scripts
 
@@ -53,7 +53,7 @@ These items are intentionally left for later issues because they affect API, com
 2. Server-issued driver session/access token refresh or re-auth UX after the current short-lived route+phone lookup token expires.
 3. Route invite/deep-link URL format and route access code format.
 4. Consent legal copy source and consent version contract.
-5. Rich stop action proof capture policy: photo/signature/barcode, failure-reason taxonomy, offline queue retention, and retry/discard rules.
+5. Binary proof media upload/native capture policy: photo/signature/barcode storage, offline queue retention, and retry/discard rules.
 6. Store disclosure matrix and production privacy copy for continuous background location.
 7. EAS/App Store/Play Store build profile and signing ownership.
 8. Minimum supported iOS/Android versions and physical-device background-location smoke matrix.
