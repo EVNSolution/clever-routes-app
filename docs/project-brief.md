@@ -235,7 +235,7 @@ unidentified
 - OS 위치 권한 철회: active delivery 중이면 위치 송신을 중단하고 서버에 가능한 상태 이벤트를 보낸 뒤 복구 안내를 제공한다.
 - 당일 route 없음: "오늘 배정된 route 없음" 상태를 표시하고 자동으로 다른 driver/route를 노출하지 않는다.
 - 서버/API 장애: 현재 화면의 민감 데이터 확대 표시를 피하고 재시도 가능한 오류 상태로 둔다.
-- 네트워크 불안정: driver event와 proof media submission은 durable app-side offline queue/retry 대상으로 관리하되, 중복 전송과 민감 payload logging을 피한다. repeated failure, route completion, 또는 driver sign-out 이후의 production 보존/폐기 기준은 store build 전 별도 확정한다.
+- 네트워크 불안정: driver event와 proof media submission은 durable app-side offline queue/retry 대상으로 관리하되, 중복 전송과 민감 payload logging을 피한다. 앱 로컬 queue는 5회 실패, 72시간 경과, route completion cleanup, 또는 driver sign-out/session reset 시 discard할 수 있는 기준을 둔다.
 
 ## Server contract 필요 항목
 
@@ -362,7 +362,7 @@ unidentified
 - input data: route context, E.164 phone, consent decisions, current date/device context
 - output data: company guidance, consent record, assigned route/stop display state, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
-- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, and richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events with native photo URI capture, proof media upload references, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads; token refresh/re-auth, production proof-media storage hardening, physical-device background smoke evidence, and production queue retention/discard thresholds remain follow-up work
+- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, and richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events with native photo URI capture, proof media upload references, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, route cleanup, and session reset; token refresh/re-auth, production proof-media storage hardening, and physical-device background smoke evidence remain follow-up work
 
 ## 검증 초안
 
@@ -378,7 +378,7 @@ unidentified
 - consent legal copy source and production version registry
 - native map launch/provider and background location policy for post-MVP
 - minimum supported iOS/Android versions and physical-device background-location smoke matrix
-- production durable queue retention/discard thresholds after repeated failure, route completion, or driver sign-out
+- production server-side proof-media retention/deletion policy and release evidence
 
 ## 다음 작업 목록
 
@@ -399,6 +399,7 @@ unidentified
 15. Add native proof photo URI capture from camera/library. — completed
 16. Add binary proof media upload/native capture: photo file upload, signature drawing, barcode scanning. — completed as app-side boundary
 17. Add offline queue/retry policy for driver events and proof media. — completed as durable app-side queue boundary
+18. Add app-side offline queue retention/discard thresholds after repeated failure, route completion, or driver sign-out/session reset. — completed
 18. Add release-readiness checklist for physical iOS/Android smoke matrix and production store/privacy disclosure evidence. — completed as documentation checklist; real device/store evidence remains pending
 19. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
 20. Add context-monorepo service document once production runtime/API boundaries are confirmed.
