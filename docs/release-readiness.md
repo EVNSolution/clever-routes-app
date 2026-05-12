@@ -89,4 +89,10 @@ stable work items instead of unowned notes:
 | Physical iOS/Android device smoke evidence for background tracking, proof capture, offline retry/discard, token recovery, and route completion cleanup | EVNSolution/clever-driver-app#72 | Driver app evidence collection |
 | Owner-controlled Expo/EAS project, Apple/Google signing credentials, EAS preview/production environment values, store/private distribution policy, owner/legal-approved privacy disclosure copy, and public license/reuse decision | EVNSolution/clever-driver-app#73 | Native build/distribution approval |
 | Production proof-media object storage ownership, signed retrieval/access-control, scanner backend/private evidence storage, and deployed cleanup/scheduler evidence | EVNSolution/clever-delivery-server#71 | Delivery-server proof media hardening |
-| Context-monorepo service document after production runtime/API boundaries are confirmed | EVNSolution/clever-context-monorepo#23 | Canonical service context |
+
+The baseline context-monorepo service pointer is complete:
+`EVNSolution/clever-context-monorepo#23` was closed by
+`EVNSolution/clever-context-monorepo#24`. Future production runtime/API
+boundary changes should create a new context-monorepo issue/PR only if the
+durable service responsibility, public contract, deployment/runtime category, or
+cross-repo interpretation changes.

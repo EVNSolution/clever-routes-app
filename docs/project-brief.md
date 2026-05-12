@@ -412,4 +412,4 @@ unidentified
 23. Implement app-side proof media scanner rejection handling. — completed as app-side boundary; live scanner/backend deployment evidence remains pending
 24. Add local proof-media scanner rejection smoke mock mode. — completed as physical-device verification aid; real device evidence remains pending
 25. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
-26. Add context-monorepo service document once production runtime/API boundaries are confirmed.
+26. Add context-monorepo service document once production runtime/API boundaries are confirmed. — baseline pointer completed in `clever-context-monorepo#24`; future production boundary changes should open a new context issue only if durable service responsibility, public contract, deployment/runtime category, or cross-repo interpretation changes.
