@@ -11,7 +11,7 @@ This document records the repo baseline for the `clever-driver-app` implementati
 - Package manager: npm with `package-lock.json`
 - Node floor: `.nvmrc` pins `20.19.4`; `package.json` allows Node `>=20.19.4`
 - Entry point: `index.ts` registering `App.tsx`
-- Current implementation depth: local Expo route+phone lookup, company guidance, consent gate, assigned-route screen, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, native proof photo URI capture, proof media upload references, signature/barcode proof capture, richer stop delivered/failed proof metadata controls, and durable app-side offline queue/retry for driver events and proof media; production proof-media storage hardening and physical-device background smoke evidence remain later slices
+- Current implementation depth: local Expo route+phone lookup, company guidance, consent gate, assigned-route screen, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, native proof photo URI capture, proof media upload references, signature/barcode proof capture, richer stop delivered/failed proof metadata controls, and durable app-side offline queue/retry for driver events and proof media; production proof-media storage hardening, physical-device background smoke evidence, and store/privacy disclosure evidence remain later slices
 
 ## Scripts
 
@@ -33,9 +33,9 @@ This document records the repo baseline for the `clever-driver-app` implementati
 - local agent/runtime state: `.omx/`
 - dependencies and package-manager caches: `node_modules/`, `.npm/`, `.pnpm-store/`
 - secrets and local env files: `.env`, `.env.*`, while keeping `.env.example` trackable for the optional live delivery-server base URL
-- build/test outputs: `dist/`, `build/`, `coverage/`, `.cache/`, `.metro-cache/`
-- Expo/React Native local output: `.expo/`, `.expo-shared/`, `web-build/`, `*.jsbundle`
-- generated native build output: Android Gradle/app build folders, iOS build/Pods folders
+- build/test/compiler outputs: `dist/`, `build/`, `coverage/`, `.cache/`, `.metro-cache/`, `*.tsbuildinfo`
+- Expo/React Native local output: `.expo/`, `.expo-shared/`, `.eas/`, `web-build/`, `*.jsbundle`
+- generated native build/tooling output: root/Android Gradle folders, Android `.cxx`, app build/captures/local properties, iOS build/DerivedData/Pods/xcuserdata state, heap profiles
 - mobile signing artifacts and binaries: `*.apk`, `*.aab`, `*.ipa`, `*.dSYM/`, `*.keystore`, `*.jks`, `*.p8`, `*.p12`, `*.mobileprovision`, `*.cer`, `*.pem`
 - OS/editor noise: `.DS_Store`, `Thumbs.db`, `.idea/`, `.vscode/`
 
@@ -49,11 +49,14 @@ Generated `android/` and `ios/` source directories are not globally ignored. If 
 
 Before opening an implementation PR, re-check these repo baseline files together with the code diff:
 
-- `.gitignore`: generated Expo/native outputs, signing artifacts, local env files, package caches, and agent/runtime state stay ignored; `android/` and `ios/` source directories are intentionally not globally ignored.
+- `.gitignore`: generated Expo/native outputs, signing artifacts, local env files, package caches, compiler artifacts, and agent/runtime state stay ignored; `android/` and `ios/` source directories are intentionally not globally ignored.
 - `.env.example`: every bundled `EXPO_PUBLIC_*` runtime key used by the app is documented, and secret `.env*` files stay ignored.
 - `package.json` / `package-lock.json`: scripts, Node floor, Expo SDK dependencies, and audit overrides match the implementation.
-- `app.json`: bundle/package identifiers, permission copy, plugins, and background-location settings match the current native capability slice.
+- `app.json`: bundle/package identifiers, permission copy, plugins, background-location settings, and static project/bootstrap issue metadata match the current native capability slice.
 - `.github/PULL_REQUEST_TEMPLATE.md`: target issue, change-control issue, concurrent-work gate, validation evidence, and context/wiki completion fields are filled before issue closure.
+- `CONTRIBUTING.md` and `SECURITY.md`: human workflow, security/privacy reporting, sensitive evidence handling, and generated-file guardrails stay current.
+- `docs/release-readiness.md`: physical-device smoke matrix, store/privacy disclosure checklist, and release blockers match current runtime behavior.
+- `LICENSE`: remains intentionally absent until an owner selects reuse/distribution terms.
 
 ## Follow-up setup decisions
 
@@ -64,7 +67,8 @@ These items are intentionally left for later issues because they affect API, com
 3. Route invite/deep-link URL format and route access code format.
 4. Consent legal copy source and consent version contract.
 5. Production proof media storage policy: persistent photo/signature/barcode storage ownership, offline queue retention, and retry/discard rules.
-6. Store disclosure matrix and production privacy copy for continuous background location.
+6. Store disclosure matrix and production privacy copy for continuous background location; tracked in `docs/release-readiness.md`.
 7. EAS/App Store/Play Store build profile and signing ownership.
-8. Minimum supported iOS/Android versions and physical-device background-location smoke matrix.
+8. Minimum supported iOS/Android versions and physical-device background-location smoke matrix; tracked in `docs/release-readiness.md`.
 9. Production retention/discard thresholds for durable offline queue items after repeated failure, route completion, or driver sign-out.
+10. Public license/reuse terms, if the owner decides to grant them.

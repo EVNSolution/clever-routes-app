@@ -62,7 +62,7 @@ Clever/Tomatono 배송 운영에는 관리자 콘솔과 delivery server는 준�
 기본 방향:
 
 - implementation target: iOS + Android cross-platform native app
-- preferred framework candidate: Expo/React Native 계열 우선 검토
+- selected framework: Expo/React Native 계열로 1차 구현 진행
 - distribution candidates:
   - App Store/TestFlight and Google Play testing/production tracks
   - driver 대상이 제한된 경우 Apple Business Manager Custom Apps and managed Google Play/private app
@@ -399,5 +399,6 @@ unidentified
 15. Add native proof photo URI capture from camera/library. — completed
 16. Add binary proof media upload/native capture: photo file upload, signature drawing, barcode scanning. — completed as app-side boundary
 17. Add offline queue/retry policy for driver events and proof media. — completed as durable app-side queue boundary
-18. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
-19. Add context-monorepo service document once production runtime/API boundaries are confirmed.
+18. Add release-readiness checklist for physical iOS/Android smoke matrix and production store/privacy disclosure evidence. — completed as documentation checklist; real device/store evidence remains pending
+19. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
+20. Add context-monorepo service document once production runtime/API boundaries are confirmed.

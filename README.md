@@ -36,9 +36,17 @@ The app includes an interactive route access screen:
 - explicit delivery start action that requests OS foreground location permission before `delivery_active`
 - route started, foreground one-shot location update, continuous background-capable location streaming, native proof photo URI capture, proof media upload references, signature/barcode proof capture, and richer stop delivered/failed proof-event mock/API boundaries for delivery-server `POST /driver/events` after delivery_active succeeds
 - safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
-- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup, native secure storage for the short-lived driver token, and live downstream consent/assigned-route/driver-event/proof-media clients; durable app-side offline queue/retry for pending driver events and proof media using AsyncStorage-backed non-secret queue metadata; production proof-media storage hardening and physical store/device smoke evidence left for follow-up slices
+- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup, native secure storage for the short-lived driver token, and live downstream consent/assigned-route/driver-event/proof-media clients; durable app-side offline queue/retry for pending driver events and proof media using AsyncStorage-backed non-secret queue metadata; production proof-media storage hardening and physical-device smoke evidence and store/privacy disclosure evidence left for follow-up slices
 
 See `docs/route-access-flow.md` for the app-side route access, consent, and assigned-route mock/API boundary.
+
+
+## Repository guardrails
+
+- Human contribution workflow is documented in `CONTRIBUTING.md`.
+- Security/privacy reporting and evidence handling are documented in `SECURITY.md`.
+- Production release, store disclosure, and physical-device smoke evidence are tracked in `docs/release-readiness.md`.
+- A public `LICENSE` file has not been selected yet; do not add reuse terms without an explicit owner decision.
 
 ## Local setup
 
@@ -84,5 +92,8 @@ Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`, g
 
 - `docs/project-brief.md` — product role, MVP scenarios, platform decision, and implementation sequencing.
 - `docs/repository-setup.md` — repo baseline, scripts, ignore policy, and follow-up setup notes.
-- `docs/route-access-flow.md` — app-side route access and consent mock/API boundary.
+- `docs/route-access-flow.md` — app-side route access, consent, assigned route, delivery event, proof media, and offline queue boundary.
+- `docs/release-readiness.md` — production distribution, store/privacy disclosure, physical-device smoke evidence, and release blockers.
+- `CONTRIBUTING.md` — human workflow, validation, privacy review points, and generated-file guardrails.
+- `SECURITY.md` — vulnerability reporting, sensitive evidence handling, and current data-handling expectations.
 - `AGENTS.md` — agent workflow, issue/branch/PR rules, and verification requirements.
