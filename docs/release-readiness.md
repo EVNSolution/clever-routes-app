@@ -42,7 +42,7 @@ Before production release, capture evidence on at least one real iPhone and one 
 | Proof photo capture from camera/library | pending | pending | Use synthetic proof media. |
 | Signature and barcode proof capture | pending | pending | Confirm unavailable/denied states. |
 | Offline queue retry/discard UI after network loss | pending | pending | Confirm app restart hydration. |
-| Token expiry or invalid persisted token recovery | pending | pending | Confirm SecureStore clearing path. |
+| Token expiry, invalid persisted token, or live downstream `401` recovery | pending | pending | App clears expired/malformed SecureStore payloads before reuse and live downstream `401` driver access plus active route UI state before requiring route+phone re-lookup; confirm on devices. |
 | Driver session reset/sign-out cleanup | pending | pending | Confirm reset stops tracking, clears SecureStore driver access, clears queued retry state, blanks lookup inputs, and returns to safe lookup state. |
 | Delivery finish or route completion cleanup | pending | pending | App-side finish now stops tracking, records/queues `ROUTE_COMPLETED`, and cleans route queue after recorded completion; confirm on devices. |
 

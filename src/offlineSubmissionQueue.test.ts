@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { createDriverApiHttpError } from './driverApiError';
 import { createMockDriverEventService } from './driverEvents';
 import {
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
@@ -140,6 +141,37 @@ describe('offline submission queue', () => {
     });
     assert.equal(queue.listPending()[0]?.attempts, 1);
     assert.equal(queue.listPending()[0]?.lastError, 'still offline');
+  });
+
+  it('marks offline retry failures as requiring route lookup when live retry returns unauthorized', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'stop-1',
+      fileName: 'stop-1.jpg',
+      routePlanId: 'route-1',
+      source: 'camera',
+      uri: 'file:///proof/stop-1.jpg',
+    });
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => {
+          throw createDriverApiHttpError({ endpoint: 'Proof media upload', status: 401 });
+        },
+      },
+      queue,
+    });
+
+    assert.deepEqual(result, {
+      discarded: 0,
+      failed: 1,
+      requiresRouteLookup: true,
+      retried: 1,
+      succeeded: 0,
+    });
+    assert.equal(queue.listPending()[0]?.attempts, 1);
+    assert.equal(queue.listPending()[0]?.lastError, 'Proof media upload failed with HTTP 401');
   });
 
   it('discards queued submissions by item id', () => {

@@ -1,4 +1,5 @@
 import { getInitialAccessValidation, type DriverFlowState } from './driverFlow';
+import { createDriverApiHttpError } from './driverApiError';
 
 export type RouteAccessLookupInput = {
   routeContext: string;
@@ -255,7 +256,10 @@ export function createRouteAccessApiClient(input: {
       });
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(`Route access lookup failed with HTTP ${response.status ?? 'unknown'}`);
+        throw createDriverApiHttpError({
+          endpoint: 'Route access lookup',
+          status: response.status,
+        });
       }
 
       return readRouteAccessEnvelope(payload);

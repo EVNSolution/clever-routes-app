@@ -1,4 +1,9 @@
 import type { ProofPhotoCaptureResult, ProofPhotoCaptureSource } from './proofPhotoCapture';
+import {
+  createDriverApiHttpError,
+  formatDriverApiErrorForDriver,
+  getDriverApiRecoveryReason,
+} from './driverApiError';
 
 export type ProofMediaKind = 'photo';
 
@@ -27,7 +32,7 @@ export type ProofMediaUploadService = {
 
 export type ProofMediaUploadResult =
   | { kind: 'skipped'; message: string; reason: 'photo_not_captured' }
-  | { kind: 'upload_failed'; message: string }
+  | { kind: 'upload_failed'; message: string; reason?: 'driver_access_expired' }
   | { kind: 'uploaded'; media: ProofMediaReference };
 
 export type FetchLike = (
@@ -75,7 +80,10 @@ export function createProofMediaUploadApiClient(input: {
       });
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(`Proof media upload failed with HTTP ${response.status ?? 'unknown'}`);
+        throw createDriverApiHttpError({
+          endpoint: 'Proof media upload',
+          status: response.status,
+        });
       }
 
       return readProofMediaReferenceEnvelope(payload);
@@ -104,9 +112,12 @@ export async function uploadCapturedProofPhoto(input: {
     });
     return { kind: 'uploaded', media };
   } catch (error) {
+    const recoveryReason = getDriverApiRecoveryReason(error);
+
     return {
       kind: 'upload_failed',
-      message: `Proof media upload failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+      message: `Proof media upload failed: ${formatDriverApiErrorForDriver(error)}`,
+      ...(recoveryReason === undefined ? {} : { reason: recoveryReason }),
     };
   }
 }

@@ -146,7 +146,8 @@ MVP와 확장 경계:
 - 초대되지 않은 번호, 비활성 driver, 차단된 driver는 route 데이터를 받지 못하고 안내 화면에 머문다.
 - MVP 문서 기준 첫 관문은 `route context + 전화번호 + 초대 상태 확인`으로 둔다.
 - route context 없이 phone lookup만으로 production route/stop 데이터를 노출하지 않는다. 서버는 후속 driver API contract에서 driver-scoped short-lived session/access token 또는 동등한 접근 경계를 정의해야 한다.
-- OTP, deep link invite token, managed identity 같은 강한 인증은 driver API contract 후속 이슈에서 결정한다.
+- 현재 앱은 short-lived token의 expiry/invalid payload와 live downstream `401`을 안전하게 처리해 secure token과 active route UI state를 지우고 route context + phone lookup을 다시 요구한다.
+- OTP, deep link invite token, managed identity 같은 강한 인증과 서버-issued refresh는 driver API contract 후속 이슈에서 결정한다.
 
 ### 시나리오 1-a: 회사 안내 확인
 
@@ -238,6 +239,7 @@ unidentified
 - 당일 route 없음: "오늘 배정된 route 없음" 상태를 표시하고 자동으로 다른 driver/route를 노출하지 않는다.
 - 서버/API 장애: 현재 화면의 민감 데이터 확대 표시를 피하고 재시도 가능한 오류 상태로 둔다.
 - 네트워크 불안정: driver event와 proof media submission은 durable app-side offline queue/retry 대상으로 관리하되, 중복 전송과 민감 payload logging을 피한다. 앱 로컬 queue는 5회 실패, 72시간 경과, route completion cleanup, 또는 명시적 driver session reset/sign-out 시 discard할 수 있는 기준과 앱 UI action을 둔다.
+- live downstream 인증 만료: consent, assigned-route, driver-event, proof-media upload, offline retry에서 `401`이 오면 secure driver token과 active route UI state를 제거하고 route context + phone lookup부터 다시 진행하도록 안내한다. retry 가능한 event/proof item은 token 없이 local queue에 남긴다.
 
 ## Server contract 필요 항목
 
@@ -339,7 +341,7 @@ unidentified
 - 완료 기준:
   - invited phone → consent accepted → today's route 확인 smoke flow가 가능하다.
   - route 없음/error 상태가 사용자에게 명확히 표시된다.
-  - live server calls can use route+phone `driverAccess` token handoff through native secure storage with expiry clearing; token refresh/re-auth remains later server/session work.
+  - live server calls can use route+phone `driverAccess` token handoff through native secure storage with expiry/invalid/live `401` clearing and route+phone re-lookup recovery; token refresh/strong re-auth remains later server/session work.
 
 ### 5단계: release evidence and context sync
 
@@ -364,7 +366,7 @@ unidentified
 - input data: route context, E.164 phone, consent decisions, current date/device context
 - output data: company guidance, consent record, assigned route/stop display state, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
-- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events, and `ROUTE_COMPLETED` delivery finish event with native photo URI capture, proof media upload references, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, recorded route cleanup, and session reset; delivery server local/manual proof-media cleanup runner exists; token refresh/re-auth, production proof-media object storage/access/scanning hardening, deployed cleanup evidence, and physical-device background smoke evidence remain follow-up work
+- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events, and `ROUTE_COMPLETED` delivery finish event with native photo URI capture, proof media upload references, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads or live downstream `401`, which returns the driver to route context + phone lookup; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, recorded route cleanup, and session reset; delivery server local/manual proof-media cleanup runner exists; token refresh/strong re-auth, production proof-media object storage/access/scanning hardening, deployed cleanup evidence, and physical-device background smoke evidence remain follow-up work
 
 ## 검증 초안
 
@@ -391,7 +393,7 @@ unidentified
 5. Implement assigned route screen and app API boundary. — completed
 6. Implement driver access token handoff. — completed
 7. Implement real environment/base URL switch. — completed
-8. Implement secure token persistence/expiry handling. — completed in this slice
+8. Implement secure token persistence/expiry handling. — completed
 9. Implement delivery-active foreground location permission slice. — completed
 10. Implement route-started driver event after delivery_active. — completed
 11. Implement foreground `LOCATION_UPDATED` event after delivery_active. — completed
@@ -405,5 +407,6 @@ unidentified
 19. Add release-readiness checklist for physical iOS/Android smoke matrix and production store/privacy disclosure evidence. — completed as documentation checklist; real device/store evidence remains pending
 20. Add EAS preview/production native build-profile scaffolding for iOS/Android release evidence. — completed
 21. Implement delivery finish with `ROUTE_COMPLETED`, tracking stop, and route-scoped local queue cleanup. — completed
+22. Implement app-side live downstream `401` expired-token recovery and route+phone re-lookup guidance. — completed as app-side boundary; physical-device/live-server evidence remains pending
 22. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
 23. Add context-monorepo service document once production runtime/API boundaries are confirmed.

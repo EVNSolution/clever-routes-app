@@ -364,7 +364,7 @@ export default function App() {
     setAssignedRouteSubmission(null);
     setDeliveryFinishResult(null);
     try {
-      setConsentSubmission(await submitDriverConsent(
+      const result = await submitDriverConsent(
         {
           appContext: { appVersion: '0.1.0' },
           deviceContext: { platform: Platform.OS },
@@ -375,7 +375,11 @@ export default function App() {
           runtimeConfig,
           submission,
         }),
-      ));
+      );
+      setConsentSubmission(result);
+      if (result.kind === 'consent_error' && result.reason === 'driver_access_expired') {
+        await markDriverAccessExpiredForRelookup();
+      }
     } finally {
       setIsRecordingConsent(false);
     }
@@ -387,7 +391,7 @@ export default function App() {
     setDeliveryFinishResult(null);
     setStopNavigationResults({});
     try {
-      setAssignedRouteSubmission(await loadAssignedRouteAfterConsent(
+      const result = await loadAssignedRouteAfterConsent(
         {
           consentState: consentSubmission?.flowState === 'consent_recorded' ? 'consent_recorded' : 'consent_required',
           routeContext: routeAccess.routeContext,
@@ -397,7 +401,11 @@ export default function App() {
           runtimeConfig,
           submission,
         }),
-      ));
+      );
+      setAssignedRouteSubmission(result);
+      if (result.kind === 'route_error' && result.reason === 'driver_access_expired') {
+        await markDriverAccessExpiredForRelookup();
+      }
     } finally {
       setIsLoadingAssignedRoute(false);
     }
@@ -431,6 +439,9 @@ export default function App() {
           });
           setRouteStartedEventResult(routeStartedResult);
           setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
+          if (routeStartedResult.kind === 'queued' && routeStartedResult.requiresRouteLookup === true) {
+            await markDriverAccessExpiredForRelookup();
+          }
         } finally {
           setIsRecordingRouteStarted(false);
         }
@@ -465,6 +476,9 @@ export default function App() {
       });
       setLocationUpdateResult(locationResult);
       setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
+      if (locationResult.kind === 'queued' && locationResult.requiresRouteLookup === true) {
+        await markDriverAccessExpiredForRelookup();
+      }
     } finally {
       setIsRecordingLocationUpdate(false);
     }
@@ -530,6 +544,9 @@ export default function App() {
         });
       }
       setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
+      if (finishResult.kind === 'queued' && finishResult.requiresRouteLookup === true) {
+        await markDriverAccessExpiredForRelookup();
+      }
     } finally {
       setIsFinishingDelivery(false);
     }
@@ -580,6 +597,9 @@ export default function App() {
           uri: result.uri,
         });
         setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
+      }
+      if (uploadResult.kind === 'upload_failed' && uploadResult.reason === 'driver_access_expired') {
+        await markDriverAccessExpiredForRelookup();
       }
       setProofMediaUploadResults((current) => ({ ...current, [stop.deliveryStopId]: uploadResult }));
     } finally {
@@ -663,6 +683,9 @@ export default function App() {
         offlineQueue: offlineSubmissionQueue,
       });
       setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
+      if (result.kind === 'queued' && result.requiresRouteLookup === true) {
+        await markDriverAccessExpiredForRelookup();
+      }
       setStopProofResults((current) => ({ ...current, [proofKey]: result }));
     } finally {
       setRecordingStopProofId(null);
@@ -687,6 +710,9 @@ export default function App() {
       });
       setOfflineQueueRetryResult(result);
       setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
+      if (result.requiresRouteLookup === true) {
+        await markDriverAccessExpiredForRelookup();
+      }
     } finally {
       setIsRetryingOfflineQueue(false);
     }
@@ -726,6 +752,34 @@ export default function App() {
     } finally {
       setIsResettingSession(false);
     }
+  }
+
+  async function markDriverAccessExpiredForRelookup() {
+    registerContinuousLocationTaskHandler(null);
+    try {
+      await stopContinuousLocationUpdates({ streamService: continuousLocationStreamService });
+    } catch {
+      // Session recovery must still clear stale driver access even if OS tracking is already stopped.
+    }
+    await driverAccessTokenStore.clear();
+    setSubmission(null);
+    setConsentSubmission(null);
+    setAssignedRouteSubmission(null);
+    setDeliveryStartResult(null);
+    setDeliveryFinishResult(null);
+    setRouteStartedEventResult(null);
+    setLocationUpdateResult(null);
+    setContinuousLocationResult(null);
+    setStopProofResults({});
+    setStopNavigationResults({});
+    setStopProofDrafts({});
+    setProofPhotoCaptureResults({});
+    setProofMediaUploadResults({});
+    setProofSignatureCaptureResults({});
+    setProofBarcodeCaptureResults({});
+    setOfflineQueueRetryResult(null);
+    setSessionResetResult(null);
+    setDriverAccessRestoreStatus('expired');
   }
 
   return (
@@ -1009,7 +1063,7 @@ function formatDriverAccessRestoreStatus(status: DriverAccessRestoreResult['kind
     case 'active':
       return 'active in native secure storage';
     case 'expired':
-      return 'expired and cleared';
+      return 'expired and cleared; look up assignment again';
     case 'invalid':
       return 'invalid and cleared';
     case 'missing':

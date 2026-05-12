@@ -1,4 +1,5 @@
 import type { DriverEventInput, DriverEventService, DriverEventType } from './driverEvents';
+import { getDriverApiRequiresRouteLookup } from './driverApiError';
 import type { ProofMediaUploadRequest, ProofMediaUploadService } from './proofMediaUpload';
 
 export const OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY = '@clever-driver/offline-submission-queue-v1';
@@ -52,6 +53,7 @@ export type OfflineSubmissionQueueStorage = {
 export type OfflineSubmissionRetryResult = {
   discarded: number;
   failed: number;
+  requiresRouteLookup?: true;
   retried: number;
   succeeded: number;
 };
@@ -187,6 +189,7 @@ export async function retryOfflineSubmissions(input: {
 }): Promise<OfflineSubmissionRetryResult> {
   let discarded = 0;
   let failed = 0;
+  let requiresRouteLookup: true | undefined;
   let succeeded = 0;
   const pending = input.queue.listPending();
   const retryPolicy = input.retryPolicy ?? OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY;
@@ -209,6 +212,7 @@ export async function retryOfflineSubmissions(input: {
       input.queue.discard(item.queueItemId);
       succeeded += 1;
     } catch (error) {
+      requiresRouteLookup ??= getDriverApiRequiresRouteLookup(error);
       input.queue.recordRetryFailure(item.queueItemId, error instanceof Error ? error.message : 'unknown error');
       const updatedItem = input.queue.listPending().find((pendingItem) => pendingItem.queueItemId === item.queueItemId);
       if (updatedItem !== undefined && shouldDiscardOfflineSubmission(updatedItem, retryPolicy, now())) {
@@ -223,6 +227,7 @@ export async function retryOfflineSubmissions(input: {
   return {
     discarded,
     failed,
+    ...(requiresRouteLookup === undefined ? {} : { requiresRouteLookup }),
     retried: pending.length,
     succeeded,
   };

@@ -1,4 +1,9 @@
 import type { DriverFlowState } from './driverFlow';
+import {
+  createDriverApiHttpError,
+  DRIVER_ACCESS_EXPIRED_MESSAGE,
+  isDriverApiUnauthorizedError,
+} from './driverApiError';
 
 export type DriverConsentType = 'LOCATION_INFORMATION' | 'PERSONAL_INFORMATION';
 
@@ -50,6 +55,7 @@ export type DriverConsentSubmissionResult =
       flowState: Extract<DriverFlowState, 'consent_required'>;
       kind: 'consent_error';
       message: string;
+      reason?: 'driver_access_expired';
     };
 
 export type FetchLike = (
@@ -102,7 +108,16 @@ export async function submitDriverConsent(
       recordedAt: result.recordedAt,
       records: result.records,
     };
-  } catch {
+  } catch (error) {
+    if (isDriverApiUnauthorizedError(error)) {
+      return {
+        flowState: 'consent_required',
+        kind: 'consent_error',
+        message: DRIVER_ACCESS_EXPIRED_MESSAGE,
+        reason: 'driver_access_expired',
+      };
+    }
+
     return {
       flowState: 'consent_required',
       kind: 'consent_error',
@@ -152,7 +167,10 @@ export function createDriverConsentApiClient(input: {
       });
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(`Driver consent submission failed with HTTP ${response.status ?? 'unknown'}`);
+        throw createDriverApiHttpError({
+          endpoint: 'Driver consent submission',
+          status: response.status,
+        });
       }
 
       return readDriverConsentEnvelope(payload);

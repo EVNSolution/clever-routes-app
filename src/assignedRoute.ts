@@ -1,4 +1,9 @@
 import type { DriverFlowState } from './driverFlow';
+import {
+  createDriverApiHttpError,
+  DRIVER_ACCESS_EXPIRED_MESSAGE,
+  isDriverApiUnauthorizedError,
+} from './driverApiError';
 
 export type AssignedRouteAddress = {
   address1: string;
@@ -71,6 +76,7 @@ export type AssignedRouteLoadResult =
       flowState: Extract<DriverFlowState, 'consent_recorded'>;
       kind: 'route_error';
       message: string;
+      reason?: 'driver_access_expired';
     }
   | {
       flowState: Extract<DriverFlowState, 'consent_required'>;
@@ -170,7 +176,16 @@ export async function loadAssignedRouteAfterConsent(
         stops: [...result.route.stops].sort((left, right) => left.sequence - right.sequence),
       },
     };
-  } catch {
+  } catch (error) {
+    if (isDriverApiUnauthorizedError(error)) {
+      return {
+        flowState: 'consent_recorded',
+        kind: 'route_error',
+        message: DRIVER_ACCESS_EXPIRED_MESSAGE,
+        reason: 'driver_access_expired',
+      };
+    }
+
     return {
       flowState: 'consent_recorded',
       kind: 'route_error',
@@ -208,7 +223,10 @@ export function createAssignedRouteApiClient(input: {
       });
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(`Assigned route lookup failed with HTTP ${response.status ?? 'unknown'}`);
+        throw createDriverApiHttpError({
+          endpoint: 'Assigned route lookup',
+          status: response.status,
+        });
       }
 
       return readAssignedRouteEnvelope(payload);

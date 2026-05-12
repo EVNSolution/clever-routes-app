@@ -146,4 +146,34 @@ describe('driver event API boundary', () => {
     assert.equal(pending[0]?.kind, 'driver_event');
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'ROUTE_STARTED');
   });
+
+  it('queues route started with re-lookup guidance when live driver event returns unauthorized', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const service = createDriverEventsApiClient({
+      accessToken: 'expired-driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          data: null,
+          error: { code: 'UNAUTHORIZED', message: 'Invalid driver bearer token' },
+        }),
+      }),
+    });
+
+    const result = await recordRouteStartedAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: service,
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(result.kind, 'queued');
+    assert.equal(result.reason, 'record_failed');
+    assert.equal(result.requiresRouteLookup, true);
+    assert.match(result.message, /Driver session expired/iu);
+    assert.match(result.message, /HTTP 401/iu);
+    assert.equal(queue.listPending().length, 1);
+  });
 });

@@ -111,4 +111,35 @@ describe('proof media upload', () => {
       message: 'Proof media upload failed: network down',
     });
   });
+
+  it('distinguishes expired driver access from a generic proof upload failure', async () => {
+    const service = createProofMediaUploadApiClient({
+      accessToken: 'expired-driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          data: null,
+          error: { code: 'UNAUTHORIZED', message: 'Invalid driver bearer token' },
+        }),
+      }),
+    });
+
+    const result = await uploadCapturedProofPhoto({
+      captureResult: { kind: 'captured', source: 'camera', uri: 'file:///proof/stop-1.jpg' },
+      uploadRequest: {
+        deliveryStopId: 'stop-1',
+        fileName: 'stop-1.jpg',
+        routePlanId: 'route-1',
+      },
+      uploadService: service,
+    });
+
+    assert.deepEqual(result, {
+      kind: 'upload_failed',
+      message: 'Proof media upload failed: Driver session expired. Look up the route with route context and phone again. (HTTP 401)',
+      reason: 'driver_access_expired',
+    });
+  });
 });

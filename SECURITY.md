@@ -27,6 +27,7 @@ Security review for this app includes:
 ## Data-handling expectations
 
 - Driver access tokens must remain in native secure storage.
+- Expired, malformed, or live downstream `401` driver access must be cleared from native secure storage before route context + phone re-lookup.
 - `.env*` files, signing artifacts, generated binaries, and local runtime state must remain ignored.
 - AsyncStorage queue payloads are not encrypted and must not become a secret store.
 - Production proof-media storage, queue retention/discard thresholds, and store privacy disclosures remain release-gating work tracked in `docs/release-readiness.md`.
