@@ -34,9 +34,9 @@ The app includes an interactive route access screen:
 - assigned route mock/API boundary for delivery-server `GET /driver/assigned-route`
 - route summary and ordered stop cards after consent moves the flow to `route_ready`
 - explicit delivery start action that requests OS foreground location permission before `delivery_active`
-- route started, foreground location update, and stop delivered/failed proof-event mock/API boundaries for delivery-server `POST /driver/events` after delivery_active succeeds
+- route started, foreground one-shot location update, continuous background-capable location streaming, and stop delivered/failed proof-event mock/API boundaries for delivery-server `POST /driver/events` after delivery_active succeeds
 - safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
-- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup, native secure storage for the short-lived driver token, and live downstream consent/assigned-route/driver-event clients; background location services, continuous GPS `LOCATION_UPDATED` streaming, and rich proof media capture left for follow-up slices
+- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup, native secure storage for the short-lived driver token, and live downstream consent/assigned-route/driver-event clients; rich proof media capture, offline queueing, and physical store/device background smoke evidence left for follow-up slices
 
 See `docs/route-access-flow.md` for the app-side route access, consent, and assigned-route mock/API boundary.
 
