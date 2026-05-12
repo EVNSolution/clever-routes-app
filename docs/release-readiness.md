@@ -40,7 +40,7 @@ Before production release, capture evidence on at least one real iPhone and one 
 | Delivery start foreground location permission | pending | pending | Confirm denial and recovery UX. |
 | Continuous/background-capable location task | pending | pending | Confirm native background configuration and OS prompts. |
 | Proof photo capture from camera/library | pending | pending | Use synthetic proof media. |
-| Proof media scan rejection UX | pending | pending | Confirm scanner-rejected photos show recapture guidance and are not queued as retryable proof. |
+| Proof media scan rejection UX | pending | pending | Local mock mode now exposes `scan_rejected`; live mode can use server `PROOF_MEDIA_REJECTED`. Confirm rejected photos show recapture guidance and are not queued as retryable proof. |
 | Signature and barcode proof capture | pending | pending | Confirm unavailable/denied states. |
 | Offline queue retry/discard UI after network loss | pending | pending | Confirm app restart hydration. |
 | Token expiry, invalid persisted token, or live downstream `401` recovery | pending | pending | App clears expired/malformed SecureStore payloads before reuse and live downstream `401` driver access plus active route UI state before requiring route+phone re-lookup; confirm on devices. |

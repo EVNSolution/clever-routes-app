@@ -183,6 +183,8 @@ The app includes only successfully uploaded media references in `STOP_DELIVERED`
 
 If the live server returns `422` with the Driver API error code `PROOF_MEDIA_REJECTED`, the app maps it to a safe driver-facing message: "Proof photo was rejected by the safety scan. Capture another proof photo." The app does not expose scanner internals, does not create a durable media reference, and does not queue that photo for offline retry. The same non-retryable discard applies when an already queued proof media upload receives the scanner rejection during offline retry.
 
+For physical-device smoke runs without a deployed scanner backend, local mock mode exposes a `Local proof media upload mock` selector with `success`, `failure`, and `scan_rejected`. This selector is only used when `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` is unset and the app is running on local mock services; live delivery-server mode ignores it.
+
 ## Signature and barcode proof boundary
 
 `src/proofSignatureCapture.ts` records signature drawing evidence as vector metadata (`signatureId`, signer name, stroke count, point count) instead of storing raw image data in the driver event payload.
