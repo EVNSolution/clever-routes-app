@@ -180,7 +180,7 @@ MVP와 확장 경계:
 - 위치 수집과 위치 이벤트 송신은 `배송 시작` 이후에만 허용한다.
 - 배송 시작 이벤트는 서버 driver event API에 `ROUTE_STARTED`로 기록한다. foreground one-shot GPS 위치 업데이트와 continuous/background-capable GPS update는 `LOCATION_UPDATED`로 전송할 수 있다.
 - `delivery_active` 이후 continuous tracking action은 background location permission과 native task availability를 확인한 뒤 named task를 시작하고, task batch를 서버 driver event API의 `LOCATION_UPDATED`로 기록한다.
-- `delivery_active` 이후 stop card에서 배송 완료/실패를 누르면 앱은 서버 driver event API에 `STOP_DELIVERED` 또는 `STOP_FAILED`를 기록한다. 현재 proof는 note, failure reason, Expo ImagePicker 기반 photo capture, proof media upload reference, signature drawing evidence, barcode scan evidence와 app-side offline queue/retry를 포함한다. Delivery server에는 proof-media scan rejection hook이 있으며, production object storage/signed access/deployed scanner evidence는 후속 slice에서 다룬다.
+- `delivery_active` 이후 stop card에서 배송 완료/실패를 누르면 앱은 서버 driver event API에 `STOP_DELIVERED` 또는 `STOP_FAILED`를 기록한다. 현재 proof는 note, failure reason, Expo ImagePicker 기반 photo capture, proof media upload reference, scanner-rejected photo recapture guidance, signature drawing evidence, barcode scan evidence와 app-side offline queue/retry를 포함한다. Delivery server에는 proof-media scan rejection hook이 있으며, production object storage/signed access/deployed scanner evidence는 후속 slice에서 다룬다.
 - 서버 compliance 기준상 driver GPS `LOCATION_UPDATED`는 위치정보 `COLLECT` 성격의 동작으로 본다.
 - 배송 시작 전에는 background location 수집을 하지 않는다.
 
@@ -239,6 +239,7 @@ unidentified
 - 당일 route 없음: "오늘 배정된 route 없음" 상태를 표시하고 자동으로 다른 driver/route를 노출하지 않는다.
 - 서버/API 장애: 현재 화면의 민감 데이터 확대 표시를 피하고 재시도 가능한 오류 상태로 둔다.
 - 네트워크 불안정: driver event와 proof media submission은 durable app-side offline queue/retry 대상으로 관리하되, 중복 전송과 민감 payload logging을 피한다. 앱 로컬 queue는 5회 실패, 72시간 경과, route completion cleanup, 또는 명시적 driver session reset/sign-out 시 discard할 수 있는 기준과 앱 UI action을 둔다.
+- proof media scanner rejection: 서버가 `422 PROOF_MEDIA_REJECTED`를 반환하면 앱은 durable proof reference를 만들지 않고 해당 사진을 retry queue에 남기지 않는다. 배송원에게는 scanner 내부 사유를 노출하지 않고 다른 proof photo를 다시 촬영하라고 안내한다.
 - live downstream 인증 만료: consent, assigned-route, driver-event, proof-media upload, offline retry에서 `401`이 오면 secure driver token과 active route UI state를 제거하고 route context + phone lookup부터 다시 진행하도록 안내한다. retry 가능한 event/proof item은 token 없이 local queue에 남긴다.
 
 ## Server contract 필요 항목
@@ -366,7 +367,7 @@ unidentified
 - input data: route context, E.164 phone, consent decisions, current date/device context
 - output data: company guidance, consent record, assigned route/stop display state, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
-- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events, and `ROUTE_COMPLETED` delivery finish event with native photo URI capture, proof media upload references, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads or live downstream `401`, which returns the driver to route context + phone lookup; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, recorded route cleanup, and session reset; delivery server proof-media scan rejection hook and local/manual cleanup runner exist; token refresh/strong re-auth, production proof-media object storage/signed access/deployed scanner evidence, deployed cleanup evidence, and physical-device background smoke evidence remain follow-up work
+- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events, and `ROUTE_COMPLETED` delivery finish event with native photo URI capture, proof media upload references, scanner-rejected proof media handling, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads or live downstream `401`, which returns the driver to route context + phone lookup; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, recorded route cleanup, scanner rejection, and session reset; delivery server proof-media scan rejection hook and local/manual cleanup runner exist; token refresh/strong re-auth, production proof-media object storage/signed access/deployed scanner evidence, deployed cleanup evidence, and physical-device background smoke evidence remain follow-up work
 
 ## 검증 초안
 
@@ -408,5 +409,6 @@ unidentified
 20. Add EAS preview/production native build-profile scaffolding for iOS/Android release evidence. — completed
 21. Implement delivery finish with `ROUTE_COMPLETED`, tracking stop, and route-scoped local queue cleanup. — completed
 22. Implement app-side live downstream `401` expired-token recovery and route+phone re-lookup guidance. — completed as app-side boundary; physical-device/live-server evidence remains pending
-22. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
-23. Add context-monorepo service document once production runtime/API boundaries are confirmed.
+23. Implement app-side proof media scanner rejection handling. — completed as app-side boundary; live scanner/backend deployment evidence remains pending
+24. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
+25. Add context-monorepo service document once production runtime/API boundaries are confirmed.

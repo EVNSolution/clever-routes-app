@@ -61,6 +61,7 @@ import {
 import {
   uploadCapturedProofPhoto,
   createMockProofMediaUploadService,
+  shouldQueueFailedProofMediaUpload,
   type ProofMediaUploadResult,
   type ProofMediaUploadService,
 } from './src/proofMediaUpload';
@@ -590,7 +591,7 @@ export default function App() {
           submission,
         }),
       });
-      if (uploadResult.kind === 'upload_failed' && result.kind === 'captured') {
+      if (shouldQueueFailedProofMediaUpload(uploadResult) && result.kind === 'captured') {
         offlineSubmissionQueue.enqueueProofMediaUpload({
           ...uploadRequest,
           source: result.source,

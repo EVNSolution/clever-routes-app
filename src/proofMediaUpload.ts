@@ -32,8 +32,26 @@ export type ProofMediaUploadService = {
 
 export type ProofMediaUploadResult =
   | { kind: 'skipped'; message: string; reason: 'photo_not_captured' }
-  | { kind: 'upload_failed'; message: string; reason?: 'driver_access_expired' }
+  | { kind: 'upload_failed'; message: string; reason?: 'driver_access_expired' | 'proof_media_rejected' }
   | { kind: 'uploaded'; media: ProofMediaReference };
+
+export const PROOF_MEDIA_REJECTED_MESSAGE =
+  'Proof photo was rejected by the safety scan. Capture another proof photo.';
+
+export class ProofMediaRejectedError extends Error {
+  constructor() {
+    super(PROOF_MEDIA_REJECTED_MESSAGE);
+    this.name = 'ProofMediaRejectedError';
+  }
+}
+
+export function createProofMediaRejectedError(): ProofMediaRejectedError {
+  return new ProofMediaRejectedError();
+}
+
+export function isProofMediaRejectedError(error: unknown): error is ProofMediaRejectedError {
+  return error instanceof ProofMediaRejectedError;
+}
 
 export type FetchLike = (
   input: string,
@@ -80,6 +98,10 @@ export function createProofMediaUploadApiClient(input: {
       });
       const payload = await response.json();
       if (!response.ok) {
+        if (response.status === 422 && readDriverApiErrorCode(payload) === 'PROOF_MEDIA_REJECTED') {
+          throw createProofMediaRejectedError();
+        }
+
         throw createDriverApiHttpError({
           endpoint: 'Proof media upload',
           status: response.status,
@@ -112,6 +134,14 @@ export async function uploadCapturedProofPhoto(input: {
     });
     return { kind: 'uploaded', media };
   } catch (error) {
+    if (isProofMediaRejectedError(error)) {
+      return {
+        kind: 'upload_failed',
+        message: PROOF_MEDIA_REJECTED_MESSAGE,
+        reason: 'proof_media_rejected',
+      };
+    }
+
     const recoveryReason = getDriverApiRecoveryReason(error);
 
     return {
@@ -120,6 +150,10 @@ export async function uploadCapturedProofPhoto(input: {
       ...(recoveryReason === undefined ? {} : { reason: recoveryReason }),
     };
   }
+}
+
+export function shouldQueueFailedProofMediaUpload(result: ProofMediaUploadResult): boolean {
+  return result.kind === 'upload_failed' && result.reason !== 'proof_media_rejected';
 }
 
 function toProofMediaFormData(request: ProofMediaUploadRequest): FormData {
@@ -155,6 +189,20 @@ function readProofMediaReferenceEnvelope(payload: unknown): ProofMediaReference 
   }
 
   return data;
+}
+
+function readDriverApiErrorCode(payload: unknown): string | null {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    return null;
+  }
+
+  const error = (payload as { error?: unknown }).error;
+  if (typeof error !== 'object' || error === null || Array.isArray(error)) {
+    return null;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
 }
 
 function isProofMediaReference(value: unknown): value is ProofMediaReference {
