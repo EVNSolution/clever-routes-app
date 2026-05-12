@@ -28,6 +28,10 @@ import {
   type DriverFlowState,
 } from './src/driverFlow';
 import {
+  createDriverRuntimeServices,
+  readDriverRuntimeConfig,
+} from './src/driverRuntimeConfig';
+import {
   CONSENT_COPY_VERSIONS,
   createMockDriverConsentService,
   submitDriverConsent,
@@ -61,11 +65,22 @@ export default function App() {
   const [isRecordingConsent, setIsRecordingConsent] = useState(false);
   const [isLoadingAssignedRoute, setIsLoadingAssignedRoute] = useState(false);
 
+  const runtimeConfig = useMemo(
+    () => readDriverRuntimeConfig({
+      EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: process.env.EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL,
+    }),
+    [],
+  );
+
   const routeAccessService = useMemo(() => {
+    if (runtimeConfig.mode === 'live') {
+      return createDriverRuntimeServices({ config: runtimeConfig }).routeAccessService;
+    }
+
     const result: RouteAccessLookupResult =
       mockMode === 'INVITED' ? sampleInvitedRouteAccess : { status: mockMode };
     return createMockRouteAccessService(result);
-  }, [mockMode]);
+  }, [mockMode, runtimeConfig]);
 
   const driverConsentService = useMemo<DriverConsentService>(() => {
     if (consentMockMode === 'failure') {
@@ -160,6 +175,14 @@ export default function App() {
         </View>
 
         <FlowProgress currentState={currentFlowState} />
+
+        <View style={styles.guardPanel}>
+          <Text style={styles.sectionTitle}>Runtime API mode</Text>
+          <GuardRow
+            label="Delivery server"
+            value={runtimeConfig.mode === 'live' ? runtimeConfig.deliveryServerBaseUrl : 'local mock services'}
+          />
+        </View>
 
         <View style={styles.cardLight}>
           <Text style={styles.sectionTitle}>Access lookup</Text>
