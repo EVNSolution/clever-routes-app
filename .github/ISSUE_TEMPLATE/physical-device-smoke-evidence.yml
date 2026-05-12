@@ -1,0 +1,93 @@
+name: Physical-device smoke evidence
+about: Track iPhone and Android smoke evidence collection without committing private artifacts.
+title: "Collect physical-device smoke evidence: <release candidate>"
+labels: [evidence, release, physical-device]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for iPhone/Android evidence collection that supports `docs/release-readiness.md` and `docs/physical-device-smoke-runbook.md`.
+
+        Do not attach screenshots, videos, logs, generated app binaries, signing files, raw phone numbers, customer data, exact production coordinates, access tokens, or completed evidence manifests to this public issue. Store artifacts in the approved external evidence location and paste only sanitized references.
+  - type: input
+    id: source_revision
+    attributes:
+      label: Source revision
+      description: Commit SHA or PR/merge commit selected for the smoke run.
+      placeholder: ba8b8b9de3a0a98ec28a6ce85a4e9138a7e5e098
+    validations:
+      required: true
+  - type: input
+    id: related_release_manifest
+    attributes:
+      label: External release evidence manifest reference
+      description: Sanitized reference to the external copy of docs/release-evidence-manifest.template.md.
+      placeholder: external-evidence://clever-driver/release-candidate/<date>-<sha>
+    validations:
+      required: true
+  - type: dropdown
+    id: device_scope
+    attributes:
+      label: Device scope
+      multiple: true
+      options:
+        - iPhone
+        - Android phone
+    validations:
+      required: true
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Preconditions
+      options:
+        - label: '`npm run check:native-release` passed for the selected source revision.'
+          required: true
+        - label: Preview/production EAS build URL/reference is stored outside git.
+          required: true
+        - label: Synthetic driver/route/proof data is used unless production validation was explicitly approved.
+          required: true
+        - label: External evidence storage path is approved and access-controlled.
+          required: true
+  - type: checkboxes
+    id: smoke_rows
+    attributes:
+      label: Smoke rows to evidence
+      description: Fill evidence references in the external manifest, not in this issue body.
+      options:
+        - label: Fresh install and app launch.
+        - label: Route context + E.164 phone lookup.
+        - label: Company guidance and support contact display, including multi-company wording.
+        - label: Consent gate and retry/error handling.
+        - label: Assigned route and stop list.
+        - label: Stop-card OS map handoff.
+        - label: Delivery start foreground location permission.
+        - label: Continuous/background-capable location task.
+        - label: Proof photo capture from camera/library.
+        - label: Proof media scan rejection UX.
+        - label: Signature and barcode proof capture.
+        - label: Offline queue retry/discard UI after network loss.
+        - label: Token expiry, invalid persisted token, or live downstream `401` recovery.
+        - label: Driver session reset/sign-out cleanup.
+        - label: Delivery finish or route completion cleanup.
+  - type: textarea
+    id: sanitized_results
+    attributes:
+      label: Sanitized result summary
+      description: Summarize pass/fail status and sanitized external evidence references only.
+      placeholder: |
+        - iPhone: pass/fail, external reference only
+        - Android: pass/fail, external reference only
+        - Gaps/blockers:
+    validations:
+      required: true
+  - type: checkboxes
+    id: closure_gate
+    attributes:
+      label: Closure gate
+      options:
+        - label: Every required iPhone and Android row in the external release manifest has a pass result and sanitized evidence reference.
+          required: true
+        - label: No private artifacts, secrets, raw PII, binaries, screenshots, videos, or completed manifests were committed or pasted into GitHub.
+          required: true
+        - label: '`npm run release:evidence:verify -- <external-manifest-path>` passed against a local copy after evidence was filled.'
+          required: true

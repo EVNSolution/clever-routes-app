@@ -49,6 +49,7 @@
   - `.gitignore`
   - `.dockerignore`
   - `.editorconfig` / `.gitattributes`
+  - `.github/ISSUE_TEMPLATE/`
   - `.github/workflows/ci.yml`
   - `.env.example`
   - `app.json` / `eas.json`
