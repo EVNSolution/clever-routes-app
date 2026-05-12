@@ -81,6 +81,7 @@ npm run lint
 npm run typecheck
 npm run test
 npm run check:native-release
+npm run release:evidence:seed
 npm run build
 npm audit --audit-level=moderate
 npx expo install --check
@@ -96,6 +97,8 @@ npx eas-cli build --platform all --profile production
 ```
 
 Run `npm run check:native-release` before EAS builds or release PRs. It validates source-controlled Expo/EAS identity, permission, profile, and public runtime env baseline only; owner-controlled Expo/EAS project values, Apple/Google signing authority, store/private distribution approval, privacy copy, and license decisions remain external release blockers.
+
+Run `npm run release:evidence:seed` from the committed source revision selected for EAS/device testing. It prints a non-secret Markdown seed with commit, app version/build identifiers, EAS build commands, preflight status, external blocker list, and tracking issues so the completed evidence manifest can be filled in the approved external evidence store.
 
 Preview builds are for internal physical-device evidence collection. Production builds are store/TestFlight/Play candidates and require owner-controlled Expo, Apple, Google, signing, and environment-variable setup before execution.
 

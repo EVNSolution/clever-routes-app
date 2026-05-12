@@ -33,6 +33,20 @@ npm run check:native-release
 
 This local preflight validates source-controlled Expo/EAS identity, native permission declarations, build-profile shape, and public runtime env documentation. It is not a substitute for owner-controlled Expo/EAS project setup, signing authority, store/private distribution decisions, privacy disclosure approval, public license approval, or physical-device smoke evidence.
 
+After choosing the committed source revision for external EAS/device evidence,
+seed the external evidence manifest with:
+
+```bash
+npm run release:evidence:seed
+```
+
+The command prints non-secret Markdown with the current commit/ref, app
+version/build identifiers, EAS build commands, native release preflight result,
+remaining owner-controlled gates, and release blocker issue map. Copy that
+output into the approved external evidence store before filling EAS URLs, device
+results, owner/legal approvals, and evidence references. Do not commit completed
+manifests or binary artifacts.
+
 ## Physical-device smoke matrix
 
 Before production release, capture evidence on at least one real iPhone and one real Android phone. Use synthetic driver/route data unless production validation is explicitly approved. Execute `docs/physical-device-smoke-runbook.md` for the step order, evidence naming, and external storage rules. Copy `docs/release-evidence-manifest.template.md` into the external evidence store for the release candidate and fill it there; do not commit completed evidence manifests.
