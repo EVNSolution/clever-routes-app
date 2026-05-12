@@ -362,7 +362,7 @@ unidentified
 - input data: route context, E.164 phone, consent decisions, current date/device context
 - output data: company guidance, consent record, assigned route/stop display state, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
-- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, and richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events with native photo URI capture, proof media upload references, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, route cleanup, and session reset; token refresh/re-auth, production proof-media storage hardening, and physical-device background smoke evidence remain follow-up work
+- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, and richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events with native photo URI capture, proof media upload references, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, route cleanup, and session reset; delivery server local/manual proof-media cleanup runner exists; token refresh/re-auth, production proof-media object storage/access/scanning hardening, deployed cleanup evidence, and physical-device background smoke evidence remain follow-up work
 
 ## 검증 초안
 
@@ -378,7 +378,7 @@ unidentified
 - consent legal copy source and production version registry
 - native map launch/provider and background location policy for post-MVP
 - minimum supported iOS/Android versions and physical-device background-location smoke matrix
-- production server-side proof-media retention/deletion policy and release evidence
+- production proof-media object storage/access/scanning policy and deployed cleanup release evidence
 
 ## 다음 작업 목록
 
