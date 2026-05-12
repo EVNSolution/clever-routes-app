@@ -2,6 +2,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -18,6 +19,13 @@ import {
   type DriverFlowState,
 } from './src/driverFlow';
 import {
+  CONSENT_COPY_VERSIONS,
+  createMockDriverConsentService,
+  submitDriverConsent,
+  type DriverConsentService,
+  type DriverConsentSubmissionResult,
+} from './src/driverConsent';
+import {
   createMockRouteAccessService,
   sampleInvitedRouteAccess,
   submitRouteAccess,
@@ -28,13 +36,17 @@ import {
 const SAMPLE_PHONE_E164 = '+14165550123';
 
 type MockMode = RouteAccessLookupResult['status'];
+type ConsentMockMode = 'success' | 'failure';
 
 export default function App() {
   const [routeContext, setRouteContext] = useState(sampleInvitedRouteAccess.routeAccess.routeContext);
   const [phoneE164, setPhoneE164] = useState(SAMPLE_PHONE_E164);
   const [mockMode, setMockMode] = useState<MockMode>('INVITED');
+  const [consentMockMode, setConsentMockMode] = useState<ConsentMockMode>('success');
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
+  const [consentSubmission, setConsentSubmission] = useState<DriverConsentSubmissionResult | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRecordingConsent, setIsRecordingConsent] = useState(false);
 
   const routeAccessService = useMemo(() => {
     const result: RouteAccessLookupResult =
@@ -42,7 +54,19 @@ export default function App() {
     return createMockRouteAccessService(result);
   }, [mockMode]);
 
-  const currentFlowState = getCurrentFlowState(submission);
+  const driverConsentService = useMemo<DriverConsentService>(() => {
+    if (consentMockMode === 'failure') {
+      return {
+        recordDriverConsents: async () => {
+          throw new Error('Local consent mock failure');
+        },
+      };
+    }
+
+    return createMockDriverConsentService();
+  }, [consentMockMode]);
+
+  const currentFlowState = getCurrentFlowState(submission, consentSubmission);
   const canRevealRoute = canRevealRouteDetails(currentFlowState);
   const canStartDelivery = canEnterDeliveryActive({
     state: currentFlowState,
@@ -51,10 +75,27 @@ export default function App() {
 
   async function handleLookup() {
     setIsSubmitting(true);
+    setConsentSubmission(null);
     try {
       setSubmission(await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService));
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']) {
+    setIsRecordingConsent(true);
+    try {
+      setConsentSubmission(await submitDriverConsent(
+        {
+          appContext: { appVersion: '0.1.0' },
+          deviceContext: { platform: Platform.OS },
+          routeContext: routeAccess.routeContext,
+        },
+        driverConsentService,
+      ));
+    } finally {
+      setIsRecordingConsent(false);
     }
   }
 
@@ -94,7 +135,18 @@ export default function App() {
           </Pressable>
         </View>
 
-        {submission === null ? <EmptyStateCard /> : <RouteAccessResultCard result={submission} />}
+        {submission === null ? (
+          <EmptyStateCard />
+        ) : (
+          <RouteAccessResultCard
+            consentMockMode={consentMockMode}
+            consentResult={consentSubmission}
+            isRecordingConsent={isRecordingConsent}
+            onRecordConsent={handleRecordConsent}
+            result={submission}
+            setConsentMockMode={setConsentMockMode}
+          />
+        )}
 
         <View style={styles.guardPanel}>
           <Text style={styles.sectionTitle}>Current guard snapshot</Text>
@@ -107,9 +159,16 @@ export default function App() {
   );
 }
 
-function getCurrentFlowState(submission: RouteAccessSubmissionResult | null): DriverFlowState {
+function getCurrentFlowState(
+  submission: RouteAccessSubmissionResult | null,
+  consentSubmission: DriverConsentSubmissionResult | null,
+): DriverFlowState {
+  if (consentSubmission !== null) {
+    return consentSubmission.flowState;
+  }
+
   if (submission?.kind === 'company_guidance') {
-    return submission.flowState;
+    return submission.nextState;
   }
 
   return 'route_context_entered';
@@ -171,7 +230,21 @@ function MockModePicker({
   );
 }
 
-function RouteAccessResultCard({ result }: { result: RouteAccessSubmissionResult }) {
+function RouteAccessResultCard({
+  consentMockMode,
+  consentResult,
+  isRecordingConsent,
+  onRecordConsent,
+  result,
+  setConsentMockMode,
+}: {
+  consentMockMode: ConsentMockMode;
+  consentResult: DriverConsentSubmissionResult | null;
+  isRecordingConsent: boolean;
+  onRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
+  result: RouteAccessSubmissionResult;
+  setConsentMockMode(value: ConsentMockMode): void;
+}) {
   if (result.kind === 'validation_error') {
     return (
       <View style={styles.warningCard}>
@@ -207,7 +280,91 @@ function RouteAccessResultCard({ result }: { result: RouteAccessSubmissionResult
       ))}
       <View style={styles.actionPreview}>
         <Text style={styles.actionPreviewLabel}>Next</Text>
-        <Text style={styles.actionPreviewText}>Continue to consent gate placeholder</Text>
+        <Text style={styles.actionPreviewText}>Record required consent before route details</Text>
+      </View>
+      <ConsentGateCard
+        consentMockMode={consentMockMode}
+        consentResult={consentResult}
+        isRecordingConsent={isRecordingConsent}
+        onRecordConsent={() => onRecordConsent(result.routeAccess)}
+        setConsentMockMode={setConsentMockMode}
+      />
+    </View>
+  );
+}
+
+function ConsentGateCard({
+  consentMockMode,
+  consentResult,
+  isRecordingConsent,
+  onRecordConsent,
+  setConsentMockMode,
+}: {
+  consentMockMode: ConsentMockMode;
+  consentResult: DriverConsentSubmissionResult | null;
+  isRecordingConsent: boolean;
+  onRecordConsent(): void;
+  setConsentMockMode(value: ConsentMockMode): void;
+}) {
+  return (
+    <View style={styles.consentPanel}>
+      <Text style={styles.consentKicker}>Consent gate</Text>
+      <Text style={styles.consentTitle}>Required before assigned route</Text>
+      <Text style={styles.consentBody}>
+        The app records location-information and personal-information consent before route
+        stops, customer addresses, or delivery location flows can be shown.
+      </Text>
+      <InfoRow label="Location consent" value={CONSENT_COPY_VERSIONS.locationInformation} />
+      <InfoRow label="Privacy consent" value={CONSENT_COPY_VERSIONS.personalInformation} />
+      <ConsentMockModePicker consentMockMode={consentMockMode} setConsentMockMode={setConsentMockMode} />
+      {consentResult?.kind === 'consent_error' ? (
+        <Text style={styles.consentErrorText}>{consentResult.message}</Text>
+      ) : null}
+      {consentResult?.kind === 'consent_recorded' ? (
+        <View style={styles.consentSuccessBox}>
+          <Text style={styles.consentSuccessTitle}>Consent recorded</Text>
+          <Text style={styles.consentSuccessText}>{consentResult.recordedAt}</Text>
+        </View>
+      ) : (
+        <Pressable
+          accessibilityRole="button"
+          disabled={isRecordingConsent}
+          onPress={onRecordConsent}
+          style={[styles.secondaryButton, isRecordingConsent && styles.buttonDisabled]}
+        >
+          {isRecordingConsent ? (
+            <ActivityIndicator color="#0f172a" />
+          ) : (
+            <Text style={styles.secondaryButtonText}>Record required consents</Text>
+          )}
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
+function ConsentMockModePicker({
+  consentMockMode,
+  setConsentMockMode,
+}: {
+  consentMockMode: ConsentMockMode;
+  setConsentMockMode(value: ConsentMockMode): void;
+}) {
+  const modes: ConsentMockMode[] = ['success', 'failure'];
+  return (
+    <View style={styles.mockPanel}>
+      <Text style={styles.inputLabel}>Local consent mock</Text>
+      <View style={styles.chipGrid}>
+        {modes.map((mode) => (
+          <Pressable
+            accessibilityRole="button"
+            key={mode}
+            onPress={() => setConsentMockMode(mode)}
+            style={[styles.chip, consentMockMode === mode && styles.chipActive]}
+          >
+            <Text style={[styles.chipText, consentMockMode === mode && styles.chipTextActive]}>{mode}</Text>
+          </Pressable>
+        ))}
       </View>
     </View>
   );
@@ -367,6 +524,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
   },
+  secondaryButton: {
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+  },
+  secondaryButtonText: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
   cardDark: {
     backgroundColor: '#0f172a',
     borderRadius: 28,
@@ -451,6 +623,58 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   actionPreviewText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  consentPanel: {
+    backgroundColor: '#172554',
+    borderColor: '#1d4ed8',
+    borderRadius: 22,
+    borderWidth: 1,
+    gap: 12,
+    marginTop: 8,
+    padding: 16,
+  },
+  consentKicker: {
+    color: '#bfdbfe',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  consentTitle: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  consentBody: {
+    color: '#dbeafe',
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  consentErrorText: {
+    backgroundColor: '#7f1d1d',
+    borderRadius: 14,
+    color: '#fee2e2',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+    padding: 12,
+  },
+  consentSuccessBox: {
+    backgroundColor: '#14532d',
+    borderRadius: 16,
+    gap: 4,
+    padding: 14,
+  },
+  consentSuccessTitle: {
+    color: '#bbf7d0',
+    fontSize: 13,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  consentSuccessText: {
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '700',

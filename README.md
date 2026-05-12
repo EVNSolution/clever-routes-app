@@ -28,10 +28,12 @@ The app includes an interactive route access screen:
 - route context + E.164 phone validation before lookup
 - local mock service for delivery-server `POST /driver/route-access/lookup`
 - company/shop/route guidance for `INVITED`
+- app-side consent gate for required location-information and personal-information consent
+- local mock service and API client boundary for delivery-server `POST /driver/consents`
 - safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
-- consent, assigned route, and location collection left for follow-up slices
+- assigned route, OS location permission, and location collection left for follow-up slices
 
-See `docs/route-access-flow.md` for the app-side mock/API boundary.
+See `docs/route-access-flow.md` for the app-side route access and consent mock/API boundary.
 
 ## Local setup
 
@@ -66,5 +68,5 @@ npm run build
 
 - `docs/project-brief.md` — product role, MVP scenarios, platform decision, and implementation sequencing.
 - `docs/repository-setup.md` — repo baseline, scripts, ignore policy, and follow-up setup notes.
-- `docs/route-access-flow.md` — app-side route access mock/API boundary.
+- `docs/route-access-flow.md` — app-side route access and consent mock/API boundary.
 - `AGENTS.md` — agent workflow, issue/branch/PR rules, and verification requirements.
