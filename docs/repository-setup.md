@@ -26,6 +26,8 @@ This document records the repo baseline for the `clever-driver-app` implementati
 | `npm run lint` | Run Expo ESLint config |
 | `npm run check:workspace` | Run typecheck and tests together |
 | `npm run check:native-release` | Validate source-controlled Expo/EAS identity, permission, profile, and public runtime env release preflight gates |
+| `npm run release:evidence:seed` | Print a non-secret release evidence seed from the committed source revision |
+| `npm run release:evidence:verify -- <manifest-path>` | Validate a completed external release evidence manifest copy before release approval |
 | `npm run build` | Export Android and iOS JS bundles to ignored `dist/` folders |
 
 ## Native build profiles
@@ -56,8 +58,14 @@ The EAS config intentionally does not commit Expo project IDs, Apple/Google cred
 - Expo/React Native local output: `.expo/`, `.expo-shared/`, `.eas/`, `web-build/`, `*.jsbundle`
 - generated native build/tooling output: root/Android Gradle folders, Android `.cxx`, app build/captures/local properties, iOS build/DerivedData/Pods/xcuserdata state, heap profiles
 - mobile signing artifacts, store credentials, and binaries: `*.apk`, `*.apks`, `*.aab`, `*.ipa`, `*.dSYM/`, `credentials.json`, `eas-credentials.json`, `google-play-service-account*.json`, `app-store-connect-api-key*.json`, `*.keystore`, `*.jks`, `*.p8`, `*.p12`, `*.mobileprovision`, `*.cer`, `*.pem`
-- release/physical-device smoke evidence artifacts: `evidence/`, `release-evidence/`, `smoke-evidence/`, matching `docs/*evidence/` folders, completed `release-evidence-manifest-*.md` copies, and `clever-driver-*` screenshot/video/log files generated from `docs/physical-device-smoke-runbook.md`
+- release/physical-device smoke evidence artifacts: `evidence/`, `release-evidence/`, `smoke-evidence/`, matching `docs/*evidence/` folders, completed `release-evidence-manifest-*.md` copies, and `clever-driver-*` screenshot/video/log/PDF/media files generated from `docs/physical-device-smoke-runbook.md`
 - OS/editor noise: `.DS_Store`, `Thumbs.db`, `.idea/`, `.vscode/`
+
+`.dockerignore` mirrors the same secret/evidence/generated-output policy for any
+future local Docker tooling. This repo does not currently deploy the mobile app
+through Docker; the file is a guardrail so accidental build contexts do not copy
+dependency folders, native build artifacts, signing material, environment files,
+or completed release evidence.
 
 Generated `android/` and `ios/` source directories are not globally ignored. If this app later adopts Expo prebuild or bare native customization, generated native source can be intentionally reviewed and committed while build outputs remain ignored.
 
@@ -70,13 +78,14 @@ Generated `android/` and `ios/` source directories are not globally ignored. If 
 Before opening an implementation PR, re-check these repo baseline files together with the code diff:
 
 - `.editorconfig` / `.gitattributes`: UTF-8/LF/final-newline defaults and binary patterns for evidence, release, and signing artifacts stay aligned with the repo hygiene policy.
-- `.gitignore`: generated Expo/native outputs, signing artifacts, local env files, package caches, compiler artifacts, and agent/runtime state stay ignored; `android/` and `ios/` source directories are intentionally not globally ignored.
+- `.gitignore` / `.dockerignore`: generated Expo/native outputs, signing artifacts, local env files, package caches, compiler artifacts, release evidence, and agent/runtime state stay ignored; `android/` and `ios/` source directories are intentionally not globally ignored.
 - physical-device evidence: screenshots, videos, logs, generated binaries, signing files, credentials, and production PII stay outside git; keep only sanitized references in issues/PRs.
 - `.env.example`: every bundled `EXPO_PUBLIC_*` runtime key used by the app is documented, and secret `.env*` files stay ignored.
 - `package.json` / `package-lock.json`: scripts, Node floor, Expo SDK dependencies, and audit overrides match the implementation.
 - `app.json`: bundle/package identifiers, native build versions, permission copy, plugins, background-location settings, and static project/bootstrap issue metadata match the current native capability slice.
 - `eas.json`: preview/internal and production/store profile settings, EAS environment names, require-commit policy, and app version source match the release evidence plan.
 - `npm run check:native-release`: local native release config preflight passes, while external owner-controlled blockers remain tracked in `docs/release-readiness.md`.
+- `npm run release:evidence:verify -- <external-manifest-path>`: completed external release evidence manifests are checked before release approval; the completed manifest itself stays out of git.
 - `.github/PULL_REQUEST_TEMPLATE.md`: target issue, change-control issue, concurrent-work gate, validation evidence, and context/wiki completion fields are filled before issue closure.
 - `CONTRIBUTING.md` and `SECURITY.md`: human workflow, security/privacy reporting, sensitive evidence handling, and generated-file guardrails stay current.
 - `docs/release-readiness.md`: physical-device smoke matrix, store/privacy disclosure checklist, and release blockers match current runtime behavior.

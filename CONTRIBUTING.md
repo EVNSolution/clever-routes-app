@@ -42,6 +42,8 @@ git diff --check
 
 `npm run build` exports JavaScript bundles into ignored `dist/` folders. It is not an App Store or Play Store binary build. `npm run check:native-release` is a local config preflight; it does not prove owner-controlled EAS project values, signing authority, store approval, privacy copy, or license decisions.
 
+For release evidence approval, run `npm run release:evidence:verify -- <external-manifest-path>` against a local copy of the completed external manifest. Keep the completed manifest and binary evidence outside git.
+
 ## Privacy and safety review points
 
 - Do not treat phone number alone as a global driver identity; route/company context is part of the access boundary.
@@ -53,7 +55,7 @@ git diff --check
 
 ## Generated and sensitive files
 
-Generated Expo/native outputs, signing artifacts, local env files, local runtime state, dependency folders, and build/test artifacts must stay untracked. Review `.gitignore`, `.gitattributes`, and `.editorconfig` before adding native build tooling, release signing files, or evidence workflows.
+Generated Expo/native outputs, signing artifacts, local env files, local runtime state, dependency folders, and build/test artifacts must stay untracked. Review `.gitignore`, `.dockerignore`, `.gitattributes`, and `.editorconfig` before adding native build tooling, release signing files, or evidence workflows.
 
 ## License
 

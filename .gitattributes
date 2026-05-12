@@ -17,10 +17,15 @@
 *.png binary
 *.jpg binary
 *.jpeg binary
+*.heic binary
+*.heif binary
 *.gif binary
 *.webp binary
 *.mp4 binary
 *.mov binary
+*.m4v binary
+*.webm binary
+*.pdf binary
 *.apk binary
 *.apks binary
 *.aab binary

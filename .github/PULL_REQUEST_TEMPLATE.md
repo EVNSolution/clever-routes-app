@@ -47,6 +47,7 @@
 
 - repo docs checked:
   - `.gitignore`
+  - `.dockerignore`
   - `.editorconfig` / `.gitattributes`
   - `.env.example`
   - `app.json` / `eas.json`

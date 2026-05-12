@@ -19,6 +19,18 @@ committed source revision and paste its non-secret output into the external
 evidence workspace as the starting audit record. The seed does not replace real
 EAS build URLs, physical-device results, or owner/legal approvals.
 
+After filling the external copy, validate a local working copy from this repo:
+
+```bash
+npm run release:evidence:verify -- /path/to/external/release-evidence-manifest-<yyyyMMdd>-<shortsha>.md
+```
+
+The verifier should pass only after all `pending` placeholders are removed, each
+physical-device smoke row has iPhone and Android `pass` results with sanitized
+external evidence references, each store/privacy row is approved or complete,
+and the release candidate decision is `approved`. Do not commit the completed
+copy after verification.
+
 ## Release candidate identity
 
 | Field | Value |
