@@ -49,6 +49,11 @@ import {
   type StopProofFailureReason,
 } from './src/stopProofEvents';
 import {
+  captureProofPhoto,
+  type ProofPhotoCaptureResult,
+  type ProofPhotoCaptureSource,
+} from './src/proofPhotoCapture';
+import {
   canEnterDeliveryActive,
   canRevealRouteDetails,
   DRIVER_FLOW_STATES,
@@ -63,6 +68,7 @@ import {
   createExpoContinuousLocationStreamService,
   registerContinuousLocationTaskHandler,
 } from './src/expoContinuousLocationStreamService';
+import { createExpoProofPhotoCaptureService } from './src/expoProofPhotoCaptureService';
 import {
   createDriverRuntimeServices,
   readDriverRuntimeConfig,
@@ -110,6 +116,7 @@ export default function App() {
   const [continuousLocationResult, setContinuousLocationResult] = useState<ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null>(null);
   const [stopProofResults, setStopProofResults] = useState<Record<string, StopProofEventResult>>({});
   const [stopProofDrafts, setStopProofDrafts] = useState<Record<string, StopProofDraft>>({});
+  const [proofPhotoCaptureResults, setProofPhotoCaptureResults] = useState<Record<string, ProofPhotoCaptureResult>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecordingConsent, setIsRecordingConsent] = useState(false);
   const [isLoadingAssignedRoute, setIsLoadingAssignedRoute] = useState(false);
@@ -119,12 +126,14 @@ export default function App() {
   const [isStartingContinuousLocation, setIsStartingContinuousLocation] = useState(false);
   const [isStoppingContinuousLocation, setIsStoppingContinuousLocation] = useState(false);
   const [recordingStopProofId, setRecordingStopProofId] = useState<string | null>(null);
+  const [capturingProofPhotoId, setCapturingProofPhotoId] = useState<string | null>(null);
   const [driverAccessRestoreStatus, setDriverAccessRestoreStatus] = useState<DriverAccessRestoreResult['kind']>('missing');
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
   const foregroundLocationSnapshotService = useMemo(() => createExpoForegroundLocationSnapshotService(), []);
   const continuousLocationStreamService = useMemo(() => createExpoContinuousLocationStreamService(), []);
+  const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
 
   const runtimeConfig = useMemo(
     () => readDriverRuntimeConfig({
@@ -240,6 +249,7 @@ export default function App() {
     setContinuousLocationResult(null);
     setStopProofResults({});
     setStopProofDrafts({});
+    setProofPhotoCaptureResults({});
     try {
       const result = await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService);
       setSubmission(result);
@@ -398,6 +408,23 @@ export default function App() {
     }));
   }
 
+  async function handleCaptureStopProofPhoto(stop: AssignedRouteStop, source: ProofPhotoCaptureSource) {
+    const captureKey = `${stop.deliveryStopId}:${source}`;
+    setCapturingProofPhotoId(captureKey);
+    try {
+      const result = await captureProofPhoto({
+        captureService: proofPhotoCaptureService,
+        source,
+      });
+      setProofPhotoCaptureResults((current) => ({ ...current, [stop.deliveryStopId]: result }));
+      if (result.kind === 'captured') {
+        updateStopProofDraft(stop.deliveryStopId, { photoUri: result.uri });
+      }
+    } finally {
+      setCapturingProofPhotoId(null);
+    }
+  }
+
   async function handleRecordStopProof(stop: AssignedRouteStop, action: StopProofAction) {
     const effectiveDeliveryStart: DeliveryStartResult = deliveryStartResult ?? {
       flowState: 'route_ready',
@@ -501,7 +528,10 @@ export default function App() {
             onStartContinuousLocation={handleStartContinuousLocation}
             onStartDelivery={handleStartDelivery}
             onStopContinuousLocation={handleStopContinuousLocation}
+            onCaptureStopProofPhoto={handleCaptureStopProofPhoto}
             onRecordStopProof={handleRecordStopProof}
+            proofPhotoCaptureResults={proofPhotoCaptureResults}
+            capturingProofPhotoId={capturingProofPhotoId}
             result={submission}
             recordingStopProofId={recordingStopProofId}
             routeStartedEventResult={routeStartedEventResult}
@@ -716,10 +746,13 @@ function RouteAccessResultCard({
   onLoadAssignedRoute,
   onRecordConsent,
   onRecordLocationUpdate,
+  onCaptureStopProofPhoto,
   onStartContinuousLocation,
   onStartDelivery,
   onStopContinuousLocation,
   onRecordStopProof,
+  proofPhotoCaptureResults,
+  capturingProofPhotoId,
   result,
   recordingStopProofId,
   routeStartedEventResult,
@@ -746,10 +779,13 @@ function RouteAccessResultCard({
   onLoadAssignedRoute(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
   onRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
   onRecordLocationUpdate(): void;
+  onCaptureStopProofPhoto(stop: AssignedRouteStop, source: ProofPhotoCaptureSource): void;
   onStartContinuousLocation(): void;
   onStartDelivery(): void;
   onStopContinuousLocation(): void;
   onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
+  proofPhotoCaptureResults: Record<string, ProofPhotoCaptureResult>;
+  capturingProofPhotoId: string | null;
   result: RouteAccessSubmissionResult;
   recordingStopProofId: string | null;
   routeStartedEventResult: RouteStartedRecordResult | null;
@@ -818,7 +854,10 @@ function RouteAccessResultCard({
           locationUpdateResult={locationUpdateResult}
           onLoadAssignedRoute={() => onLoadAssignedRoute(result.routeAccess)}
           onRecordLocationUpdate={onRecordLocationUpdate}
+          onCaptureStopProofPhoto={onCaptureStopProofPhoto}
           onRecordStopProof={onRecordStopProof}
+          proofPhotoCaptureResults={proofPhotoCaptureResults}
+          capturingProofPhotoId={capturingProofPhotoId}
           onStartContinuousLocation={onStartContinuousLocation}
           onStartDelivery={onStartDelivery}
           onStopContinuousLocation={onStopContinuousLocation}
@@ -925,12 +964,15 @@ function AssignedRouteCard({
   locationUpdateResult,
   onLoadAssignedRoute,
   onRecordLocationUpdate,
+  onCaptureStopProofPhoto,
   onRecordStopProof,
   onStartContinuousLocation,
   onStartDelivery,
   onStopContinuousLocation,
   recordingStopProofId,
   routeStartedEventResult,
+  proofPhotoCaptureResults,
+  capturingProofPhotoId,
   stopProofDrafts,
   stopProofResults,
   onUpdateStopProofDraft,
@@ -949,12 +991,15 @@ function AssignedRouteCard({
   locationUpdateResult: ForegroundLocationUpdateResult | null;
   onLoadAssignedRoute(): void;
   onRecordLocationUpdate(): void;
+  onCaptureStopProofPhoto(stop: AssignedRouteStop, source: ProofPhotoCaptureSource): void;
   onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
   onStartContinuousLocation(): void;
   onStartDelivery(): void;
   onStopContinuousLocation(): void;
   recordingStopProofId: string | null;
   routeStartedEventResult: RouteStartedRecordResult | null;
+  proofPhotoCaptureResults: Record<string, ProofPhotoCaptureResult>;
+  capturingProofPhotoId: string | null;
   stopProofDrafts: Record<string, StopProofDraft>;
   stopProofResults: Record<string, StopProofEventResult>;
   onUpdateStopProofDraft(deliveryStopId: string, patch: Partial<StopProofDraft>): void;
@@ -987,7 +1032,10 @@ function AssignedRouteCard({
               isDeliveryActive={deliveryStartResult?.kind === 'delivery_active'}
               key={stop.deliveryStopId}
               onRecordStopProof={(action) => onRecordStopProof(stop, action)}
+              captureResult={proofPhotoCaptureResults[stop.deliveryStopId]}
+              capturingProofPhotoId={capturingProofPhotoId}
               draft={getStopProofDraft(stopProofDrafts[stop.deliveryStopId])}
+              onCaptureProofPhoto={(source) => onCaptureStopProofPhoto(stop, source)}
               onUpdateDraft={(patch) => onUpdateStopProofDraft(stop.deliveryStopId, patch)}
               recordingStopProofId={recordingStopProofId}
               stop={stop}
@@ -1191,6 +1239,19 @@ function AssignedRouteMockModePicker({
 }
 
 
+
+function formatProofPhotoCaptureResult(result: ProofPhotoCaptureResult): string {
+  if (result.kind === 'captured') {
+    return `Proof photo attached from ${result.source}: ${result.uri}`;
+  }
+
+  if (result.kind === 'cancelled') {
+    return `Proof photo ${result.source} selection cancelled.`;
+  }
+
+  return result.message;
+}
+
 function getStopProofDraft(draft?: StopProofDraft): StopProofDraft {
   return {
     failureReason: draft?.failureReason ?? 'OTHER',
@@ -1200,16 +1261,22 @@ function getStopProofDraft(draft?: StopProofDraft): StopProofDraft {
 }
 
 function AssignedRouteStopCard({
+  captureResult,
+  capturingProofPhotoId,
   draft,
   isDeliveryActive,
+  onCaptureProofPhoto,
   onRecordStopProof,
   onUpdateDraft,
   recordingStopProofId,
   stop,
   stopProofResults,
 }: {
+  captureResult?: ProofPhotoCaptureResult;
+  capturingProofPhotoId: string | null;
   draft: StopProofDraft;
   isDeliveryActive: boolean;
+  onCaptureProofPhoto(source: ProofPhotoCaptureSource): void;
   onRecordStopProof(action: StopProofAction): void;
   onUpdateDraft(patch: Partial<StopProofDraft>): void;
   recordingStopProofId: string | null;
@@ -1246,6 +1313,33 @@ function AssignedRouteStopCard({
             style={styles.stopProofInput}
             value={draft.photoUri}
           />
+          {captureResult !== undefined ? (
+            <Text style={captureResult.kind === 'captured' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
+              {formatProofPhotoCaptureResult(captureResult)}
+            </Text>
+          ) : null}
+          <View style={styles.stopActionRow}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={capturingProofPhotoId === `${stop.deliveryStopId}:camera`}
+              onPress={() => onCaptureProofPhoto('camera')}
+              style={[styles.stopActionButton, capturingProofPhotoId === `${stop.deliveryStopId}:camera` && styles.buttonDisabled]}
+            >
+              <Text style={styles.stopActionButtonText}>
+                {capturingProofPhotoId === `${stop.deliveryStopId}:camera` ? 'Opening…' : 'Take photo'}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={capturingProofPhotoId === `${stop.deliveryStopId}:library`}
+              onPress={() => onCaptureProofPhoto('library')}
+              style={[styles.stopActionButton, capturingProofPhotoId === `${stop.deliveryStopId}:library` && styles.buttonDisabled]}
+            >
+              <Text style={styles.stopActionButtonText}>
+                {capturingProofPhotoId === `${stop.deliveryStopId}:library` ? 'Opening…' : 'Choose photo'}
+              </Text>
+            </Pressable>
+          </View>
           <View style={styles.stopActionRow}>
             {STOP_PROOF_FAILURE_REASONS.map((reason) => (
               <Pressable
