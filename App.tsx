@@ -36,6 +36,13 @@ import {
   type ForegroundLocationUpdateResult,
 } from './src/foregroundLocationEvent';
 import {
+  recordContinuousLocationUpdateBatch,
+  startContinuousLocationUpdatesAfterDeliveryStart,
+  stopContinuousLocationUpdates,
+  type ContinuousLocationStopResult,
+  type ContinuousLocationStreamStartResult,
+} from './src/continuousLocationStream';
+import {
   recordStopProofEventAfterDeliveryStart,
   type StopProofAction,
   type StopProofEventResult,
@@ -51,6 +58,10 @@ import { type DriverAccessRestoreResult } from './src/driverAccessTokenStore';
 import { createExpoSecureDriverAccessTokenStore } from './src/expoSecureDriverAccessTokenStore';
 import { createExpoForegroundLocationPermissionService } from './src/expoLocationPermissionService';
 import { createExpoForegroundLocationSnapshotService } from './src/expoForegroundLocationSnapshotService';
+import {
+  createExpoContinuousLocationStreamService,
+  registerContinuousLocationTaskHandler,
+} from './src/expoContinuousLocationStreamService';
 import {
   createDriverRuntimeServices,
   readDriverRuntimeConfig,
@@ -88,6 +99,7 @@ export default function App() {
   const [deliveryStartResult, setDeliveryStartResult] = useState<DeliveryStartResult | null>(null);
   const [routeStartedEventResult, setRouteStartedEventResult] = useState<RouteStartedRecordResult | null>(null);
   const [locationUpdateResult, setLocationUpdateResult] = useState<ForegroundLocationUpdateResult | null>(null);
+  const [continuousLocationResult, setContinuousLocationResult] = useState<ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null>(null);
   const [stopProofResults, setStopProofResults] = useState<Record<string, StopProofEventResult>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecordingConsent, setIsRecordingConsent] = useState(false);
@@ -95,12 +107,15 @@ export default function App() {
   const [isStartingDelivery, setIsStartingDelivery] = useState(false);
   const [isRecordingRouteStarted, setIsRecordingRouteStarted] = useState(false);
   const [isRecordingLocationUpdate, setIsRecordingLocationUpdate] = useState(false);
+  const [isStartingContinuousLocation, setIsStartingContinuousLocation] = useState(false);
+  const [isStoppingContinuousLocation, setIsStoppingContinuousLocation] = useState(false);
   const [recordingStopProofId, setRecordingStopProofId] = useState<string | null>(null);
   const [driverAccessRestoreStatus, setDriverAccessRestoreStatus] = useState<DriverAccessRestoreResult['kind']>('missing');
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
   const foregroundLocationSnapshotService = useMemo(() => createExpoForegroundLocationSnapshotService(), []);
+  const continuousLocationStreamService = useMemo(() => createExpoContinuousLocationStreamService(), []);
 
   const runtimeConfig = useMemo(
     () => readDriverRuntimeConfig({
@@ -181,6 +196,31 @@ export default function App() {
     hasLocationPermission: deliveryStartResult?.kind === 'delivery_active',
   });
 
+  const activeRoutePlanId = assignedRouteSubmission?.kind === 'route_ready' ? assignedRouteSubmission.route.id : null;
+
+  useEffect(() => {
+    if (deliveryStartResult?.kind !== 'delivery_active') {
+      registerContinuousLocationTaskHandler(null);
+      return;
+    }
+
+    registerContinuousLocationTaskHandler(async (locations) => {
+      await recordContinuousLocationUpdateBatch({
+        driverEventService: getDriverEventServiceForCurrentSubmission({
+          driverEventService,
+          runtimeConfig,
+          submission,
+        }),
+        locations,
+        routePlanId: activeRoutePlanId,
+      });
+    });
+
+    return () => {
+      registerContinuousLocationTaskHandler(null);
+    };
+  }, [activeRoutePlanId, deliveryStartResult, driverEventService, runtimeConfig, submission]);
+
   async function handleLookup() {
     setIsSubmitting(true);
     setConsentSubmission(null);
@@ -188,6 +228,7 @@ export default function App() {
     setDeliveryStartResult(null);
     setRouteStartedEventResult(null);
     setLocationUpdateResult(null);
+    setContinuousLocationResult(null);
     setStopProofResults({});
     try {
       const result = await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService);
@@ -255,6 +296,7 @@ export default function App() {
       });
       setDeliveryStartResult(deliveryStart);
       setRouteStartedEventResult(null);
+      setContinuousLocationResult(null);
 
       if (deliveryStart.kind === 'delivery_active') {
         setIsRecordingRouteStarted(true);
@@ -266,7 +308,7 @@ export default function App() {
               runtimeConfig,
               submission,
             }),
-            routePlanId: assignedRouteSubmission?.kind === 'route_ready' ? assignedRouteSubmission.route.id : null,
+            routePlanId: activeRoutePlanId,
           }));
         } finally {
           setIsRecordingRouteStarted(false);
@@ -297,10 +339,41 @@ export default function App() {
           submission,
         }),
         locationService: foregroundLocationSnapshotService,
-        routePlanId: assignedRouteSubmission?.kind === 'route_ready' ? assignedRouteSubmission.route.id : null,
+        routePlanId: activeRoutePlanId,
       }));
     } finally {
       setIsRecordingLocationUpdate(false);
+    }
+  }
+
+  async function handleStartContinuousLocation() {
+    const effectiveDeliveryStart: DeliveryStartResult = deliveryStartResult ?? {
+      flowState: 'route_ready',
+      kind: 'permission_denied',
+      reason: 'foreground_location_denied',
+      message: 'Delivery must be active before starting continuous location updates.',
+    };
+
+    setIsStartingContinuousLocation(true);
+    try {
+      setContinuousLocationResult(await startContinuousLocationUpdatesAfterDeliveryStart({
+        deliveryStart: effectiveDeliveryStart,
+        routePlanId: activeRoutePlanId,
+        streamService: continuousLocationStreamService,
+      }));
+    } finally {
+      setIsStartingContinuousLocation(false);
+    }
+  }
+
+  async function handleStopContinuousLocation() {
+    setIsStoppingContinuousLocation(true);
+    try {
+      setContinuousLocationResult(await stopContinuousLocationUpdates({
+        streamService: continuousLocationStreamService,
+      }));
+    } finally {
+      setIsStoppingContinuousLocation(false);
     }
   }
 
@@ -328,7 +401,7 @@ export default function App() {
           deliveryStopId: stop.deliveryStopId,
           note: action === 'delivered' ? 'Driver marked delivered in MVP app.' : 'Driver marked failed in MVP app.',
           reason: action === 'failed' ? 'OTHER' : undefined,
-          routePlanId: assignedRouteSubmission?.kind === 'route_ready' ? assignedRouteSubmission.route.id : '',
+          routePlanId: activeRoutePlanId ?? '',
         },
       });
       setStopProofResults((current) => ({ ...current, [proofKey]: result }));
@@ -391,16 +464,21 @@ export default function App() {
             consentMockMode={consentMockMode}
             consentResult={consentSubmission}
             deliveryStartResult={deliveryStartResult}
+            continuousLocationResult={continuousLocationResult}
             isLoadingAssignedRoute={isLoadingAssignedRoute}
             isRecordingConsent={isRecordingConsent}
             isRecordingLocationUpdate={isRecordingLocationUpdate}
+            isStartingContinuousLocation={isStartingContinuousLocation}
             isRecordingRouteStarted={isRecordingRouteStarted}
             isStartingDelivery={isStartingDelivery}
+            isStoppingContinuousLocation={isStoppingContinuousLocation}
             locationUpdateResult={locationUpdateResult}
             onLoadAssignedRoute={handleLoadAssignedRoute}
             onRecordConsent={handleRecordConsent}
             onRecordLocationUpdate={handleRecordLocationUpdate}
+            onStartContinuousLocation={handleStartContinuousLocation}
             onStartDelivery={handleStartDelivery}
+            onStopContinuousLocation={handleStopContinuousLocation}
             onRecordStopProof={handleRecordStopProof}
             result={submission}
             recordingStopProofId={recordingStopProofId}
@@ -600,18 +678,23 @@ function RouteAccessResultCard({
   assignedRouteMockMode,
   assignedRouteResult,
   consentMockMode,
+  continuousLocationResult,
   consentResult,
   deliveryStartResult,
   isLoadingAssignedRoute,
   isRecordingConsent,
   isRecordingLocationUpdate,
   isRecordingRouteStarted,
+  isStartingContinuousLocation,
   isStartingDelivery,
+  isStoppingContinuousLocation,
   locationUpdateResult,
   onLoadAssignedRoute,
   onRecordConsent,
   onRecordLocationUpdate,
+  onStartContinuousLocation,
   onStartDelivery,
+  onStopContinuousLocation,
   onRecordStopProof,
   result,
   recordingStopProofId,
@@ -624,17 +707,22 @@ function RouteAccessResultCard({
   assignedRouteResult: AssignedRouteLoadResult | null;
   consentMockMode: ConsentMockMode;
   consentResult: DriverConsentSubmissionResult | null;
+  continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
   deliveryStartResult: DeliveryStartResult | null;
   isLoadingAssignedRoute: boolean;
   isRecordingConsent: boolean;
   isRecordingLocationUpdate: boolean;
   isRecordingRouteStarted: boolean;
+  isStartingContinuousLocation: boolean;
   isStartingDelivery: boolean;
+  isStoppingContinuousLocation: boolean;
   locationUpdateResult: ForegroundLocationUpdateResult | null;
   onLoadAssignedRoute(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
   onRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
   onRecordLocationUpdate(): void;
+  onStartContinuousLocation(): void;
   onStartDelivery(): void;
+  onStopContinuousLocation(): void;
   onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
   result: RouteAccessSubmissionResult;
   recordingStopProofId: string | null;
@@ -691,16 +779,21 @@ function RouteAccessResultCard({
         <AssignedRouteCard
           assignedRouteMockMode={assignedRouteMockMode}
           assignedRouteResult={assignedRouteResult}
+          continuousLocationResult={continuousLocationResult}
           deliveryStartResult={deliveryStartResult}
           isLoadingAssignedRoute={isLoadingAssignedRoute}
           isRecordingLocationUpdate={isRecordingLocationUpdate}
           isRecordingRouteStarted={isRecordingRouteStarted}
+          isStartingContinuousLocation={isStartingContinuousLocation}
           isStartingDelivery={isStartingDelivery}
+          isStoppingContinuousLocation={isStoppingContinuousLocation}
           locationUpdateResult={locationUpdateResult}
           onLoadAssignedRoute={() => onLoadAssignedRoute(result.routeAccess)}
           onRecordLocationUpdate={onRecordLocationUpdate}
           onRecordStopProof={onRecordStopProof}
+          onStartContinuousLocation={onStartContinuousLocation}
           onStartDelivery={onStartDelivery}
+          onStopContinuousLocation={onStopContinuousLocation}
           recordingStopProofId={recordingStopProofId}
           routeStartedEventResult={routeStartedEventResult}
           stopProofResults={stopProofResults}
@@ -791,16 +884,21 @@ function ConsentMockModePicker({
 function AssignedRouteCard({
   assignedRouteMockMode,
   assignedRouteResult,
+  continuousLocationResult,
   deliveryStartResult,
   isLoadingAssignedRoute,
   isRecordingLocationUpdate,
   isRecordingRouteStarted,
+  isStartingContinuousLocation,
   isStartingDelivery,
+  isStoppingContinuousLocation,
   locationUpdateResult,
   onLoadAssignedRoute,
   onRecordLocationUpdate,
   onRecordStopProof,
+  onStartContinuousLocation,
   onStartDelivery,
+  onStopContinuousLocation,
   recordingStopProofId,
   routeStartedEventResult,
   stopProofResults,
@@ -808,16 +906,21 @@ function AssignedRouteCard({
 }: {
   assignedRouteMockMode: AssignedRouteMockMode;
   assignedRouteResult: AssignedRouteLoadResult | null;
+  continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
   deliveryStartResult: DeliveryStartResult | null;
   isLoadingAssignedRoute: boolean;
   isRecordingLocationUpdate: boolean;
   isRecordingRouteStarted: boolean;
+  isStartingContinuousLocation: boolean;
   isStartingDelivery: boolean;
+  isStoppingContinuousLocation: boolean;
   locationUpdateResult: ForegroundLocationUpdateResult | null;
   onLoadAssignedRoute(): void;
   onRecordLocationUpdate(): void;
   onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
+  onStartContinuousLocation(): void;
   onStartDelivery(): void;
+  onStopContinuousLocation(): void;
   recordingStopProofId: string | null;
   routeStartedEventResult: RouteStartedRecordResult | null;
   stopProofResults: Record<string, StopProofEventResult>;
@@ -862,13 +965,18 @@ function AssignedRouteCard({
       ) : null}
       {assignedRouteResult?.kind === 'route_ready' ? (
         <DeliveryStartCard
+          continuousLocationResult={continuousLocationResult}
           deliveryStartResult={deliveryStartResult}
           isRecordingLocationUpdate={isRecordingLocationUpdate}
           isRecordingRouteStarted={isRecordingRouteStarted}
+          isStartingContinuousLocation={isStartingContinuousLocation}
           isStartingDelivery={isStartingDelivery}
+          isStoppingContinuousLocation={isStoppingContinuousLocation}
           locationUpdateResult={locationUpdateResult}
           onRecordLocationUpdate={onRecordLocationUpdate}
+          onStartContinuousLocation={onStartContinuousLocation}
           onStartDelivery={onStartDelivery}
+          onStopContinuousLocation={onStopContinuousLocation}
           routeStartedEventResult={routeStartedEventResult}
         />
       ) : null}
@@ -890,22 +998,32 @@ function AssignedRouteCard({
 
 
 function DeliveryStartCard({
+  continuousLocationResult,
   deliveryStartResult,
   isRecordingLocationUpdate,
   isRecordingRouteStarted,
+  isStartingContinuousLocation,
   isStartingDelivery,
+  isStoppingContinuousLocation,
   locationUpdateResult,
   onRecordLocationUpdate,
+  onStartContinuousLocation,
   onStartDelivery,
+  onStopContinuousLocation,
   routeStartedEventResult,
 }: {
+  continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
   deliveryStartResult: DeliveryStartResult | null;
   isRecordingLocationUpdate: boolean;
   isRecordingRouteStarted: boolean;
+  isStartingContinuousLocation: boolean;
   isStartingDelivery: boolean;
+  isStoppingContinuousLocation: boolean;
   locationUpdateResult: ForegroundLocationUpdateResult | null;
   onRecordLocationUpdate(): void;
+  onStartContinuousLocation(): void;
   onStartDelivery(): void;
+  onStopContinuousLocation(): void;
   routeStartedEventResult: RouteStartedRecordResult | null;
 }) {
   const isActive = deliveryStartResult?.kind === 'delivery_active';
@@ -915,8 +1033,8 @@ function DeliveryStartCard({
       <Text style={styles.consentTitle}>Start delivery with foreground location</Text>
       <Text style={styles.consentBody}>
         The app requests OS foreground location permission only after the driver explicitly starts
-        delivery. The app records ROUTE_STARTED and foreground LOCATION_UPDATED events after
-        delivery_active succeeds; background streaming remains blocked for the next slice.
+        delivery. The app records ROUTE_STARTED, foreground LOCATION_UPDATED, and continuous
+        background-capable LOCATION_UPDATED events after delivery_active succeeds.
       </Text>
       {deliveryStartResult !== null ? (
         <Text style={isActive ? styles.deliveryStartSuccessText : styles.routeWarningText}>
@@ -935,6 +1053,11 @@ function DeliveryStartCard({
       {locationUpdateResult?.kind === 'recorded' ? (
         <Text style={styles.deliveryStartSuccessText}>Foreground location update recorded: {locationUpdateResult.eventId}</Text>
       ) : null}
+      {continuousLocationResult !== null ? (
+        <Text style={continuousLocationResult.kind === 'streaming' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
+          {formatContinuousLocationResult(continuousLocationResult)}
+        </Text>
+      ) : null}
       {isActive ? (
         <Pressable
           accessibilityRole="button"
@@ -948,6 +1071,30 @@ function DeliveryStartCard({
             <Text style={styles.secondaryButtonText}>Sync foreground location</Text>
           )}
         </Pressable>
+      ) : null}
+      {isActive ? (
+        <View style={styles.stopActionRow}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={isStartingContinuousLocation}
+            onPress={onStartContinuousLocation}
+            style={[styles.stopActionButton, isStartingContinuousLocation && styles.buttonDisabled]}
+          >
+            <Text style={styles.stopActionButtonText}>
+              {isStartingContinuousLocation ? 'Starting…' : 'Start continuous tracking'}
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={isStoppingContinuousLocation}
+            onPress={onStopContinuousLocation}
+            style={[styles.stopActionDangerButton, isStoppingContinuousLocation && styles.buttonDisabled]}
+          >
+            <Text style={styles.stopActionButtonText}>
+              {isStoppingContinuousLocation ? 'Stopping…' : 'Stop tracking'}
+            </Text>
+          </Pressable>
+        </View>
       ) : null}
       <Pressable
         accessibilityRole="button"
@@ -963,6 +1110,21 @@ function DeliveryStartCard({
       </Pressable>
     </View>
   );
+}
+
+
+function formatContinuousLocationResult(result: ContinuousLocationStreamStartResult | ContinuousLocationStopResult): string {
+  if (result.kind === 'streaming') {
+    return result.alreadyStarted
+      ? `Continuous location already active: ${result.taskName}`
+      : `Continuous location active: ${result.taskName}`;
+  }
+
+  if (result.kind === 'stopped') {
+    return `Continuous location stopped: ${result.taskName}`;
+  }
+
+  return result.message;
 }
 
 function AssignedRouteMockModePicker({
