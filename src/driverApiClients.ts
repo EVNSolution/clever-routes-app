@@ -8,15 +8,21 @@ import {
   type DriverConsentService,
   type FetchLike as DriverConsentFetchLike,
 } from './driverConsent';
+import {
+  createDriverEventsApiClient,
+  type DriverEventService,
+  type FetchLike as DriverEventFetchLike,
+} from './driverEvents';
 import type { PersistedDriverAccess } from './driverAccessTokenStore';
 import type { RouteAccessLookupResult } from './routeAccess';
 
 export type DriverApiClients = {
   assignedRouteService: AssignedRouteService;
   driverConsentService: DriverConsentService;
+  driverEventService: DriverEventService;
 };
 
-export type DriverApiClientsFetchLike = AssignedRouteFetchLike & DriverConsentFetchLike;
+export type DriverApiClientsFetchLike = AssignedRouteFetchLike & DriverConsentFetchLike & DriverEventFetchLike;
 
 export function createDriverApiClientsFromRouteAccess(input: {
   baseUrl: string;
@@ -54,6 +60,11 @@ function createDriverApiClientsFromAccessToken(input: {
       fetchImpl: input.fetchImpl,
     }),
     driverConsentService: createDriverConsentApiClient({
+      accessToken: input.accessToken,
+      baseUrl: input.baseUrl,
+      fetchImpl: input.fetchImpl,
+    }),
+    driverEventService: createDriverEventsApiClient({
       accessToken: input.accessToken,
       baseUrl: input.baseUrl,
       fetchImpl: input.fetchImpl,
