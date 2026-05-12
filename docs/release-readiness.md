@@ -11,7 +11,7 @@ The app targets native iPhone and Android phone runtime. `eas.json` now defines 
 - App Store/TestFlight and Google Play testing or production tracks
 - Apple Business Manager Custom Apps and managed Google Play/private app for restricted driver distribution
 
-Do not add final store listing copy, screenshots, signing ownership, or public license terms without an explicit owner decision.
+Do not add final store listing copy, screenshots, signing ownership, or public license terms without an explicit owner decision. `docs/store-privacy-disclosure-draft.md` is a non-final worksheet for owner/legal review only.
 
 ## Native build profile matrix
 
@@ -61,6 +61,8 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 - Server proof-media retention/deletion support: `clever-delivery-server` now has `DRIVER_PROOF_MEDIA_RETENTION_DAYS` and `npm run driver:proof-media:cleanup` for local/manual or cron-style cleanup; production deployment evidence is still pending.
 - Support contact: company/operator support contact must be available in route guidance or store support metadata.
 
+See `docs/store-privacy-disclosure-draft.md` for the current non-final App Store / Google Play disclosure worksheet. The worksheet narrows the review input, but final store answers still require owner/legal approval in the actual store consoles.
+
 ## Evidence storage policy
 
 - Keep screenshots/videos/logs in the approved external evidence location; issues and PRs should contain only sanitized references.
@@ -71,6 +73,6 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 
 - Production proof-media object storage ownership, signed retrieval/access-control, malware scanning/private evidence storage, and deployed cleanup/scheduler evidence.
 - Physical iOS/Android device smoke evidence for background tracking and proof capture.
-- Store/private distribution policy and privacy disclosure copy.
+- Store/private distribution policy and owner/legal-approved privacy disclosure copy.
 - Owner-controlled Expo/EAS project, Apple/Google signing credentials, and EAS preview/production environment values must be configured outside git before native builds run.
 - Context-monorepo service document after production runtime/API boundaries are confirmed.
