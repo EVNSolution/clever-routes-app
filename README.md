@@ -84,7 +84,15 @@ npx expo install --check
 git diff --check
 ```
 
-`npm run build` exports Android and iOS JavaScript bundles into ignored `dist/` folders. It is not an App Store/Play Store binary build.
+`npm run build` exports Android and iOS JavaScript bundles into ignored `dist/` folders. It is not an App Store/Play Store binary build. Native binary candidates are described by `eas.json`:
+
+```bash
+npx eas-cli build --platform android --profile preview
+npx eas-cli build --platform ios --profile preview
+npx eas-cli build --platform all --profile production
+```
+
+Preview builds are for internal physical-device evidence collection. Production builds are store/TestFlight/Play candidates and require owner-controlled Expo, Apple, Google, signing, and environment-variable setup before execution.
 
 Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`, generated outputs remain ignored, and `.env.example` still documents every public runtime env key used by the app.
 
