@@ -54,6 +54,20 @@ import {
   type ProofPhotoCaptureSource,
 } from './src/proofPhotoCapture';
 import {
+  uploadCapturedProofPhoto,
+  createMockProofMediaUploadService,
+  type ProofMediaUploadResult,
+  type ProofMediaUploadService,
+} from './src/proofMediaUpload';
+import {
+  captureProofSignature,
+  type ProofSignatureCaptureResult,
+} from './src/proofSignatureCapture';
+import {
+  captureProofBarcode,
+  type ProofBarcodeCaptureResult,
+} from './src/proofBarcodeCapture';
+import {
   canEnterDeliveryActive,
   canRevealRouteDetails,
   DRIVER_FLOW_STATES,
@@ -69,6 +83,7 @@ import {
   registerContinuousLocationTaskHandler,
 } from './src/expoContinuousLocationStreamService';
 import { createExpoProofPhotoCaptureService } from './src/expoProofPhotoCaptureService';
+import { createExpoProofBarcodeCaptureService } from './src/expoProofBarcodeCaptureService';
 import {
   createDriverRuntimeServices,
   readDriverRuntimeConfig,
@@ -97,6 +112,8 @@ type StopProofDraft = {
   failureReason: StopProofFailureReason;
   note: string;
   photoUri: string;
+  signaturePointCount: number;
+  signerName: string;
 };
 
 const STOP_PROOF_FAILURE_REASONS: StopProofFailureReason[] = ['CUSTOMER_UNAVAILABLE', 'DAMAGED', 'INACCESSIBLE', 'OTHER'];
@@ -117,6 +134,9 @@ export default function App() {
   const [stopProofResults, setStopProofResults] = useState<Record<string, StopProofEventResult>>({});
   const [stopProofDrafts, setStopProofDrafts] = useState<Record<string, StopProofDraft>>({});
   const [proofPhotoCaptureResults, setProofPhotoCaptureResults] = useState<Record<string, ProofPhotoCaptureResult>>({});
+  const [proofMediaUploadResults, setProofMediaUploadResults] = useState<Record<string, ProofMediaUploadResult>>({});
+  const [proofSignatureCaptureResults, setProofSignatureCaptureResults] = useState<Record<string, ProofSignatureCaptureResult>>({});
+  const [proofBarcodeCaptureResults, setProofBarcodeCaptureResults] = useState<Record<string, ProofBarcodeCaptureResult>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecordingConsent, setIsRecordingConsent] = useState(false);
   const [isLoadingAssignedRoute, setIsLoadingAssignedRoute] = useState(false);
@@ -127,6 +147,9 @@ export default function App() {
   const [isStoppingContinuousLocation, setIsStoppingContinuousLocation] = useState(false);
   const [recordingStopProofId, setRecordingStopProofId] = useState<string | null>(null);
   const [capturingProofPhotoId, setCapturingProofPhotoId] = useState<string | null>(null);
+  const [uploadingProofMediaId, setUploadingProofMediaId] = useState<string | null>(null);
+  const [capturingProofSignatureId, setCapturingProofSignatureId] = useState<string | null>(null);
+  const [capturingProofBarcodeId, setCapturingProofBarcodeId] = useState<string | null>(null);
   const [driverAccessRestoreStatus, setDriverAccessRestoreStatus] = useState<DriverAccessRestoreResult['kind']>('missing');
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
@@ -134,6 +157,8 @@ export default function App() {
   const foregroundLocationSnapshotService = useMemo(() => createExpoForegroundLocationSnapshotService(), []);
   const continuousLocationStreamService = useMemo(() => createExpoContinuousLocationStreamService(), []);
   const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
+  const proofBarcodeCaptureService = useMemo(() => createExpoProofBarcodeCaptureService(), []);
+  const proofMediaUploadService = useMemo(() => createMockProofMediaUploadService(), []);
 
   const runtimeConfig = useMemo(
     () => readDriverRuntimeConfig({
@@ -250,6 +275,9 @@ export default function App() {
     setStopProofResults({});
     setStopProofDrafts({});
     setProofPhotoCaptureResults({});
+    setProofMediaUploadResults({});
+    setProofSignatureCaptureResults({});
+    setProofBarcodeCaptureResults({});
     try {
       const result = await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService);
       setSubmission(result);
@@ -420,8 +448,53 @@ export default function App() {
       if (result.kind === 'captured') {
         updateStopProofDraft(stop.deliveryStopId, { photoUri: result.uri });
       }
+      setUploadingProofMediaId(stop.deliveryStopId);
+      const uploadResult = await uploadCapturedProofPhoto({
+        captureResult: result,
+        uploadRequest: {
+          deliveryStopId: stop.deliveryStopId,
+          fileName: getFileNameFromUri(result.kind === 'captured' ? result.uri : '', stop.deliveryStopId),
+          routePlanId: activeRoutePlanId ?? '',
+        },
+        uploadService: getProofMediaUploadServiceForCurrentSubmission({
+          proofMediaUploadService,
+          runtimeConfig,
+          submission,
+        }),
+      });
+      setProofMediaUploadResults((current) => ({ ...current, [stop.deliveryStopId]: uploadResult }));
     } finally {
       setCapturingProofPhotoId(null);
+      setUploadingProofMediaId(null);
+    }
+  }
+
+  async function handleCaptureStopProofSignature(stop: AssignedRouteStop) {
+    setCapturingProofSignatureId(stop.deliveryStopId);
+    try {
+      const draft = getStopProofDraft(stopProofDrafts[stop.deliveryStopId]);
+      const result = await captureProofSignature({
+        captureService: {
+          captureSignature: async () => ({
+            kind: 'captured',
+            signerName: draft.signerName,
+            strokes: [Array.from({ length: draft.signaturePointCount }, (_value, index) => ({ x: index, y: index }))],
+          }),
+        },
+      });
+      setProofSignatureCaptureResults((current) => ({ ...current, [stop.deliveryStopId]: result }));
+    } finally {
+      setCapturingProofSignatureId(null);
+    }
+  }
+
+  async function handleCaptureStopProofBarcode(stop: AssignedRouteStop) {
+    setCapturingProofBarcodeId(stop.deliveryStopId);
+    try {
+      const result = await captureProofBarcode({ barcodeService: proofBarcodeCaptureService });
+      setProofBarcodeCaptureResults((current) => ({ ...current, [stop.deliveryStopId]: result }));
+    } finally {
+      setCapturingProofBarcodeId(null);
     }
   }
 
@@ -446,11 +519,13 @@ export default function App() {
         }),
         input: {
           action,
+          barcodes: getScannedProofBarcodes(proofBarcodeCaptureResults[stop.deliveryStopId]),
           deliveryStopId: stop.deliveryStopId,
+          media: getUploadedProofMedia(proofMediaUploadResults[stop.deliveryStopId]),
           note: draft.note,
-          photoUris: draft.photoUri.trim().length === 0 ? [] : [draft.photoUri],
           reason: action === 'failed' ? draft.failureReason : undefined,
           routePlanId: activeRoutePlanId ?? '',
+          signatures: getCapturedProofSignatures(proofSignatureCaptureResults[stop.deliveryStopId]),
         },
       });
       setStopProofResults((current) => ({ ...current, [proofKey]: result }));
@@ -528,10 +603,18 @@ export default function App() {
             onStartContinuousLocation={handleStartContinuousLocation}
             onStartDelivery={handleStartDelivery}
             onStopContinuousLocation={handleStopContinuousLocation}
+            onCaptureStopProofBarcode={handleCaptureStopProofBarcode}
             onCaptureStopProofPhoto={handleCaptureStopProofPhoto}
+            onCaptureStopProofSignature={handleCaptureStopProofSignature}
             onRecordStopProof={handleRecordStopProof}
+            proofBarcodeCaptureResults={proofBarcodeCaptureResults}
+            proofMediaUploadResults={proofMediaUploadResults}
             proofPhotoCaptureResults={proofPhotoCaptureResults}
+            proofSignatureCaptureResults={proofSignatureCaptureResults}
+            capturingProofBarcodeId={capturingProofBarcodeId}
             capturingProofPhotoId={capturingProofPhotoId}
+            capturingProofSignatureId={capturingProofSignatureId}
+            uploadingProofMediaId={uploadingProofMediaId}
             result={submission}
             recordingStopProofId={recordingStopProofId}
             routeStartedEventResult={routeStartedEventResult}
@@ -632,6 +715,38 @@ function getDriverEventServiceForCurrentSubmission(input: {
     baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
     routeAccess: toInvitedRouteAccess(input.submission),
   }).driverEventService;
+}
+
+function getProofMediaUploadServiceForCurrentSubmission(input: {
+  proofMediaUploadService: ProofMediaUploadService;
+  runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
+  submission: RouteAccessSubmissionResult | null;
+}): ProofMediaUploadService {
+  if (input.runtimeConfig.mode !== 'live' || input.submission?.kind !== 'company_guidance') {
+    return input.proofMediaUploadService;
+  }
+
+  return createDriverApiClientsFromRouteAccess({
+    baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
+    routeAccess: toInvitedRouteAccess(input.submission),
+  }).proofMediaUploadService;
+}
+
+function getUploadedProofMedia(result?: ProofMediaUploadResult) {
+  return result?.kind === 'uploaded' ? [result.media] : [];
+}
+
+function getCapturedProofSignatures(result?: ProofSignatureCaptureResult) {
+  return result?.kind === 'captured' ? [result.signature] : [];
+}
+
+function getScannedProofBarcodes(result?: ProofBarcodeCaptureResult) {
+  return result?.kind === 'scanned' ? [result.barcode] : [];
+}
+
+function getFileNameFromUri(uri: string, deliveryStopId: string): string {
+  const fileName = uri.split('/').pop()?.trim();
+  return fileName === undefined || fileName === '' ? `${deliveryStopId}.jpg` : fileName;
 }
 
 function formatDriverAccessRestoreStatus(status: DriverAccessRestoreResult['kind']): string {
@@ -746,13 +861,21 @@ function RouteAccessResultCard({
   onLoadAssignedRoute,
   onRecordConsent,
   onRecordLocationUpdate,
+  onCaptureStopProofBarcode,
   onCaptureStopProofPhoto,
+  onCaptureStopProofSignature,
   onStartContinuousLocation,
   onStartDelivery,
   onStopContinuousLocation,
   onRecordStopProof,
+  proofBarcodeCaptureResults,
+  proofMediaUploadResults,
   proofPhotoCaptureResults,
+  proofSignatureCaptureResults,
+  capturingProofBarcodeId,
   capturingProofPhotoId,
+  capturingProofSignatureId,
+  uploadingProofMediaId,
   result,
   recordingStopProofId,
   routeStartedEventResult,
@@ -779,13 +902,21 @@ function RouteAccessResultCard({
   onLoadAssignedRoute(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
   onRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
   onRecordLocationUpdate(): void;
+  onCaptureStopProofBarcode(stop: AssignedRouteStop): void;
   onCaptureStopProofPhoto(stop: AssignedRouteStop, source: ProofPhotoCaptureSource): void;
+  onCaptureStopProofSignature(stop: AssignedRouteStop): void;
   onStartContinuousLocation(): void;
   onStartDelivery(): void;
   onStopContinuousLocation(): void;
   onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
+  proofBarcodeCaptureResults: Record<string, ProofBarcodeCaptureResult>;
+  proofMediaUploadResults: Record<string, ProofMediaUploadResult>;
   proofPhotoCaptureResults: Record<string, ProofPhotoCaptureResult>;
+  proofSignatureCaptureResults: Record<string, ProofSignatureCaptureResult>;
+  capturingProofBarcodeId: string | null;
   capturingProofPhotoId: string | null;
+  capturingProofSignatureId: string | null;
+  uploadingProofMediaId: string | null;
   result: RouteAccessSubmissionResult;
   recordingStopProofId: string | null;
   routeStartedEventResult: RouteStartedRecordResult | null;
@@ -854,10 +985,18 @@ function RouteAccessResultCard({
           locationUpdateResult={locationUpdateResult}
           onLoadAssignedRoute={() => onLoadAssignedRoute(result.routeAccess)}
           onRecordLocationUpdate={onRecordLocationUpdate}
+          onCaptureStopProofBarcode={onCaptureStopProofBarcode}
           onCaptureStopProofPhoto={onCaptureStopProofPhoto}
+          onCaptureStopProofSignature={onCaptureStopProofSignature}
           onRecordStopProof={onRecordStopProof}
+          proofBarcodeCaptureResults={proofBarcodeCaptureResults}
+          proofMediaUploadResults={proofMediaUploadResults}
           proofPhotoCaptureResults={proofPhotoCaptureResults}
+          proofSignatureCaptureResults={proofSignatureCaptureResults}
+          capturingProofBarcodeId={capturingProofBarcodeId}
           capturingProofPhotoId={capturingProofPhotoId}
+          capturingProofSignatureId={capturingProofSignatureId}
+          uploadingProofMediaId={uploadingProofMediaId}
           onStartContinuousLocation={onStartContinuousLocation}
           onStartDelivery={onStartDelivery}
           onStopContinuousLocation={onStopContinuousLocation}
@@ -964,15 +1103,23 @@ function AssignedRouteCard({
   locationUpdateResult,
   onLoadAssignedRoute,
   onRecordLocationUpdate,
+  onCaptureStopProofBarcode,
   onCaptureStopProofPhoto,
+  onCaptureStopProofSignature,
   onRecordStopProof,
   onStartContinuousLocation,
   onStartDelivery,
   onStopContinuousLocation,
   recordingStopProofId,
   routeStartedEventResult,
+  proofBarcodeCaptureResults,
+  proofMediaUploadResults,
   proofPhotoCaptureResults,
+  proofSignatureCaptureResults,
+  capturingProofBarcodeId,
   capturingProofPhotoId,
+  capturingProofSignatureId,
+  uploadingProofMediaId,
   stopProofDrafts,
   stopProofResults,
   onUpdateStopProofDraft,
@@ -991,15 +1138,23 @@ function AssignedRouteCard({
   locationUpdateResult: ForegroundLocationUpdateResult | null;
   onLoadAssignedRoute(): void;
   onRecordLocationUpdate(): void;
+  onCaptureStopProofBarcode(stop: AssignedRouteStop): void;
   onCaptureStopProofPhoto(stop: AssignedRouteStop, source: ProofPhotoCaptureSource): void;
+  onCaptureStopProofSignature(stop: AssignedRouteStop): void;
   onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
   onStartContinuousLocation(): void;
   onStartDelivery(): void;
   onStopContinuousLocation(): void;
   recordingStopProofId: string | null;
   routeStartedEventResult: RouteStartedRecordResult | null;
+  proofBarcodeCaptureResults: Record<string, ProofBarcodeCaptureResult>;
+  proofMediaUploadResults: Record<string, ProofMediaUploadResult>;
   proofPhotoCaptureResults: Record<string, ProofPhotoCaptureResult>;
+  proofSignatureCaptureResults: Record<string, ProofSignatureCaptureResult>;
+  capturingProofBarcodeId: string | null;
   capturingProofPhotoId: string | null;
+  capturingProofSignatureId: string | null;
+  uploadingProofMediaId: string | null;
   stopProofDrafts: Record<string, StopProofDraft>;
   stopProofResults: Record<string, StopProofEventResult>;
   onUpdateStopProofDraft(deliveryStopId: string, patch: Partial<StopProofDraft>): void;
@@ -1032,14 +1187,22 @@ function AssignedRouteCard({
               isDeliveryActive={deliveryStartResult?.kind === 'delivery_active'}
               key={stop.deliveryStopId}
               onRecordStopProof={(action) => onRecordStopProof(stop, action)}
+              barcodeResult={proofBarcodeCaptureResults[stop.deliveryStopId]}
               captureResult={proofPhotoCaptureResults[stop.deliveryStopId]}
+              mediaUploadResult={proofMediaUploadResults[stop.deliveryStopId]}
+              signatureResult={proofSignatureCaptureResults[stop.deliveryStopId]}
+              capturingProofBarcodeId={capturingProofBarcodeId}
               capturingProofPhotoId={capturingProofPhotoId}
+              capturingProofSignatureId={capturingProofSignatureId}
               draft={getStopProofDraft(stopProofDrafts[stop.deliveryStopId])}
+              onCaptureProofBarcode={() => onCaptureStopProofBarcode(stop)}
               onCaptureProofPhoto={(source) => onCaptureStopProofPhoto(stop, source)}
+              onCaptureProofSignature={() => onCaptureStopProofSignature(stop)}
               onUpdateDraft={(patch) => onUpdateStopProofDraft(stop.deliveryStopId, patch)}
               recordingStopProofId={recordingStopProofId}
               stop={stop}
               stopProofResults={stopProofResults}
+              uploadingProofMediaId={uploadingProofMediaId}
             />
           ))}
         </View>
@@ -1252,36 +1415,78 @@ function formatProofPhotoCaptureResult(result: ProofPhotoCaptureResult): string 
   return result.message;
 }
 
+function formatProofMediaUploadResult(result: ProofMediaUploadResult): string {
+  if (result.kind === 'uploaded') {
+    return `Proof media uploaded: ${result.media.mediaId}`;
+  }
+
+  return result.message;
+}
+
+function formatProofSignatureCaptureResult(result: ProofSignatureCaptureResult): string {
+  if (result.kind === 'captured') {
+    return `Signature captured: ${result.signature.signatureId} (${result.signature.pointCount} points)`;
+  }
+
+  return result.message;
+}
+
+function formatProofBarcodeCaptureResult(result: ProofBarcodeCaptureResult): string {
+  if (result.kind === 'scanned') {
+    return `Barcode scanned: ${result.barcode.symbology} ${result.barcode.data}`;
+  }
+
+  return result.message;
+}
+
 function getStopProofDraft(draft?: StopProofDraft): StopProofDraft {
   return {
     failureReason: draft?.failureReason ?? 'OTHER',
     note: draft?.note ?? 'Driver proof recorded in MVP app.',
     photoUri: draft?.photoUri ?? '',
+    signaturePointCount: draft?.signaturePointCount ?? 0,
+    signerName: draft?.signerName ?? 'Recipient',
   };
 }
 
 function AssignedRouteStopCard({
+  barcodeResult,
   captureResult,
+  mediaUploadResult,
+  signatureResult,
+  capturingProofBarcodeId,
   capturingProofPhotoId,
+  capturingProofSignatureId,
   draft,
   isDeliveryActive,
+  onCaptureProofBarcode,
   onCaptureProofPhoto,
+  onCaptureProofSignature,
   onRecordStopProof,
   onUpdateDraft,
   recordingStopProofId,
   stop,
   stopProofResults,
+  uploadingProofMediaId,
 }: {
+  barcodeResult?: ProofBarcodeCaptureResult;
   captureResult?: ProofPhotoCaptureResult;
+  mediaUploadResult?: ProofMediaUploadResult;
+  signatureResult?: ProofSignatureCaptureResult;
+  capturingProofBarcodeId: string | null;
   capturingProofPhotoId: string | null;
+  capturingProofSignatureId: string | null;
   draft: StopProofDraft;
   isDeliveryActive: boolean;
+  onCaptureProofBarcode(): void;
   onCaptureProofPhoto(source: ProofPhotoCaptureSource): void;
+  onCaptureProofSignature(): void;
   onRecordStopProof(action: StopProofAction): void;
   onUpdateDraft(patch: Partial<StopProofDraft>): void;
   recordingStopProofId: string | null;
   stop: AssignedRouteStop;
   stopProofResults: Record<string, StopProofEventResult>;
+  uploadingProofMediaId: string | null;
 }) {
   const deliveredKey = `${stop.deliveryStopId}:delivered`;
   const failedKey = `${stop.deliveryStopId}:failed`;
@@ -1297,7 +1502,7 @@ function AssignedRouteStopCard({
       <Text style={styles.stopMeta}>Coordinates: {formatCoordinates(stop)}</Text>
       {isDeliveryActive ? (
         <View style={styles.stopActionPanel}>
-          <Text style={styles.stopMeta}>Proof metadata MVP: note, failure reason, and local photo URI; binary upload/signature/barcode later.</Text>
+          <Text style={styles.stopMeta}>Proof evidence: uploaded photo media, signature drawing evidence, barcode scan evidence, note, and failure reason.</Text>
           <TextInput
             onChangeText={(value) => onUpdateDraft({ note: value })}
             placeholder="Proof note"
@@ -1308,7 +1513,7 @@ function AssignedRouteStopCard({
           <TextInput
             autoCapitalize="none"
             onChangeText={(value) => onUpdateDraft({ photoUri: value })}
-            placeholder="Optional photo URI metadata"
+            placeholder="Captured photo URI before upload"
             placeholderTextColor="#94a3b8"
             style={styles.stopProofInput}
             value={draft.photoUri}
@@ -1316,6 +1521,14 @@ function AssignedRouteStopCard({
           {captureResult !== undefined ? (
             <Text style={captureResult.kind === 'captured' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
               {formatProofPhotoCaptureResult(captureResult)}
+            </Text>
+          ) : null}
+          {uploadingProofMediaId === stop.deliveryStopId ? (
+            <Text style={styles.routeHelpText}>Uploading proof media…</Text>
+          ) : null}
+          {mediaUploadResult !== undefined ? (
+            <Text style={mediaUploadResult.kind === 'uploaded' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
+              {formatProofMediaUploadResult(mediaUploadResult)}
             </Text>
           ) : null}
           <View style={styles.stopActionRow}>
@@ -1340,6 +1553,61 @@ function AssignedRouteStopCard({
               </Text>
             </Pressable>
           </View>
+          <TextInput
+            onChangeText={(value) => onUpdateDraft({ signerName: value })}
+            placeholder="Signer name"
+            placeholderTextColor="#94a3b8"
+            style={styles.stopProofInput}
+            value={draft.signerName}
+          />
+          <View
+            onTouchMove={() => onUpdateDraft({ signaturePointCount: draft.signaturePointCount + 1 })}
+            onTouchStart={() => onUpdateDraft({ signaturePointCount: draft.signaturePointCount + 1 })}
+            style={styles.signaturePad}
+          >
+            <Text style={styles.signaturePadText}>Draw signature here: {draft.signaturePointCount} captured points</Text>
+          </View>
+          <View style={styles.stopActionRow}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => onUpdateDraft({ signaturePointCount: 0 })}
+              style={styles.stopActionButton}
+            >
+              <Text style={styles.stopActionButtonText}>Clear signature</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={capturingProofSignatureId === stop.deliveryStopId}
+              onPress={onCaptureProofSignature}
+              style={[styles.stopActionButton, capturingProofSignatureId === stop.deliveryStopId && styles.buttonDisabled]}
+            >
+              <Text style={styles.stopActionButtonText}>
+                {capturingProofSignatureId === stop.deliveryStopId ? 'Capturing…' : 'Capture signature'}
+              </Text>
+            </Pressable>
+          </View>
+          {signatureResult !== undefined ? (
+            <Text style={signatureResult.kind === 'captured' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
+              {formatProofSignatureCaptureResult(signatureResult)}
+            </Text>
+          ) : null}
+          <View style={styles.stopActionRow}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={capturingProofBarcodeId === stop.deliveryStopId}
+              onPress={onCaptureProofBarcode}
+              style={[styles.stopActionButton, capturingProofBarcodeId === stop.deliveryStopId && styles.buttonDisabled]}
+            >
+              <Text style={styles.stopActionButtonText}>
+                {capturingProofBarcodeId === stop.deliveryStopId ? 'Scanning…' : 'Scan barcode'}
+              </Text>
+            </Pressable>
+          </View>
+          {barcodeResult !== undefined ? (
+            <Text style={barcodeResult.kind === 'scanned' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
+              {formatProofBarcodeCaptureResult(barcodeResult)}
+            </Text>
+          ) : null}
           <View style={styles.stopActionRow}>
             {STOP_PROOF_FAILURE_REASONS.map((reason) => (
               <Pressable
@@ -1840,6 +2108,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     paddingHorizontal: 10,
     paddingVertical: 8,
+  },
+  signaturePad: {
+    alignItems: 'center',
+    backgroundColor: '#1e293b',
+    borderColor: '#64748b',
+    borderRadius: 14,
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 92,
+    padding: 12,
+  },
+  signaturePadText: {
+    color: '#cbd5e1',
+    fontSize: 13,
+    fontWeight: '700',
   },
   reasonChip: {
     backgroundColor: '#1e293b',

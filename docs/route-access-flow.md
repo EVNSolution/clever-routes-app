@@ -20,7 +20,7 @@ The app now has an interactive route access screen for the first driver-facing f
 10. Delivery start requests foreground location permission and moves to `delivery_active` only when permission is granted.
 11. After `delivery_active`, the app records a `ROUTE_STARTED` driver event and can sync a foreground `LOCATION_UPDATED` event through the driver event API boundary.
 12. After `delivery_active`, the app can request background location permission and start/stop a named continuous location task that streams batched `LOCATION_UPDATED` events through the same driver event boundary.
-13. After `delivery_active`, each stop card can record delivered/failed proof metadata as `STOP_DELIVERED` or `STOP_FAILED`; the app captures note, failure reason, and optional local proof photo URI via native camera/library picker through the same driver event API boundary.
+13. After `delivery_active`, each stop card can record delivered/failed proof metadata as `STOP_DELIVERED` or `STOP_FAILED`; the app captures note, failure reason, uploaded photo media references, signature drawing evidence, and barcode scan evidence through proof-media and driver event API boundaries.
 14. `NO_ASSIGNED_ROUTE` and API errors stay in safe user-visible states without exposing other tenant/driver data.
 
 ## Local mock boundary
@@ -94,16 +94,59 @@ The expected response shape matches `clever-delivery-server/docs/api/driver-assi
 - `NO_ASSIGNED_ROUTE` returns a safe empty state.
 - HTTP/API failures stay in `consent_recorded` with a retry message.
 
-The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records `ROUTE_STARTED`, foreground one-shot `LOCATION_UPDATED`, continuous/background-capable `LOCATION_UPDATED`, `STOP_DELIVERED`, and `STOP_FAILED` events to `POST /driver/events` with the active driver bearer token. Stop proof currently stores metadata (`proof` payload with note/reason/source and optional local photo URI from Expo ImagePicker); binary media upload, signature drawing, barcode scanning, offline queue proof capture, and physical-device background smoke evidence remain later slices. Duplicate event responses are treated idempotently as recorded.
+The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records `ROUTE_STARTED`, foreground one-shot `LOCATION_UPDATED`, continuous/background-capable `LOCATION_UPDATED`, `STOP_DELIVERED`, and `STOP_FAILED` events to `POST /driver/events` with the active driver bearer token. Stop proof now stores metadata (`proof` payload with note/reason/source, uploaded photo media references, signature drawing evidence, and barcode scan evidence). Offline queue proof capture, production proof-media storage hardening, and physical-device background smoke evidence remain later slices. Duplicate event responses are treated idempotently as recorded.
+
+## Proof media upload boundary
+
+`src/proofMediaUpload.ts` exports `createProofMediaUploadApiClient({ baseUrl, accessToken, fetchImpl })`, which posts captured proof photos as multipart form data:
+
+```http
+POST /driver/proof-media
+Authorization: Bearer <server-issued driver JWT>
+Content-Type: multipart/form-data; boundary=...
+```
+
+Form fields:
+
+- `deliveryStopId`
+- `routePlanId`
+- `source`: `camera` or `library`
+- `file`: native photo file from Expo ImagePicker
+
+The expected success envelope returns durable media evidence:
+
+```json
+{
+  "data": {
+    "kind": "photo",
+    "mediaId": "media-1",
+    "storageKey": "driver-proof/media-1.jpg",
+    "contentType": "image/jpeg",
+    "source": "camera",
+    "uploadedAt": "2026-05-12T10:00:00.000Z",
+    "sizeBytes": 12345,
+    "sha256": "sha256-fixture"
+  },
+  "error": null
+}
+```
+
+The app includes only successfully uploaded media references in `STOP_DELIVERED` / `STOP_FAILED` proof payloads. Failed or cancelled capture/upload branches remain visible in the UI but are not converted into durable proof evidence.
+
+## Signature and barcode proof boundary
+
+`src/proofSignatureCapture.ts` records signature drawing evidence as vector metadata (`signatureId`, signer name, stroke count, point count) instead of storing raw image data in the driver event payload.
+
+`src/proofBarcodeCapture.ts` records barcode evidence (`barcodeId`, symbology, data, capturedAt) from the native scanner boundary. The Expo implementation uses `expo-camera`'s modern scanner when available on the device; unavailable or permission-denied paths stay visible and do not create proof evidence.
 
 ## Runtime API mode
 
-By default the app uses local mock services. Setting `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switches route+phone lookup to the live delivery-server `POST /driver/route-access/lookup` API. A successful `INVITED` lookup stores the returned short-lived `driverAccess` token in Expo SecureStore via `src/expoSecureDriverAccessTokenStore.ts`. The app clears denied lookup sessions and clears expired or malformed persisted token payloads before reuse. Downstream live consent, assigned-route, and driver-event API clients are built from the active route lookup token via `src/driverApiClients.ts`.
+By default the app uses local mock services. Setting `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switches route+phone lookup to the live delivery-server `POST /driver/route-access/lookup` API. A successful `INVITED` lookup stores the returned short-lived `driverAccess` token in Expo SecureStore via `src/expoSecureDriverAccessTokenStore.ts`. The app clears denied lookup sessions and clears expired or malformed persisted token payloads before reuse. Downstream live consent, assigned-route, driver-event, and proof-media API clients are built from the active route lookup token via `src/driverApiClients.ts`.
 
 The persisted payload stores only the driver token and route access identifiers required for downstream consent/assigned-route calls. It does not change the server-owned token TTL, refresh policy, tenant boundary, or route/stop authorization checks.
 
 ## Follow-up
 
 - Define release environment profiles and any server-side token refresh/re-auth UX beyond the current short-lived token TTL.
-- Add binary proof upload and native capture flows for photos, signatures, barcodes, plus offline retry/queue policy.
+- Add offline retry/queue policy for driver events and proof media, plus production proof-media storage retention/deletion evidence.
 - Add physical-device background tracking smoke evidence, production privacy disclosures, and local queue/retry policy for updates emitted while the app process cannot reach the live delivery server. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.

@@ -179,7 +179,7 @@ MVP와 확장 경계:
 - 위치 수집과 위치 이벤트 송신은 `배송 시작` 이후에만 허용한다.
 - 배송 시작 이벤트는 서버 driver event API에 `ROUTE_STARTED`로 기록한다. foreground one-shot GPS 위치 업데이트와 continuous/background-capable GPS update는 `LOCATION_UPDATED`로 전송할 수 있다.
 - `delivery_active` 이후 continuous tracking action은 background location permission과 native task availability를 확인한 뒤 named task를 시작하고, task batch를 서버 driver event API의 `LOCATION_UPDATED`로 기록한다.
-- `delivery_active` 이후 stop card에서 배송 완료/실패를 누르면 앱은 서버 driver event API에 `STOP_DELIVERED` 또는 `STOP_FAILED`를 기록한다. 현재 proof는 note, failure reason, Expo ImagePicker 기반 local photo URI metadata이며 binary media upload, native signature/barcode capture, offline queue는 후속 slice에서 다룬다.
+- `delivery_active` 이후 stop card에서 배송 완료/실패를 누르면 앱은 서버 driver event API에 `STOP_DELIVERED` 또는 `STOP_FAILED`를 기록한다. 현재 proof는 note, failure reason, Expo ImagePicker 기반 photo capture, proof media upload reference, signature drawing evidence, barcode scan evidence를 포함하며 offline queue와 production proof-media storage hardening은 후속 slice에서 다룬다.
 - 서버 compliance 기준상 driver GPS `LOCATION_UPDATED`는 위치정보 `COLLECT` 성격의 동작으로 본다.
 - 배송 시작 전에는 background location 수집을 하지 않는다.
 
@@ -362,7 +362,7 @@ unidentified
 - input data: route context, E.164 phone, consent decisions, current date/device context
 - output data: company guidance, consent record, assigned route/stop display state, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
-- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, and richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events with native photo URI capture are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads; token refresh/re-auth, binary proof media upload/native signature-barcode capture, physical-device background smoke evidence, and offline queue policy remain follow-up work
+- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, and richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events with native photo URI capture, proof media upload references, signature drawing evidence, and barcode scan evidence are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads; token refresh/re-auth, production proof-media storage hardening, physical-device background smoke evidence, and offline queue policy remain follow-up work
 
 ## 검증 초안
 
@@ -397,7 +397,7 @@ unidentified
 13. Implement background location service and continuous GPS `LOCATION_UPDATED` streaming. — completed
 14. Add richer proof-of-delivery metadata: note, photo URI metadata, failure reason taxonomy. — completed
 15. Add native proof photo URI capture from camera/library. — completed
-16. Add binary proof media upload/native capture: photo file upload, signature drawing, barcode scanning.
+16. Add binary proof media upload/native capture: photo file upload, signature drawing, barcode scanning. — completed as app-side boundary
 17. Add offline queue/retry policy for driver events and proof media.
 18. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
 19. Add context-monorepo service document once production runtime/API boundaries are confirmed.

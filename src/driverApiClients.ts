@@ -14,15 +14,24 @@ import {
   type FetchLike as DriverEventFetchLike,
 } from './driverEvents';
 import type { PersistedDriverAccess } from './driverAccessTokenStore';
+import {
+  createProofMediaUploadApiClient,
+  type FetchLike as ProofMediaUploadFetchLike,
+  type ProofMediaUploadService,
+} from './proofMediaUpload';
 import type { RouteAccessLookupResult } from './routeAccess';
 
 export type DriverApiClients = {
   assignedRouteService: AssignedRouteService;
   driverConsentService: DriverConsentService;
   driverEventService: DriverEventService;
+  proofMediaUploadService: ProofMediaUploadService;
 };
 
-export type DriverApiClientsFetchLike = AssignedRouteFetchLike & DriverConsentFetchLike & DriverEventFetchLike;
+export type DriverApiClientsFetchLike = AssignedRouteFetchLike
+  & DriverConsentFetchLike
+  & DriverEventFetchLike
+  & ProofMediaUploadFetchLike;
 
 export function createDriverApiClientsFromRouteAccess(input: {
   baseUrl: string;
@@ -65,6 +74,11 @@ function createDriverApiClientsFromAccessToken(input: {
       fetchImpl: input.fetchImpl,
     }),
     driverEventService: createDriverEventsApiClient({
+      accessToken: input.accessToken,
+      baseUrl: input.baseUrl,
+      fetchImpl: input.fetchImpl,
+    }),
+    proofMediaUploadService: createProofMediaUploadApiClient({
       accessToken: input.accessToken,
       baseUrl: input.baseUrl,
       fetchImpl: input.fetchImpl,
