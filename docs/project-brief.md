@@ -178,6 +178,7 @@ MVP와 확장 경계:
 - 앱은 이 시점부터 foreground location 권한을 요청한다. background location 권한은 foreground 권한과 active delivery UX가 검증된 뒤 단계적으로 요청한다.
 - 위치 수집과 위치 이벤트 송신은 `배송 시작` 이후에만 허용한다.
 - 배송 시작 이벤트는 서버 driver event API에 `ROUTE_STARTED`로 기록한다. foreground one-shot GPS 위치 업데이트는 `LOCATION_UPDATED`로 전송할 수 있으며, 지속/background streaming은 후속 slice에서 다룬다.
+- `delivery_active` 이후 stop card에서 배송 완료/실패를 누르면 앱은 서버 driver event API에 `STOP_DELIVERED` 또는 `STOP_FAILED`를 기록한다. 현재 proof는 텍스트 note/reason 메타데이터이며 사진/서명/바코드 proof와 offline queue는 후속 slice에서 다룬다.
 - 서버 compliance 기준상 driver GPS `LOCATION_UPDATED`는 위치정보 `COLLECT` 성격의 동작으로 본다.
 - 배송 시작 전에는 background location 수집을 하지 않는다.
 
@@ -245,7 +246,7 @@ unidentified
 - consent record: consent type, consent version, driver identity, timestamp, device/app context를 서버에 기록한다.
 - assigned route read: shop/shopDomain tenant boundary와 assigned driver boundary 안에서만 shop/route timezone 기준 당일 route summary와 stop list를 반환한다.
 - stop detail read: 배송 준비에 필요한 주소/순서/지도 이동 정보를 반환하되 다른 driver route 접근은 차단한다.
-- driver event/location update: `배송 시작` 이후 foreground/background 위치 이벤트와 delivery status event를 수집한다.
+- driver event/location update: `배송 시작` 이후 foreground/background 위치 이벤트와 route/stop delivery status event를 수집한다.
 - access/usage logging: route/stop read는 위치정보 `PROVIDE`, GPS update는 위치정보 `COLLECT`로 분류할 수 있도록 서버 compliance log와 맞춘다.
 
 ## 구현 계획 v0
@@ -360,7 +361,7 @@ unidentified
 - input data: route context, E.164 phone, consent decisions, current date/device context
 - output data: company guidance, consent record, assigned route/stop display state, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
-- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, and foreground `LOCATION_UPDATED` event are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads; stop detail/actions, token refresh/re-auth, continuous GPS streaming/background location, and proof-of-delivery remain follow-up work
+- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground `LOCATION_UPDATED` event, and text-only `STOP_DELIVERED`/`STOP_FAILED` proof events are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads; token refresh/re-auth, continuous GPS streaming/background location, rich proof media capture, and offline queue policy remain follow-up work
 
 ## 검증 초안
 
@@ -388,8 +389,10 @@ unidentified
 6. Implement driver access token handoff. — completed
 7. Implement real environment/base URL switch. — completed
 8. Implement secure token persistence/expiry handling. — completed in this slice
-9. Implement delivery-active foreground location permission slice. — current slice
-10. Implement route-started driver event after delivery_active. — current slice
-11. Implement foreground `LOCATION_UPDATED` event after delivery_active. — current slice
-12. Implement stop actions, proof-of-delivery, background location service, and continuous GPS `LOCATION_UPDATED` streaming.
-13. Add context-monorepo service document once production runtime/API boundaries are confirmed.
+9. Implement delivery-active foreground location permission slice. — completed
+10. Implement route-started driver event after delivery_active. — completed
+11. Implement foreground `LOCATION_UPDATED` event after delivery_active. — completed
+12. Implement text-only stop delivered/failed proof events after delivery_active. — current slice
+13. Implement background location service and continuous GPS `LOCATION_UPDATED` streaming.
+14. Add rich proof-of-delivery capture: photo/signature/barcode, failure reason taxonomy, offline queue/retry policy.
+15. Add context-monorepo service document once production runtime/API boundaries are confirmed.

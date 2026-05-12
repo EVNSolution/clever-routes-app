@@ -16,6 +16,7 @@ export type DriverEventInput = {
   latitude?: number | null;
   longitude?: number | null;
   occurredAt: Date;
+  payload?: Record<string, unknown>;
   routePlanId?: string | null;
 };
 
@@ -128,6 +129,7 @@ function toDriverEventRequestBody(event: DriverEventInput): Record<string, unkno
     ...(event.latitude === undefined ? {} : { latitude: event.latitude }),
     ...(event.longitude === undefined ? {} : { longitude: event.longitude }),
     occurredAt: event.occurredAt.toISOString(),
+    ...(event.payload === undefined ? {} : event.payload),
     ...(event.routePlanId === undefined ? {} : { routePlanId: event.routePlanId }),
   };
 }

@@ -36,6 +36,11 @@ import {
   type ForegroundLocationUpdateResult,
 } from './src/foregroundLocationEvent';
 import {
+  recordStopProofEventAfterDeliveryStart,
+  type StopProofAction,
+  type StopProofEventResult,
+} from './src/stopProofEvents';
+import {
   canEnterDeliveryActive,
   canRevealRouteDetails,
   DRIVER_FLOW_STATES,
@@ -83,12 +88,14 @@ export default function App() {
   const [deliveryStartResult, setDeliveryStartResult] = useState<DeliveryStartResult | null>(null);
   const [routeStartedEventResult, setRouteStartedEventResult] = useState<RouteStartedRecordResult | null>(null);
   const [locationUpdateResult, setLocationUpdateResult] = useState<ForegroundLocationUpdateResult | null>(null);
+  const [stopProofResults, setStopProofResults] = useState<Record<string, StopProofEventResult>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecordingConsent, setIsRecordingConsent] = useState(false);
   const [isLoadingAssignedRoute, setIsLoadingAssignedRoute] = useState(false);
   const [isStartingDelivery, setIsStartingDelivery] = useState(false);
   const [isRecordingRouteStarted, setIsRecordingRouteStarted] = useState(false);
   const [isRecordingLocationUpdate, setIsRecordingLocationUpdate] = useState(false);
+  const [recordingStopProofId, setRecordingStopProofId] = useState<string | null>(null);
   const [driverAccessRestoreStatus, setDriverAccessRestoreStatus] = useState<DriverAccessRestoreResult['kind']>('missing');
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
@@ -181,8 +188,7 @@ export default function App() {
     setDeliveryStartResult(null);
     setRouteStartedEventResult(null);
     setLocationUpdateResult(null);
-    setLocationUpdateResult(null);
-    setRouteStartedEventResult(null);
+    setStopProofResults({});
     try {
       const result = await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService);
       setSubmission(result);
@@ -298,6 +304,39 @@ export default function App() {
     }
   }
 
+
+  async function handleRecordStopProof(stop: AssignedRouteStop, action: StopProofAction) {
+    const effectiveDeliveryStart: DeliveryStartResult = deliveryStartResult ?? {
+      flowState: 'route_ready',
+      kind: 'permission_denied',
+      reason: 'foreground_location_denied',
+      message: 'Delivery must be active before recording stop proof.',
+    };
+    const proofKey = `${stop.deliveryStopId}:${action}`;
+
+    setRecordingStopProofId(proofKey);
+    try {
+      const result = await recordStopProofEventAfterDeliveryStart({
+        deliveryStart: effectiveDeliveryStart,
+        driverEventService: getDriverEventServiceForCurrentSubmission({
+          driverEventService,
+          runtimeConfig,
+          submission,
+        }),
+        input: {
+          action,
+          deliveryStopId: stop.deliveryStopId,
+          note: action === 'delivered' ? 'Driver marked delivered in MVP app.' : 'Driver marked failed in MVP app.',
+          reason: action === 'failed' ? 'OTHER' : undefined,
+          routePlanId: assignedRouteSubmission?.kind === 'route_ready' ? assignedRouteSubmission.route.id : '',
+        },
+      });
+      setStopProofResults((current) => ({ ...current, [proofKey]: result }));
+    } finally {
+      setRecordingStopProofId(null);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
@@ -362,8 +401,11 @@ export default function App() {
             onRecordConsent={handleRecordConsent}
             onRecordLocationUpdate={handleRecordLocationUpdate}
             onStartDelivery={handleStartDelivery}
+            onRecordStopProof={handleRecordStopProof}
             result={submission}
+            recordingStopProofId={recordingStopProofId}
             routeStartedEventResult={routeStartedEventResult}
+            stopProofResults={stopProofResults}
             setAssignedRouteMockMode={setAssignedRouteMockMode}
             setConsentMockMode={setConsentMockMode}
           />
@@ -570,8 +612,11 @@ function RouteAccessResultCard({
   onRecordConsent,
   onRecordLocationUpdate,
   onStartDelivery,
+  onRecordStopProof,
   result,
+  recordingStopProofId,
   routeStartedEventResult,
+  stopProofResults,
   setAssignedRouteMockMode,
   setConsentMockMode,
 }: {
@@ -590,8 +635,11 @@ function RouteAccessResultCard({
   onRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
   onRecordLocationUpdate(): void;
   onStartDelivery(): void;
+  onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
   result: RouteAccessSubmissionResult;
+  recordingStopProofId: string | null;
   routeStartedEventResult: RouteStartedRecordResult | null;
+  stopProofResults: Record<string, StopProofEventResult>;
   setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
   setConsentMockMode(value: ConsentMockMode): void;
 }) {
@@ -651,8 +699,11 @@ function RouteAccessResultCard({
           locationUpdateResult={locationUpdateResult}
           onLoadAssignedRoute={() => onLoadAssignedRoute(result.routeAccess)}
           onRecordLocationUpdate={onRecordLocationUpdate}
+          onRecordStopProof={onRecordStopProof}
           onStartDelivery={onStartDelivery}
+          recordingStopProofId={recordingStopProofId}
           routeStartedEventResult={routeStartedEventResult}
+          stopProofResults={stopProofResults}
           setAssignedRouteMockMode={setAssignedRouteMockMode}
         />
       ) : null}
@@ -748,8 +799,11 @@ function AssignedRouteCard({
   locationUpdateResult,
   onLoadAssignedRoute,
   onRecordLocationUpdate,
+  onRecordStopProof,
   onStartDelivery,
+  recordingStopProofId,
   routeStartedEventResult,
+  stopProofResults,
   setAssignedRouteMockMode,
 }: {
   assignedRouteMockMode: AssignedRouteMockMode;
@@ -762,8 +816,11 @@ function AssignedRouteCard({
   locationUpdateResult: ForegroundLocationUpdateResult | null;
   onLoadAssignedRoute(): void;
   onRecordLocationUpdate(): void;
+  onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
   onStartDelivery(): void;
+  recordingStopProofId: string | null;
   routeStartedEventResult: RouteStartedRecordResult | null;
+  stopProofResults: Record<string, StopProofEventResult>;
   setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
 }) {
   return (
@@ -789,7 +846,14 @@ function AssignedRouteCard({
           <InfoRow label="Shop" value={assignedRouteResult.route.shopDomain} />
           <InfoRow label="Timezone" value={assignedRouteResult.route.timezone} />
           {assignedRouteResult.route.stops.map((stop) => (
-            <AssignedRouteStopCard key={stop.deliveryStopId} stop={stop} />
+            <AssignedRouteStopCard
+              isDeliveryActive={deliveryStartResult?.kind === 'delivery_active'}
+              key={stop.deliveryStopId}
+              onRecordStopProof={(action) => onRecordStopProof(stop, action)}
+              recordingStopProofId={recordingStopProofId}
+              stop={stop}
+              stopProofResults={stopProofResults}
+            />
           ))}
         </View>
       ) : null}
@@ -928,7 +992,23 @@ function AssignedRouteMockModePicker({
   );
 }
 
-function AssignedRouteStopCard({ stop }: { stop: AssignedRouteStop }) {
+function AssignedRouteStopCard({
+  isDeliveryActive,
+  onRecordStopProof,
+  recordingStopProofId,
+  stop,
+  stopProofResults,
+}: {
+  isDeliveryActive: boolean;
+  onRecordStopProof(action: StopProofAction): void;
+  recordingStopProofId: string | null;
+  stop: AssignedRouteStop;
+  stopProofResults: Record<string, StopProofEventResult>;
+}) {
+  const deliveredKey = `${stop.deliveryStopId}:delivered`;
+  const failedKey = `${stop.deliveryStopId}:failed`;
+  const deliveredResult = stopProofResults[deliveredKey];
+  const failedResult = stopProofResults[failedKey];
   return (
     <View style={styles.stopCard}>
       <Text style={styles.stopSequence}>Stop {stop.sequence}</Text>
@@ -937,6 +1017,39 @@ function AssignedRouteStopCard({ stop }: { stop: AssignedRouteStop }) {
       <Text style={styles.stopBody}>{formatStopAddress(stop)}</Text>
       <Text style={styles.stopMeta}>Phone: {stop.phone ?? 'Contact dispatch'}</Text>
       <Text style={styles.stopMeta}>Coordinates: {formatCoordinates(stop)}</Text>
+      {isDeliveryActive ? (
+        <View style={styles.stopActionPanel}>
+          <Text style={styles.stopMeta}>Proof note MVP: text-only event metadata; photo/signature later.</Text>
+          {deliveredResult?.kind === 'recorded' ? (
+            <Text style={styles.deliveryStartSuccessText}>Delivered event: {deliveredResult.eventId}</Text>
+          ) : null}
+          {failedResult?.kind === 'recorded' ? (
+            <Text style={styles.routeWarningText}>Failed event: {failedResult.eventId}</Text>
+          ) : null}
+          <View style={styles.stopActionRow}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={recordingStopProofId === deliveredKey}
+              onPress={() => onRecordStopProof('delivered')}
+              style={[styles.stopActionButton, recordingStopProofId === deliveredKey && styles.buttonDisabled]}
+            >
+              <Text style={styles.stopActionButtonText}>
+                {recordingStopProofId === deliveredKey ? 'Recording…' : 'Mark delivered'}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={recordingStopProofId === failedKey}
+              onPress={() => onRecordStopProof('failed')}
+              style={[styles.stopActionDangerButton, recordingStopProofId === failedKey && styles.buttonDisabled]}
+            >
+              <Text style={styles.stopActionButtonText}>
+                {recordingStopProofId === failedKey ? 'Recording…' : 'Mark failed'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1354,6 +1467,37 @@ const styles = StyleSheet.create({
     color: '#cbd5e1',
     fontSize: 12,
     fontWeight: '700',
+  },
+  stopActionPanel: {
+    backgroundColor: '#0f172a',
+    borderColor: '#334155',
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 8,
+    marginTop: 8,
+    padding: 10,
+  },
+  stopActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  stopActionButton: {
+    backgroundColor: '#16a34a',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  stopActionDangerButton: {
+    backgroundColor: '#dc2626',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  stopActionButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
   },
   guardPanel: {
     backgroundColor: '#ffffff',
