@@ -99,6 +99,7 @@ Result values: `pass`, `fail`, `blocked`, or `not-run`.
 | Every physical-device smoke row has iPhone and Android evidence | pending | pending |
 | Store/private distribution path approved | pending | pending |
 | Privacy disclosure copy approved | pending | pending |
+| Local native release preflight passes | pending | Run `npm run check:native-release` from the source commit before EAS builds |
 | EAS build records point to committed source | pending | pending |
 | Generated artifacts and sensitive evidence kept outside git | pending | pending |
 | Follow-up blockers filed as GitHub issues | pending | See issue map below |

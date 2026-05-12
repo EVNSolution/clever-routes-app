@@ -24,6 +24,7 @@ This document records the repo baseline for the `clever-driver-app` implementati
 | `npm run typecheck` | Run TypeScript without emitting build outputs |
 | `npm run lint` | Run Expo ESLint config |
 | `npm run check:workspace` | Run typecheck and tests together |
+| `npm run check:native-release` | Validate source-controlled Expo/EAS identity, permission, profile, and public runtime env release preflight gates |
 | `npm run build` | Export Android and iOS JS bundles to ignored `dist/` folders |
 
 ## Native build profiles
@@ -39,6 +40,8 @@ The EAS config intentionally does not commit Expo project IDs, Apple/Google cred
 
 `eas.json` sets `cli.requireCommit=true` to bind native build evidence to committed source. It also sets `cli.appVersionSource=remote`; `app.json` keeps initial `ios.buildNumber` and `android.versionCode` at `1` so the first remote version sync has a clear baseline, while production builds use `autoIncrement`.
 
+`npm run check:native-release` must pass before EAS build evidence or release-sensitive PRs. This preflight is intentionally source-controlled and secret-free: it checks bundle/package identity, native version pins, permission plugin copy, preview/production profile shape, and `.env.example` coverage. It does not prove Expo/EAS project ownership, Apple/Google signing authority, store/private distribution approval, privacy copy approval, or the public license decision.
+
 ## Ignore policy reviewed
 
 `.gitignore` is configured to keep generated or sensitive local state out of git:
@@ -49,7 +52,7 @@ The EAS config intentionally does not commit Expo project IDs, Apple/Google cred
 - build/test/compiler outputs: `dist/`, `build/`, `coverage/`, `.cache/`, `.metro-cache/`, `*.tsbuildinfo`
 - Expo/React Native local output: `.expo/`, `.expo-shared/`, `.eas/`, `web-build/`, `*.jsbundle`
 - generated native build/tooling output: root/Android Gradle folders, Android `.cxx`, app build/captures/local properties, iOS build/DerivedData/Pods/xcuserdata state, heap profiles
-- mobile signing artifacts and binaries: `*.apk`, `*.aab`, `*.ipa`, `*.dSYM/`, `*.keystore`, `*.jks`, `*.p8`, `*.p12`, `*.mobileprovision`, `*.cer`, `*.pem`
+- mobile signing artifacts, store credentials, and binaries: `*.apk`, `*.apks`, `*.aab`, `*.ipa`, `*.dSYM/`, `credentials.json`, `eas-credentials.json`, `google-play-service-account*.json`, `app-store-connect-api-key*.json`, `*.keystore`, `*.jks`, `*.p8`, `*.p12`, `*.mobileprovision`, `*.cer`, `*.pem`
 - release/physical-device smoke evidence artifacts: `evidence/`, `release-evidence/`, `smoke-evidence/`, matching `docs/*evidence/` folders, completed `release-evidence-manifest-*.md` copies, and `clever-driver-*` screenshot/video/log files generated from `docs/physical-device-smoke-runbook.md`
 - OS/editor noise: `.DS_Store`, `Thumbs.db`, `.idea/`, `.vscode/`
 
@@ -69,6 +72,7 @@ Before opening an implementation PR, re-check these repo baseline files together
 - `package.json` / `package-lock.json`: scripts, Node floor, Expo SDK dependencies, and audit overrides match the implementation.
 - `app.json`: bundle/package identifiers, native build versions, permission copy, plugins, background-location settings, and static project/bootstrap issue metadata match the current native capability slice.
 - `eas.json`: preview/internal and production/store profile settings, EAS environment names, require-commit policy, and app version source match the release evidence plan.
+- `npm run check:native-release`: local native release config preflight passes, while external owner-controlled blockers remain tracked in `docs/release-readiness.md`.
 - `.github/PULL_REQUEST_TEMPLATE.md`: target issue, change-control issue, concurrent-work gate, validation evidence, and context/wiki completion fields are filled before issue closure.
 - `CONTRIBUTING.md` and `SECURITY.md`: human workflow, security/privacy reporting, sensitive evidence handling, and generated-file guardrails stay current.
 - `docs/release-readiness.md`: physical-device smoke matrix, store/privacy disclosure checklist, and release blockers match current runtime behavior.

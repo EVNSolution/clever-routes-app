@@ -79,6 +79,7 @@ npm run check:workspace
 npm run lint
 npm run typecheck
 npm run test
+npm run check:native-release
 npm run build
 npm audit --audit-level=moderate
 npx expo install --check
@@ -93,9 +94,11 @@ npx eas-cli build --platform ios --profile preview
 npx eas-cli build --platform all --profile production
 ```
 
+Run `npm run check:native-release` before EAS builds or release PRs. It validates source-controlled Expo/EAS identity, permission, profile, and public runtime env baseline only; owner-controlled Expo/EAS project values, Apple/Google signing authority, store/private distribution approval, privacy copy, and license decisions remain external release blockers.
+
 Preview builds are for internal physical-device evidence collection. Production builds are store/TestFlight/Play candidates and require owner-controlled Expo, Apple, Google, signing, and environment-variable setup before execution.
 
-Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`, generated outputs and physical-device evidence artifacts remain ignored, and `.env.example` still documents every public runtime env key used by the app.
+Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`, generated outputs and physical-device evidence artifacts remain ignored, `.env.example` still documents every public runtime env key used by the app, and `npm run check:native-release` passes for release-sensitive config changes.
 
 ## Documentation map
 

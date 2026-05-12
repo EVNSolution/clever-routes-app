@@ -46,6 +46,9 @@
 ## Context/wiki completion
 
 - repo docs checked:
+  - `.gitignore`
+  - `.env.example`
+  - `app.json` / `eas.json`
   - `README.md`
   - `docs/project-brief.md`
   - `docs/repository-setup.md`

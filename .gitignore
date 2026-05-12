@@ -42,12 +42,14 @@ android/local.properties
 ios/build/
 ios/DerivedData/
 ios/Pods/
+ios/.xcode.env.local
 ios/**/*.xcuserdata/
 ios/**/*.xcuserstate
 *.hprof
 
 # Native mobile build artifacts
 *.apk
+*.apks
 *.aab
 *.ipa
 *.app
@@ -70,6 +72,10 @@ clever-driver-*.mov
 clever-driver-*.txt
 
 # Mobile signing and provisioning secrets
+credentials.json
+eas-credentials.json
+google-play-service-account*.json
+app-store-connect-api-key*.json
 *.keystore
 *.jks
 *.p8
