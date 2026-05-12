@@ -188,13 +188,12 @@ The app includes only successfully uploaded media references in `STOP_DELIVERED`
 
 ## Runtime API mode
 
-By default the app uses local mock services. Setting `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switches route+phone lookup to the live delivery-server `POST /driver/route-access/lookup` API. A successful `INVITED` lookup stores the returned short-lived `driverAccess` token in Expo SecureStore via `src/expoSecureDriverAccessTokenStore.ts`. The app clears denied lookup sessions and clears expired or malformed persisted token payloads before reuse. Downstream live consent, assigned-route, driver-event, and proof-media API clients are built from the active route lookup token via `src/driverApiClients.ts`.
+By default the app uses local mock services. Setting `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switches route+phone lookup to the live delivery-server `POST /driver/route-access/lookup` API. The delivery server now supports both exact route-plan UUID contexts and shared company/route-scope contexts that can return `MULTIPLE_MATCHES`; the app treats ambiguous responses as display-only guidance and does not continue to consent, assigned-route, event, or proof-media calls until a route-specific `INVITED` response supplies driver access. A successful `INVITED` lookup stores the returned short-lived `driverAccess` token in Expo SecureStore via `src/expoSecureDriverAccessTokenStore.ts`. The app clears denied lookup sessions and clears expired or malformed persisted token payloads before reuse. Downstream live consent, assigned-route, driver-event, and proof-media API clients are built from the active route lookup token via `src/driverApiClients.ts`.
 
 The persisted payload stores only the driver token and route access identifiers required for downstream consent/assigned-route calls. It does not change the server-owned token TTL, refresh policy, tenant boundary, or route/stop authorization checks.
 
 ## Follow-up
 
-- Sync `clever-delivery-server/docs/api/driver-route-access.md` and server implementation for `MULTIPLE_MATCHES` if the backend introduces shared company/route access codes. The current server UUID `RoutePlan.id` context can remain a single-match or `NOT_FOUND` path.
 - Define release environment profiles and any server-side token refresh/re-auth UX beyond the current short-lived token TTL.
 - Add production proof-media object storage, signed access, malware scanning/private evidence storage, and deployed cleanup/scheduler evidence. The delivery server already exposes a local/manual cleanup runner via `npm run driver:proof-media:cleanup`.
 - Add physical-device background tracking smoke evidence and production privacy disclosures for updates emitted while the app process cannot reach the live delivery server. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.
