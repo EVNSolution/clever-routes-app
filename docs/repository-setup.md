@@ -50,7 +50,7 @@ The EAS config intentionally does not commit Expo project IDs, Apple/Google cred
 - Expo/React Native local output: `.expo/`, `.expo-shared/`, `.eas/`, `web-build/`, `*.jsbundle`
 - generated native build/tooling output: root/Android Gradle folders, Android `.cxx`, app build/captures/local properties, iOS build/DerivedData/Pods/xcuserdata state, heap profiles
 - mobile signing artifacts and binaries: `*.apk`, `*.aab`, `*.ipa`, `*.dSYM/`, `*.keystore`, `*.jks`, `*.p8`, `*.p12`, `*.mobileprovision`, `*.cer`, `*.pem`
-- release/physical-device smoke evidence artifacts: `evidence/`, `release-evidence/`, `smoke-evidence/`, matching `docs/*evidence/` folders, and `clever-driver-*` screenshot/video/log files generated from `docs/physical-device-smoke-runbook.md`
+- release/physical-device smoke evidence artifacts: `evidence/`, `release-evidence/`, `smoke-evidence/`, matching `docs/*evidence/` folders, completed `release-evidence-manifest-*.md` copies, and `clever-driver-*` screenshot/video/log files generated from `docs/physical-device-smoke-runbook.md`
 - OS/editor noise: `.DS_Store`, `Thumbs.db`, `.idea/`, `.vscode/`
 
 Generated `android/` and `ios/` source directories are not globally ignored. If this app later adopts Expo prebuild or bare native customization, generated native source can be intentionally reviewed and committed while build outputs remain ignored.

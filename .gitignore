@@ -60,6 +60,8 @@ smoke-evidence/
 docs/evidence/
 docs/release-evidence/
 docs/smoke-evidence/
+release-evidence-manifest-*.md
+docs/release-evidence-manifest-*.md
 clever-driver-*.png
 clever-driver-*.jpg
 clever-driver-*.jpeg

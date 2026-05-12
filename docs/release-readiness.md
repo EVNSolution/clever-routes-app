@@ -27,7 +27,7 @@ The native binary build path uses Expo EAS profiles:
 
 ## Physical-device smoke matrix
 
-Before production release, capture evidence on at least one real iPhone and one real Android phone. Use synthetic driver/route data unless production validation is explicitly approved. Execute `docs/physical-device-smoke-runbook.md` for the step order, evidence naming, and external storage rules.
+Before production release, capture evidence on at least one real iPhone and one real Android phone. Use synthetic driver/route data unless production validation is explicitly approved. Execute `docs/physical-device-smoke-runbook.md` for the step order, evidence naming, and external storage rules. Copy `docs/release-evidence-manifest.template.md` into the external evidence store for the release candidate and fill it there; do not commit completed evidence manifests.
 
 | Area | iPhone evidence | Android evidence | Notes |
 | --- | --- | --- | --- |
@@ -68,6 +68,7 @@ See `docs/store-privacy-disclosure-draft.md` for the current non-final App Store
 - Keep screenshots/videos/logs in the approved external evidence location; issues and PRs should contain only sanitized references.
 - Do not commit large binary evidence, generated app bundles, signing artifacts, or production PII to this repo.
 - If an evidence artifact is necessary but sensitive, reference the private storage location in the change-control issue instead of committing it.
+- Completed copies of `docs/release-evidence-manifest.template.md` belong in the external evidence store, not in git.
 
 ## Release blockers still open
 
