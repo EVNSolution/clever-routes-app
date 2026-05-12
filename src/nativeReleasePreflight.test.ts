@@ -71,3 +71,41 @@ test('native release preflight reports release-blocking config gaps without secr
     }
   ]);
 });
+
+test('native release preflight rejects accidental Android Contacts permission declarations', () => {
+  const input = currentInput();
+  const expo = input.appConfig.expo;
+  assert.ok(expo);
+  assert.ok(expo.android);
+  (expo.android as Record<string, unknown>).permissions = ['android.permission.READ_CONTACTS'];
+
+  const result = runNativeReleasePreflight(input);
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.failures, [
+    {
+      id: 'expo.permissions',
+      message: 'Contacts/address-book permissions must stay absent from the driver app native config.'
+    }
+  ]);
+});
+
+test('native release preflight rejects accidental iOS Contacts usage descriptions', () => {
+  const input = currentInput();
+  const expo = input.appConfig.expo;
+  assert.ok(expo);
+  assert.ok(expo.ios);
+  (expo.ios as Record<string, unknown>).infoPlist = {
+    NSContactsUsageDescription: 'Allow Clever Driver to read contacts.'
+  };
+
+  const result = runNativeReleasePreflight(input);
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.failures, [
+    {
+      id: 'expo.permissions',
+      message: 'Contacts/address-book permissions must stay absent from the driver app native config.'
+    }
+  ]);
+});

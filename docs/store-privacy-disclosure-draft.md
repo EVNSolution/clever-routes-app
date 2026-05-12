@@ -124,11 +124,13 @@ Required evidence before submission:
 
 The current driver access model intentionally uses manual route context plus
 manual E.164 phone entry. It does not need address-book lookup, contact import,
-or call-log/SMS permissions. Store evidence should include a native manifest
-check showing no Contacts permissions are present. If a future support feature
-needs contact selection, open a new issue first and prefer the minimum-scope
-system contact picker or equivalent alternative instead of broad Contacts
-permission.
+or call-log/SMS permissions. `npm run check:native-release` rejects
+source-controlled Android Contacts permissions and iOS Contacts usage
+descriptions before EAS evidence builds. Store evidence should still include a
+native manifest check showing no Contacts permissions are present. If a future
+support feature needs contact selection, open a new issue first and prefer the
+minimum-scope system contact picker or equivalent alternative instead of broad
+Contacts permission.
 
 ## Pre-submission blockers
 
