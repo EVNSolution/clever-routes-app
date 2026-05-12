@@ -32,6 +32,12 @@ This document records the repo baseline for the `clever-driver-app` implementati
 
 ## Continuous integration
 
+`.github/ISSUE_TEMPLATE/` contains release evidence intake forms for
+physical-device smoke and native build/store/privacy approval issues. The forms
+point to the external evidence manifests/runbooks and explicitly forbid pasting
+private artifacts, signing material, screenshots, videos, secrets, raw PII, or
+completed manifests into GitHub.
+
 `.github/workflows/ci.yml` runs on pull requests to `dev`/`main` and pushes to
 `dev`/`main`. The workflow uses the Node version from `.nvmrc`, installs from
 `package-lock.json` with `npm ci`, then runs the same source-controlled gates
