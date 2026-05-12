@@ -91,7 +91,7 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 - Background location use: only after delivery start and only when native background tracking is enabled.
 - Camera/photos: proof-of-delivery photo capture/upload.
 - Camera barcode scanning: proof barcode capture when available.
-- Contacts/address book: current app uses manual route context plus manual E.164 phone entry and should not request Contacts permissions unless a future owner-approved feature changes that.
+- Contacts/address book: current app uses manual route context plus manual E.164 phone entry and should not request Contacts permissions unless a future owner-approved feature changes that. `npm run check:native-release` rejects source-controlled Android Contacts permissions or iOS Contacts usage descriptions before EAS evidence builds.
 - Driver identifiers: route context, phone lookup, server-issued driver access token, route assignment identifiers.
 - Proof media: photo file, signature metadata, barcode metadata, and related stop/route identifiers.
 - Offline queue: non-secret retry metadata and file URI references retained locally until retry/discard policy runs.

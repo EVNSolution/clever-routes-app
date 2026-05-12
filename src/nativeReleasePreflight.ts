@@ -24,12 +24,14 @@ export type NativeReleasePreflightInput = {
       android?: {
         edgeToEdgeEnabled?: boolean;
         package?: string;
+        permissions?: string[];
         versionCode?: number;
       };
       extra?: Record<string, unknown>;
       ios?: {
         buildNumber?: string;
         bundleIdentifier?: string;
+        infoPlist?: Record<string, unknown>;
         supportsTablet?: boolean;
       };
       plugins?: unknown[];
@@ -53,6 +55,15 @@ export type NativeReleasePreflightInput = {
   };
   envExample: string;
 };
+
+const FORBIDDEN_CONTACTS_ANDROID_PERMISSIONS = new Set([
+  'GET_ACCOUNTS',
+  'READ_CONTACTS',
+  'WRITE_CONTACTS'
+]);
+const FORBIDDEN_CONTACTS_IOS_INFO_PLIST_KEYS = new Set([
+  'NSContactsUsageDescription'
+]);
 
 export function runNativeReleasePreflight(input: NativeReleasePreflightInput): NativeReleasePreflightResult {
   const checks = [
@@ -161,8 +172,27 @@ function checkExpoPermissions(appConfig: NativeReleasePreflightInput['appConfig'
   if (!plugins.includes('expo-secure-store')) {
     return fail('expo.permissions', 'expo-secure-store plugin is required for native driver token storage.');
   }
+  if (hasForbiddenContactsAndroidPermission(appConfig.expo?.android?.permissions)) {
+    return fail('expo.permissions', 'Contacts/address-book permissions must stay absent from the driver app native config.');
+  }
+  if (hasForbiddenContactsIosInfoPlistKey(appConfig.expo?.ios?.infoPlist)) {
+    return fail('expo.permissions', 'Contacts/address-book permissions must stay absent from the driver app native config.');
+  }
 
   return pass('expo.permissions', 'Native location, camera, photo, scanner, and secure storage permissions are declared.');
+}
+
+function hasForbiddenContactsAndroidPermission(permissions: string[] | undefined): boolean {
+  return (
+    permissions?.some((permission) => {
+      const normalizedPermission = permission.trim().toUpperCase().replace(/^ANDROID\.PERMISSION\./u, '');
+      return FORBIDDEN_CONTACTS_ANDROID_PERMISSIONS.has(normalizedPermission);
+    }) ?? false
+  );
+}
+
+function hasForbiddenContactsIosInfoPlistKey(infoPlist: Record<string, unknown> | undefined): boolean {
+  return Object.keys(infoPlist ?? {}).some((key) => FORBIDDEN_CONTACTS_IOS_INFO_PLIST_KEYS.has(key));
 }
 
 function checkEasPreview(easConfig: NativeReleasePreflightInput['easConfig']): NativeReleasePreflightCheck {
