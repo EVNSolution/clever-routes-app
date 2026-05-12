@@ -2,13 +2,15 @@ import type { DeliveryStartResult } from './deliveryStart';
 import type { DriverEventRecordResult, DriverEventService, DriverEventType } from './driverEvents';
 
 export type StopProofAction = 'delivered' | 'failed';
+export type StopProofFailureReason = 'CUSTOMER_UNAVAILABLE' | 'DAMAGED' | 'INACCESSIBLE' | 'OTHER';
 
 export type StopProofEventInput = {
   action: StopProofAction;
   deliveryStopId: string;
   note: string;
   occurredAt?: Date;
-  reason?: 'CUSTOMER_UNAVAILABLE' | 'DAMAGED' | 'INACCESSIBLE' | 'OTHER';
+  photoUris?: string[];
+  reason?: StopProofFailureReason;
   routePlanId: string;
 };
 
@@ -46,8 +48,11 @@ function getStopProofEventType(action: StopProofAction): Extract<DriverEventType
 }
 
 function getStopProofPayload(input: StopProofEventInput): Record<string, unknown> {
+  const media = getProofMedia(input.photoUris ?? []);
+
   if (input.action === 'delivered') {
     return {
+      ...(media.length === 0 ? {} : { media }),
       note: input.note,
       source: 'driver-app-mvp',
       type: 'DELIVERED_NOTE',
@@ -55,11 +60,19 @@ function getStopProofPayload(input: StopProofEventInput): Record<string, unknown
   }
 
   return {
+    ...(media.length === 0 ? {} : { media }),
     note: input.note,
     reason: input.reason ?? 'OTHER',
     source: 'driver-app-mvp',
     type: 'FAILED_REASON',
   };
+}
+
+function getProofMedia(photoUris: string[]): { kind: 'photo'; uri: string }[] {
+  return photoUris
+    .map((uri) => uri.trim())
+    .filter((uri) => uri.length > 0)
+    .map((uri) => ({ kind: 'photo', uri }));
 }
 
 function createClientEventId(prefix: string): string {

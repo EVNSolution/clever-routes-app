@@ -46,6 +46,7 @@ import {
   recordStopProofEventAfterDeliveryStart,
   type StopProofAction,
   type StopProofEventResult,
+  type StopProofFailureReason,
 } from './src/stopProofEvents';
 import {
   canEnterDeliveryActive,
@@ -86,6 +87,13 @@ const SAMPLE_PHONE_E164 = '+14165550123';
 type MockMode = RouteAccessLookupResult['status'];
 type ConsentMockMode = 'success' | 'failure';
 type AssignedRouteMockMode = 'assigned' | 'failure' | 'none';
+type StopProofDraft = {
+  failureReason: StopProofFailureReason;
+  note: string;
+  photoUri: string;
+};
+
+const STOP_PROOF_FAILURE_REASONS: StopProofFailureReason[] = ['CUSTOMER_UNAVAILABLE', 'DAMAGED', 'INACCESSIBLE', 'OTHER'];
 
 export default function App() {
   const [routeContext, setRouteContext] = useState(sampleInvitedRouteAccess.routeAccess.routeContext);
@@ -101,6 +109,7 @@ export default function App() {
   const [locationUpdateResult, setLocationUpdateResult] = useState<ForegroundLocationUpdateResult | null>(null);
   const [continuousLocationResult, setContinuousLocationResult] = useState<ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null>(null);
   const [stopProofResults, setStopProofResults] = useState<Record<string, StopProofEventResult>>({});
+  const [stopProofDrafts, setStopProofDrafts] = useState<Record<string, StopProofDraft>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecordingConsent, setIsRecordingConsent] = useState(false);
   const [isLoadingAssignedRoute, setIsLoadingAssignedRoute] = useState(false);
@@ -230,6 +239,7 @@ export default function App() {
     setLocationUpdateResult(null);
     setContinuousLocationResult(null);
     setStopProofResults({});
+    setStopProofDrafts({});
     try {
       const result = await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService);
       setSubmission(result);
@@ -378,6 +388,16 @@ export default function App() {
   }
 
 
+  function updateStopProofDraft(deliveryStopId: string, patch: Partial<StopProofDraft>) {
+    setStopProofDrafts((current) => ({
+      ...current,
+      [deliveryStopId]: {
+        ...getStopProofDraft(current[deliveryStopId]),
+        ...patch,
+      },
+    }));
+  }
+
   async function handleRecordStopProof(stop: AssignedRouteStop, action: StopProofAction) {
     const effectiveDeliveryStart: DeliveryStartResult = deliveryStartResult ?? {
       flowState: 'route_ready',
@@ -386,6 +406,7 @@ export default function App() {
       message: 'Delivery must be active before recording stop proof.',
     };
     const proofKey = `${stop.deliveryStopId}:${action}`;
+    const draft = getStopProofDraft(stopProofDrafts[stop.deliveryStopId]);
 
     setRecordingStopProofId(proofKey);
     try {
@@ -399,8 +420,9 @@ export default function App() {
         input: {
           action,
           deliveryStopId: stop.deliveryStopId,
-          note: action === 'delivered' ? 'Driver marked delivered in MVP app.' : 'Driver marked failed in MVP app.',
-          reason: action === 'failed' ? 'OTHER' : undefined,
+          note: draft.note,
+          photoUris: draft.photoUri.trim().length === 0 ? [] : [draft.photoUri],
+          reason: action === 'failed' ? draft.failureReason : undefined,
           routePlanId: activeRoutePlanId ?? '',
         },
       });
@@ -483,7 +505,9 @@ export default function App() {
             result={submission}
             recordingStopProofId={recordingStopProofId}
             routeStartedEventResult={routeStartedEventResult}
+            stopProofDrafts={stopProofDrafts}
             stopProofResults={stopProofResults}
+            onUpdateStopProofDraft={updateStopProofDraft}
             setAssignedRouteMockMode={setAssignedRouteMockMode}
             setConsentMockMode={setConsentMockMode}
           />
@@ -699,7 +723,9 @@ function RouteAccessResultCard({
   result,
   recordingStopProofId,
   routeStartedEventResult,
+  stopProofDrafts,
   stopProofResults,
+  onUpdateStopProofDraft,
   setAssignedRouteMockMode,
   setConsentMockMode,
 }: {
@@ -727,7 +753,9 @@ function RouteAccessResultCard({
   result: RouteAccessSubmissionResult;
   recordingStopProofId: string | null;
   routeStartedEventResult: RouteStartedRecordResult | null;
+  stopProofDrafts: Record<string, StopProofDraft>;
   stopProofResults: Record<string, StopProofEventResult>;
+  onUpdateStopProofDraft(deliveryStopId: string, patch: Partial<StopProofDraft>): void;
   setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
   setConsentMockMode(value: ConsentMockMode): void;
 }) {
@@ -796,7 +824,9 @@ function RouteAccessResultCard({
           onStopContinuousLocation={onStopContinuousLocation}
           recordingStopProofId={recordingStopProofId}
           routeStartedEventResult={routeStartedEventResult}
+          stopProofDrafts={stopProofDrafts}
           stopProofResults={stopProofResults}
+          onUpdateStopProofDraft={onUpdateStopProofDraft}
           setAssignedRouteMockMode={setAssignedRouteMockMode}
         />
       ) : null}
@@ -901,7 +931,9 @@ function AssignedRouteCard({
   onStopContinuousLocation,
   recordingStopProofId,
   routeStartedEventResult,
+  stopProofDrafts,
   stopProofResults,
+  onUpdateStopProofDraft,
   setAssignedRouteMockMode,
 }: {
   assignedRouteMockMode: AssignedRouteMockMode;
@@ -923,7 +955,9 @@ function AssignedRouteCard({
   onStopContinuousLocation(): void;
   recordingStopProofId: string | null;
   routeStartedEventResult: RouteStartedRecordResult | null;
+  stopProofDrafts: Record<string, StopProofDraft>;
   stopProofResults: Record<string, StopProofEventResult>;
+  onUpdateStopProofDraft(deliveryStopId: string, patch: Partial<StopProofDraft>): void;
   setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
 }) {
   return (
@@ -953,6 +987,8 @@ function AssignedRouteCard({
               isDeliveryActive={deliveryStartResult?.kind === 'delivery_active'}
               key={stop.deliveryStopId}
               onRecordStopProof={(action) => onRecordStopProof(stop, action)}
+              draft={getStopProofDraft(stopProofDrafts[stop.deliveryStopId])}
+              onUpdateDraft={(patch) => onUpdateStopProofDraft(stop.deliveryStopId, patch)}
               recordingStopProofId={recordingStopProofId}
               stop={stop}
               stopProofResults={stopProofResults}
@@ -1154,15 +1190,28 @@ function AssignedRouteMockModePicker({
   );
 }
 
+
+function getStopProofDraft(draft?: StopProofDraft): StopProofDraft {
+  return {
+    failureReason: draft?.failureReason ?? 'OTHER',
+    note: draft?.note ?? 'Driver proof recorded in MVP app.',
+    photoUri: draft?.photoUri ?? '',
+  };
+}
+
 function AssignedRouteStopCard({
+  draft,
   isDeliveryActive,
   onRecordStopProof,
+  onUpdateDraft,
   recordingStopProofId,
   stop,
   stopProofResults,
 }: {
+  draft: StopProofDraft;
   isDeliveryActive: boolean;
   onRecordStopProof(action: StopProofAction): void;
+  onUpdateDraft(patch: Partial<StopProofDraft>): void;
   recordingStopProofId: string | null;
   stop: AssignedRouteStop;
   stopProofResults: Record<string, StopProofEventResult>;
@@ -1181,7 +1230,34 @@ function AssignedRouteStopCard({
       <Text style={styles.stopMeta}>Coordinates: {formatCoordinates(stop)}</Text>
       {isDeliveryActive ? (
         <View style={styles.stopActionPanel}>
-          <Text style={styles.stopMeta}>Proof note MVP: text-only event metadata; photo/signature later.</Text>
+          <Text style={styles.stopMeta}>Proof metadata MVP: note, failure reason, and local photo URI; binary upload/signature/barcode later.</Text>
+          <TextInput
+            onChangeText={(value) => onUpdateDraft({ note: value })}
+            placeholder="Proof note"
+            placeholderTextColor="#94a3b8"
+            style={styles.stopProofInput}
+            value={draft.note}
+          />
+          <TextInput
+            autoCapitalize="none"
+            onChangeText={(value) => onUpdateDraft({ photoUri: value })}
+            placeholder="Optional photo URI metadata"
+            placeholderTextColor="#94a3b8"
+            style={styles.stopProofInput}
+            value={draft.photoUri}
+          />
+          <View style={styles.stopActionRow}>
+            {STOP_PROOF_FAILURE_REASONS.map((reason) => (
+              <Pressable
+                accessibilityRole="button"
+                key={reason}
+                onPress={() => onUpdateDraft({ failureReason: reason })}
+                style={[styles.reasonChip, draft.failureReason === reason && styles.reasonChipActive]}
+              >
+                <Text style={[styles.reasonChipText, draft.failureReason === reason && styles.reasonChipTextActive]}>{reason}</Text>
+              </Pressable>
+            ))}
+          </View>
           {deliveredResult?.kind === 'recorded' ? (
             <Text style={styles.deliveryStartSuccessText}>Delivered event: {deliveredResult.eventId}</Text>
           ) : null}
@@ -1660,6 +1736,36 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '800',
+  },
+  stopProofInput: {
+    backgroundColor: '#1e293b',
+    borderColor: '#334155',
+    borderRadius: 12,
+    borderWidth: 1,
+    color: '#e2e8f0',
+    fontSize: 13,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  reasonChip: {
+    backgroundColor: '#1e293b',
+    borderColor: '#475569',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  reasonChipActive: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#f8fafc',
+  },
+  reasonChipText: {
+    color: '#cbd5e1',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  reasonChipTextActive: {
+    color: '#0f172a',
   },
   guardPanel: {
     backgroundColor: '#ffffff',
