@@ -101,7 +101,7 @@ Result values: `pass`, `fail`, `blocked`, or `not-run`.
 | Privacy disclosure copy approved | pending | pending |
 | EAS build records point to committed source | pending | pending |
 | Generated artifacts and sensitive evidence kept outside git | pending | pending |
-| Follow-up blockers filed as GitHub issues | pending | pending |
+| Follow-up blockers filed as GitHub issues | pending | See issue map below |
 
 Release candidate decision: `approved` / `rejected` / `blocked`
 
@@ -109,4 +109,11 @@ Decision owner:
 
 Decision timestamp:
 
-Follow-up issue links:
+## Follow-up issue map
+
+| Blocker | Issue | Status / evidence reference |
+| --- | --- | --- |
+| Physical iOS/Android smoke evidence | EVNSolution/clever-driver-app#72 | pending |
+| Native EAS builds, signing, store/privacy approvals, license decision | EVNSolution/clever-driver-app#73 | pending |
+| Production proof-media object storage, signed access, scanner, cleanup evidence | EVNSolution/clever-delivery-server#71 | pending |
+| Context-monorepo service document after production boundaries | EVNSolution/clever-context-monorepo#23 | pending |
