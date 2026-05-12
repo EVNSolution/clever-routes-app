@@ -1,0 +1,38 @@
+{
+  "name": "clever-driver-app",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "lint": "expo lint",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "check:workspace": "npm run typecheck && npm run test",
+    "build": "npm run build:android && npm run build:ios",
+    "build:android": "expo export -p android --output-dir dist/android",
+    "build:ios": "expo export -p ios --output-dir dist/ios"
+  },
+  "dependencies": {
+    "expo": "~54.0.33",
+    "expo-status-bar": "~3.0.9",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.41",
+    "@types/react": "~19.1.0",
+    "eslint": "^9.0.0",
+    "eslint-config-expo": "~10.0.0",
+    "tsx": "^4.20.6",
+    "typescript": "~5.9.2"
+  },
+  "engines": {
+    "node": ">=20.19.4"
+  },
+  "overrides": {
+    "postcss": "8.5.10"
+  }
+}

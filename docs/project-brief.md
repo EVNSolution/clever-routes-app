@@ -267,18 +267,21 @@ unidentified
 ### 1단계: mobile framework bootstrap
 
 - 목적: 앱을 실행·검증할 수 있는 최소 mobile runtime을 만든다.
-- 선행 결정:
-  - framework: Expo/React Native 계열 우선 검토
-  - package manager와 Node/runtime version
-  - 앱 라우팅 방식과 기본 화면 구조
-  - iOS/Android permission, privacy disclosure, background capability 설정 위치
+- baseline 결정:
+  - framework: Expo/React Native
+  - package manager/runtime: npm `package-lock.json`, Node `>=20.19.4`
+  - 앱 구조: `index.ts`가 `App.tsx`를 등록하고, MVP state/guard 로직은 `src/driverFlow.ts`에서 순수 함수로 검증한다.
+  - iOS/Android 설정 위치: `app.json`에 bundle/package id, scheme, 기본 native runtime 옵션을 둔다.
+  - background location 또는 실제 위치 수집은 이 단계에서 구현하지 않는다.
 - 산출물:
   - 앱 skeleton
-  - lint/typecheck/test/build 또는 start command
-  - base navigation과 placeholder screens
+  - `lint`, `typecheck`, `test`, `build`, `check:workspace`, `start`, `ios`, `android` command
+  - route access, company guidance, consent gate, assigned route, delivery active placeholder screens
+  - repo setup notes and ignore policy review
 - 완료 기준:
-  - clean checkout에서 install 후 앱 시작 command가 동작한다.
-  - PR 전 필수 검증 명령이 repo 현실에 맞게 정의된다.
+  - clean checkout에서 `npm install` 후 앱 시작 command가 준비된다.
+  - PR 전 필수 검증 명령이 repo 현실에 맞게 정의되고 통과한다.
+  - route context + phone, consent gate, delivery active guard가 unit test로 고정된다.
 
 ### 2단계: route+phone access and company guidance UX
 
@@ -366,7 +369,6 @@ unidentified
 
 ## 미정 사항
 
-- mobile framework and package manager
 - driver authentication/session method after route+phone lookup
 - route invite link/code format and company guidance payload shape
 - consent record API shape and legal copy source
@@ -376,6 +378,7 @@ unidentified
 
 ## 다음 작업 목록
 
-1. Create implementation issue for mobile framework bootstrap and base navigation.
+1. Merge mobile framework bootstrap and base navigation PR into `dev`.
 2. Define driver-facing delivery server API contract for route+phone access, company guidance, consent, and assigned route.
-3. Add context-monorepo service document once framework/API boundaries are confirmed.
+3. Implement route+phone access and company guidance UX against the agreed mock/API boundary.
+4. Add context-monorepo service document once framework/API boundaries are confirmed.
