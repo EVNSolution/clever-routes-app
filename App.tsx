@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -27,6 +27,9 @@ import {
   DRIVER_FLOW_STATES,
   type DriverFlowState,
 } from './src/driverFlow';
+import { createDriverApiClientsFromRouteAccess } from './src/driverApiClients';
+import { type DriverAccessRestoreResult } from './src/driverAccessTokenStore';
+import { createExpoSecureDriverAccessTokenStore } from './src/expoSecureDriverAccessTokenStore';
 import {
   createDriverRuntimeServices,
   readDriverRuntimeConfig,
@@ -64,6 +67,9 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecordingConsent, setIsRecordingConsent] = useState(false);
   const [isLoadingAssignedRoute, setIsLoadingAssignedRoute] = useState(false);
+  const [driverAccessRestoreStatus, setDriverAccessRestoreStatus] = useState<DriverAccessRestoreResult['kind']>('missing');
+
+  const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
 
   const runtimeConfig = useMemo(
     () => readDriverRuntimeConfig({
@@ -71,6 +77,25 @@ export default function App() {
     }),
     [],
   );
+
+  useEffect(() => {
+    let isMounted = true;
+    driverAccessTokenStore.loadActiveDriverAccess()
+      .then((result) => {
+        if (isMounted) {
+          setDriverAccessRestoreStatus(result.kind);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setDriverAccessRestoreStatus('invalid');
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [driverAccessTokenStore]);
 
   const routeAccessService = useMemo(() => {
     if (runtimeConfig.mode === 'live') {
@@ -123,7 +148,15 @@ export default function App() {
     setConsentSubmission(null);
     setAssignedRouteSubmission(null);
     try {
-      setSubmission(await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService));
+      const result = await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService);
+      setSubmission(result);
+      if (result.kind === 'company_guidance') {
+        await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(result));
+        setDriverAccessRestoreStatus('active');
+      } else if (result.kind === 'denied') {
+        await driverAccessTokenStore.clear();
+        setDriverAccessRestoreStatus('missing');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -139,7 +172,11 @@ export default function App() {
           deviceContext: { platform: Platform.OS },
           routeContext: routeAccess.routeContext,
         },
-        driverConsentService,
+        getDriverConsentServiceForCurrentSubmission({
+          driverConsentService,
+          runtimeConfig,
+          submission,
+        }),
       ));
     } finally {
       setIsRecordingConsent(false);
@@ -154,7 +191,11 @@ export default function App() {
           consentState: consentSubmission?.flowState === 'consent_recorded' ? 'consent_recorded' : 'consent_required',
           routeContext: routeAccess.routeContext,
         },
-        assignedRouteService,
+        getAssignedRouteServiceForCurrentSubmission({
+          assignedRouteService,
+          runtimeConfig,
+          submission,
+        }),
       ));
     } finally {
       setIsLoadingAssignedRoute(false);
@@ -182,6 +223,7 @@ export default function App() {
             label="Delivery server"
             value={runtimeConfig.mode === 'live' ? runtimeConfig.deliveryServerBaseUrl : 'local mock services'}
           />
+          <GuardRow label="Secure driver token" value={formatDriverAccessRestoreStatus(driverAccessRestoreStatus)} />
         </View>
 
         <View style={styles.cardLight}>
@@ -232,6 +274,61 @@ export default function App() {
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+
+function toInvitedRouteAccess(
+  result: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>,
+): Extract<RouteAccessLookupResult, { status: 'INVITED' }> {
+  return {
+    status: 'INVITED',
+    companyGuidance: result.companyGuidance,
+    driverAccess: result.driverAccess,
+    routeAccess: result.routeAccess,
+  };
+}
+
+function getDriverConsentServiceForCurrentSubmission(input: {
+  driverConsentService: DriverConsentService;
+  runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
+  submission: RouteAccessSubmissionResult | null;
+}): DriverConsentService {
+  if (input.runtimeConfig.mode !== 'live' || input.submission?.kind !== 'company_guidance') {
+    return input.driverConsentService;
+  }
+
+  return createDriverApiClientsFromRouteAccess({
+    baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
+    routeAccess: toInvitedRouteAccess(input.submission),
+  }).driverConsentService;
+}
+
+function getAssignedRouteServiceForCurrentSubmission(input: {
+  assignedRouteService: AssignedRouteService;
+  runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
+  submission: RouteAccessSubmissionResult | null;
+}): AssignedRouteService {
+  if (input.runtimeConfig.mode !== 'live' || input.submission?.kind !== 'company_guidance') {
+    return input.assignedRouteService;
+  }
+
+  return createDriverApiClientsFromRouteAccess({
+    baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
+    routeAccess: toInvitedRouteAccess(input.submission),
+  }).assignedRouteService;
+}
+
+function formatDriverAccessRestoreStatus(status: DriverAccessRestoreResult['kind']): string {
+  switch (status) {
+    case 'active':
+      return 'active in native secure storage';
+    case 'expired':
+      return 'expired and cleared';
+    case 'invalid':
+      return 'invalid and cleared';
+    case 'missing':
+      return 'no active token';
+  }
 }
 
 function getCurrentFlowState(
