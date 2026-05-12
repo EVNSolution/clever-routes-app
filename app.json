@@ -20,7 +20,14 @@
       "changeControlIssue": "EVNSolution/clever-change-control#146"
     },
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Clever Driver to use your location while you are actively delivering a route.",
+          "locationAlwaysAndWhenInUsePermission": "Allow Clever Driver to use your location for active delivery tracking."
+        }
+      ]
     ]
   }
 }

@@ -22,6 +22,10 @@ import {
   type AssignedRouteStop,
 } from './src/assignedRoute';
 import {
+  startDeliveryWithForegroundPermission,
+  type DeliveryStartResult,
+} from './src/deliveryStart';
+import {
   canEnterDeliveryActive,
   canRevealRouteDetails,
   DRIVER_FLOW_STATES,
@@ -30,6 +34,7 @@ import {
 import { createDriverApiClientsFromRouteAccess } from './src/driverApiClients';
 import { type DriverAccessRestoreResult } from './src/driverAccessTokenStore';
 import { createExpoSecureDriverAccessTokenStore } from './src/expoSecureDriverAccessTokenStore';
+import { createExpoForegroundLocationPermissionService } from './src/expoLocationPermissionService';
 import {
   createDriverRuntimeServices,
   readDriverRuntimeConfig,
@@ -64,12 +69,15 @@ export default function App() {
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
   const [consentSubmission, setConsentSubmission] = useState<DriverConsentSubmissionResult | null>(null);
   const [assignedRouteSubmission, setAssignedRouteSubmission] = useState<AssignedRouteLoadResult | null>(null);
+  const [deliveryStartResult, setDeliveryStartResult] = useState<DeliveryStartResult | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecordingConsent, setIsRecordingConsent] = useState(false);
   const [isLoadingAssignedRoute, setIsLoadingAssignedRoute] = useState(false);
+  const [isStartingDelivery, setIsStartingDelivery] = useState(false);
   const [driverAccessRestoreStatus, setDriverAccessRestoreStatus] = useState<DriverAccessRestoreResult['kind']>('missing');
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
+  const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
 
   const runtimeConfig = useMemo(
     () => readDriverRuntimeConfig({
@@ -136,17 +144,23 @@ export default function App() {
     return createMockAssignedRouteService(result);
   }, [assignedRouteMockMode]);
 
-  const currentFlowState = getCurrentFlowState(submission, consentSubmission, assignedRouteSubmission);
+  const currentFlowState = getCurrentFlowState(
+    submission,
+    consentSubmission,
+    assignedRouteSubmission,
+    deliveryStartResult,
+  );
   const canRevealRoute = canRevealRouteDetails(currentFlowState);
   const canStartDelivery = canEnterDeliveryActive({
     state: currentFlowState,
-    hasLocationPermission: false,
+    hasLocationPermission: deliveryStartResult?.kind === 'delivery_active',
   });
 
   async function handleLookup() {
     setIsSubmitting(true);
     setConsentSubmission(null);
     setAssignedRouteSubmission(null);
+    setDeliveryStartResult(null);
     try {
       const result = await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService);
       setSubmission(result);
@@ -185,6 +199,7 @@ export default function App() {
 
   async function handleLoadAssignedRoute(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']) {
     setIsLoadingAssignedRoute(true);
+    setDeliveryStartResult(null);
     try {
       setAssignedRouteSubmission(await loadAssignedRouteAfterConsent(
         {
@@ -199,6 +214,19 @@ export default function App() {
       ));
     } finally {
       setIsLoadingAssignedRoute(false);
+    }
+  }
+
+
+  async function handleStartDelivery() {
+    setIsStartingDelivery(true);
+    try {
+      setDeliveryStartResult(await startDeliveryWithForegroundPermission({
+        flowState: currentFlowState,
+        permissionService: foregroundLocationPermissionService,
+      }));
+    } finally {
+      setIsStartingDelivery(false);
     }
   }
 
@@ -255,9 +283,12 @@ export default function App() {
             assignedRouteResult={assignedRouteSubmission}
             consentMockMode={consentMockMode}
             consentResult={consentSubmission}
+            deliveryStartResult={deliveryStartResult}
             isLoadingAssignedRoute={isLoadingAssignedRoute}
             isRecordingConsent={isRecordingConsent}
+            isStartingDelivery={isStartingDelivery}
             onLoadAssignedRoute={handleLoadAssignedRoute}
+            onStartDelivery={handleStartDelivery}
             onRecordConsent={handleRecordConsent}
             result={submission}
             setAssignedRouteMockMode={setAssignedRouteMockMode}
@@ -269,13 +300,35 @@ export default function App() {
           <Text style={styles.sectionTitle}>Current guard snapshot</Text>
           <GuardRow label="Current flow state" value={currentFlowState} />
           <GuardRow label="Route details visible" value={canRevealRoute ? 'yes' : 'blocked until consent'} />
-          <GuardRow label="Delivery active allowed" value={canStartDelivery ? 'yes' : 'requires route_ready + OS permission'} />
+          <GuardRow label="Foreground location" value={formatForegroundLocationStatus(deliveryStartResult)} />
+          <GuardRow label="Delivery active allowed" value={formatDeliveryActiveGuard(currentFlowState, canStartDelivery)} />
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+
+
+function formatForegroundLocationStatus(deliveryStartResult: DeliveryStartResult | null): string {
+  if (deliveryStartResult?.kind === 'delivery_active') {
+    return 'granted for active delivery';
+  }
+
+  if (deliveryStartResult?.kind === 'permission_denied') {
+    return 'denied; retry or open system settings';
+  }
+
+  return 'not requested before delivery start';
+}
+
+function formatDeliveryActiveGuard(currentFlowState: DriverFlowState, canStartDelivery: boolean): string {
+  if (currentFlowState === 'delivery_active') {
+    return 'active';
+  }
+
+  return canStartDelivery ? 'ready to start' : 'requires route_ready + foreground permission';
+}
 
 function toInvitedRouteAccess(
   result: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>,
@@ -335,7 +388,12 @@ function getCurrentFlowState(
   submission: RouteAccessSubmissionResult | null,
   consentSubmission: DriverConsentSubmissionResult | null,
   assignedRouteSubmission: AssignedRouteLoadResult | null,
+  deliveryStartResult: DeliveryStartResult | null,
 ): DriverFlowState {
+  if (deliveryStartResult?.kind === 'delivery_active') {
+    return deliveryStartResult.flowState;
+  }
+
   if (assignedRouteSubmission?.kind === 'route_ready') {
     return assignedRouteSubmission.flowState;
   }
@@ -412,10 +470,13 @@ function RouteAccessResultCard({
   assignedRouteResult,
   consentMockMode,
   consentResult,
+  deliveryStartResult,
   isLoadingAssignedRoute,
   isRecordingConsent,
+  isStartingDelivery,
   onLoadAssignedRoute,
   onRecordConsent,
+  onStartDelivery,
   result,
   setAssignedRouteMockMode,
   setConsentMockMode,
@@ -424,10 +485,13 @@ function RouteAccessResultCard({
   assignedRouteResult: AssignedRouteLoadResult | null;
   consentMockMode: ConsentMockMode;
   consentResult: DriverConsentSubmissionResult | null;
+  deliveryStartResult: DeliveryStartResult | null;
   isLoadingAssignedRoute: boolean;
   isRecordingConsent: boolean;
+  isStartingDelivery: boolean;
   onLoadAssignedRoute(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
   onRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
+  onStartDelivery(): void;
   result: RouteAccessSubmissionResult;
   setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
   setConsentMockMode(value: ConsentMockMode): void;
@@ -480,8 +544,11 @@ function RouteAccessResultCard({
         <AssignedRouteCard
           assignedRouteMockMode={assignedRouteMockMode}
           assignedRouteResult={assignedRouteResult}
+          deliveryStartResult={deliveryStartResult}
           isLoadingAssignedRoute={isLoadingAssignedRoute}
+          isStartingDelivery={isStartingDelivery}
           onLoadAssignedRoute={() => onLoadAssignedRoute(result.routeAccess)}
+          onStartDelivery={onStartDelivery}
           setAssignedRouteMockMode={setAssignedRouteMockMode}
         />
       ) : null}
@@ -569,14 +636,20 @@ function ConsentMockModePicker({
 function AssignedRouteCard({
   assignedRouteMockMode,
   assignedRouteResult,
+  deliveryStartResult,
   isLoadingAssignedRoute,
+  isStartingDelivery,
   onLoadAssignedRoute,
+  onStartDelivery,
   setAssignedRouteMockMode,
 }: {
   assignedRouteMockMode: AssignedRouteMockMode;
   assignedRouteResult: AssignedRouteLoadResult | null;
+  deliveryStartResult: DeliveryStartResult | null;
   isLoadingAssignedRoute: boolean;
+  isStartingDelivery: boolean;
   onLoadAssignedRoute(): void;
+  onStartDelivery(): void;
   setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
 }) {
   return (
@@ -584,8 +657,8 @@ function AssignedRouteCard({
       <Text style={styles.consentKicker}>Assigned route</Text>
       <Text style={styles.consentTitle}>Today's route after consent</Text>
       <Text style={styles.consentBody}>
-        The app loads route and stop context only after consent is recorded. Delivery start and
-        OS location permission stay blocked for a later slice.
+        The app loads route and stop context only after consent is recorded. Delivery start asks
+        for OS foreground location permission only after route_ready.
       </Text>
       <AssignedRouteMockModePicker
         assignedRouteMockMode={assignedRouteMockMode}
@@ -609,6 +682,13 @@ function AssignedRouteCard({
       {assignedRouteResult !== null && assignedRouteResult.kind !== 'route_ready' ? (
         <Text style={styles.routeWarningText}>{assignedRouteResult.message}</Text>
       ) : null}
+      {assignedRouteResult?.kind === 'route_ready' ? (
+        <DeliveryStartCard
+          deliveryStartResult={deliveryStartResult}
+          isStartingDelivery={isStartingDelivery}
+          onStartDelivery={onStartDelivery}
+        />
+      ) : null}
       <Pressable
         accessibilityRole="button"
         disabled={isLoadingAssignedRoute}
@@ -619,6 +699,46 @@ function AssignedRouteCard({
           <ActivityIndicator color="#0f172a" />
         ) : (
           <Text style={styles.secondaryButtonText}>Load assigned route</Text>
+        )}
+      </Pressable>
+    </View>
+  );
+}
+
+
+function DeliveryStartCard({
+  deliveryStartResult,
+  isStartingDelivery,
+  onStartDelivery,
+}: {
+  deliveryStartResult: DeliveryStartResult | null;
+  isStartingDelivery: boolean;
+  onStartDelivery(): void;
+}) {
+  const isActive = deliveryStartResult?.kind === 'delivery_active';
+  return (
+    <View style={styles.deliveryStartPanel}>
+      <Text style={styles.consentKicker}>delivery_active gate</Text>
+      <Text style={styles.consentTitle}>Start delivery with foreground location</Text>
+      <Text style={styles.consentBody}>
+        The app requests OS foreground location permission only after the driver explicitly starts
+        delivery. Background collection and GPS event streaming remain blocked for the next slice.
+      </Text>
+      {deliveryStartResult !== null ? (
+        <Text style={isActive ? styles.deliveryStartSuccessText : styles.routeWarningText}>
+          {deliveryStartResult.message}
+        </Text>
+      ) : null}
+      <Pressable
+        accessibilityRole="button"
+        disabled={isStartingDelivery || isActive}
+        onPress={onStartDelivery}
+        style={[styles.secondaryButton, (isStartingDelivery || isActive) && styles.buttonDisabled]}
+      >
+        {isStartingDelivery ? (
+          <ActivityIndicator color="#0f172a" />
+        ) : (
+          <Text style={styles.secondaryButtonText}>{isActive ? 'Delivery active' : 'Start delivery'}</Text>
         )}
       </Pressable>
     </View>
@@ -992,6 +1112,21 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '700',
+  },
+  deliveryStartPanel: {
+    backgroundColor: '#ecfeff',
+    borderColor: '#06b6d4',
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 10,
+    marginTop: 16,
+    padding: 16,
+  },
+  deliveryStartSuccessText: {
+    color: '#0f766e',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
   },
   routePanel: {
     backgroundColor: '#052e16',

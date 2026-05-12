@@ -90,7 +90,7 @@ The expected response shape matches `clever-delivery-server/docs/api/driver-assi
 - `NO_ASSIGNED_ROUTE` returns a safe empty state.
 - HTTP/API failures stay in `consent_recorded` with a retry message.
 
-The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. It still does not start delivery or request OS location permissions in this slice.
+The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission.
 
 ## Runtime API mode
 
@@ -102,4 +102,4 @@ The persisted payload stores only the driver token and route access identifiers 
 
 - Define release environment profiles and any server-side token refresh/re-auth UX beyond the current short-lived token TTL.
 - Add dedicated stop action/proof-of-delivery flows after the route-ready screen.
-- Keep foreground/background location permission and collection out of this flow until the `delivery_active` slice.
+- Add background location service/task setup and GPS event streaming after foreground delivery start is proven. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.

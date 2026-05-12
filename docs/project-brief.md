@@ -175,7 +175,7 @@ MVP와 확장 경계:
 ### 시나리오 4: 배송 시작과 위치 서비스
 
 - 배송원은 route를 확인한 뒤 명시적으로 `배송 시작`을 누른다.
-- 앱은 이 시점부터 foreground location 권한을 요청하고, 필요한 경우 background location 권한을 단계적으로 요청한다.
+- 앱은 이 시점부터 foreground location 권한을 요청한다. background location 권한은 foreground 권한과 active delivery UX가 검증된 뒤 단계적으로 요청한다.
 - 위치 수집과 위치 이벤트 송신은 `배송 시작` 이후에만 허용한다.
 - 위치 이벤트는 서버 driver event/location update API로 전송한다.
 - 서버 compliance 기준상 driver GPS update는 위치정보 `COLLECT` 성격의 동작으로 본다.
@@ -388,5 +388,6 @@ unidentified
 6. Implement driver access token handoff. — completed
 7. Implement real environment/base URL switch. — completed
 8. Implement secure token persistence/expiry handling. — completed in this slice
-9. Implement stop actions plus delivery-active/location permission slice.
-10. Add context-monorepo service document once production runtime/API boundaries are confirmed.
+9. Implement delivery-active foreground location permission slice. — current slice
+10. Implement stop actions, proof-of-delivery, background location service, and GPS event streaming.
+11. Add context-monorepo service document once production runtime/API boundaries are confirmed.
