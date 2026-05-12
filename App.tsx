@@ -13,6 +13,15 @@ import {
 } from 'react-native';
 
 import {
+  createMockAssignedRouteService,
+  loadAssignedRouteAfterConsent,
+  sampleAssignedRoute,
+  type AssignedRouteLoadResult,
+  type AssignedRouteLookupResult,
+  type AssignedRouteService,
+  type AssignedRouteStop,
+} from './src/assignedRoute';
+import {
   canEnterDeliveryActive,
   canRevealRouteDetails,
   DRIVER_FLOW_STATES,
@@ -37,16 +46,20 @@ const SAMPLE_PHONE_E164 = '+14165550123';
 
 type MockMode = RouteAccessLookupResult['status'];
 type ConsentMockMode = 'success' | 'failure';
+type AssignedRouteMockMode = 'assigned' | 'failure' | 'none';
 
 export default function App() {
   const [routeContext, setRouteContext] = useState(sampleInvitedRouteAccess.routeAccess.routeContext);
   const [phoneE164, setPhoneE164] = useState(SAMPLE_PHONE_E164);
   const [mockMode, setMockMode] = useState<MockMode>('INVITED');
   const [consentMockMode, setConsentMockMode] = useState<ConsentMockMode>('success');
+  const [assignedRouteMockMode, setAssignedRouteMockMode] = useState<AssignedRouteMockMode>('assigned');
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
   const [consentSubmission, setConsentSubmission] = useState<DriverConsentSubmissionResult | null>(null);
+  const [assignedRouteSubmission, setAssignedRouteSubmission] = useState<AssignedRouteLoadResult | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecordingConsent, setIsRecordingConsent] = useState(false);
+  const [isLoadingAssignedRoute, setIsLoadingAssignedRoute] = useState(false);
 
   const routeAccessService = useMemo(() => {
     const result: RouteAccessLookupResult =
@@ -66,16 +79,34 @@ export default function App() {
     return createMockDriverConsentService();
   }, [consentMockMode]);
 
-  const currentFlowState = getCurrentFlowState(submission, consentSubmission);
+  const assignedRouteService = useMemo<AssignedRouteService>(() => {
+    if (assignedRouteMockMode === 'failure') {
+      return {
+        getAssignedRoute: async () => {
+          throw new Error('Local assigned route mock failure');
+        },
+      };
+    }
+
+    const result: AssignedRouteLookupResult =
+      assignedRouteMockMode === 'none'
+        ? { status: 'NO_ASSIGNED_ROUTE' }
+        : { status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute };
+
+    return createMockAssignedRouteService(result);
+  }, [assignedRouteMockMode]);
+
+  const currentFlowState = getCurrentFlowState(submission, consentSubmission, assignedRouteSubmission);
   const canRevealRoute = canRevealRouteDetails(currentFlowState);
   const canStartDelivery = canEnterDeliveryActive({
     state: currentFlowState,
-    hasLocationPermission: true,
+    hasLocationPermission: false,
   });
 
   async function handleLookup() {
     setIsSubmitting(true);
     setConsentSubmission(null);
+    setAssignedRouteSubmission(null);
     try {
       setSubmission(await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService));
     } finally {
@@ -85,6 +116,7 @@ export default function App() {
 
   async function handleRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']) {
     setIsRecordingConsent(true);
+    setAssignedRouteSubmission(null);
     try {
       setConsentSubmission(await submitDriverConsent(
         {
@@ -96,6 +128,21 @@ export default function App() {
       ));
     } finally {
       setIsRecordingConsent(false);
+    }
+  }
+
+  async function handleLoadAssignedRoute(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']) {
+    setIsLoadingAssignedRoute(true);
+    try {
+      setAssignedRouteSubmission(await loadAssignedRouteAfterConsent(
+        {
+          consentState: consentSubmission?.flowState === 'consent_recorded' ? 'consent_recorded' : 'consent_required',
+          routeContext: routeAccess.routeContext,
+        },
+        assignedRouteService,
+      ));
+    } finally {
+      setIsLoadingAssignedRoute(false);
     }
   }
 
@@ -139,11 +186,16 @@ export default function App() {
           <EmptyStateCard />
         ) : (
           <RouteAccessResultCard
+            assignedRouteMockMode={assignedRouteMockMode}
+            assignedRouteResult={assignedRouteSubmission}
             consentMockMode={consentMockMode}
             consentResult={consentSubmission}
+            isLoadingAssignedRoute={isLoadingAssignedRoute}
             isRecordingConsent={isRecordingConsent}
+            onLoadAssignedRoute={handleLoadAssignedRoute}
             onRecordConsent={handleRecordConsent}
             result={submission}
+            setAssignedRouteMockMode={setAssignedRouteMockMode}
             setConsentMockMode={setConsentMockMode}
           />
         )}
@@ -162,7 +214,12 @@ export default function App() {
 function getCurrentFlowState(
   submission: RouteAccessSubmissionResult | null,
   consentSubmission: DriverConsentSubmissionResult | null,
+  assignedRouteSubmission: AssignedRouteLoadResult | null,
 ): DriverFlowState {
+  if (assignedRouteSubmission?.kind === 'route_ready') {
+    return assignedRouteSubmission.flowState;
+  }
+
   if (consentSubmission !== null) {
     return consentSubmission.flowState;
   }
@@ -231,18 +288,28 @@ function MockModePicker({
 }
 
 function RouteAccessResultCard({
+  assignedRouteMockMode,
+  assignedRouteResult,
   consentMockMode,
   consentResult,
+  isLoadingAssignedRoute,
   isRecordingConsent,
+  onLoadAssignedRoute,
   onRecordConsent,
   result,
+  setAssignedRouteMockMode,
   setConsentMockMode,
 }: {
+  assignedRouteMockMode: AssignedRouteMockMode;
+  assignedRouteResult: AssignedRouteLoadResult | null;
   consentMockMode: ConsentMockMode;
   consentResult: DriverConsentSubmissionResult | null;
+  isLoadingAssignedRoute: boolean;
   isRecordingConsent: boolean;
+  onLoadAssignedRoute(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
   onRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
   result: RouteAccessSubmissionResult;
+  setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
   setConsentMockMode(value: ConsentMockMode): void;
 }) {
   if (result.kind === 'validation_error') {
@@ -289,6 +356,15 @@ function RouteAccessResultCard({
         onRecordConsent={() => onRecordConsent(result.routeAccess)}
         setConsentMockMode={setConsentMockMode}
       />
+      {consentResult?.kind === 'consent_recorded' ? (
+        <AssignedRouteCard
+          assignedRouteMockMode={assignedRouteMockMode}
+          assignedRouteResult={assignedRouteResult}
+          isLoadingAssignedRoute={isLoadingAssignedRoute}
+          onLoadAssignedRoute={() => onLoadAssignedRoute(result.routeAccess)}
+          setAssignedRouteMockMode={setAssignedRouteMockMode}
+        />
+      ) : null}
     </View>
   );
 }
@@ -368,6 +444,124 @@ function ConsentMockModePicker({
       </View>
     </View>
   );
+}
+
+function AssignedRouteCard({
+  assignedRouteMockMode,
+  assignedRouteResult,
+  isLoadingAssignedRoute,
+  onLoadAssignedRoute,
+  setAssignedRouteMockMode,
+}: {
+  assignedRouteMockMode: AssignedRouteMockMode;
+  assignedRouteResult: AssignedRouteLoadResult | null;
+  isLoadingAssignedRoute: boolean;
+  onLoadAssignedRoute(): void;
+  setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
+}) {
+  return (
+    <View style={styles.routePanel}>
+      <Text style={styles.consentKicker}>Assigned route</Text>
+      <Text style={styles.consentTitle}>Today's route after consent</Text>
+      <Text style={styles.consentBody}>
+        The app loads route and stop context only after consent is recorded. Delivery start and
+        OS location permission stay blocked for a later slice.
+      </Text>
+      <AssignedRouteMockModePicker
+        assignedRouteMockMode={assignedRouteMockMode}
+        setAssignedRouteMockMode={setAssignedRouteMockMode}
+      />
+      {assignedRouteResult === null ? (
+        <Text style={styles.routeHelpText}>Load the assigned route to move from consent_recorded to route_ready.</Text>
+      ) : null}
+      {assignedRouteResult?.kind === 'route_ready' ? (
+        <View style={styles.routeReadyBox}>
+          <Text style={styles.routeReadyKicker}>route_ready</Text>
+          <Text style={styles.routeReadyTitle}>{assignedRouteResult.route.name}</Text>
+          <InfoRow label="Delivery date" value={assignedRouteResult.route.deliveryDate} />
+          <InfoRow label="Shop" value={assignedRouteResult.route.shopDomain} />
+          <InfoRow label="Timezone" value={assignedRouteResult.route.timezone} />
+          {assignedRouteResult.route.stops.map((stop) => (
+            <AssignedRouteStopCard key={stop.deliveryStopId} stop={stop} />
+          ))}
+        </View>
+      ) : null}
+      {assignedRouteResult !== null && assignedRouteResult.kind !== 'route_ready' ? (
+        <Text style={styles.routeWarningText}>{assignedRouteResult.message}</Text>
+      ) : null}
+      <Pressable
+        accessibilityRole="button"
+        disabled={isLoadingAssignedRoute}
+        onPress={onLoadAssignedRoute}
+        style={[styles.secondaryButton, isLoadingAssignedRoute && styles.buttonDisabled]}
+      >
+        {isLoadingAssignedRoute ? (
+          <ActivityIndicator color="#0f172a" />
+        ) : (
+          <Text style={styles.secondaryButtonText}>Load assigned route</Text>
+        )}
+      </Pressable>
+    </View>
+  );
+}
+
+function AssignedRouteMockModePicker({
+  assignedRouteMockMode,
+  setAssignedRouteMockMode,
+}: {
+  assignedRouteMockMode: AssignedRouteMockMode;
+  setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
+}) {
+  const modes: AssignedRouteMockMode[] = ['assigned', 'none', 'failure'];
+  return (
+    <View style={styles.mockPanel}>
+      <Text style={styles.inputLabel}>Local assigned route mock</Text>
+      <View style={styles.chipGrid}>
+        {modes.map((mode) => (
+          <Pressable
+            accessibilityRole="button"
+            key={mode}
+            onPress={() => setAssignedRouteMockMode(mode)}
+            style={[styles.chip, assignedRouteMockMode === mode && styles.chipActive]}
+          >
+            <Text style={[styles.chipText, assignedRouteMockMode === mode && styles.chipTextActive]}>{mode}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function AssignedRouteStopCard({ stop }: { stop: AssignedRouteStop }) {
+  return (
+    <View style={styles.stopCard}>
+      <Text style={styles.stopSequence}>Stop {stop.sequence}</Text>
+      <Text style={styles.stopTitle}>{stop.orderName}</Text>
+      <Text style={styles.stopBody}>{stop.recipientName ?? 'Recipient pending'}</Text>
+      <Text style={styles.stopBody}>{formatStopAddress(stop)}</Text>
+      <Text style={styles.stopMeta}>Phone: {stop.phone ?? 'Contact dispatch'}</Text>
+      <Text style={styles.stopMeta}>Coordinates: {formatCoordinates(stop)}</Text>
+    </View>
+  );
+}
+
+function formatStopAddress(stop: AssignedRouteStop): string {
+  return [
+    stop.address.address1,
+    stop.address.address2,
+    stop.address.city,
+    stop.address.province,
+    stop.address.postalCode,
+    stop.address.countryCode,
+  ].filter(Boolean).join(', ');
+}
+
+function formatCoordinates(stop: AssignedRouteStop): string {
+  if (stop.coordinates === null) {
+    return 'pending';
+  }
+
+  return `${stop.coordinates.latitude.toFixed(4)}, ${stop.coordinates.longitude.toFixed(4)}`;
 }
 
 function EmptyStateCard() {
@@ -677,6 +871,77 @@ const styles = StyleSheet.create({
   consentSuccessText: {
     color: '#ffffff',
     fontSize: 15,
+    fontWeight: '700',
+  },
+  routePanel: {
+    backgroundColor: '#052e16',
+    borderColor: '#16a34a',
+    borderRadius: 22,
+    borderWidth: 1,
+    gap: 12,
+    marginTop: 8,
+    padding: 16,
+  },
+  routeHelpText: {
+    backgroundColor: '#064e3b',
+    borderRadius: 14,
+    color: '#d1fae5',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+    padding: 12,
+  },
+  routeReadyBox: {
+    backgroundColor: '#0f172a',
+    borderRadius: 18,
+    gap: 10,
+    padding: 14,
+  },
+  routeReadyKicker: {
+    color: '#86efac',
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  routeReadyTitle: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  routeWarningText: {
+    backgroundColor: '#7f1d1d',
+    borderRadius: 14,
+    color: '#fee2e2',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+    padding: 12,
+  },
+  stopCard: {
+    backgroundColor: '#1e293b',
+    borderRadius: 16,
+    gap: 5,
+    padding: 12,
+  },
+  stopSequence: {
+    color: '#86efac',
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  stopTitle: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  stopBody: {
+    color: '#dbeafe',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  stopMeta: {
+    color: '#cbd5e1',
+    fontSize: 12,
     fontWeight: '700',
   },
   guardPanel: {
