@@ -93,4 +93,91 @@ describe('stop proof event flow', () => {
       },
     });
   });
+
+  it('records uploaded media, signature, and barcode proof references after delivery_active', async () => {
+    const driverEventService = createMockDriverEventService();
+
+    await recordStopProofEventAfterDeliveryStart({
+      deliveryStart: activeDelivery,
+      driverEventService,
+      input: {
+        action: 'delivered',
+        barcodes: [
+          {
+            barcodeId: 'barcode-1',
+            capturedAt: '2026-05-12T10:10:00.000Z',
+            data: 'ORDER-1001',
+            kind: 'barcode',
+            source: 'native-scanner',
+            symbology: 'code128',
+          },
+        ],
+        deliveryStopId: 'stop-1',
+        media: [
+          {
+            contentType: 'image/jpeg',
+            kind: 'photo',
+            mediaId: 'media-1',
+            sha256: 'sha256-fixture',
+            sizeBytes: 12345,
+            source: 'camera',
+            storageKey: 'driver-proof/media-1.jpg',
+            uploadedAt: '2026-05-12T10:00:00.000Z',
+          },
+        ],
+        note: 'Signed and photo uploaded',
+        routePlanId: 'route-1',
+        signatures: [
+          {
+            kind: 'signature',
+            pointCount: 3,
+            signatureId: 'signature-1',
+            signerName: 'Recipient One',
+            source: 'native-drawing',
+            strokeCount: 2,
+          },
+        ],
+      },
+    });
+
+    assert.deepEqual(driverEventService.recordedEvents[0]?.payload, {
+      proof: {
+        barcodes: [
+          {
+            barcodeId: 'barcode-1',
+            capturedAt: '2026-05-12T10:10:00.000Z',
+            data: 'ORDER-1001',
+            kind: 'barcode',
+            source: 'native-scanner',
+            symbology: 'code128',
+          },
+        ],
+        media: [
+          {
+            contentType: 'image/jpeg',
+            kind: 'photo',
+            mediaId: 'media-1',
+            sha256: 'sha256-fixture',
+            sizeBytes: 12345,
+            source: 'camera',
+            storageKey: 'driver-proof/media-1.jpg',
+            uploadedAt: '2026-05-12T10:00:00.000Z',
+          },
+        ],
+        note: 'Signed and photo uploaded',
+        signatures: [
+          {
+            kind: 'signature',
+            pointCount: 3,
+            signatureId: 'signature-1',
+            signerName: 'Recipient One',
+            source: 'native-drawing',
+            strokeCount: 2,
+          },
+        ],
+        source: 'driver-app-mvp',
+        type: 'DELIVERED_NOTE',
+      },
+    });
+  });
 });

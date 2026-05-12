@@ -1,17 +1,23 @@
 import type { DeliveryStartResult } from './deliveryStart';
 import type { DriverEventRecordResult, DriverEventService, DriverEventType } from './driverEvents';
+import type { ProofBarcodeReference } from './proofBarcodeCapture';
+import type { ProofMediaReference } from './proofMediaUpload';
+import type { ProofSignatureReference } from './proofSignatureCapture';
 
 export type StopProofAction = 'delivered' | 'failed';
 export type StopProofFailureReason = 'CUSTOMER_UNAVAILABLE' | 'DAMAGED' | 'INACCESSIBLE' | 'OTHER';
 
 export type StopProofEventInput = {
   action: StopProofAction;
+  barcodes?: ProofBarcodeReference[];
   deliveryStopId: string;
+  media?: ProofMediaReference[];
   note: string;
   occurredAt?: Date;
   photoUris?: string[];
   reason?: StopProofFailureReason;
   routePlanId: string;
+  signatures?: ProofSignatureReference[];
 };
 
 export type StopProofEventResult =
@@ -48,21 +54,30 @@ function getStopProofEventType(action: StopProofAction): Extract<DriverEventType
 }
 
 function getStopProofPayload(input: StopProofEventInput): Record<string, unknown> {
-  const media = getProofMedia(input.photoUris ?? []);
+  const media = [
+    ...getProofMedia(input.photoUris ?? []),
+    ...(input.media ?? []),
+  ];
+  const barcodes = input.barcodes ?? [];
+  const signatures = input.signatures ?? [];
 
   if (input.action === 'delivered') {
     return {
+      ...(barcodes.length === 0 ? {} : { barcodes }),
       ...(media.length === 0 ? {} : { media }),
       note: input.note,
+      ...(signatures.length === 0 ? {} : { signatures }),
       source: 'driver-app-mvp',
       type: 'DELIVERED_NOTE',
     };
   }
 
   return {
+    ...(barcodes.length === 0 ? {} : { barcodes }),
     ...(media.length === 0 ? {} : { media }),
     note: input.note,
     reason: input.reason ?? 'OTHER',
+    ...(signatures.length === 0 ? {} : { signatures }),
     source: 'driver-app-mvp',
     type: 'FAILED_REASON',
   };

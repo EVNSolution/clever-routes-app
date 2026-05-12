@@ -1,0 +1,114 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+import {
+  createProofMediaUploadApiClient,
+  uploadCapturedProofPhoto,
+  type ProofMediaUploadRequest,
+} from './proofMediaUpload';
+
+describe('proof media upload', () => {
+  it('uploads captured proof photo with driver bearer token and returns durable media reference', async () => {
+    const requests: { body: FormData; headers: Record<string, string>; method: string; url: string }[] = [];
+    const service = createProofMediaUploadApiClient({
+      accessToken: 'driver-token',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body as FormData,
+          headers: init?.headers ?? {},
+          method: String(init?.method),
+          url: String(url),
+        });
+        return {
+          ok: true,
+          json: async () => ({
+            data: {
+              contentType: 'image/jpeg',
+              kind: 'photo',
+              mediaId: 'media-1',
+              sha256: 'sha256-fixture',
+              sizeBytes: 12345,
+              source: 'camera',
+              storageKey: 'driver-proof/media-1.jpg',
+              uploadedAt: '2026-05-12T10:00:00.000Z',
+            },
+            error: null,
+          }),
+        };
+      },
+    });
+
+    const result = await uploadCapturedProofPhoto({
+      captureResult: { kind: 'captured', source: 'camera', uri: 'file:///proof/stop-1.jpg' },
+      uploadRequest: {
+        deliveryStopId: 'stop-1',
+        fileName: 'stop-1.jpg',
+        routePlanId: 'route-1',
+      },
+      uploadService: service,
+    });
+
+    assert.equal(result.kind, 'uploaded');
+    assert.deepEqual(result.media, {
+      contentType: 'image/jpeg',
+      kind: 'photo',
+      mediaId: 'media-1',
+      sha256: 'sha256-fixture',
+      sizeBytes: 12345,
+      source: 'camera',
+      storageKey: 'driver-proof/media-1.jpg',
+      uploadedAt: '2026-05-12T10:00:00.000Z',
+    });
+    assert.equal(requests[0]?.url, 'https://delivery.example.com/driver/proof-media');
+    assert.equal(requests[0]?.method, 'POST');
+    assert.equal(requests[0]?.headers.Authorization, 'Bearer driver-token');
+    assert.equal(requests[0]?.headers['Content-Type'], undefined);
+    assert.equal(requests[0]?.body.get('deliveryStopId'), 'stop-1');
+    assert.equal(requests[0]?.body.get('routePlanId'), 'route-1');
+    assert.equal(requests[0]?.body.get('source'), 'camera');
+  });
+
+  it('does not upload proof media when photo capture did not produce a file URI', async () => {
+    const result = await uploadCapturedProofPhoto({
+      captureResult: { kind: 'cancelled', source: 'library' },
+      uploadRequest: {
+        deliveryStopId: 'stop-1',
+        fileName: 'stop-1.jpg',
+        routePlanId: 'route-1',
+      },
+      uploadService: {
+        uploadProofMedia: async (_request: ProofMediaUploadRequest) => {
+          throw new Error('upload should not run');
+        },
+      },
+    });
+
+    assert.deepEqual(result, {
+      kind: 'skipped',
+      message: 'Proof photo was not captured, so no media upload was attempted.',
+      reason: 'photo_not_captured',
+    });
+  });
+
+  it('returns upload_failed without creating a durable evidence reference', async () => {
+    const result = await uploadCapturedProofPhoto({
+      captureResult: { kind: 'captured', source: 'camera', uri: 'file:///proof/stop-1.jpg' },
+      uploadRequest: {
+        deliveryStopId: 'stop-1',
+        fileName: 'stop-1.jpg',
+        routePlanId: 'route-1',
+      },
+      uploadService: {
+        uploadProofMedia: async () => {
+          throw new Error('network down');
+        },
+      },
+    });
+
+    assert.deepEqual(result, {
+      kind: 'upload_failed',
+      message: 'Proof media upload failed: network down',
+    });
+  });
+});
