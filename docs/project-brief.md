@@ -15,6 +15,32 @@ agent 작업 절차, branch 운영, 테스트 순서, 완료 조건은 `AGENTS.m
 - target service: `clever-driver-app`
 - template lineage: `clever-agent-project/docs/templates@main`
 
+## 레포 역할
+
+`clever-driver-app`는 Clever/Tomatono 배송원이 쓰는 driver-facing mobile client의 구현 대상 repo다.
+
+이 repo가 책임지는 것:
+
+- 배송원 모바일 UX와 앱 런타임 코드
+- 전화번호 기반 접근 시작 화면과 초대/접근 상태 표시
+- 위치정보 처리 동의 및 개인정보 이용 동의 UX
+- 배송원에게 배정된 당일 route/stop 조회 화면
+- 모바일 앱의 로컬 검증, 빌드, smoke evidence
+
+이 repo가 책임지지 않는 것:
+
+- driver, route, order의 canonical data model
+- 관리자용 driver 등록/초대, route 생성/편집/삭제 UX
+- server-side compliance record 저장소와 API contract의 최종 정본
+- Shopify embedded admin console 구현
+
+정본 경계:
+
+- `clever-delivery-server`: driver/route/order/compliance record의 server-side source of truth
+- `clever-context-monorepo`: 서비스 책임, API, 데이터 흐름, 배포 context의 해석 정본
+- `clever-change-control`: project-start/change-control 승인과 추적 정본
+- 이 repo: 배송원 모바일 client 구현과 로컬 앱 문맥
+
 ## 문제 정의
 
 Clever/Tomatono 배송 운영에는 관리자 콘솔과 delivery server는 준비되고 있으나, 실제 배송원이 당일 배정 route를 확인하고 위치정보 처리 동의를 완료할 수 있는 전용 모바일 앱 repo가 없다.
@@ -59,6 +85,100 @@ Clever/Tomatono 배송 운영에는 관리자 콘솔과 delivery server는 준�
 3. 당일 assigned route/stop list 조회
 4. stop detail에서 주소, 순서, 지도 이동 준비 정보 확인
 5. MVP 이후 위치 업데이트 송신과 delivery status update 확장
+
+## 구현 계획 v0
+
+이 계획은 코드 구현 전에 repo 역할과 순서를 고정하기 위한 초안이다. 각 단계는 별도 target issue와 GitHub Development linked branch에서 진행한다.
+
+### 0단계: repo context 고정
+
+- 목적: 이 repo의 역할, MVP 경계, 후속 구현 순서를 명확히 한다.
+- 산출물: `docs/project-brief.md`, `README.md`, issue/branch/PR 운영 기준 확인
+- 완료 기준:
+  - 레포 역할과 non-goal이 문서에 명시된다.
+  - 구현은 후속 issue-linked branch에서만 진행한다는 제약이 남아 있다.
+  - open PR/active branch 충돌이 없거나 non-overlap 판정이 기록된다.
+- 검증:
+  - `git diff --check`
+  - 문서 diff review
+
+### 1단계: mobile framework bootstrap
+
+- 목적: 앱을 실행·검증할 수 있는 최소 mobile runtime을 만든다.
+- 선행 결정:
+  - framework: Expo/React Native 계열 우선 검토
+  - package manager와 Node/runtime version
+  - 앱 라우팅 방식과 기본 화면 구조
+- 산출물:
+  - 앱 skeleton
+  - lint/typecheck/test/build 또는 start command
+  - base navigation과 placeholder screens
+- 완료 기준:
+  - clean checkout에서 install 후 앱 시작 command가 동작한다.
+  - PR 전 필수 검증 명령이 repo 현실에 맞게 정의된다.
+
+### 2단계: driver access 시작 UX
+
+- 목적: 배송원이 전화번호를 입력하고 서버에서 driver invite/access 상태를 확인하는 시작 흐름을 만든다.
+- 선행 계약:
+  - E.164 phone normalization 기준
+  - delivery server의 driver-facing phone lookup endpoint
+  - invited/not-found/disabled/error 상태 코드
+- 산출물:
+  - phone input screen
+  - validation and API error state rendering
+  - session/access state 저장 방식
+- 완료 기준:
+  - 유효하지 않은 번호는 서버 요청 전에 막는다.
+  - 초대된 배송원만 consent 단계로 이동한다.
+
+### 3단계: consent gate
+
+- 목적: 위치정보 처리 동의와 개인정보 이용 동의를 route 조회 전 필수 gate로 만든다.
+- 선행 계약:
+  - legal copy source
+  - consent versioning
+  - delivery server consent record endpoint
+- 산출물:
+  - consent screen
+  - required consent state machine
+  - consent submit/retry/error UX
+- 완료 기준:
+  - 동의 전에는 route 화면에 접근할 수 없다.
+  - 동의 성공 후 서버 기록 결과를 근거로 다음 화면으로 이동한다.
+
+### 4단계: assigned route MVP
+
+- 목적: 배송원이 당일 자신에게 배정된 route와 stop list를 확인한다.
+- 선행 계약:
+  - assigned route 조회 endpoint
+  - route/stop response shape
+  - no-route, multiple-route, API error 상태 처리 기준
+- 산출물:
+  - today's route screen
+  - stop list and stop detail screen
+  - 주소/순서/지도 이동 준비 정보 표시
+- 완료 기준:
+  - invited phone → consent accepted → today's route 확인 smoke flow가 가능하다.
+  - route 없음/error 상태가 사용자에게 명확히 표시된다.
+
+### 5단계: release evidence and context sync
+
+- 목적: MVP 앱을 검증 가능한 형태로 묶고 서비스 context 정본 반영 필요 여부를 처리한다.
+- 산출물:
+  - local or CI verification output
+  - mobile runtime screenshot/video 또는 build artifact
+  - 필요 시 `clever-context-monorepo/docs/services/clever-driver-app/index.md`
+- 완료 기준:
+  - PR 본문에 target issue, change-control issue, linked branch, 검증 결과가 남는다.
+  - public contract/API/data flow 변경 여부가 context monorepo에 반영되거나 불필요 사유가 기록된다.
+
+## 작업 분리 원칙
+
+- mobile framework bootstrap과 driver-facing API contract 정의는 분리한다.
+- server API shape가 확정되지 않은 상태에서는 앱 UI를 mock boundary까지 구현하고, 실제 contract 연동 PR은 별도 issue로 둔다.
+- consent legal copy/source와 consent record API는 route 화면 구현보다 먼저 결정한다.
+- public API, env, deploy profile이 바뀌면 context monorepo 반영 여부를 PR에서 판단한다.
 
 ## 데이터와 연동
 
