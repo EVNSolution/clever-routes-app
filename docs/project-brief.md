@@ -358,7 +358,7 @@ unidentified
 - input data: route context, E.164 phone, consent decisions, current date/device context
 - output data: company guidance, consent record, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
-- public contract: delivery server driver-facing API contract to be defined in follow-up issue
+- public contract: delivery server route access lookup is defined in `clever-delivery-server#48`; consent record, assigned route, and stop detail contracts remain follow-up work
 
 ## 검증 초안
 
@@ -379,6 +379,7 @@ unidentified
 ## 다음 작업 목록
 
 1. Merge mobile framework bootstrap and base navigation PR into `dev`.
-2. Define driver-facing delivery server API contract for route+phone access, company guidance, consent, and assigned route.
-3. Implement route+phone access and company guidance UX against the agreed mock/API boundary.
-4. Add context-monorepo service document once framework/API boundaries are confirmed.
+2. Define driver-facing delivery server API contract for route+phone access and company guidance. — completed in `clever-delivery-server#48`; consent and assigned route contracts remain pending.
+3. Implement route+phone access and company guidance UX against the agreed mock/API boundary. — current slice.
+4. Define consent record plus assigned route/stop detail APIs and app UX.
+5. Add context-monorepo service document once framework/API boundaries are confirmed.

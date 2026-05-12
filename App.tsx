@@ -1,32 +1,62 @@
 import { StatusBar } from 'expo-status-bar';
 import { useMemo, useState } from 'react';
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import {
   canEnterDeliveryActive,
   canRevealRouteDetails,
   DRIVER_FLOW_STATES,
-  getInitialAccessValidation,
-  getPlaceholderScreens,
-  type PlaceholderScreen,
+  type DriverFlowState,
 } from './src/driverFlow';
+import {
+  createMockRouteAccessService,
+  sampleInvitedRouteAccess,
+  submitRouteAccess,
+  type RouteAccessLookupResult,
+  type RouteAccessSubmissionResult,
+} from './src/routeAccess';
 
-const SAMPLE_ROUTE_CONTEXT = 'tomatono-route-2026-05-12';
 const SAMPLE_PHONE_E164 = '+14165550123';
 
+type MockMode = RouteAccessLookupResult['status'];
+
 export default function App() {
-  const screens = useMemo(() => getPlaceholderScreens(), []);
-  const [screenIndex, setScreenIndex] = useState(0);
-  const currentScreen = screens[screenIndex];
-  const accessValidation = getInitialAccessValidation({
-    routeContext: SAMPLE_ROUTE_CONTEXT,
-    phoneE164: SAMPLE_PHONE_E164,
-  });
-  const canRevealRoute = canRevealRouteDetails(currentScreen.state);
+  const [routeContext, setRouteContext] = useState(sampleInvitedRouteAccess.routeAccess.routeContext);
+  const [phoneE164, setPhoneE164] = useState(SAMPLE_PHONE_E164);
+  const [mockMode, setMockMode] = useState<MockMode>('INVITED');
+  const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const routeAccessService = useMemo(() => {
+    const result: RouteAccessLookupResult =
+      mockMode === 'INVITED' ? sampleInvitedRouteAccess : { status: mockMode };
+    return createMockRouteAccessService(result);
+  }, [mockMode]);
+
+  const currentFlowState = getCurrentFlowState(submission);
+  const canRevealRoute = canRevealRouteDetails(currentFlowState);
   const canStartDelivery = canEnterDeliveryActive({
-    state: currentScreen.state,
+    state: currentFlowState,
     hasLocationPermission: true,
   });
+
+  async function handleLookup() {
+    setIsSubmitting(true);
+    try {
+      setSubmission(await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -34,47 +64,169 @@ export default function App() {
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.header}>
           <Text style={styles.eyebrow}>Clever Driver MVP</Text>
-          <Text style={styles.title}>Route + phone delivery flow</Text>
+          <Text style={styles.title}>Route + phone access</Text>
           <Text style={styles.subtitle}>
-            Native iOS/Android bootstrap for route-scoped driver access, company guidance,
-            consent gate, and delivery-ready state placeholders.
+            Enter the company route context and E.164 phone number. The app shows company
+            guidance before consent, and never reveals stop/customer data in this step.
           </Text>
         </View>
 
-        <FlowProgress currentState={currentScreen.state} />
-        <ScreenCard screen={currentScreen} />
+        <FlowProgress currentState={currentFlowState} />
+
+        <View style={styles.cardLight}>
+          <Text style={styles.sectionTitle}>Access lookup</Text>
+          <LabeledInput
+            label="Route context"
+            onChangeText={setRouteContext}
+            placeholder="Route link/code or RoutePlan UUID"
+            value={routeContext}
+          />
+          <LabeledInput
+            keyboardType="phone-pad"
+            label="Driver phone (E.164)"
+            onChangeText={setPhoneE164}
+            placeholder="+14165550123"
+            value={phoneE164}
+          />
+          <MockModePicker mockMode={mockMode} setMockMode={setMockMode} />
+          <Pressable accessibilityRole="button" onPress={handleLookup} style={styles.primaryButton}>
+            {isSubmitting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>Look up assignment</Text>}
+          </Pressable>
+        </View>
+
+        {submission === null ? <EmptyStateCard /> : <RouteAccessResultCard result={submission} />}
 
         <View style={styles.guardPanel}>
           <Text style={styles.sectionTitle}>Current guard snapshot</Text>
-          <GuardRow label="Sample access input" value={accessValidation.ok ? 'route context + E.164 phone' : accessValidation.reason} />
+          <GuardRow label="Current flow state" value={currentFlowState} />
           <GuardRow label="Route details visible" value={canRevealRoute ? 'yes' : 'blocked until consent'} />
           <GuardRow label="Delivery active allowed" value={canStartDelivery ? 'yes' : 'requires route_ready + OS permission'} />
-        </View>
-
-        <View style={styles.actions}>
-          <Pressable
-            accessibilityRole="button"
-            disabled={screenIndex === 0}
-            onPress={() => setScreenIndex((value) => Math.max(0, value - 1))}
-            style={[styles.button, screenIndex === 0 && styles.buttonDisabled]}
-          >
-            <Text style={styles.buttonText}>Back</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            disabled={screenIndex === screens.length - 1}
-            onPress={() => setScreenIndex((value) => Math.min(screens.length - 1, value + 1))}
-            style={[styles.button, screenIndex === screens.length - 1 && styles.buttonDisabled]}
-          >
-            <Text style={styles.buttonText}>Next step</Text>
-          </Pressable>
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-function FlowProgress({ currentState }: { currentState: PlaceholderScreen['state'] }) {
+function getCurrentFlowState(submission: RouteAccessSubmissionResult | null): DriverFlowState {
+  if (submission?.kind === 'company_guidance') {
+    return submission.flowState;
+  }
+
+  return 'route_context_entered';
+}
+
+function LabeledInput({
+  keyboardType,
+  label,
+  onChangeText,
+  placeholder,
+  value,
+}: {
+  keyboardType?: 'default' | 'phone-pad';
+  label: string;
+  onChangeText(value: string): void;
+  placeholder: string;
+  value: string;
+}) {
+  return (
+    <View style={styles.inputGroup}>
+      <Text style={styles.inputLabel}>{label}</Text>
+      <TextInput
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType={keyboardType ?? 'default'}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        style={styles.input}
+        value={value}
+      />
+    </View>
+  );
+}
+
+function MockModePicker({
+  mockMode,
+  setMockMode,
+}: {
+  mockMode: MockMode;
+  setMockMode(value: MockMode): void;
+}) {
+  const modes: MockMode[] = ['INVITED', 'NOT_FOUND', 'DISABLED', 'BLOCKED'];
+  return (
+    <View style={styles.mockPanel}>
+      <Text style={styles.inputLabel}>Local mock response</Text>
+      <View style={styles.chipGrid}>
+        {modes.map((mode) => (
+          <Pressable
+            accessibilityRole="button"
+            key={mode}
+            onPress={() => setMockMode(mode)}
+            style={[styles.chip, mockMode === mode && styles.chipActive]}
+          >
+            <Text style={[styles.chipText, mockMode === mode && styles.chipTextActive]}>{mode}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function RouteAccessResultCard({ result }: { result: RouteAccessSubmissionResult }) {
+  if (result.kind === 'validation_error') {
+    return (
+      <View style={styles.warningCard}>
+        <Text style={styles.cardKickerDark}>Fix input</Text>
+        <Text style={styles.cardTitleDark}>Lookup blocked before server call</Text>
+        <Text style={styles.cardBodyDark}>{result.message}</Text>
+      </View>
+    );
+  }
+
+  if (result.kind === 'denied') {
+    return (
+      <View style={styles.warningCard}>
+        <Text style={styles.cardKickerDark}>{result.status}</Text>
+        <Text style={styles.cardTitleDark}>Assignment not available</Text>
+        <Text style={styles.cardBodyDark}>{result.message}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.cardDark}>
+      <Text style={styles.cardKicker}>Company guidance</Text>
+      <Text style={styles.cardTitle}>{result.companyGuidance.companyDisplayName}</Text>
+      <Text style={styles.cardBody}>{result.companyGuidance.routeName}</Text>
+      <InfoRow label="Shop" value={result.companyGuidance.shopDomain} />
+      <InfoRow label="Delivery date" value={result.companyGuidance.deliveryDate} />
+      <InfoRow label="Timezone" value={result.companyGuidance.timezone ?? 'pending'} />
+      <InfoRow label="Pickup" value={result.companyGuidance.pickupGuidance ?? 'No pickup guidance yet'} />
+      <InfoRow label="Support" value={result.companyGuidance.operatorSupportContact ?? 'Contact dispatch'} />
+      {result.companyGuidance.driverInstructions.map((instruction) => (
+        <Text key={instruction} style={styles.instructionText}>• {instruction}</Text>
+      ))}
+      <View style={styles.actionPreview}>
+        <Text style={styles.actionPreviewLabel}>Next</Text>
+        <Text style={styles.actionPreviewText}>Continue to consent gate placeholder</Text>
+      </View>
+    </View>
+  );
+}
+
+function EmptyStateCard() {
+  return (
+    <View style={styles.cardDark}>
+      <Text style={styles.cardKicker}>Before route data</Text>
+      <Text style={styles.cardTitle}>Company confirmation comes first</Text>
+      <Text style={styles.cardBody}>
+        The lookup step only returns safe company guidance. Consent, route stops, customer
+        address, and location collection remain blocked for later states.
+      </Text>
+    </View>
+  );
+}
+
+function FlowProgress({ currentState }: { currentState: DriverFlowState }) {
   return (
     <View style={styles.progressPanel}>
       <Text style={styles.sectionTitle}>Documented state flow</Text>
@@ -91,16 +243,11 @@ function FlowProgress({ currentState }: { currentState: PlaceholderScreen['state
   );
 }
 
-function ScreenCard({ screen }: { screen: PlaceholderScreen }) {
+function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <View style={styles.card}>
-      <Text style={styles.cardKicker}>{screen.state}</Text>
-      <Text style={styles.cardTitle}>{screen.title}</Text>
-      <Text style={styles.cardBody}>{screen.purpose}</Text>
-      <View style={styles.actionPreview}>
-        <Text style={styles.actionPreviewLabel}>Primary action</Text>
-        <Text style={styles.actionPreviewText}>{screen.primaryAction}</Text>
-      </View>
+    <View style={styles.infoRow}>
+      <Text style={styles.infoLabel}>{label}</Text>
+      <Text style={styles.infoValue}>{value}</Text>
     </View>
   );
 }
@@ -159,6 +306,33 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
   },
+  cardLight: {
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    gap: 14,
+    padding: 18,
+  },
+  inputGroup: {
+    gap: 6,
+  },
+  inputLabel: {
+    color: '#475569',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  input: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#cbd5e1',
+    borderRadius: 14,
+    borderWidth: 1,
+    color: '#0f172a',
+    fontSize: 15,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  mockPanel: {
+    gap: 8,
+  },
   chipGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -181,14 +355,41 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: '#ffffff',
   },
-  card: {
+  primaryButton: {
+    alignItems: 'center',
+    backgroundColor: '#2563eb',
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+  },
+  primaryButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  cardDark: {
     backgroundColor: '#0f172a',
     borderRadius: 28,
     gap: 12,
     padding: 22,
   },
+  warningCard: {
+    backgroundColor: '#fff7ed',
+    borderColor: '#fed7aa',
+    borderRadius: 24,
+    borderWidth: 1,
+    gap: 10,
+    padding: 18,
+  },
   cardKicker: {
     color: '#93c5fd',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  cardKickerDark: {
+    color: '#c2410c',
     fontSize: 13,
     fontWeight: '800',
     letterSpacing: 0.5,
@@ -199,10 +400,42 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '800',
   },
+  cardTitleDark: {
+    color: '#7c2d12',
+    fontSize: 22,
+    fontWeight: '800',
+  },
   cardBody: {
     color: '#cbd5e1',
     fontSize: 16,
     lineHeight: 24,
+  },
+  cardBodyDark: {
+    color: '#9a3412',
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  infoRow: {
+    borderTopColor: '#1e293b',
+    borderTopWidth: 1,
+    gap: 4,
+    paddingTop: 10,
+  },
+  infoLabel: {
+    color: '#93c5fd',
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  infoValue: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  instructionText: {
+    color: '#dbeafe',
+    fontSize: 14,
+    lineHeight: 20,
   },
   actionPreview: {
     backgroundColor: '#1e293b',
@@ -241,26 +474,6 @@ const styles = StyleSheet.create({
   },
   guardValue: {
     color: '#0f172a',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  button: {
-    alignItems: 'center',
-    backgroundColor: '#2563eb',
-    borderRadius: 16,
-    flex: 1,
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-  },
-  buttonDisabled: {
-    backgroundColor: '#94a3b8',
-  },
-  buttonText: {
-    color: '#ffffff',
     fontSize: 15,
     fontWeight: '800',
   },
