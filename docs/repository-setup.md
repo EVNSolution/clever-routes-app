@@ -21,7 +21,7 @@ This document records the repo baseline for the `clever-driver-app` implementati
 | `npm run start` | Start Expo local dev server |
 | `npm run ios` | Start Expo and launch iOS target when available |
 | `npm run android` | Start Expo and launch Android target when available |
-| `npm run test` | Enumerate `src/**/*.test.ts` files with `scripts/run-tests.mjs`, then run the Node test runner through `tsx` without shell-glob dependence |
+| `npm run test` | Enumerate `src/**/*.test.ts` files with `scripts/run-tests.mjs`, then run the Node test runner through `tsx` without shell-glob dependence; optional path arguments narrow the run |
 | `npm run typecheck` | Run TypeScript without emitting build outputs |
 | `npm run lint` | Run Expo ESLint config |
 | `npm run check:workspace` | Run typecheck and tests together |

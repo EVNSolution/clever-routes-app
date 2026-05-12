@@ -22,12 +22,35 @@ function collectTestFiles(directory) {
     .sort();
 }
 
-const testFiles = collectTestFiles(sourceRoot).map((path) =>
+function collectRequestedTestFiles(paths) {
+  return paths.flatMap((path) => {
+    const stats = statSync(path);
+
+    if (stats.isDirectory()) {
+      return collectTestFiles(path);
+    }
+
+    if (stats.isFile() && path.endsWith(testFileSuffix)) {
+      return [path];
+    }
+
+    return [];
+  });
+}
+
+const requestedPaths = process.argv.slice(2);
+const testFiles = (requestedPaths.length === 0
+  ? collectTestFiles(sourceRoot)
+  : collectRequestedTestFiles(requestedPaths)
+).map((path) =>
   relative(process.cwd(), path),
 );
 
 if (testFiles.length === 0) {
-  console.error(`No ${testFileSuffix} files found under ${sourceRoot}/.`);
+  const sourceDescription = requestedPaths.length === 0
+    ? `${sourceRoot}/`
+    : requestedPaths.join(", ");
+  console.error(`No ${testFileSuffix} files found for ${sourceDescription}.`);
   process.exit(1);
 }
 

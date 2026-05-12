@@ -76,6 +76,7 @@ const completeManifest = `# Clever Driver release evidence manifest
 | Google Play Data safety answers reviewed | approved | play-ref | legal-owner | done |
 | Background location review rationale approved | approved | background-ref | legal-owner | done |
 | Photo/video permission review approved | approved | photo-ref | legal-owner | done |
+| Google Play minimum-scope permission review completed | approved | permission-scope-ref | legal-owner | location/photo-video reviewed; Contacts permissions absent in native manifest |
 | Store/private distribution path approved | approved | distribution-ref | owner | done |
 | Public \`LICENSE\` / reuse terms decision | approved | license-ref | owner | done |
 
@@ -86,6 +87,7 @@ const completeManifest = `# Clever Driver release evidence manifest
 | Every physical-device smoke row has iPhone and Android evidence | pass | verified |
 | Store/private distribution path approved | pass | verified |
 | Privacy disclosure copy approved | pass | verified |
+| Current Google Play minimum-scope permission review complete | pass | verified |
 | Local native release preflight passes | pass | verified |
 | EAS build records point to committed source | pass | verified |
 | Generated artifacts and sensitive evidence kept outside git | pass | verified |
@@ -120,4 +122,35 @@ test('rejects pending smoke evidence, unapproved store gates, blocked decisions,
   assert.match(result.failures.join('\n'), /store\/privacy row/i);
   assert.match(result.failures.join('\n'), /release candidate decision/i);
   assert.match(result.failures.join('\n'), /sensitive or binary artifact pattern/i);
+});
+
+test('rejects manifests missing the minimum-scope permission review gate', () => {
+  const missingPermissionGateManifest = completeManifest.replace(
+    '| Google Play minimum-scope permission review completed | approved | permission-scope-ref | legal-owner | location/photo-video reviewed; Contacts permissions absent in native manifest |\n',
+    '',
+  );
+
+  const result = verifyReleaseEvidenceManifest(missingPermissionGateManifest);
+
+  assert.equal(result.ok, false);
+  assert.match(result.failures.join('\n'), /Google Play minimum-scope permission review completed/i);
+});
+
+test('rejects pending minimum-scope permission review evidence', () => {
+  const pendingPermissionGateManifest = completeManifest
+    .replace(
+      '| Google Play minimum-scope permission review completed | approved | permission-scope-ref | legal-owner | location/photo-video reviewed; Contacts permissions absent in native manifest |',
+      '| Google Play minimum-scope permission review completed | pending | pending | pending | pending |',
+    )
+    .replace(
+      '| Current Google Play minimum-scope permission review complete | pass | verified |',
+      '| Current Google Play minimum-scope permission review complete | pending | pending |',
+    );
+
+  const result = verifyReleaseEvidenceManifest(pendingPermissionGateManifest);
+
+  assert.equal(result.ok, false);
+  assert.match(result.failures.join('\n'), /pending placeholder/i);
+  assert.match(result.failures.join('\n'), /Google Play minimum-scope permission review completed/i);
+  assert.match(result.failures.join('\n'), /Current Google Play minimum-scope permission review complete/i);
 });

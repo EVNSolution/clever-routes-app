@@ -21,6 +21,26 @@ const SENSITIVE_OR_BINARY_PATTERNS: { label: string; pattern: RegExp }[] = [
 
 const COMPLETED_STATUS_VALUES = new Set(['approved', 'complete', 'pass']);
 const PASS_STATUS_VALUES = new Set(['pass']);
+const REQUIRED_STORE_PRIVACY_AREAS = [
+  'Privacy policy URL approved',
+  'App Store privacy answers reviewed',
+  'Google Play Data safety answers reviewed',
+  'Background location review rationale approved',
+  'Photo/video permission review approved',
+  'Google Play minimum-scope permission review completed',
+  'Store/private distribution path approved',
+  'Public LICENSE / reuse terms decision'
+];
+const REQUIRED_COMPLETION_DECISION_GATES = [
+  'Every physical-device smoke row has iPhone and Android evidence',
+  'Store/private distribution path approved',
+  'Privacy disclosure copy approved',
+  'Current Google Play minimum-scope permission review complete',
+  'Local native release preflight passes',
+  'EAS build records point to committed source',
+  'Generated artifacts and sensitive evidence kept outside git',
+  'Follow-up blockers filed as GitHub issues'
+];
 
 export function verifyReleaseEvidenceManifest(markdown: string): ReleaseEvidenceVerificationResult {
   const failures: string[] = [];
@@ -182,6 +202,12 @@ function verifyStoreAndPrivacyEvidence(markdown: string, failures: string[]): vo
     return;
   }
 
+  for (const requiredArea of REQUIRED_STORE_PRIVACY_AREAS) {
+    if (rows.find((row) => normalized(row.cells[0]) === normalized(requiredArea)) === undefined) {
+      failures.push(`store/privacy row "${requiredArea}" is missing.`);
+    }
+  }
+
   for (const row of rows) {
     const [area, status, evidenceReference, approver] = row.cells;
     if (
@@ -200,6 +226,13 @@ function verifyCompletionDecision(markdown: string, failures: string[]): void {
 
   if (rows.length === 0) {
     failures.push('completion decision table is missing.');
+    return;
+  }
+
+  for (const requiredGate of REQUIRED_COMPLETION_DECISION_GATES) {
+    if (rows.find((row) => normalized(row.cells[0]) === normalized(requiredGate)) === undefined) {
+      failures.push(`completion decision gate "${requiredGate}" is missing.`);
+    }
   }
 
   for (const row of rows) {
