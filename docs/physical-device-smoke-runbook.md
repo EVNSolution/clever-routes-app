@@ -108,5 +108,8 @@ The release smoke gate is complete only when:
 - store/private distribution policy and privacy disclosure copy are approved
 - EAS build records point to committed source
 - generated artifacts and sensitive evidence remain outside git
+- native manifest/store review confirms the current app does not request
+  Contacts permissions, and current Google Play minimum-scope permission caveats
+  for location and photo/video have been reviewed
 
 If any step fails, stop the release candidate, create a new target issue and change-control issue, and attach only sanitized evidence references.
