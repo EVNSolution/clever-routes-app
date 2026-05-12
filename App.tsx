@@ -62,6 +62,7 @@ import {
   uploadCapturedProofPhoto,
   createMockProofMediaUploadService,
   shouldQueueFailedProofMediaUpload,
+  type ProofMediaUploadMockMode,
   type ProofMediaUploadResult,
   type ProofMediaUploadService,
 } from './src/proofMediaUpload';
@@ -131,6 +132,7 @@ const SAMPLE_PHONE_E164 = '+14165550123';
 type MockMode = RouteAccessLookupResult['status'];
 type ConsentMockMode = 'success' | 'failure';
 type AssignedRouteMockMode = 'assigned' | 'failure' | 'none';
+type ProofMediaMockMode = ProofMediaUploadMockMode;
 type OfflineQueueRestoreStatus = 'failed' | 'loading' | 'ready';
 type StopProofDraft = {
   failureReason: StopProofFailureReason;
@@ -148,6 +150,7 @@ export default function App() {
   const [mockMode, setMockMode] = useState<MockMode>('INVITED');
   const [consentMockMode, setConsentMockMode] = useState<ConsentMockMode>('success');
   const [assignedRouteMockMode, setAssignedRouteMockMode] = useState<AssignedRouteMockMode>('assigned');
+  const [proofMediaMockMode, setProofMediaMockMode] = useState<ProofMediaMockMode>('success');
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
   const [consentSubmission, setConsentSubmission] = useState<DriverConsentSubmissionResult | null>(null);
   const [assignedRouteSubmission, setAssignedRouteSubmission] = useState<AssignedRouteLoadResult | null>(null);
@@ -193,7 +196,10 @@ export default function App() {
   const continuousLocationStreamService = useMemo(() => createExpoContinuousLocationStreamService(), []);
   const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
   const proofBarcodeCaptureService = useMemo(() => createExpoProofBarcodeCaptureService(), []);
-  const proofMediaUploadService = useMemo(() => createMockProofMediaUploadService(), []);
+  const proofMediaUploadService = useMemo(
+    () => createMockProofMediaUploadService({ mode: proofMediaMockMode }),
+    [proofMediaMockMode],
+  );
   const offlineSubmissionQueueStorage = useMemo(() => createExpoOfflineSubmissionQueueStorage(), []);
 
   const runtimeConfig = useMemo(
@@ -855,6 +861,10 @@ export default function App() {
             value={phoneE164}
           />
           <MockModePicker mockMode={mockMode} setMockMode={setMockMode} />
+          <ProofMediaMockModePicker
+            proofMediaMockMode={proofMediaMockMode}
+            setProofMediaMockMode={setProofMediaMockMode}
+          />
           <Pressable accessibilityRole="button" onPress={handleLookup} style={styles.primaryButton}>
             {isSubmitting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>Look up assignment</Text>}
           </Pressable>
@@ -1151,6 +1161,36 @@ function MockModePicker({
             style={[styles.chip, mockMode === mode && styles.chipActive]}
           >
             <Text style={[styles.chipText, mockMode === mode && styles.chipTextActive]}>{mode}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function ProofMediaMockModePicker({
+  proofMediaMockMode,
+  setProofMediaMockMode,
+}: {
+  proofMediaMockMode: ProofMediaMockMode;
+  setProofMediaMockMode(value: ProofMediaMockMode): void;
+}) {
+  const modes: ProofMediaMockMode[] = ['success', 'failure', 'scan_rejected'];
+  return (
+    <View style={styles.mockPanel}>
+      <Text style={styles.inputLabel}>Local proof media upload mock</Text>
+      <Text style={styles.helpText}>
+        Used only when the app is running with local mock services. Live delivery-server mode ignores this selector.
+      </Text>
+      <View style={styles.chipGrid}>
+        {modes.map((mode) => (
+          <Pressable
+            accessibilityRole="button"
+            key={mode}
+            onPress={() => setProofMediaMockMode(mode)}
+            style={[styles.chip, proofMediaMockMode === mode && styles.chipActive]}
+          >
+            <Text style={[styles.chipText, proofMediaMockMode === mode && styles.chipTextActive]}>{mode}</Text>
           </Pressable>
         ))}
       </View>
@@ -2490,6 +2530,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 20,
     padding: 12,
+  },
+  helpText: {
+    color: '#475569',
+    fontSize: 13,
+    lineHeight: 18,
   },
   routeReadyBox: {
     backgroundColor: '#0f172a',

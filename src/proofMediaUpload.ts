@@ -30,6 +30,8 @@ export type ProofMediaUploadService = {
   uploadProofMedia(input: ProofMediaUploadRequest): Promise<ProofMediaReference>;
 };
 
+export type ProofMediaUploadMockMode = 'failure' | 'scan_rejected' | 'success';
+
 export type ProofMediaUploadResult =
   | { kind: 'skipped'; message: string; reason: 'photo_not_captured' }
   | { kind: 'upload_failed'; message: string; reason?: 'driver_access_expired' | 'proof_media_rejected' }
@@ -66,16 +68,34 @@ export type FetchLike = (
   status?: number;
 }>;
 
-export function createMockProofMediaUploadService(): ProofMediaUploadService {
+export function createMockProofMediaUploadService(input?: {
+  mode?: ProofMediaUploadMockMode;
+}): ProofMediaUploadService {
+  const mode = input?.mode ?? 'success';
+
   return {
-    uploadProofMedia: async (input) => ({
-      contentType: getContentTypeFromFileName(input.fileName),
-      kind: 'photo',
-      mediaId: `mock-media-${input.deliveryStopId}`,
-      source: input.source,
-      storageKey: `mock-driver-proof/${input.routePlanId}/${input.deliveryStopId}/${input.fileName}`,
-      uploadedAt: new Date().toISOString(),
-    }),
+    uploadProofMedia: async (request) => {
+      if (mode === 'scan_rejected') {
+        throw createProofMediaRejectedError();
+      }
+
+      if (mode === 'failure') {
+        throw new Error('Proof media mock upload failed');
+      }
+
+      return createMockProofMediaReference(request);
+    },
+  };
+}
+
+function createMockProofMediaReference(input: ProofMediaUploadRequest): ProofMediaReference {
+  return {
+    contentType: getContentTypeFromFileName(input.fileName),
+    kind: 'photo',
+    mediaId: `mock-media-${input.deliveryStopId}`,
+    source: input.source,
+    storageKey: `mock-driver-proof/${input.routePlanId}/${input.deliveryStopId}/${input.fileName}`,
+    uploadedAt: new Date().toISOString(),
   };
 }
 

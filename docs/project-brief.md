@@ -410,5 +410,6 @@ unidentified
 21. Implement delivery finish with `ROUTE_COMPLETED`, tracking stop, and route-scoped local queue cleanup. — completed
 22. Implement app-side live downstream `401` expired-token recovery and route+phone re-lookup guidance. — completed as app-side boundary; physical-device/live-server evidence remains pending
 23. Implement app-side proof media scanner rejection handling. — completed as app-side boundary; live scanner/backend deployment evidence remains pending
-24. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
-25. Add context-monorepo service document once production runtime/API boundaries are confirmed.
+24. Add local proof-media scanner rejection smoke mock mode. — completed as physical-device verification aid; real device evidence remains pending
+25. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
+26. Add context-monorepo service document once production runtime/API boundaries are confirmed.

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  createMockProofMediaUploadService,
   createProofMediaUploadApiClient,
   createProofMediaRejectedError,
   shouldQueueFailedProofMediaUpload,
@@ -213,5 +214,42 @@ describe('proof media upload', () => {
 
   it('can create a scanner rejection error for offline retry discard paths', () => {
     assert.equal(createProofMediaRejectedError().message, 'Proof photo was rejected by the safety scan. Capture another proof photo.');
+  });
+
+  it('can simulate scanner rejection through the local proof media mock mode', async () => {
+    const result = await uploadCapturedProofPhoto({
+      captureResult: { kind: 'captured', source: 'camera', uri: 'file:///proof/stop-1.jpg' },
+      uploadRequest: {
+        deliveryStopId: 'stop-1',
+        fileName: 'stop-1.jpg',
+        routePlanId: 'route-1',
+      },
+      uploadService: createMockProofMediaUploadService({ mode: 'scan_rejected' }),
+    });
+
+    assert.deepEqual(result, {
+      kind: 'upload_failed',
+      message: 'Proof photo was rejected by the safety scan. Capture another proof photo.',
+      reason: 'proof_media_rejected',
+    });
+    assert.equal(shouldQueueFailedProofMediaUpload(result), false);
+  });
+
+  it('can simulate retryable generic upload failure through the local proof media mock mode', async () => {
+    const result = await uploadCapturedProofPhoto({
+      captureResult: { kind: 'captured', source: 'camera', uri: 'file:///proof/stop-1.jpg' },
+      uploadRequest: {
+        deliveryStopId: 'stop-1',
+        fileName: 'stop-1.jpg',
+        routePlanId: 'route-1',
+      },
+      uploadService: createMockProofMediaUploadService({ mode: 'failure' }),
+    });
+
+    assert.deepEqual(result, {
+      kind: 'upload_failed',
+      message: 'Proof media upload failed: Proof media mock upload failed',
+    });
+    assert.equal(shouldQueueFailedProofMediaUpload(result), true);
   });
 });
