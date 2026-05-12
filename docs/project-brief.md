@@ -394,9 +394,9 @@ unidentified
 10. Implement route-started driver event after delivery_active. — completed
 11. Implement foreground `LOCATION_UPDATED` event after delivery_active. — completed
 12. Implement text-only stop delivered/failed proof events after delivery_active. — completed
-13. Implement background location service and continuous GPS `LOCATION_UPDATED` streaming. — current slice
+13. Implement background location service and continuous GPS `LOCATION_UPDATED` streaming. — completed
 14. Add richer proof-of-delivery metadata: note, photo URI metadata, failure reason taxonomy. — completed
-15. Add native proof photo URI capture from camera/library. — current slice
+15. Add native proof photo URI capture from camera/library. — completed
 16. Add binary proof media upload/native capture: photo file upload, signature drawing, barcode scanning.
 17. Add offline queue/retry policy for driver events and proof media.
 18. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
