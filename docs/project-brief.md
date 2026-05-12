@@ -325,16 +325,17 @@ unidentified
 
 - 목적: 배송원이 당일 자신에게 배정된 route와 stop list를 확인한다.
 - 선행 계약:
-  - assigned route 조회 endpoint
-  - route/stop response shape
-  - no-route, multiple-route, API error 상태 처리 기준
+  - assigned route 조회 endpoint: delivery-server `GET /driver/assigned-route` and app API boundary are implemented
+  - route/stop response shape: route summary and ordered stop cards are implemented in the local Expo flow
+  - no-route, multiple-route, API error 상태 처리 기준: no-route and API error states are implemented; multiple-route remains a server-side safe-empty/route-context concern
 - 산출물:
-  - today's route screen
-  - stop list and stop detail screen
-  - 주소/순서/지도 이동 준비 정보 표시
+  - today's route screen: implemented after consent with local mock/API boundary
+  - stop list and stop detail screen: implemented as ordered stop cards for route-ready MVP
+  - 주소/순서/지도 이동 준비 정보 표시: address, sequence, phone, and coordinate text are shown; native map launch remains a later UX slice
 - 완료 기준:
   - invited phone → consent accepted → today's route 확인 smoke flow가 가능하다.
   - route 없음/error 상태가 사용자에게 명확히 표시된다.
+  - live server calls still require route+phone 후속 driver access token/session issuance.
 
 ### 5단계: release evidence and context sync
 
@@ -357,9 +358,9 @@ unidentified
 ## 데이터와 연동
 
 - input data: route context, E.164 phone, consent decisions, current date/device context
-- output data: company guidance, consent record, driver session/access state, optional location update after MVP expansion
+- output data: company guidance, consent record, assigned route/stop display state, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
-- public contract: delivery server route access lookup is defined in `clever-delivery-server#48`; consent record, assigned route, and stop detail contracts remain follow-up work
+- public contract: delivery server route access lookup, consent record, and assigned route read are implemented as app-side boundaries; stop detail/actions, driver session issuance, and location event contracts remain follow-up work
 
 ## 검증 초안
 
@@ -371,16 +372,19 @@ unidentified
 ## 미정 사항
 
 - driver authentication/session method after route+phone lookup
-- route invite link/code format and company guidance payload shape
-- consent record API shape and legal copy source
-- map provider and background location policy for post-MVP
+- route invite link/code format beyond current RoutePlan UUID-shaped route context
+- consent legal copy source and production version registry
+- native map launch/provider and background location policy for post-MVP
 - minimum supported iOS/Android versions and physical-device background-location smoke matrix
 - local queue/idempotency policy for failed driver location events
 
 ## 다음 작업 목록
 
-1. Merge mobile framework bootstrap and base navigation PR into `dev`.
-2. Define driver-facing delivery server API contract for route+phone access and company guidance. — completed in `clever-delivery-server#48`; consent and assigned route contracts remain pending.
-3. Implement route+phone access and company guidance UX against the agreed mock/API boundary. — current slice.
-4. Define consent record plus assigned route/stop detail APIs and app UX.
-5. Add context-monorepo service document once framework/API boundaries are confirmed.
+1. Merge mobile framework bootstrap and base navigation PR into `dev`. — completed
+2. Define driver-facing delivery server API contract for route+phone access and company guidance. — completed in `clever-delivery-server#48`
+3. Implement route+phone access and company guidance UX against the agreed mock/API boundary. — completed
+4. Implement consent record app UX/API boundary. — completed; production token/session wiring remains pending
+5. Implement assigned route screen and app API boundary. — current slice
+6. Implement driver session/access token issuance and real environment wiring.
+7. Implement stop actions plus delivery-active/location permission slice.
+8. Add context-monorepo service document once production runtime/API boundaries are confirmed.

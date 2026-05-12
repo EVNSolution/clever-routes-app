@@ -1,8 +1,8 @@
-# Route access, company guidance, and consent flow
+# Route access, company guidance, consent, and assigned route flow
 
 ## Purpose
 
-This document records the current app-side route access and consent UX boundary. Product scenarios remain in `docs/project-brief.md`; server contract details are owned by `clever-delivery-server/docs/api/driver-route-access.md` and `clever-delivery-server/docs/api/driver-consents.md`.
+This document records the current app-side route access, consent, and assigned-route UX boundary. Product scenarios remain in `docs/project-brief.md`; server contract details are owned by `clever-delivery-server/docs/api/driver-route-access.md`, `clever-delivery-server/docs/api/driver-consents.md`, and `clever-delivery-server/docs/api/driver-assigned-route.md`.
 
 ## Current app behavior
 
@@ -14,11 +14,14 @@ The app now has an interactive route access screen for the first driver-facing f
 4. `INVITED` renders company/shop/route guidance and moves the visible state to `consent_required`.
 5. `NOT_FOUND`, `DISABLED`, and `BLOCKED` render safe denial messages without route/stop/customer data.
 6. Consent gate records required `LOCATION_INFORMATION` and `PERSONAL_INFORMATION` consent via a `DriverConsentService` boundary.
-7. Successful consent moves the visible state to `consent_recorded`; assigned route/stop data remains a follow-up slice.
+7. Successful consent moves the visible state to `consent_recorded`.
+8. Assigned route loading calls an `AssignedRouteService` boundary shaped like delivery-server `GET /driver/assigned-route`.
+9. `ASSIGNED_ROUTE` renders route summary and ordered stop cards, then moves the visible state to `route_ready`.
+10. `NO_ASSIGNED_ROUTE` and API errors stay in safe user-visible states without exposing other tenant/driver data.
 
 ## Local mock boundary
 
-`App.tsx` currently uses `createMockRouteAccessService()` from `src/routeAccess.ts` and `createMockDriverConsentService()` from `src/driverConsent.ts`. This keeps the app runnable without a live server while preserving the backend response shape.
+`App.tsx` currently uses `createMockRouteAccessService()` from `src/routeAccess.ts`, `createMockDriverConsentService()` from `src/driverConsent.ts`, and `createMockAssignedRouteService()` from `src/assignedRoute.ts`. This keeps the app runnable without a live server while preserving the backend response shape.
 
 The route access screen exposes mock modes:
 
@@ -27,7 +30,7 @@ The route access screen exposes mock modes:
 - `DISABLED`
 - `BLOCKED`
 
-The consent gate also exposes local `success` and `failure` mock modes so retry/error UX can be tested without a live server. These modes are for local UX smoke only and do not replace backend integration tests.
+The consent gate also exposes local `success` and `failure` mock modes so retry/error UX can be tested without a live server. Assigned-route loading exposes local `assigned`, `none`, and `failure` mock modes for route-ready, no-route, and retry/error UX. These modes are for local UX smoke only and do not replace backend integration tests.
 
 ## API client boundary
 
@@ -72,10 +75,27 @@ Content-Type: application/json
 
 The app-side response boundary accepts only `CONSENT_RECORDED` evidence and never treats consent submission as an assigned route/stop read. Production wiring still needs the server-issued driver access token/session boundary after route+phone lookup.
 
+## Assigned route API client boundary
+
+`src/assignedRoute.ts` exports `createAssignedRouteApiClient({ baseUrl, accessToken, fetchImpl })`, which gets:
+
+```http
+GET /driver/assigned-route?routeContext=11111111-1111-4111-8111-111111111111
+Authorization: Bearer <server-issued driver JWT>
+```
+
+The expected response shape matches `clever-delivery-server/docs/api/driver-assigned-route.md`:
+
+- `ASSIGNED_ROUTE` returns route summary and ordered stops.
+- `NO_ASSIGNED_ROUTE` returns a safe empty state.
+- HTTP/API failures stay in `consent_recorded` with a retry message.
+
+The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. It still does not start delivery or request OS location permissions in this slice.
+
 ## Follow-up
 
 - Add environment/base URL wiring for the real delivery server.
 - Replace local mock services with API clients under an environment switch.
-- Add server-issued driver access token/session wiring for real consent API calls.
-- Implement assigned route and stop detail reads only after consent and server access/session rules are ready.
+- Add server-issued driver access token/session wiring for real consent and assigned-route API calls.
+- Add dedicated stop action/proof-of-delivery flows after the route-ready screen.
 - Keep foreground/background location permission and collection out of this flow until the `delivery_active` slice.
