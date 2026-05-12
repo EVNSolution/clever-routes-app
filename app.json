@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Clever Driver",
+    "slug": "clever-driver-app",
+    "scheme": "clever-driver",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.evns.cleverdriverapp"
+    },
+    "android": {
+      "package": "com.evns.cleverdriverapp",
+      "edgeToEdgeEnabled": true
+    },
+    "extra": {
+      "projectStartIssue": "EVNSolution/clever-change-control#145",
+      "changeControlIssue": "EVNSolution/clever-change-control#146"
+    }
+  }
+}

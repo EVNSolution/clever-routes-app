@@ -22,6 +22,7 @@ build/
 coverage/
 .turbo/
 .cache/
+.metro-cache/
 
 # Expo / React Native candidate outputs
 .expo/
@@ -41,6 +42,15 @@ ios/Pods/
 *.ipa
 *.app
 *.dSYM/
+
+# Mobile signing and provisioning secrets
+*.keystore
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+*.cer
+*.pem
 
 # Package manager caches
 .npm/
