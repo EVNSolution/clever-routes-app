@@ -45,6 +45,13 @@
 
 ## Context/wiki completion
 
+- repo docs checked:
+  - `README.md`
+  - `docs/project-brief.md`
+  - `docs/repository-setup.md`
+  - `docs/route-access-flow.md`
+  - `docs/release-readiness.md`
+  - `CONTRIBUTING.md` / `SECURITY.md`
 - context docs checked:
   - `clever-context-monorepo/docs/services/<service>/index.md`
   - `clever-context-monorepo/docs/wiki/`

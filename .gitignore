@@ -16,25 +16,35 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Build and coverage outputs
+# Build, test, and compiler outputs
 dist/
 build/
 coverage/
 .turbo/
 .cache/
 .metro-cache/
+*.tsbuildinfo
 
 # Expo / React Native candidate outputs
 .expo/
 .expo-shared/
+.eas/
 web-build/
 *.jsbundle
 
 # Native mobile generated dependencies/build outputs
+.gradle/
 android/.gradle/
+android/.cxx/
 android/app/build/
+android/captures/
+android/local.properties
 ios/build/
+ios/DerivedData/
 ios/Pods/
+ios/**/*.xcuserdata/
+ios/**/*.xcuserstate
+*.hprof
 
 # Native mobile build artifacts
 *.apk
