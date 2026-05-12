@@ -58,7 +58,7 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 - Proof media: photo file, signature metadata, barcode metadata, and related stop/route identifiers.
 - Offline queue: non-secret retry metadata and file URI references retained locally until retry/discard policy runs.
 - Offline queue app-side policy: pending driver event/proof-media retry items are discarded after five retained attempts, after 72 hours, when the completed route is explicitly purged, or when driver sign-out/session reset clears local retry state.
-- Server proof-media retention/deletion support: `clever-delivery-server` now has `DRIVER_PROOF_MEDIA_RETENTION_DAYS` and `npm run driver:proof-media:cleanup` for local/manual or cron-style cleanup; production deployment evidence is still pending.
+- Server proof-media rejection/retention support: `clever-delivery-server` now has a proof-media scan rejection hook, `DRIVER_PROOF_MEDIA_RETENTION_DAYS`, and `npm run driver:proof-media:cleanup` for local/manual or cron-style cleanup; production object storage, scanner backend, and scheduler deployment evidence are still pending.
 - Support contact: company/operator support contact must be available in route guidance or store support metadata.
 
 See `docs/store-privacy-disclosure-draft.md` for the current non-final App Store / Google Play disclosure worksheet. The worksheet narrows the review input, but final store answers still require owner/legal approval in the actual store consoles.
@@ -72,7 +72,7 @@ See `docs/store-privacy-disclosure-draft.md` for the current non-final App Store
 
 ## Release blockers still open
 
-- Production proof-media object storage ownership, signed retrieval/access-control, malware scanning/private evidence storage, and deployed cleanup/scheduler evidence.
+- Production proof-media object storage ownership, signed retrieval/access-control, scanner backend/private evidence storage, and deployed cleanup/scheduler evidence.
 - Physical iOS/Android device smoke evidence for background tracking and proof capture.
 - Store/private distribution policy and owner/legal-approved privacy disclosure copy.
 - Owner-controlled Expo/EAS project, Apple/Google signing credentials, and EAS preview/production environment values must be configured outside git before native builds run.
