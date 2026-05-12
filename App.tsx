@@ -32,6 +32,10 @@ import {
   type RouteStartedRecordResult,
 } from './src/driverEvents';
 import {
+  recordForegroundLocationUpdateAfterDeliveryStart,
+  type ForegroundLocationUpdateResult,
+} from './src/foregroundLocationEvent';
+import {
   canEnterDeliveryActive,
   canRevealRouteDetails,
   DRIVER_FLOW_STATES,
@@ -41,6 +45,7 @@ import { createDriverApiClientsFromRouteAccess } from './src/driverApiClients';
 import { type DriverAccessRestoreResult } from './src/driverAccessTokenStore';
 import { createExpoSecureDriverAccessTokenStore } from './src/expoSecureDriverAccessTokenStore';
 import { createExpoForegroundLocationPermissionService } from './src/expoLocationPermissionService';
+import { createExpoForegroundLocationSnapshotService } from './src/expoForegroundLocationSnapshotService';
 import {
   createDriverRuntimeServices,
   readDriverRuntimeConfig,
@@ -77,15 +82,18 @@ export default function App() {
   const [assignedRouteSubmission, setAssignedRouteSubmission] = useState<AssignedRouteLoadResult | null>(null);
   const [deliveryStartResult, setDeliveryStartResult] = useState<DeliveryStartResult | null>(null);
   const [routeStartedEventResult, setRouteStartedEventResult] = useState<RouteStartedRecordResult | null>(null);
+  const [locationUpdateResult, setLocationUpdateResult] = useState<ForegroundLocationUpdateResult | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRecordingConsent, setIsRecordingConsent] = useState(false);
   const [isLoadingAssignedRoute, setIsLoadingAssignedRoute] = useState(false);
   const [isStartingDelivery, setIsStartingDelivery] = useState(false);
   const [isRecordingRouteStarted, setIsRecordingRouteStarted] = useState(false);
+  const [isRecordingLocationUpdate, setIsRecordingLocationUpdate] = useState(false);
   const [driverAccessRestoreStatus, setDriverAccessRestoreStatus] = useState<DriverAccessRestoreResult['kind']>('missing');
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
+  const foregroundLocationSnapshotService = useMemo(() => createExpoForegroundLocationSnapshotService(), []);
 
   const runtimeConfig = useMemo(
     () => readDriverRuntimeConfig({
@@ -172,6 +180,8 @@ export default function App() {
     setAssignedRouteSubmission(null);
     setDeliveryStartResult(null);
     setRouteStartedEventResult(null);
+    setLocationUpdateResult(null);
+    setLocationUpdateResult(null);
     setRouteStartedEventResult(null);
     try {
       const result = await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService);
@@ -261,6 +271,33 @@ export default function App() {
     }
   }
 
+
+
+  async function handleRecordLocationUpdate() {
+    const effectiveDeliveryStart: DeliveryStartResult = deliveryStartResult ?? {
+      flowState: 'route_ready',
+      kind: 'permission_denied',
+      reason: 'foreground_location_denied',
+      message: 'Delivery must be active before syncing foreground location.',
+    };
+
+    setIsRecordingLocationUpdate(true);
+    try {
+      setLocationUpdateResult(await recordForegroundLocationUpdateAfterDeliveryStart({
+        deliveryStart: effectiveDeliveryStart,
+        driverEventService: getDriverEventServiceForCurrentSubmission({
+          driverEventService,
+          runtimeConfig,
+          submission,
+        }),
+        locationService: foregroundLocationSnapshotService,
+        routePlanId: assignedRouteSubmission?.kind === 'route_ready' ? assignedRouteSubmission.route.id : null,
+      }));
+    } finally {
+      setIsRecordingLocationUpdate(false);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
@@ -317,13 +354,16 @@ export default function App() {
             deliveryStartResult={deliveryStartResult}
             isLoadingAssignedRoute={isLoadingAssignedRoute}
             isRecordingConsent={isRecordingConsent}
+            isRecordingLocationUpdate={isRecordingLocationUpdate}
             isRecordingRouteStarted={isRecordingRouteStarted}
             isStartingDelivery={isStartingDelivery}
+            locationUpdateResult={locationUpdateResult}
             onLoadAssignedRoute={handleLoadAssignedRoute}
-            onStartDelivery={handleStartDelivery}
-            routeStartedEventResult={routeStartedEventResult}
             onRecordConsent={handleRecordConsent}
+            onRecordLocationUpdate={handleRecordLocationUpdate}
+            onStartDelivery={handleStartDelivery}
             result={submission}
+            routeStartedEventResult={routeStartedEventResult}
             setAssignedRouteMockMode={setAssignedRouteMockMode}
             setConsentMockMode={setConsentMockMode}
           />
@@ -522,13 +562,16 @@ function RouteAccessResultCard({
   deliveryStartResult,
   isLoadingAssignedRoute,
   isRecordingConsent,
+  isRecordingLocationUpdate,
   isRecordingRouteStarted,
   isStartingDelivery,
+  locationUpdateResult,
   onLoadAssignedRoute,
   onRecordConsent,
+  onRecordLocationUpdate,
   onStartDelivery,
-  routeStartedEventResult,
   result,
+  routeStartedEventResult,
   setAssignedRouteMockMode,
   setConsentMockMode,
 }: {
@@ -539,13 +582,16 @@ function RouteAccessResultCard({
   deliveryStartResult: DeliveryStartResult | null;
   isLoadingAssignedRoute: boolean;
   isRecordingConsent: boolean;
+  isRecordingLocationUpdate: boolean;
   isRecordingRouteStarted: boolean;
   isStartingDelivery: boolean;
+  locationUpdateResult: ForegroundLocationUpdateResult | null;
   onLoadAssignedRoute(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
   onRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
+  onRecordLocationUpdate(): void;
   onStartDelivery(): void;
-  routeStartedEventResult: RouteStartedRecordResult | null;
   result: RouteAccessSubmissionResult;
+  routeStartedEventResult: RouteStartedRecordResult | null;
   setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
   setConsentMockMode(value: ConsentMockMode): void;
 }) {
@@ -599,9 +645,12 @@ function RouteAccessResultCard({
           assignedRouteResult={assignedRouteResult}
           deliveryStartResult={deliveryStartResult}
           isLoadingAssignedRoute={isLoadingAssignedRoute}
+          isRecordingLocationUpdate={isRecordingLocationUpdate}
           isRecordingRouteStarted={isRecordingRouteStarted}
           isStartingDelivery={isStartingDelivery}
+          locationUpdateResult={locationUpdateResult}
           onLoadAssignedRoute={() => onLoadAssignedRoute(result.routeAccess)}
+          onRecordLocationUpdate={onRecordLocationUpdate}
           onStartDelivery={onStartDelivery}
           routeStartedEventResult={routeStartedEventResult}
           setAssignedRouteMockMode={setAssignedRouteMockMode}
@@ -693,9 +742,12 @@ function AssignedRouteCard({
   assignedRouteResult,
   deliveryStartResult,
   isLoadingAssignedRoute,
+  isRecordingLocationUpdate,
   isRecordingRouteStarted,
   isStartingDelivery,
+  locationUpdateResult,
   onLoadAssignedRoute,
+  onRecordLocationUpdate,
   onStartDelivery,
   routeStartedEventResult,
   setAssignedRouteMockMode,
@@ -704,9 +756,12 @@ function AssignedRouteCard({
   assignedRouteResult: AssignedRouteLoadResult | null;
   deliveryStartResult: DeliveryStartResult | null;
   isLoadingAssignedRoute: boolean;
+  isRecordingLocationUpdate: boolean;
   isRecordingRouteStarted: boolean;
   isStartingDelivery: boolean;
+  locationUpdateResult: ForegroundLocationUpdateResult | null;
   onLoadAssignedRoute(): void;
+  onRecordLocationUpdate(): void;
   onStartDelivery(): void;
   routeStartedEventResult: RouteStartedRecordResult | null;
   setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
@@ -744,8 +799,11 @@ function AssignedRouteCard({
       {assignedRouteResult?.kind === 'route_ready' ? (
         <DeliveryStartCard
           deliveryStartResult={deliveryStartResult}
+          isRecordingLocationUpdate={isRecordingLocationUpdate}
           isRecordingRouteStarted={isRecordingRouteStarted}
           isStartingDelivery={isStartingDelivery}
+          locationUpdateResult={locationUpdateResult}
+          onRecordLocationUpdate={onRecordLocationUpdate}
           onStartDelivery={onStartDelivery}
           routeStartedEventResult={routeStartedEventResult}
         />
@@ -769,14 +827,20 @@ function AssignedRouteCard({
 
 function DeliveryStartCard({
   deliveryStartResult,
+  isRecordingLocationUpdate,
   isRecordingRouteStarted,
   isStartingDelivery,
+  locationUpdateResult,
+  onRecordLocationUpdate,
   onStartDelivery,
   routeStartedEventResult,
 }: {
   deliveryStartResult: DeliveryStartResult | null;
+  isRecordingLocationUpdate: boolean;
   isRecordingRouteStarted: boolean;
   isStartingDelivery: boolean;
+  locationUpdateResult: ForegroundLocationUpdateResult | null;
+  onRecordLocationUpdate(): void;
   onStartDelivery(): void;
   routeStartedEventResult: RouteStartedRecordResult | null;
 }) {
@@ -787,8 +851,8 @@ function DeliveryStartCard({
       <Text style={styles.consentTitle}>Start delivery with foreground location</Text>
       <Text style={styles.consentBody}>
         The app requests OS foreground location permission only after the driver explicitly starts
-        delivery. The app records a ROUTE_STARTED server event after delivery_active succeeds; GPS
-        streaming remains blocked for the next slice.
+        delivery. The app records ROUTE_STARTED and foreground LOCATION_UPDATED events after
+        delivery_active succeeds; background streaming remains blocked for the next slice.
       </Text>
       {deliveryStartResult !== null ? (
         <Text style={isActive ? styles.deliveryStartSuccessText : styles.routeWarningText}>
@@ -800,6 +864,26 @@ function DeliveryStartCard({
       ) : null}
       {routeStartedEventResult?.kind === 'recorded' ? (
         <Text style={styles.deliveryStartSuccessText}>Route started event recorded: {routeStartedEventResult.eventId}</Text>
+      ) : null}
+      {isRecordingLocationUpdate ? (
+        <Text style={styles.routeHelpText}>Recording foreground location update…</Text>
+      ) : null}
+      {locationUpdateResult?.kind === 'recorded' ? (
+        <Text style={styles.deliveryStartSuccessText}>Foreground location update recorded: {locationUpdateResult.eventId}</Text>
+      ) : null}
+      {isActive ? (
+        <Pressable
+          accessibilityRole="button"
+          disabled={isRecordingLocationUpdate}
+          onPress={onRecordLocationUpdate}
+          style={[styles.secondaryButton, isRecordingLocationUpdate && styles.buttonDisabled]}
+        >
+          {isRecordingLocationUpdate ? (
+            <ActivityIndicator color="#0f172a" />
+          ) : (
+            <Text style={styles.secondaryButtonText}>Sync foreground location</Text>
+          )}
+        </Pressable>
       ) : null}
       <Pressable
         accessibilityRole="button"
