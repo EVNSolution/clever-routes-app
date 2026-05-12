@@ -335,7 +335,7 @@ unidentified
 - 완료 기준:
   - invited phone → consent accepted → today's route 확인 smoke flow가 가능하다.
   - route 없음/error 상태가 사용자에게 명확히 표시된다.
-  - live server calls still require route+phone 후속 driver access token/session issuance.
+  - live server calls can use route+phone `driverAccess` token handoff; production environment/base URL switch and secure token persistence remain later release work.
 
 ### 5단계: release evidence and context sync
 
@@ -384,7 +384,8 @@ unidentified
 2. Define driver-facing delivery server API contract for route+phone access and company guidance. — completed in `clever-delivery-server#48`
 3. Implement route+phone access and company guidance UX against the agreed mock/API boundary. — completed
 4. Implement consent record app UX/API boundary. — completed; production token/session wiring remains pending
-5. Implement assigned route screen and app API boundary. — current slice
-6. Implement driver session/access token issuance and real environment wiring.
-7. Implement stop actions plus delivery-active/location permission slice.
-8. Add context-monorepo service document once production runtime/API boundaries are confirmed.
+5. Implement assigned route screen and app API boundary. — completed
+6. Implement driver access token handoff. — current slice
+7. Implement real environment/base URL switch and secure token persistence/expiry handling.
+8. Implement stop actions plus delivery-active/location permission slice.
+9. Add context-monorepo service document once production runtime/API boundaries are confirmed.

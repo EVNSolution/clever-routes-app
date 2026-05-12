@@ -16,6 +16,14 @@ export type RouteAccessCompanyGuidance = {
   timezone: string | null;
 };
 
+export type DriverAccessToken = {
+  accessToken: string;
+  expiresAt: string;
+  tokenType: 'Bearer';
+  ttlSeconds: number;
+  use: 'consent_and_assigned_route';
+};
+
 export type RouteAccessLookupResult =
   | {
       status: 'INVITED';
@@ -24,6 +32,7 @@ export type RouteAccessLookupResult =
         routeContext: string;
         routePlanId: string;
       };
+      driverAccess: DriverAccessToken;
       companyGuidance: RouteAccessCompanyGuidance;
     }
   | { status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND' };
@@ -41,6 +50,7 @@ export type RouteAccessSubmissionResult =
   | {
       kind: 'company_guidance';
       companyGuidance: RouteAccessCompanyGuidance;
+      driverAccess: DriverAccessToken;
       flowState: Extract<DriverFlowState, 'company_context_confirmed'>;
       nextState: 'consent_required';
       routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess'];
@@ -81,6 +91,13 @@ export const sampleInvitedRouteAccess: Extract<RouteAccessLookupResult, { status
     shopDomain: 'tomatono.myshopify.com',
     timezone: 'America/Toronto',
   },
+  driverAccess: {
+    accessToken: 'fixture-driver-access-token',
+    expiresAt: '2026-05-12T06:55:00.000Z',
+    tokenType: 'Bearer',
+    ttlSeconds: 900,
+    use: 'consent_and_assigned_route',
+  },
 };
 
 export function createMockRouteAccessService(
@@ -112,6 +129,7 @@ export async function submitRouteAccess(
     return {
       kind: 'company_guidance',
       companyGuidance: lookup.companyGuidance,
+      driverAccess: lookup.driverAccess,
       flowState: 'company_context_confirmed',
       nextState: lookup.routeAccess.nextState,
       routeAccess: lookup.routeAccess,
@@ -201,8 +219,9 @@ function isRouteAccessLookupResult(value: unknown): value is RouteAccessLookupRe
   }
 
   const routeAccess = (value as { routeAccess?: unknown }).routeAccess;
+  const driverAccess = (value as { driverAccess?: unknown }).driverAccess;
   const companyGuidance = (value as { companyGuidance?: unknown }).companyGuidance;
-  return isRouteAccess(routeAccess) && isCompanyGuidance(companyGuidance);
+  return isRouteAccess(routeAccess) && isDriverAccessToken(driverAccess) && isCompanyGuidance(companyGuidance);
 }
 
 function isRouteAccess(value: unknown): value is Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess'] {
@@ -234,6 +253,25 @@ function isCompanyGuidance(value: unknown): value is RouteAccessCompanyGuidance 
     typeof guidance.routeName === 'string' &&
     typeof guidance.shopDomain === 'string' &&
     nullableString(guidance.timezone)
+  );
+}
+
+function isDriverAccessToken(value: unknown): value is DriverAccessToken {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const token = value as Record<string, unknown>;
+  return (
+    typeof token.accessToken === 'string' &&
+    token.accessToken.trim() !== '' &&
+    typeof token.expiresAt === 'string' &&
+    token.expiresAt.trim() !== '' &&
+    token.tokenType === 'Bearer' &&
+    typeof token.ttlSeconds === 'number' &&
+    Number.isFinite(token.ttlSeconds) &&
+    token.ttlSeconds > 0 &&
+    token.use === 'consent_and_assigned_route'
   );
 }
 
