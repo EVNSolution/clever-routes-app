@@ -25,6 +25,14 @@ The native binary build path uses Expo EAS profiles:
 
 `cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied to committed source. `cli.appVersionSource` is `remote`; initial local `ios.buildNumber` and `android.versionCode` are set to `1` before the first EAS remote version sync, while production builds use `autoIncrement` to avoid duplicate store build numbers.
 
+Before running any preview/production EAS build for evidence, run:
+
+```bash
+npm run check:native-release
+```
+
+This local preflight validates source-controlled Expo/EAS identity, native permission declarations, build-profile shape, and public runtime env documentation. It is not a substitute for owner-controlled Expo/EAS project setup, signing authority, store/private distribution decisions, privacy disclosure approval, public license approval, or physical-device smoke evidence.
+
 ## Physical-device smoke matrix
 
 Before production release, capture evidence on at least one real iPhone and one real Android phone. Use synthetic driver/route data unless production validation is explicitly approved. Execute `docs/physical-device-smoke-runbook.md` for the step order, evidence naming, and external storage rules. Copy `docs/release-evidence-manifest.template.md` into the external evidence store for the release candidate and fill it there; do not commit completed evidence manifests.

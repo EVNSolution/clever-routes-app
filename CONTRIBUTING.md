@@ -33,13 +33,14 @@ npm run check:workspace
 npm run lint
 npm run typecheck
 npm run test
+npm run check:native-release
 npm run build
 npm audit --audit-level=moderate
 npx expo install --check
 git diff --check
 ```
 
-`npm run build` exports JavaScript bundles into ignored `dist/` folders. It is not an App Store or Play Store binary build.
+`npm run build` exports JavaScript bundles into ignored `dist/` folders. It is not an App Store or Play Store binary build. `npm run check:native-release` is a local config preflight; it does not prove owner-controlled EAS project values, signing authority, store approval, privacy copy, or license decisions.
 
 ## Privacy and safety review points
 
@@ -48,6 +49,7 @@ git diff --check
 - Keep driver access tokens in SecureStore-backed storage only; do not move secrets into AsyncStorage or logs.
 - Treat AsyncStorage offline queue data as non-secret retry metadata plus file URI references.
 - Any change to background location, proof media capture, storage, or retention must update `docs/release-readiness.md` and the PR context/wiki decision.
+- Any change to `app.json`, `eas.json`, `.env.example`, native permission copy, bundle/package identity, or native build-profile settings must keep `npm run check:native-release` current.
 
 ## Generated and sensitive files
 

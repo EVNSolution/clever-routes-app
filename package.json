@@ -10,6 +10,7 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\"",
+    "check:native-release": "tsx src/nativeReleasePreflightCli.ts",
     "check:workspace": "npm run typecheck && npm run test",
     "build": "npm run build:android && npm run build:ios",
     "build:android": "expo export -p android --output-dir dist/android",
