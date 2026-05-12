@@ -310,15 +310,16 @@ unidentified
 - 선행 계약:
   - legal copy source
   - consent versioning
-  - delivery server consent record endpoint
+  - delivery server consent record endpoint: app API boundary is implemented; production token/session wiring remains before live use
   - foreground/background location 권한 요청 시점과 거절/재요청 UX
 - 산출물:
-  - consent screen
-  - required consent state machine
-  - consent submit/retry/error UX
+  - consent screen: implemented in local Expo flow
+  - required consent state machine: `consent_required` → `consent_recorded` implemented for app-side boundary
+  - consent submit/retry/error UX: implemented with local success/failure mock
 - 완료 기준:
   - 동의 전에는 route 화면에 접근할 수 없다.
-  - 동의 성공 후 서버 기록 결과를 근거로 다음 화면으로 이동한다.
+  - 동의 성공 후 서버 기록 결과를 근거로 `consent_recorded` 상태로 이동한다.
+  - live server consent submission still requires route+phone 후속 driver access token/session issuance.
 
 ### 4단계: assigned route MVP
 
