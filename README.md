@@ -21,6 +21,18 @@ Dedicated native mobile app repository for Clever delivery drivers.
 - This repository owns the driver-facing mobile UX, runtime, local verification, and mobile release evidence.
 - Phone number alone must not be treated as a global driver identity; route/company context is part of the access boundary.
 
+## Current app flow
+
+The app includes an interactive route access screen:
+
+- route context + E.164 phone validation before lookup
+- local mock service for delivery-server `POST /driver/route-access/lookup`
+- company/shop/route guidance for `INVITED`
+- safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
+- consent, assigned route, and location collection left for follow-up slices
+
+See `docs/route-access-flow.md` for the app-side mock/API boundary.
+
 ## Local setup
 
 Recommended Node baseline is recorded in `.nvmrc` and matches the Expo SDK 54 minimum Node floor used by this bootstrap.
@@ -54,4 +66,5 @@ npm run build
 
 - `docs/project-brief.md` — product role, MVP scenarios, platform decision, and implementation sequencing.
 - `docs/repository-setup.md` — repo baseline, scripts, ignore policy, and follow-up setup notes.
+- `docs/route-access-flow.md` — app-side route access mock/API boundary.
 - `AGENTS.md` — agent workflow, issue/branch/PR rules, and verification requirements.
