@@ -91,6 +91,7 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 - Background location use: only after delivery start and only when native background tracking is enabled.
 - Camera/photos: proof-of-delivery photo capture/upload.
 - Camera barcode scanning: proof barcode capture when available.
+- Contacts/address book: current app uses manual route context plus manual E.164 phone entry and should not request Contacts permissions unless a future owner-approved feature changes that.
 - Driver identifiers: route context, phone lookup, server-issued driver access token, route assignment identifiers.
 - Proof media: photo file, signature metadata, barcode metadata, and related stop/route identifiers.
 - Offline queue: non-secret retry metadata and file URI references retained locally until retry/discard policy runs.
@@ -98,7 +99,7 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 - Server proof-media rejection/retention support: `clever-delivery-server` now has a proof-media scan rejection hook, `DRIVER_PROOF_MEDIA_RETENTION_DAYS`, and `npm run driver:proof-media:cleanup` for local/manual or cron-style cleanup; production object storage, scanner backend, and scheduler deployment evidence are still pending.
 - Support contact: company/operator support contact must be available in route guidance or store support metadata.
 
-See `docs/store-privacy-disclosure-draft.md` for the current non-final App Store / Google Play disclosure worksheet. The worksheet narrows the review input, but final store answers still require owner/legal approval in the actual store consoles.
+See `docs/store-privacy-disclosure-draft.md` for the current non-final App Store / Google Play disclosure worksheet. The worksheet narrows the review input, including current Google Play minimum-scope permission caveats for location, photo/video, and Contacts permissions, but final store answers still require owner/legal approval in the actual store consoles.
 
 ## Evidence storage policy
 

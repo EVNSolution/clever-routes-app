@@ -19,7 +19,10 @@ policy, third-party SDK inventory, and the approved EVNSolution privacy notice.
   internal/private cases.
 - [Google Play sensitive permissions](https://support.google.com/googleplay/android-developer/answer/16558241):
   location is personal/sensitive data; background location needs a core-purpose
-  justification and explicit consent.
+  justification and explicit consent. The same Play policy page flags upcoming
+  minimum-scope guidance for precise location and a Contacts Permissions policy
+  effective October 28, 2026, so owner/legal review should re-check those items
+  before store submission.
 - [Google Play photo/video policy](https://support.google.com/googleplay/android-developer/answer/16935362):
   broad photo/video access should be avoided when a system picker or scoped flow
   is enough.
@@ -46,6 +49,7 @@ Runtime source anchors for this worksheet:
 | Data or permission area | Current app behavior | App Store privacy review input | Google Play Data safety review input | Owner/legal decision needed |
 | --- | --- | --- | --- | --- |
 | Phone number | Driver enters E.164 phone for route access lookup. | Likely Contact Info / Phone Number, linked to driver route access, purpose: App Functionality. | Likely Personal info / Phone number, collected for App functionality. | Confirm if phone is retained in production logs and privacy policy. |
+| Contacts / address book | The current app does not request Contacts permissions or read the device address book. Driver phone lookup is manual E.164 entry plus route context. | Usually no Contacts disclosure for the current build unless a future feature reads contacts. | Do not declare Contacts permissions for the current build; Google Play has announced a Contacts Permissions policy effective October 28, 2026, and future broad contact access should use minimum-scope alternatives or a separate approved issue. | Keep contacts access out of native config unless owner/legal approves a future contact-picker feature and updates store disclosures. |
 | Route context and route assignment identifiers | Driver enters route context; server returns concrete route identifiers only after `INVITED`. | Likely Identifiers or Other Data depending on final App Store taxonomy selection; linked to user/driver, purpose: App Functionality. | Likely App activity or app-specific identifiers/other data; collected for App functionality. | Confirm exact store taxonomy after production server payload review. |
 | Company/shop/route guidance | App displays company, shop, route name/date, pickup/support contact. | Usually not user-collected driver data by itself, but route assignment context is linked to driver workflow. | Usually app content/operational data, but route assignment context may be linked to driver. | Confirm whether any displayed support contact is personal data. |
 | Foreground location | App requests while-in-use location only after explicit delivery start and records location update events. | Location / Precise Location, linked to driver, purpose: App Functionality. | Location / Precise location, collected for App functionality. | Confirm whether approximate-only fallback is acceptable for any workflow. |
@@ -98,6 +102,9 @@ Required evidence before submission:
 - screenshot/video showing stop/reset behavior
 - approved in-app disclosure/consent copy
 - production server retention and deletion policy
+- Play Console policy review against current location minimum-scope guidance,
+  including the October 28, 2026 location-button recommendation if submission
+  timing or target SDK policy makes it applicable
 
 ### Photo and barcode proof justification
 
@@ -113,6 +120,16 @@ Required evidence before submission:
 - confirmation that broad photo/video library access is not requested unless an
   approved core use case requires it
 
+### Contacts permission avoidance
+
+The current driver access model intentionally uses manual route context plus
+manual E.164 phone entry. It does not need address-book lookup, contact import,
+or call-log/SMS permissions. Store evidence should include a native manifest
+check showing no Contacts permissions are present. If a future support feature
+needs contact selection, open a new issue first and prefer the minimum-scope
+system contact picker or equivalent alternative instead of broad Contacts
+permission.
+
 ## Pre-submission blockers
 
 - Owner-approved privacy policy URL naming EVNSolution / Clever Driver.
@@ -120,6 +137,9 @@ Required evidence before submission:
 - Google Play Data safety answers reviewed against the final build.
 - Google Play background location declaration, if production Android build keeps
   background location enabled.
+- Google Play minimum-scope permission review completed for location,
+  photo/video, and Contacts permissions; current app should not request Contacts
+  permissions.
 - Production proof-media object storage, signed access, scanner backend deployment
   evidence, and scheduled cleanup evidence.
 - Physical iOS/Android device smoke matrix in `docs/release-readiness.md`.
