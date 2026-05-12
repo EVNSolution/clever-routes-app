@@ -34,7 +34,7 @@ The app includes an interactive route access screen:
 - assigned route mock/API boundary for delivery-server `GET /driver/assigned-route`
 - route summary and ordered stop cards after consent moves the flow to `route_ready`
 - safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
-- live environment/base URL switch, secure token persistence, OS location permission, delivery start, and location collection left for follow-up slices
+- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup; secure token persistence, OS location permission, delivery start, and location collection left for follow-up slices
 
 See `docs/route-access-flow.md` for the app-side route access, consent, and assigned-route mock/API boundary.
 
@@ -46,6 +46,12 @@ Recommended Node baseline is recorded in `.nvmrc` and matches the Expo SDK 54 mi
 nvm use
 npm install
 npm run start
+```
+
+Optional live API mode:
+
+```bash
+EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://delivery.example.com npm run start
 ```
 
 Native launch helpers:

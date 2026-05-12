@@ -11,7 +11,7 @@ This document records the repo baseline for the `clever-driver-app` implementati
 - Package manager: npm with `package-lock.json`
 - Node floor: `.nvmrc` pins `20.19.4`; `package.json` allows Node `>=20.19.4`
 - Entry point: `index.ts` registering `App.tsx`
-- Current implementation depth: local Expo route+phone lookup, company guidance, consent gate, and assigned-route screen with mock/API boundaries; real driver token/session issuance and background location collection remain later slices
+- Current implementation depth: local Expo route+phone lookup, company guidance, consent gate, assigned-route screen, driver access token handoff, and optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` route lookup mode; secure token persistence and background location collection remain later slices
 
 ## Scripts
 
@@ -49,8 +49,8 @@ Generated `android/` and `ios/` source directories are not globally ignored. If 
 
 These items are intentionally left for later issues because they affect API, compliance, release, or device behavior beyond this bootstrap:
 
-1. Delivery server driver-facing API base URL and environment strategy.
-2. Server-issued driver session/access token wiring after route+phone lookup.
+1. Release environment profile and secure storage policy for driver access tokens.
+2. Server-issued driver session/access token expiry/refresh UX after route+phone lookup.
 3. Route invite/deep-link URL format and route access code format.
 4. Consent legal copy source and consent version contract.
 5. Stop action/proof-of-delivery API and app workflow.

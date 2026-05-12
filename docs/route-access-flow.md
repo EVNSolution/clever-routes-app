@@ -92,9 +92,14 @@ The expected response shape matches `clever-delivery-server/docs/api/driver-assi
 
 The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. It still does not start delivery or request OS location permissions in this slice.
 
+## Runtime API mode
+
+By default the app uses local mock services. Setting `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switches route+phone lookup to the live delivery-server `POST /driver/route-access/lookup` API. Downstream consent and assigned-route API clients can then be built from the returned `driverAccess` token via `src/driverApiClients.ts`.
+
+This slice intentionally keeps token handoff in memory. Secure persistence, expiry refresh UX, and production release configuration remain separate hardening work.
+
 ## Follow-up
 
-- Add environment/base URL wiring for the real delivery server.
-- Replace local mock services with API clients under an environment switch and define secure token persistence/expiry handling.
+- Define secure token persistence/expiry handling and release environment profiles.
 - Add dedicated stop action/proof-of-delivery flows after the route-ready screen.
 - Keep foreground/background location permission and collection out of this flow until the `delivery_active` slice.

@@ -386,6 +386,7 @@ unidentified
 4. Implement consent record app UX/API boundary. — completed; production token/session wiring remains pending
 5. Implement assigned route screen and app API boundary. — completed
 6. Implement driver access token handoff. — current slice
-7. Implement real environment/base URL switch and secure token persistence/expiry handling.
-8. Implement stop actions plus delivery-active/location permission slice.
-9. Add context-monorepo service document once production runtime/API boundaries are confirmed.
+7. Implement real environment/base URL switch. — current slice
+8. Implement secure token persistence/expiry handling.
+9. Implement stop actions plus delivery-active/location permission slice.
+10. Add context-monorepo service document once production runtime/API boundaries are confirmed.
