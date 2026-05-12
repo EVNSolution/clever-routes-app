@@ -94,7 +94,7 @@ npx eas-cli build --platform all --profile production
 
 Preview builds are for internal physical-device evidence collection. Production builds are store/TestFlight/Play candidates and require owner-controlled Expo, Apple, Google, signing, and environment-variable setup before execution.
 
-Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`, generated outputs remain ignored, and `.env.example` still documents every public runtime env key used by the app.
+Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`, generated outputs and physical-device evidence artifacts remain ignored, and `.env.example` still documents every public runtime env key used by the app.
 
 ## Documentation map
 
@@ -102,6 +102,7 @@ Before opening a PR, confirm the branch is issue-linked, the PR targets `dev`, g
 - `docs/repository-setup.md` — repo baseline, scripts, ignore policy, and follow-up setup notes.
 - `docs/route-access-flow.md` — app-side route access, consent, assigned route, native map handoff, delivery event, proof media, and offline queue boundary.
 - `docs/release-readiness.md` — production distribution, store/privacy disclosure, physical-device smoke evidence, and release blockers.
+- `docs/physical-device-smoke-runbook.md` — executable iPhone/Android smoke sequence and external evidence capture rules.
 - `CONTRIBUTING.md` — human workflow, validation, privacy review points, and generated-file guardrails.
 - `SECURITY.md` — vulnerability reporting, sensitive evidence handling, and current data-handling expectations.
 - `AGENTS.md` — agent workflow, issue/branch/PR rules, and verification requirements.

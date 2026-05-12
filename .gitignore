@@ -53,6 +53,20 @@ ios/**/*.xcuserstate
 *.app
 *.dSYM/
 
+# Release and physical-device smoke evidence artifacts
+evidence/
+release-evidence/
+smoke-evidence/
+docs/evidence/
+docs/release-evidence/
+docs/smoke-evidence/
+clever-driver-*.png
+clever-driver-*.jpg
+clever-driver-*.jpeg
+clever-driver-*.mp4
+clever-driver-*.mov
+clever-driver-*.txt
+
 # Mobile signing and provisioning secrets
 *.keystore
 *.jks

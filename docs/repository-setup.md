@@ -50,6 +50,7 @@ The EAS config intentionally does not commit Expo project IDs, Apple/Google cred
 - Expo/React Native local output: `.expo/`, `.expo-shared/`, `.eas/`, `web-build/`, `*.jsbundle`
 - generated native build/tooling output: root/Android Gradle folders, Android `.cxx`, app build/captures/local properties, iOS build/DerivedData/Pods/xcuserdata state, heap profiles
 - mobile signing artifacts and binaries: `*.apk`, `*.aab`, `*.ipa`, `*.dSYM/`, `*.keystore`, `*.jks`, `*.p8`, `*.p12`, `*.mobileprovision`, `*.cer`, `*.pem`
+- release/physical-device smoke evidence artifacts: `evidence/`, `release-evidence/`, `smoke-evidence/`, matching `docs/*evidence/` folders, and `clever-driver-*` screenshot/video/log files generated from `docs/physical-device-smoke-runbook.md`
 - OS/editor noise: `.DS_Store`, `Thumbs.db`, `.idea/`, `.vscode/`
 
 Generated `android/` and `ios/` source directories are not globally ignored. If this app later adopts Expo prebuild or bare native customization, generated native source can be intentionally reviewed and committed while build outputs remain ignored.
@@ -63,6 +64,7 @@ Generated `android/` and `ios/` source directories are not globally ignored. If 
 Before opening an implementation PR, re-check these repo baseline files together with the code diff:
 
 - `.gitignore`: generated Expo/native outputs, signing artifacts, local env files, package caches, compiler artifacts, and agent/runtime state stay ignored; `android/` and `ios/` source directories are intentionally not globally ignored.
+- physical-device evidence: screenshots, videos, logs, generated binaries, signing files, credentials, and production PII stay outside git; keep only sanitized references in issues/PRs.
 - `.env.example`: every bundled `EXPO_PUBLIC_*` runtime key used by the app is documented, and secret `.env*` files stay ignored.
 - `package.json` / `package-lock.json`: scripts, Node floor, Expo SDK dependencies, and audit overrides match the implementation.
 - `app.json`: bundle/package identifiers, native build versions, permission copy, plugins, background-location settings, and static project/bootstrap issue metadata match the current native capability slice.
@@ -85,4 +87,5 @@ These items are intentionally left for later issues because they affect API, com
 7. Expo/EAS project ownership, App Store/Play Store signing ownership, and credential rotation policy.
 8. Minimum supported iOS/Android versions and physical-device background-location smoke matrix; tracked in `docs/release-readiness.md`.
 9. Physical-device validation of app-side offline retry/discard behavior after network loss, route completion, tracking stop, and the explicit driver session reset/sign-out action.
-10. Public license/reuse terms, if the owner decides to grant them.
+10. GitHub Actions CI, CODEOWNERS, and additional branch/ruleset automation after the control-plane preflight/admin decision required by `AGENTS.md`.
+11. Public license/reuse terms, if the owner decides to grant them.
