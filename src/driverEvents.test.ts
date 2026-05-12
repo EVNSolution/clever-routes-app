@@ -50,6 +50,40 @@ describe('driver event API boundary', () => {
     });
   });
 
+  it('posts optional event payload metadata for stop proof events', async () => {
+    const requests: { body: unknown }[] = [];
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async (_url, init) => {
+        requests.push({ body: JSON.parse(init?.body ?? '{}') as unknown });
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({ data: { duplicate: false, eventId: 'evt_stop_1' }, error: null }),
+        };
+      },
+    });
+
+    await service.recordDriverEvent({
+      clientEventId: 'stop-delivered-1',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-05-12T07:15:00.000Z'),
+      payload: { proof: { note: 'Left with concierge', source: 'driver-app-mvp', type: 'DELIVERED_NOTE' } },
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(requests[0]?.body, {
+      clientEventId: 'stop-delivered-1',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: '2026-05-12T07:15:00.000Z',
+      proof: { note: 'Left with concierge', source: 'driver-app-mvp', type: 'DELIVERED_NOTE' },
+      routePlanId: 'route-1',
+    });
+  });
+
   it('treats duplicate driver event responses as recorded idempotently', async () => {
     const service = createDriverEventsApiClient({
       accessToken: 'fixture-driver-access-token',

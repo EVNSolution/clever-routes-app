@@ -19,7 +19,8 @@ The app now has an interactive route access screen for the first driver-facing f
 9. `ASSIGNED_ROUTE` renders route summary and ordered stop cards, then moves the visible state to `route_ready`.
 10. Delivery start requests foreground location permission and moves to `delivery_active` only when permission is granted.
 11. After `delivery_active`, the app records a `ROUTE_STARTED` driver event and can sync a foreground `LOCATION_UPDATED` event through the driver event API boundary.
-12. `NO_ASSIGNED_ROUTE` and API errors stay in safe user-visible states without exposing other tenant/driver data.
+12. After `delivery_active`, each stop card can record text-only delivered/failed proof metadata as `STOP_DELIVERED` or `STOP_FAILED` through the same driver event API boundary.
+13. `NO_ASSIGNED_ROUTE` and API errors stay in safe user-visible states without exposing other tenant/driver data.
 
 ## Local mock boundary
 
@@ -92,7 +93,7 @@ The expected response shape matches `clever-delivery-server/docs/api/driver-assi
 - `NO_ASSIGNED_ROUTE` returns a safe empty state.
 - HTTP/API failures stay in `consent_recorded` with a retry message.
 
-The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records `ROUTE_STARTED` and foreground `LOCATION_UPDATED` events to `POST /driver/events` with the active driver bearer token. Duplicate event responses are treated idempotently as recorded.
+The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records `ROUTE_STARTED`, foreground `LOCATION_UPDATED`, `STOP_DELIVERED`, and `STOP_FAILED` events to `POST /driver/events` with the active driver bearer token. Stop proof is currently text-only metadata (`proof` payload with note/reason/source); photo, signature, barcode, and offline queue proof capture remain later slices. Duplicate event responses are treated idempotently as recorded.
 
 ## Runtime API mode
 
@@ -103,5 +104,5 @@ The persisted payload stores only the driver token and route access identifiers 
 ## Follow-up
 
 - Define release environment profiles and any server-side token refresh/re-auth UX beyond the current short-lived token TTL.
-- Add dedicated stop action/proof-of-delivery flows after the route-ready screen.
+- Add rich proof capture for stop actions: photo/signature/barcode, configurable failure reasons, and offline retry/queue policy.
 - Add background location service/task setup and continuous GPS `LOCATION_UPDATED` streaming after foreground one-shot location updates are proven. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.
