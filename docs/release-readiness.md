@@ -73,8 +73,12 @@ See `docs/store-privacy-disclosure-draft.md` for the current non-final App Store
 
 ## Release blockers still open
 
-- Production proof-media object storage ownership, signed retrieval/access-control, scanner backend/private evidence storage, and deployed cleanup/scheduler evidence.
-- Physical iOS/Android device smoke evidence for background tracking and proof capture.
-- Store/private distribution policy and owner/legal-approved privacy disclosure copy.
-- Owner-controlled Expo/EAS project, Apple/Google signing credentials, and EAS preview/production environment values must be configured outside git before native builds run.
-- Context-monorepo service document after production runtime/API boundaries are confirmed.
+These blockers are now tracked as GitHub issues so release evidence can refer to
+stable work items instead of unowned notes:
+
+| Blocker | Tracking issue | Scope |
+| --- | --- | --- |
+| Physical iOS/Android device smoke evidence for background tracking, proof capture, offline retry/discard, token recovery, and route completion cleanup | EVNSolution/clever-driver-app#72 | Driver app evidence collection |
+| Owner-controlled Expo/EAS project, Apple/Google signing credentials, EAS preview/production environment values, store/private distribution policy, owner/legal-approved privacy disclosure copy, and public license/reuse decision | EVNSolution/clever-driver-app#73 | Native build/distribution approval |
+| Production proof-media object storage ownership, signed retrieval/access-control, scanner backend/private evidence storage, and deployed cleanup/scheduler evidence | EVNSolution/clever-delivery-server#71 | Delivery-server proof media hardening |
+| Context-monorepo service document after production runtime/API boundaries are confirmed | EVNSolution/clever-context-monorepo#23 | Canonical service context |
