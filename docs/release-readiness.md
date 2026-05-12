@@ -36,6 +36,7 @@ Before production release, capture evidence on at least one real iPhone and one 
 | Company guidance and support contact display | pending | pending | Confirm multi-company wording. |
 | Consent gate and retry/error handling | pending | pending | Verify consent versions/copy source. |
 | Assigned route and stop list | pending | pending | Use shop/route timezone `deliveryDate`. |
+| Stop-card OS map handoff | pending | pending | Confirm coordinates open the expected native map app and address fallback works for stops without coordinates. |
 | Delivery start foreground location permission | pending | pending | Confirm denial and recovery UX. |
 | Continuous/background-capable location task | pending | pending | Confirm native background configuration and OS prompts. |
 | Proof photo capture from camera/library | pending | pending | Use synthetic proof media. |

@@ -16,7 +16,7 @@ The app now has an interactive route access screen for the first driver-facing f
 6. Consent gate records required `LOCATION_INFORMATION` and `PERSONAL_INFORMATION` consent via a `DriverConsentService` boundary.
 7. Successful consent moves the visible state to `consent_recorded`.
 8. Assigned route loading calls an `AssignedRouteService` boundary shaped like delivery-server `GET /driver/assigned-route`.
-9. `ASSIGNED_ROUTE` renders route summary and ordered stop cards, then moves the visible state to `route_ready`.
+9. `ASSIGNED_ROUTE` renders route summary, ordered stop cards, and per-stop OS map handoff, then moves the visible state to `route_ready`.
 10. Delivery start requests foreground location permission and moves to `delivery_active` only when permission is granted.
 11. After `delivery_active`, the app records a `ROUTE_STARTED` driver event and can sync a foreground `LOCATION_UPDATED` event through the driver event API boundary.
 12. After `delivery_active`, the app can request background location permission and start/stop a named continuous location task that streams batched `LOCATION_UPDATED` events through the same driver event boundary.
@@ -91,11 +91,11 @@ Authorization: Bearer <server-issued driver JWT>
 
 The expected response shape matches `clever-delivery-server/docs/api/driver-assigned-route.md`:
 
-- `ASSIGNED_ROUTE` returns route summary and ordered stops.
+- `ASSIGNED_ROUTE` returns route summary and ordered stops; the app builds platform map URLs locally from each stop coordinate or formatted address.
 - `NO_ASSIGNED_ROUTE` returns a safe empty state.
 - HTTP/API failures stay in `consent_recorded` with a retry message.
 
-The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records `ROUTE_STARTED`, foreground one-shot `LOCATION_UPDATED`, continuous/background-capable `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, and `ROUTE_COMPLETED` events to `POST /driver/events` with the active driver bearer token. Stop proof now stores metadata (`proof` payload with note/reason/source, uploaded photo media references, signature drawing evidence, and barcode scan evidence). The durable app-side offline queue can retain failed `ROUTE_STARTED`, `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, `ROUTE_COMPLETED`, and proof media upload attempts for retry or discard across app restarts; production proof-media storage hardening and physical-device background smoke evidence remain later slices. Duplicate event responses are treated idempotently as recorded.
+The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. Stop cards expose `Open map`, which hands off to the OS map handler with coordinates first and formatted address fallback without committing to a provider SDK. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/driverEvents.ts` records `ROUTE_STARTED`, foreground one-shot `LOCATION_UPDATED`, continuous/background-capable `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, and `ROUTE_COMPLETED` events to `POST /driver/events` with the active driver bearer token. Stop proof now stores metadata (`proof` payload with note/reason/source, uploaded photo media references, signature drawing evidence, and barcode scan evidence). The durable app-side offline queue can retain failed `ROUTE_STARTED`, `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, `ROUTE_COMPLETED`, and proof media upload attempts for retry or discard across app restarts; production proof-media storage hardening and physical-device background smoke evidence remain later slices. Duplicate event responses are treated idempotently as recorded.
 
 ## Durable offline queue boundary
 

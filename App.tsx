@@ -2,6 +2,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Linking,
   Platform,
   Pressable,
   SafeAreaView,
@@ -86,6 +87,10 @@ import {
 } from './src/driverFlow';
 import { createDriverApiClientsFromRouteAccess } from './src/driverApiClients';
 import {
+  openStopNavigation,
+  type StopNavigationResult,
+} from './src/stopNavigation';
+import {
   resetDriverSession,
   type DriverSessionResetResult,
 } from './src/driverSessionReset';
@@ -150,6 +155,7 @@ export default function App() {
   const [locationUpdateResult, setLocationUpdateResult] = useState<ForegroundLocationUpdateResult | null>(null);
   const [continuousLocationResult, setContinuousLocationResult] = useState<ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null>(null);
   const [stopProofResults, setStopProofResults] = useState<Record<string, StopProofEventResult>>({});
+  const [stopNavigationResults, setStopNavigationResults] = useState<Record<string, StopNavigationResult>>({});
   const [stopProofDrafts, setStopProofDrafts] = useState<Record<string, StopProofDraft>>({});
   const [proofPhotoCaptureResults, setProofPhotoCaptureResults] = useState<Record<string, ProofPhotoCaptureResult>>({});
   const [proofMediaUploadResults, setProofMediaUploadResults] = useState<Record<string, ProofMediaUploadResult>>({});
@@ -174,6 +180,7 @@ export default function App() {
   const [uploadingProofMediaId, setUploadingProofMediaId] = useState<string | null>(null);
   const [capturingProofSignatureId, setCapturingProofSignatureId] = useState<string | null>(null);
   const [capturingProofBarcodeId, setCapturingProofBarcodeId] = useState<string | null>(null);
+  const [openingStopNavigationId, setOpeningStopNavigationId] = useState<string | null>(null);
   const [isRetryingOfflineQueue, setIsRetryingOfflineQueue] = useState(false);
   const [isResettingSession, setIsResettingSession] = useState(false);
   const [driverAccessRestoreStatus, setDriverAccessRestoreStatus] = useState<DriverAccessRestoreResult['kind']>('missing');
@@ -326,6 +333,7 @@ export default function App() {
     setLocationUpdateResult(null);
     setContinuousLocationResult(null);
     setStopProofResults({});
+    setStopNavigationResults({});
     setStopProofDrafts({});
     setProofPhotoCaptureResults({});
     setProofMediaUploadResults({});
@@ -372,6 +380,7 @@ export default function App() {
     setIsLoadingAssignedRoute(true);
     setDeliveryStartResult(null);
     setDeliveryFinishResult(null);
+    setStopNavigationResults({});
     try {
       setAssignedRouteSubmission(await loadAssignedRouteAfterConsent(
         {
@@ -603,6 +612,20 @@ export default function App() {
     }
   }
 
+  async function handleOpenStopNavigation(stop: AssignedRouteStop) {
+    setOpeningStopNavigationId(stop.deliveryStopId);
+    try {
+      const result = await openStopNavigation({
+        linking: Linking,
+        platform: Platform.OS,
+        stop,
+      });
+      setStopNavigationResults((current) => ({ ...current, [stop.deliveryStopId]: result }));
+    } finally {
+      setOpeningStopNavigationId(null);
+    }
+  }
+
   async function handleRecordStopProof(stop: AssignedRouteStop, action: StopProofAction) {
     const effectiveDeliveryStart: DeliveryStartResult = deliveryStartResult ?? {
       flowState: 'route_ready',
@@ -685,6 +708,7 @@ export default function App() {
       setLocationUpdateResult(null);
       setContinuousLocationResult(null);
       setStopProofResults({});
+      setStopNavigationResults({});
       setStopProofDrafts({});
       setProofPhotoCaptureResults({});
       setProofMediaUploadResults({});
@@ -807,6 +831,7 @@ export default function App() {
             onCaptureStopProofPhoto={handleCaptureStopProofPhoto}
             onCaptureStopProofSignature={handleCaptureStopProofSignature}
             onRecordStopProof={handleRecordStopProof}
+            onOpenStopNavigation={handleOpenStopNavigation}
             proofBarcodeCaptureResults={proofBarcodeCaptureResults}
             proofMediaUploadResults={proofMediaUploadResults}
             proofPhotoCaptureResults={proofPhotoCaptureResults}
@@ -815,10 +840,12 @@ export default function App() {
             capturingProofPhotoId={capturingProofPhotoId}
             capturingProofSignatureId={capturingProofSignatureId}
             uploadingProofMediaId={uploadingProofMediaId}
+            openingStopNavigationId={openingStopNavigationId}
             result={submission}
             recordingStopProofId={recordingStopProofId}
             routeStartedEventResult={routeStartedEventResult}
             stopProofDrafts={stopProofDrafts}
+            stopNavigationResults={stopNavigationResults}
             stopProofResults={stopProofResults}
             onUpdateStopProofDraft={updateStopProofDraft}
             setAssignedRouteMockMode={setAssignedRouteMockMode}
@@ -1099,6 +1126,7 @@ function RouteAccessResultCard({
   onStopContinuousLocation,
   onFinishDelivery,
   onRecordStopProof,
+  onOpenStopNavigation,
   proofBarcodeCaptureResults,
   proofMediaUploadResults,
   proofPhotoCaptureResults,
@@ -1107,10 +1135,12 @@ function RouteAccessResultCard({
   capturingProofPhotoId,
   capturingProofSignatureId,
   uploadingProofMediaId,
+  openingStopNavigationId,
   result,
   recordingStopProofId,
   routeStartedEventResult,
   stopProofDrafts,
+  stopNavigationResults,
   stopProofResults,
   onUpdateStopProofDraft,
   setAssignedRouteMockMode,
@@ -1143,6 +1173,7 @@ function RouteAccessResultCard({
   onStopContinuousLocation(): void;
   onFinishDelivery(): void;
   onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
+  onOpenStopNavigation(stop: AssignedRouteStop): void;
   proofBarcodeCaptureResults: Record<string, ProofBarcodeCaptureResult>;
   proofMediaUploadResults: Record<string, ProofMediaUploadResult>;
   proofPhotoCaptureResults: Record<string, ProofPhotoCaptureResult>;
@@ -1151,10 +1182,12 @@ function RouteAccessResultCard({
   capturingProofPhotoId: string | null;
   capturingProofSignatureId: string | null;
   uploadingProofMediaId: string | null;
+  openingStopNavigationId: string | null;
   result: RouteAccessSubmissionResult;
   recordingStopProofId: string | null;
   routeStartedEventResult: RouteStartedRecordResult | null;
   stopProofDrafts: Record<string, StopProofDraft>;
+  stopNavigationResults: Record<string, StopNavigationResult>;
   stopProofResults: Record<string, StopProofEventResult>;
   onUpdateStopProofDraft(deliveryStopId: string, patch: Partial<StopProofDraft>): void;
   setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
@@ -1225,6 +1258,7 @@ function RouteAccessResultCard({
           onCaptureStopProofPhoto={onCaptureStopProofPhoto}
           onCaptureStopProofSignature={onCaptureStopProofSignature}
           onRecordStopProof={onRecordStopProof}
+          onOpenStopNavigation={onOpenStopNavigation}
           proofBarcodeCaptureResults={proofBarcodeCaptureResults}
           proofMediaUploadResults={proofMediaUploadResults}
           proofPhotoCaptureResults={proofPhotoCaptureResults}
@@ -1233,6 +1267,7 @@ function RouteAccessResultCard({
           capturingProofPhotoId={capturingProofPhotoId}
           capturingProofSignatureId={capturingProofSignatureId}
           uploadingProofMediaId={uploadingProofMediaId}
+          openingStopNavigationId={openingStopNavigationId}
           onStartContinuousLocation={onStartContinuousLocation}
           onStartDelivery={onStartDelivery}
           onStopContinuousLocation={onStopContinuousLocation}
@@ -1240,6 +1275,7 @@ function RouteAccessResultCard({
           recordingStopProofId={recordingStopProofId}
           routeStartedEventResult={routeStartedEventResult}
           stopProofDrafts={stopProofDrafts}
+          stopNavigationResults={stopNavigationResults}
           stopProofResults={stopProofResults}
           onUpdateStopProofDraft={onUpdateStopProofDraft}
           setAssignedRouteMockMode={setAssignedRouteMockMode}
@@ -1346,6 +1382,7 @@ function AssignedRouteCard({
   onCaptureStopProofPhoto,
   onCaptureStopProofSignature,
   onRecordStopProof,
+  onOpenStopNavigation,
   onStartContinuousLocation,
   onStartDelivery,
   onStopContinuousLocation,
@@ -1360,7 +1397,9 @@ function AssignedRouteCard({
   capturingProofPhotoId,
   capturingProofSignatureId,
   uploadingProofMediaId,
+  openingStopNavigationId,
   stopProofDrafts,
+  stopNavigationResults,
   stopProofResults,
   onUpdateStopProofDraft,
   setAssignedRouteMockMode,
@@ -1384,6 +1423,7 @@ function AssignedRouteCard({
   onCaptureStopProofPhoto(stop: AssignedRouteStop, source: ProofPhotoCaptureSource): void;
   onCaptureStopProofSignature(stop: AssignedRouteStop): void;
   onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
+  onOpenStopNavigation(stop: AssignedRouteStop): void;
   onStartContinuousLocation(): void;
   onStartDelivery(): void;
   onStopContinuousLocation(): void;
@@ -1398,7 +1438,9 @@ function AssignedRouteCard({
   capturingProofPhotoId: string | null;
   capturingProofSignatureId: string | null;
   uploadingProofMediaId: string | null;
+  openingStopNavigationId: string | null;
   stopProofDrafts: Record<string, StopProofDraft>;
+  stopNavigationResults: Record<string, StopNavigationResult>;
   stopProofResults: Record<string, StopProofEventResult>;
   onUpdateStopProofDraft(deliveryStopId: string, patch: Partial<StopProofDraft>): void;
   setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
@@ -1430,6 +1472,7 @@ function AssignedRouteCard({
               isDeliveryActive={deliveryStartResult?.kind === 'delivery_active' && deliveryFinishResult?.flowState !== 'delivery_finished'}
               key={stop.deliveryStopId}
               onRecordStopProof={(action) => onRecordStopProof(stop, action)}
+              onOpenNavigation={() => onOpenStopNavigation(stop)}
               barcodeResult={proofBarcodeCaptureResults[stop.deliveryStopId]}
               captureResult={proofPhotoCaptureResults[stop.deliveryStopId]}
               mediaUploadResult={proofMediaUploadResults[stop.deliveryStopId]}
@@ -1446,6 +1489,8 @@ function AssignedRouteCard({
               stop={stop}
               stopProofResults={stopProofResults}
               uploadingProofMediaId={uploadingProofMediaId}
+              navigationResult={stopNavigationResults[stop.deliveryStopId]}
+              isOpeningNavigation={openingStopNavigationId === stop.deliveryStopId}
             />
           ))}
         </View>
@@ -1756,8 +1801,11 @@ function AssignedRouteStopCard({
   onCaptureProofPhoto,
   onCaptureProofSignature,
   onRecordStopProof,
+  onOpenNavigation,
   onUpdateDraft,
   recordingStopProofId,
+  navigationResult,
+  isOpeningNavigation,
   stop,
   stopProofResults,
   uploadingProofMediaId,
@@ -1775,8 +1823,11 @@ function AssignedRouteStopCard({
   onCaptureProofPhoto(source: ProofPhotoCaptureSource): void;
   onCaptureProofSignature(): void;
   onRecordStopProof(action: StopProofAction): void;
+  onOpenNavigation(): void;
   onUpdateDraft(patch: Partial<StopProofDraft>): void;
   recordingStopProofId: string | null;
+  navigationResult?: StopNavigationResult;
+  isOpeningNavigation: boolean;
   stop: AssignedRouteStop;
   stopProofResults: Record<string, StopProofEventResult>;
   uploadingProofMediaId: string | null;
@@ -1793,6 +1844,21 @@ function AssignedRouteStopCard({
       <Text style={styles.stopBody}>{formatStopAddress(stop)}</Text>
       <Text style={styles.stopMeta}>Phone: {stop.phone ?? 'Contact dispatch'}</Text>
       <Text style={styles.stopMeta}>Coordinates: {formatCoordinates(stop)}</Text>
+      {navigationResult !== undefined ? (
+        <Text style={navigationResult.kind === 'opened' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
+          {navigationResult.message}
+        </Text>
+      ) : null}
+      <View style={styles.stopActionRow}>
+        <Pressable
+          accessibilityRole="button"
+          disabled={isOpeningNavigation}
+          onPress={onOpenNavigation}
+          style={[styles.stopActionButton, isOpeningNavigation && styles.buttonDisabled]}
+        >
+          <Text style={styles.stopActionButtonText}>{isOpeningNavigation ? 'Opening map…' : 'Open map'}</Text>
+        </Pressable>
+      </View>
       {isDeliveryActive ? (
         <View style={styles.stopActionPanel}>
           <Text style={styles.stopMeta}>Proof evidence: uploaded photo media, signature drawing evidence, barcode scan evidence, note, and failure reason.</Text>
