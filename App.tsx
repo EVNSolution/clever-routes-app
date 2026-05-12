@@ -26,6 +26,10 @@ import {
   type DeliveryStartResult,
 } from './src/deliveryStart';
 import {
+  finishDeliveryAfterActive,
+  type DeliveryFinishResult,
+} from './src/deliveryFinish';
+import {
   createMockDriverEventService,
   recordRouteStartedAfterDeliveryStart,
   type DriverEventService,
@@ -137,6 +141,7 @@ export default function App() {
   const [consentSubmission, setConsentSubmission] = useState<DriverConsentSubmissionResult | null>(null);
   const [assignedRouteSubmission, setAssignedRouteSubmission] = useState<AssignedRouteLoadResult | null>(null);
   const [deliveryStartResult, setDeliveryStartResult] = useState<DeliveryStartResult | null>(null);
+  const [deliveryFinishResult, setDeliveryFinishResult] = useState<DeliveryFinishResult | null>(null);
   const [routeStartedEventResult, setRouteStartedEventResult] = useState<RouteStartedRecordResult | null>(null);
   const [locationUpdateResult, setLocationUpdateResult] = useState<ForegroundLocationUpdateResult | null>(null);
   const [continuousLocationResult, setContinuousLocationResult] = useState<ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null>(null);
@@ -158,6 +163,7 @@ export default function App() {
   const [isRecordingLocationUpdate, setIsRecordingLocationUpdate] = useState(false);
   const [isStartingContinuousLocation, setIsStartingContinuousLocation] = useState(false);
   const [isStoppingContinuousLocation, setIsStoppingContinuousLocation] = useState(false);
+  const [isFinishingDelivery, setIsFinishingDelivery] = useState(false);
   const [recordingStopProofId, setRecordingStopProofId] = useState<string | null>(null);
   const [capturingProofPhotoId, setCapturingProofPhotoId] = useState<string | null>(null);
   const [uploadingProofMediaId, setUploadingProofMediaId] = useState<string | null>(null);
@@ -268,6 +274,7 @@ export default function App() {
     consentSubmission,
     assignedRouteSubmission,
     deliveryStartResult,
+    deliveryFinishResult,
   );
   const canRevealRoute = canRevealRouteDetails(currentFlowState);
   const canStartDelivery = canEnterDeliveryActive({
@@ -278,7 +285,7 @@ export default function App() {
   const activeRoutePlanId = assignedRouteSubmission?.kind === 'route_ready' ? assignedRouteSubmission.route.id : null;
 
   useEffect(() => {
-    if (deliveryStartResult?.kind !== 'delivery_active') {
+    if (deliveryStartResult?.kind !== 'delivery_active' || deliveryFinishResult?.flowState === 'delivery_finished') {
       registerContinuousLocationTaskHandler(null);
       return;
     }
@@ -300,13 +307,14 @@ export default function App() {
     return () => {
       registerContinuousLocationTaskHandler(null);
     };
-  }, [activeRoutePlanId, deliveryStartResult, driverEventService, offlineSubmissionQueue, runtimeConfig, submission]);
+  }, [activeRoutePlanId, deliveryFinishResult, deliveryStartResult, driverEventService, offlineSubmissionQueue, runtimeConfig, submission]);
 
   async function handleLookup() {
     setIsSubmitting(true);
     setConsentSubmission(null);
     setAssignedRouteSubmission(null);
     setDeliveryStartResult(null);
+    setDeliveryFinishResult(null);
     setRouteStartedEventResult(null);
     setLocationUpdateResult(null);
     setContinuousLocationResult(null);
@@ -334,6 +342,7 @@ export default function App() {
   async function handleRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']) {
     setIsRecordingConsent(true);
     setAssignedRouteSubmission(null);
+    setDeliveryFinishResult(null);
     try {
       setConsentSubmission(await submitDriverConsent(
         {
@@ -355,6 +364,7 @@ export default function App() {
   async function handleLoadAssignedRoute(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']) {
     setIsLoadingAssignedRoute(true);
     setDeliveryStartResult(null);
+    setDeliveryFinishResult(null);
     try {
       setAssignedRouteSubmission(await loadAssignedRouteAfterConsent(
         {
@@ -381,6 +391,7 @@ export default function App() {
         permissionService: foregroundLocationPermissionService,
       });
       setDeliveryStartResult(deliveryStart);
+      setDeliveryFinishResult(null);
       setRouteStartedEventResult(null);
       setContinuousLocationResult(null);
 
@@ -466,6 +477,40 @@ export default function App() {
       }));
     } finally {
       setIsStoppingContinuousLocation(false);
+    }
+  }
+
+  async function handleFinishDelivery() {
+    const effectiveDeliveryStart: DeliveryStartResult = deliveryStartResult ?? {
+      flowState: 'route_ready',
+      kind: 'permission_denied',
+      reason: 'foreground_location_denied',
+      message: 'Delivery must be active before finishing the route.',
+    };
+
+    setIsFinishingDelivery(true);
+    try {
+      const finishResult = await finishDeliveryAfterActive({
+        deliveryStart: effectiveDeliveryStart,
+        driverEventService: getDriverEventServiceForCurrentSubmission({
+          driverEventService,
+          runtimeConfig,
+          submission,
+        }),
+        offlineQueue: offlineSubmissionQueue,
+        routePlanId: activeRoutePlanId,
+        streamService: continuousLocationStreamService,
+      });
+      setDeliveryFinishResult(finishResult);
+      if (finishResult.kind !== 'blocked') {
+        setContinuousLocationResult({
+          kind: 'stopped',
+          taskName: finishResult.stoppedTaskName,
+        });
+      }
+      setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
+    } finally {
+      setIsFinishingDelivery(false);
     }
   }
 
@@ -685,7 +730,9 @@ export default function App() {
             consentMockMode={consentMockMode}
             consentResult={consentSubmission}
             deliveryStartResult={deliveryStartResult}
+            deliveryFinishResult={deliveryFinishResult}
             continuousLocationResult={continuousLocationResult}
+            isFinishingDelivery={isFinishingDelivery}
             isLoadingAssignedRoute={isLoadingAssignedRoute}
             isRecordingConsent={isRecordingConsent}
             isRecordingLocationUpdate={isRecordingLocationUpdate}
@@ -700,6 +747,7 @@ export default function App() {
             onStartContinuousLocation={handleStartContinuousLocation}
             onStartDelivery={handleStartDelivery}
             onStopContinuousLocation={handleStopContinuousLocation}
+            onFinishDelivery={handleFinishDelivery}
             onCaptureStopProofBarcode={handleCaptureStopProofBarcode}
             onCaptureStopProofPhoto={handleCaptureStopProofPhoto}
             onCaptureStopProofSignature={handleCaptureStopProofSignature}
@@ -750,6 +798,10 @@ function formatForegroundLocationStatus(deliveryStartResult: DeliveryStartResult
 }
 
 function formatDeliveryActiveGuard(currentFlowState: DriverFlowState, canStartDelivery: boolean): string {
+  if (currentFlowState === 'delivery_finished') {
+    return 'finished; tracking stopped';
+  }
+
   if (currentFlowState === 'delivery_active') {
     return 'active';
   }
@@ -879,7 +931,12 @@ function getCurrentFlowState(
   consentSubmission: DriverConsentSubmissionResult | null,
   assignedRouteSubmission: AssignedRouteLoadResult | null,
   deliveryStartResult: DeliveryStartResult | null,
+  deliveryFinishResult: DeliveryFinishResult | null,
 ): DriverFlowState {
+  if (deliveryFinishResult?.flowState === 'delivery_finished') {
+    return deliveryFinishResult.flowState;
+  }
+
   if (deliveryStartResult?.kind === 'delivery_active') {
     return deliveryStartResult.flowState;
   }
@@ -961,7 +1018,9 @@ function RouteAccessResultCard({
   consentMockMode,
   continuousLocationResult,
   consentResult,
+  deliveryFinishResult,
   deliveryStartResult,
+  isFinishingDelivery,
   isLoadingAssignedRoute,
   isRecordingConsent,
   isRecordingLocationUpdate,
@@ -979,6 +1038,7 @@ function RouteAccessResultCard({
   onStartContinuousLocation,
   onStartDelivery,
   onStopContinuousLocation,
+  onFinishDelivery,
   onRecordStopProof,
   proofBarcodeCaptureResults,
   proofMediaUploadResults,
@@ -1002,7 +1062,9 @@ function RouteAccessResultCard({
   consentMockMode: ConsentMockMode;
   consentResult: DriverConsentSubmissionResult | null;
   continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
+  deliveryFinishResult: DeliveryFinishResult | null;
   deliveryStartResult: DeliveryStartResult | null;
+  isFinishingDelivery: boolean;
   isLoadingAssignedRoute: boolean;
   isRecordingConsent: boolean;
   isRecordingLocationUpdate: boolean;
@@ -1020,6 +1082,7 @@ function RouteAccessResultCard({
   onStartContinuousLocation(): void;
   onStartDelivery(): void;
   onStopContinuousLocation(): void;
+  onFinishDelivery(): void;
   onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
   proofBarcodeCaptureResults: Record<string, ProofBarcodeCaptureResult>;
   proofMediaUploadResults: Record<string, ProofMediaUploadResult>;
@@ -1087,7 +1150,9 @@ function RouteAccessResultCard({
           assignedRouteMockMode={assignedRouteMockMode}
           assignedRouteResult={assignedRouteResult}
           continuousLocationResult={continuousLocationResult}
+          deliveryFinishResult={deliveryFinishResult}
           deliveryStartResult={deliveryStartResult}
+          isFinishingDelivery={isFinishingDelivery}
           isLoadingAssignedRoute={isLoadingAssignedRoute}
           isRecordingLocationUpdate={isRecordingLocationUpdate}
           isRecordingRouteStarted={isRecordingRouteStarted}
@@ -1112,6 +1177,7 @@ function RouteAccessResultCard({
           onStartContinuousLocation={onStartContinuousLocation}
           onStartDelivery={onStartDelivery}
           onStopContinuousLocation={onStopContinuousLocation}
+          onFinishDelivery={onFinishDelivery}
           recordingStopProofId={recordingStopProofId}
           routeStartedEventResult={routeStartedEventResult}
           stopProofDrafts={stopProofDrafts}
@@ -1205,7 +1271,9 @@ function AssignedRouteCard({
   assignedRouteMockMode,
   assignedRouteResult,
   continuousLocationResult,
+  deliveryFinishResult,
   deliveryStartResult,
+  isFinishingDelivery,
   isLoadingAssignedRoute,
   isRecordingLocationUpdate,
   isRecordingRouteStarted,
@@ -1222,6 +1290,7 @@ function AssignedRouteCard({
   onStartContinuousLocation,
   onStartDelivery,
   onStopContinuousLocation,
+  onFinishDelivery,
   recordingStopProofId,
   routeStartedEventResult,
   proofBarcodeCaptureResults,
@@ -1240,7 +1309,9 @@ function AssignedRouteCard({
   assignedRouteMockMode: AssignedRouteMockMode;
   assignedRouteResult: AssignedRouteLoadResult | null;
   continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
+  deliveryFinishResult: DeliveryFinishResult | null;
   deliveryStartResult: DeliveryStartResult | null;
+  isFinishingDelivery: boolean;
   isLoadingAssignedRoute: boolean;
   isRecordingLocationUpdate: boolean;
   isRecordingRouteStarted: boolean;
@@ -1257,6 +1328,7 @@ function AssignedRouteCard({
   onStartContinuousLocation(): void;
   onStartDelivery(): void;
   onStopContinuousLocation(): void;
+  onFinishDelivery(): void;
   recordingStopProofId: string | null;
   routeStartedEventResult: RouteStartedRecordResult | null;
   proofBarcodeCaptureResults: Record<string, ProofBarcodeCaptureResult>;
@@ -1296,7 +1368,7 @@ function AssignedRouteCard({
           <InfoRow label="Timezone" value={assignedRouteResult.route.timezone} />
           {assignedRouteResult.route.stops.map((stop) => (
             <AssignedRouteStopCard
-              isDeliveryActive={deliveryStartResult?.kind === 'delivery_active'}
+              isDeliveryActive={deliveryStartResult?.kind === 'delivery_active' && deliveryFinishResult?.flowState !== 'delivery_finished'}
               key={stop.deliveryStopId}
               onRecordStopProof={(action) => onRecordStopProof(stop, action)}
               barcodeResult={proofBarcodeCaptureResults[stop.deliveryStopId]}
@@ -1325,7 +1397,9 @@ function AssignedRouteCard({
       {assignedRouteResult?.kind === 'route_ready' ? (
         <DeliveryStartCard
           continuousLocationResult={continuousLocationResult}
+          deliveryFinishResult={deliveryFinishResult}
           deliveryStartResult={deliveryStartResult}
+          isFinishingDelivery={isFinishingDelivery}
           isRecordingLocationUpdate={isRecordingLocationUpdate}
           isRecordingRouteStarted={isRecordingRouteStarted}
           isStartingContinuousLocation={isStartingContinuousLocation}
@@ -1336,6 +1410,7 @@ function AssignedRouteCard({
           onStartContinuousLocation={onStartContinuousLocation}
           onStartDelivery={onStartDelivery}
           onStopContinuousLocation={onStopContinuousLocation}
+          onFinishDelivery={onFinishDelivery}
           routeStartedEventResult={routeStartedEventResult}
         />
       ) : null}
@@ -1358,7 +1433,9 @@ function AssignedRouteCard({
 
 function DeliveryStartCard({
   continuousLocationResult,
+  deliveryFinishResult,
   deliveryStartResult,
+  isFinishingDelivery,
   isRecordingLocationUpdate,
   isRecordingRouteStarted,
   isStartingContinuousLocation,
@@ -1369,10 +1446,13 @@ function DeliveryStartCard({
   onStartContinuousLocation,
   onStartDelivery,
   onStopContinuousLocation,
+  onFinishDelivery,
   routeStartedEventResult,
 }: {
   continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
+  deliveryFinishResult: DeliveryFinishResult | null;
   deliveryStartResult: DeliveryStartResult | null;
+  isFinishingDelivery: boolean;
   isRecordingLocationUpdate: boolean;
   isRecordingRouteStarted: boolean;
   isStartingContinuousLocation: boolean;
@@ -1383,9 +1463,11 @@ function DeliveryStartCard({
   onStartContinuousLocation(): void;
   onStartDelivery(): void;
   onStopContinuousLocation(): void;
+  onFinishDelivery(): void;
   routeStartedEventResult: RouteStartedRecordResult | null;
 }) {
-  const isActive = deliveryStartResult?.kind === 'delivery_active';
+  const isFinished = deliveryFinishResult?.flowState === 'delivery_finished';
+  const isActive = deliveryStartResult?.kind === 'delivery_active' && !isFinished;
   return (
     <View style={styles.deliveryStartPanel}>
       <Text style={styles.consentKicker}>delivery_active gate</Text>
@@ -1421,6 +1503,14 @@ function DeliveryStartCard({
       {continuousLocationResult !== null ? (
         <Text style={continuousLocationResult.kind === 'streaming' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
           {formatContinuousLocationResult(continuousLocationResult)}
+        </Text>
+      ) : null}
+      {isFinishingDelivery ? (
+        <Text style={styles.routeHelpText}>Finishing delivery and stopping route tracking…</Text>
+      ) : null}
+      {deliveryFinishResult !== null ? (
+        <Text style={deliveryFinishResult.kind === 'recorded' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
+          {formatDeliveryFinishResult(deliveryFinishResult)}
         </Text>
       ) : null}
       {isActive ? (
@@ -1461,16 +1551,30 @@ function DeliveryStartCard({
           </Pressable>
         </View>
       ) : null}
+      {isActive ? (
+        <Pressable
+          accessibilityRole="button"
+          disabled={isFinishingDelivery}
+          onPress={onFinishDelivery}
+          style={[styles.stopActionDangerButton, isFinishingDelivery && styles.buttonDisabled]}
+        >
+          <Text style={styles.stopActionButtonText}>
+            {isFinishingDelivery ? 'Finishing…' : 'Finish delivery'}
+          </Text>
+        </Pressable>
+      ) : null}
       <Pressable
         accessibilityRole="button"
-        disabled={isStartingDelivery || isActive}
+        disabled={isStartingDelivery || isActive || isFinished}
         onPress={onStartDelivery}
-        style={[styles.secondaryButton, (isStartingDelivery || isActive) && styles.buttonDisabled]}
+        style={[styles.secondaryButton, (isStartingDelivery || isActive || isFinished) && styles.buttonDisabled]}
       >
         {isStartingDelivery ? (
           <ActivityIndicator color="#0f172a" />
         ) : (
-          <Text style={styles.secondaryButtonText}>{isActive ? 'Delivery active' : 'Start delivery'}</Text>
+          <Text style={styles.secondaryButtonText}>
+            {isFinished ? 'Delivery finished' : isActive ? 'Delivery active' : 'Start delivery'}
+          </Text>
         )}
       </Pressable>
     </View>
@@ -1487,6 +1591,18 @@ function formatContinuousLocationResult(result: ContinuousLocationStreamStartRes
 
   if (result.kind === 'stopped') {
     return `Continuous location stopped: ${result.taskName}`;
+  }
+
+  return result.message;
+}
+
+function formatDeliveryFinishResult(result: DeliveryFinishResult): string {
+  if (result.kind === 'recorded') {
+    return `${result.message} Event: ${result.eventId}. Tracking stopped: ${result.stoppedTaskName}.`;
+  }
+
+  if (result.kind === 'queued') {
+    return `${result.message} Queue item: ${result.queueItemId}. Tracking stopped: ${result.stoppedTaskName}.`;
   }
 
   return result.message;
