@@ -15,17 +15,17 @@ The app now has an interactive phone-first driver flow:
 5. From the driver's point of view, multi-company assignments are just multiple routes; each route card shows the company/shop and route metadata attached to that route.
 6. The app records required `LOCATION_INFORMATION` and `PERSONAL_INFORMATION` consent through the `DriverConsentService` boundary for the selected/loaded route token.
 7. Assigned route loading calls an `AssignedRouteService` boundary shaped like delivery-server `GET /driver/assigned-route` for each route choice.
-8. Loaded routes render in `배송전`, `배송중`, and `배송완료` tabs; a route card can open detail or start delivery.
+8. Loaded routes render in `Pending`, `In Progress`, and `Completed` tabs; a route card can open detail or start delivery.
 9. Delivery start requests foreground location permission and moves to `delivery_active` only when permission is granted.
-10. Navigation starts at the company/pickup step, then proceeds through ordered stops.
-11. Each stop can play a local area tip, open native navigation, capture required proof photo, and record optional same-day notes and location-specific tips.
+10. Live tracking starts at the company/pickup step, then proceeds through ordered stops without presenting turn-by-turn instruction UI.
+11. Each stop can play a local area tip, open stop details, capture required proof photo, and record optional same-day notes, location-specific tips, and additional notes.
 12. Delivery finish stops the continuous location task, records or queues a `ROUTE_COMPLETED` driver event, and discards route-scoped local retry items only after route completion is recorded.
 13. `INVITED` remains accepted as a legacy exact route-context response from the API, but the app no longer asks the driver for any external route access artifact.
 14. `NO_ASSIGNED_ROUTE`, `NOT_FOUND`, `DISABLED`, `BLOCKED`, and API errors stay in safe user-visible states without exposing other tenant/driver data.
 
 ## Local mock boundary
 
-`App.tsx` uses `createMockRouteAccessService()` from `src/routeAccess.ts`, `createMockDriverConsentService()` from `src/driverConsent.ts`, and `createMockAssignedRouteService()` from `src/assignedRoute.ts` when no live delivery-server base URL is configured. The default mock returns a phone-resolvable route choice with company guidance, so the app can run the same phone → route list → route detail → navigation → proof flow without a live server.
+`App.tsx` uses `createMockRouteAccessService()` from `src/routeAccess.ts`, `createMockDriverConsentService()` from `src/driverConsent.ts`, and `createMockAssignedRouteService()` from `src/assignedRoute.ts` when no live delivery-server base URL is configured. The default mock returns a phone-resolvable route choice with company guidance, so the app can run the same phone → today route → route details → live tracking → stop details → arrival check → stop completed/completed deliveries flow without a live server.
 
 Mock services are for local UX smoke only and do not replace backend integration tests.
 
