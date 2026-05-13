@@ -1,0 +1,325 @@
+import type { DriverFlowState } from '../driverFlow/driverFlow';
+import {
+  createDriverApiHttpError,
+  DRIVER_ACCESS_EXPIRED_MESSAGE,
+  isDriverApiUnauthorizedError,
+} from '../../api/deliveryServer/driverApiError';
+
+export type AssignedRouteAddress = {
+  address1: string;
+  address2: string | null;
+  city: string;
+  countryCode: string;
+  postalCode: string;
+  province: string;
+};
+
+export type AssignedRouteCoordinates = {
+  latitude: number;
+  longitude: number;
+};
+
+export type AssignedRouteStop = {
+  address: AssignedRouteAddress;
+  coordinates: AssignedRouteCoordinates | null;
+  deliveryStopId: string;
+  orderName: string;
+  phone: string | null;
+  recipientName: string | null;
+  sequence: number;
+  status: string;
+};
+
+export type AssignedRoute = {
+  deliveryDate: string;
+  id: string;
+  name: string;
+  shopDomain: string;
+  stops: AssignedRouteStop[];
+  timezone: string;
+};
+
+export type AssignedRouteLookupResult =
+  | {
+      route: AssignedRoute;
+      status: 'ASSIGNED_ROUTE';
+    }
+  | {
+      status: 'NO_ASSIGNED_ROUTE';
+    };
+
+export type AssignedRouteLookupInput = {
+  routeContext: string | null;
+};
+
+export type AssignedRouteService = {
+  getAssignedRoute(input: AssignedRouteLookupInput): Promise<AssignedRouteLookupResult>;
+};
+
+export type AssignedRouteLoadInput = {
+  consentState: Extract<DriverFlowState, 'consent_recorded' | 'consent_required'>;
+  routeContext: string;
+};
+
+export type AssignedRouteLoadResult =
+  | {
+      flowState: Extract<DriverFlowState, 'route_ready'>;
+      kind: 'route_ready';
+      route: AssignedRoute;
+    }
+  | {
+      flowState: Extract<DriverFlowState, 'consent_recorded'>;
+      kind: 'no_assigned_route';
+      message: string;
+    }
+  | {
+      flowState: Extract<DriverFlowState, 'consent_recorded'>;
+      kind: 'route_error';
+      message: string;
+      reason?: 'driver_access_expired';
+    }
+  | {
+      flowState: Extract<DriverFlowState, 'consent_required'>;
+      kind: 'blocked_until_consent';
+      message: string;
+    };
+
+export type FetchLike = (
+  input: string,
+  init?: {
+    headers?: Record<string, string>;
+    method?: string;
+  },
+) => Promise<{
+  json(): Promise<unknown>;
+  ok: boolean;
+  status?: number;
+}>;
+
+export const sampleAssignedRoute: AssignedRoute = {
+  deliveryDate: '2026-05-12',
+  id: '11111111-1111-4111-8111-111111111111',
+  name: 'Tuesday AM Route',
+  shopDomain: 'tomatono.myshopify.com',
+  stops: [
+    {
+      address: {
+        address1: '100 King St W',
+        address2: null,
+        city: 'Toronto',
+        countryCode: 'CA',
+        postalCode: 'M5X 1A9',
+        province: 'ON',
+      },
+      coordinates: {
+        latitude: 43.6487,
+        longitude: -79.3817,
+      },
+      deliveryStopId: '22222222-2222-4222-8222-222222222222',
+      orderName: '#1001',
+      phone: '+14165550123',
+      recipientName: 'Recipient One',
+      sequence: 1,
+      status: 'ASSIGNED',
+    },
+    {
+      address: {
+        address1: '200 Queen St W',
+        address2: 'Unit 4',
+        city: 'Toronto',
+        countryCode: 'CA',
+        postalCode: 'M5V 1Z2',
+        province: 'ON',
+      },
+      coordinates: {
+        latitude: 43.6509,
+        longitude: -79.3909,
+      },
+      deliveryStopId: '33333333-3333-4333-8333-333333333333',
+      orderName: '#1002',
+      phone: '+14165550124',
+      recipientName: 'Recipient Two',
+      sequence: 2,
+      status: 'ASSIGNED',
+    },
+  ],
+  timezone: 'America/Toronto',
+};
+
+export async function loadAssignedRouteAfterConsent(
+  input: AssignedRouteLoadInput,
+  service: AssignedRouteService,
+): Promise<AssignedRouteLoadResult> {
+  if (input.consentState !== 'consent_recorded') {
+    return {
+      flowState: 'consent_required',
+      kind: 'blocked_until_consent',
+      message: 'Record required consent before loading assigned route details.',
+    };
+  }
+
+  try {
+    const result = await service.getAssignedRoute({ routeContext: input.routeContext.trim() });
+    if (result.status === 'NO_ASSIGNED_ROUTE') {
+      return {
+        flowState: 'consent_recorded',
+        kind: 'no_assigned_route',
+        message: 'No assigned route is available for this driver and route context today.',
+      };
+    }
+
+    return {
+      flowState: 'route_ready',
+      kind: 'route_ready',
+      route: {
+        ...result.route,
+        stops: [...result.route.stops].sort((left, right) => left.sequence - right.sequence),
+      },
+    };
+  } catch (error) {
+    if (isDriverApiUnauthorizedError(error)) {
+      return {
+        flowState: 'consent_recorded',
+        kind: 'route_error',
+        message: DRIVER_ACCESS_EXPIRED_MESSAGE,
+        reason: 'driver_access_expired',
+      };
+    }
+
+    return {
+      flowState: 'consent_recorded',
+      kind: 'route_error',
+      message: 'Assigned route could not be loaded. Check the connection and try again.',
+    };
+  }
+}
+
+export function createMockAssignedRouteService(
+  result: AssignedRouteLookupResult = { status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute },
+): AssignedRouteService {
+  return {
+    getAssignedRoute: async () => result,
+  };
+}
+
+export function createAssignedRouteApiClient(input: {
+  accessToken: string;
+  baseUrl: string;
+  fetchImpl?: FetchLike;
+}): AssignedRouteService {
+  const baseUrl = input.baseUrl.replace(/\/$/u, '');
+  const fetchImpl = input.fetchImpl ?? globalThis.fetch;
+  const accessToken = input.accessToken.trim();
+
+  return {
+    getAssignedRoute: async (request) => {
+      const routeContext = request.routeContext?.trim();
+      const query = routeContext ? `?routeContext=${encodeURIComponent(routeContext)}` : '';
+      const response = await fetchImpl(`${baseUrl}/driver/assigned-route${query}`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        method: 'GET',
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw createDriverApiHttpError({
+          endpoint: 'Assigned route lookup',
+          status: response.status,
+        });
+      }
+
+      return readAssignedRouteEnvelope(payload);
+    },
+  };
+}
+
+function readAssignedRouteEnvelope(payload: unknown): AssignedRouteLookupResult {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new Error('Invalid assigned route response');
+  }
+
+  const data = (payload as { data?: unknown }).data;
+  if (!isAssignedRouteLookupResult(data)) {
+    throw new Error('Invalid assigned route response');
+  }
+
+  return data;
+}
+
+function isAssignedRouteLookupResult(value: unknown): value is AssignedRouteLookupResult {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const result = value as Record<string, unknown>;
+  if (result.status === 'NO_ASSIGNED_ROUTE') {
+    return true;
+  }
+
+  return result.status === 'ASSIGNED_ROUTE' && isAssignedRoute(result.route);
+}
+
+function isAssignedRoute(value: unknown): value is AssignedRoute {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const route = value as Record<string, unknown>;
+  return (
+    typeof route.deliveryDate === 'string' &&
+    typeof route.id === 'string' &&
+    typeof route.name === 'string' &&
+    typeof route.shopDomain === 'string' &&
+    Array.isArray(route.stops) &&
+    route.stops.every(isAssignedRouteStop) &&
+    typeof route.timezone === 'string'
+  );
+}
+
+function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const stop = value as Record<string, unknown>;
+  return (
+    isAssignedRouteAddress(stop.address) &&
+    (stop.coordinates === null || isAssignedRouteCoordinates(stop.coordinates)) &&
+    typeof stop.deliveryStopId === 'string' &&
+    typeof stop.orderName === 'string' &&
+    nullableString(stop.phone) &&
+    nullableString(stop.recipientName) &&
+    typeof stop.sequence === 'number' &&
+    typeof stop.status === 'string'
+  );
+}
+
+function isAssignedRouteAddress(value: unknown): value is AssignedRouteAddress {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const address = value as Record<string, unknown>;
+  return (
+    typeof address.address1 === 'string' &&
+    nullableString(address.address2) &&
+    typeof address.city === 'string' &&
+    typeof address.countryCode === 'string' &&
+    typeof address.postalCode === 'string' &&
+    typeof address.province === 'string'
+  );
+}
+
+function isAssignedRouteCoordinates(value: unknown): value is AssignedRouteCoordinates {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const coordinates = value as Record<string, unknown>;
+  return typeof coordinates.latitude === 'number' && typeof coordinates.longitude === 'number';
+}
+
+function nullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
