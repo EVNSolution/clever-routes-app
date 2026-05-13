@@ -2,16 +2,30 @@
 
 ## Purpose
 
-This document plans the next driver-app phone entry and SMS verification slice before runtime implementation. The current driver app is phone-first, but not yet SMS-verified: it accepts a phone value in E.164 format, shows a verification-code field, and calls route access by phone. The next slice should separate the driver-facing national phone input from the app/server-owned E.164 identity and then add SMS OTP only through the backend.
+This document records the driver-app phone entry implementation and the remaining SMS verification plan. The current driver app is phone-first, but not yet SMS-verified: it accepts a selected country plus national phone input, normalizes the value to E.164 for route access, shows a verification-code field, and calls route access by phone. The remaining SMS slice should add OTP only through the backend.
 
 ## Current app state
 
-- `src/app/AppRoot.tsx` owns the current login screen state: `phoneE164`, `verificationCode`, `driverName`, privacy consent, and location consent.
-- `LoginScreen` currently renders one `Phone Number` input and one `Verification Code` input. `Send Code` is visible in the UI, but the current phone lookup path does not depend on SMS verification.
-- `handleLoginAndLoadRoutes()` calls `submitRouteAccess({ phoneE164 }, routeAccessService)` after driver name and consent checks.
-- `src/domain/driverFlow/driverFlow.ts` validates only E.164 with `E164_PHONE_PATTERN = /^\+[1-9]\d{7,14}$/`.
+- `src/app/AppRoot.tsx` owns the current login screen state: selected phone country, national phone input, `verificationCode`, `driverName`, privacy consent, and location consent.
+- `LoginScreen` currently renders a country selector/search panel, calling-code prefix, national `Phone Number` input, E.164 preview, and one `Verification Code` input. `Send Code` is visible in the UI, but the current phone lookup path does not depend on SMS verification.
+- `handleLoginAndLoadRoutes()` normalizes selected country + national phone input and calls `submitRouteAccess({ phoneE164 }, routeAccessService)` after driver name and consent checks.
+- `src/domain/phone/phoneEntry.ts` formats/normalizes supported national phone input; `src/domain/driverFlow/driverFlow.ts` still validates the E.164 boundary with `E164_PHONE_PATTERN = /^\+[1-9]\d{7,14}$/`.
 - `src/domain/routeAccess/routeAccess.ts` sends `phoneE164` and `routeContext: null` to `POST /driver/route-access/lookup` in live mode.
 - Successful route lookup returns route choices, company guidance, and a short-lived driver bearer token. SMS must not be implemented in the app with provider credentials.
+
+## Implementation status
+
+Implemented in the driver app for the initial phone-entry foundation:
+
+- `src/domain/phone/phoneEntry.ts` owns the `CA`/`KR` allowlist, country labels, search by country name/ISO/calling code, national formatting, and E.164 normalization.
+- `src/app/AppRoot.tsx` renders the selected country row, searchable country panel, calling-code prefix, national phone input, and E.164 preview.
+- Existing route access still receives only `phoneE164`; SMS sending remains server-integration-ready but not active in the app.
+
+Still pending from this plan:
+
+- Server-owned OTP start/verify endpoints.
+- SMS provider selection, budget controls, fraud/rate limits, and production pricing recheck.
+- Native OTP autofill hardening beyond the current verification-code field.
 
 ## Target UX
 

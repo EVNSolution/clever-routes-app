@@ -139,8 +139,8 @@ MVP와 확장 경계:
 
 - 배송원이 iPhone 또는 Android phone에서 앱을 실행한다.
 - 앱은 관리자 기능 없이 배송원용 시작 화면을 보여준다.
-- 배송원은 전화번호를 입력한다.
-- 앱은 서버에 phone-only lookup을 요청해 해당 전화번호에 활성 라우트가 배정되어 있는지 확인한다.
+- 배송원은 지원 국가를 선택하고 해당 국가의 national phone format으로 전화번호를 입력한다.
+- 앱은 전화번호를 E.164로 정규화한 뒤 서버에 phone-only lookup을 요청해 해당 전화번호에 활성 라우트가 배정되어 있는지 확인한다.
 - 배정된 활성 라우트가 있으면 앱은 route list를 보여주며, 각 route card에 회사 안내를 함께 표시한다.
 - 초대되지 않은 번호, 비활성 driver, 차단된 driver는 route 데이터를 받지 못하고 안내 화면에 머문다.
 - MVP 문서 기준 첫 관문은 `전화번호 + 서버 route assignment 확인`으로 둔다.
@@ -293,13 +293,13 @@ unidentified
 
 - 목적: 배송원이 전화번호를 입력하고 서버에서 활성 route assignment와 driver access 상태를 확인하는 시작 흐름을 만든다.
 - 선행 계약:
-  - E.164 phone normalization 기준
+  - country-aware national phone formatting and E.164 normalization 기준
   - delivery server의 driver-facing phone lookup endpoint
   - `ROUTES_FOUND` route choice payload shape
   - route-scoped driver access token payload shape
   - not-found/disabled/blocked/error 상태 코드
 - 산출물:
-  - phone input screen
+  - country selector/search and phone input screen
   - route list with company guidance per route
   - validation and API error state rendering
   - session/access state 저장 방식
@@ -362,7 +362,7 @@ unidentified
 
 ## 데이터와 연동
 
-- input data: E.164 phone, consent decisions, current date/device context, server-issued route assignment identifiers
+- input data: selected phone country, national phone input normalized to E.164, consent decisions, current date/device context, server-issued route assignment identifiers
 - output data: company guidance, consent record, assigned route/stop display state, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
 - public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events, and `ROUTE_COMPLETED` delivery finish event with native photo URI capture, proof media upload references, scanner-rejected proof media handling, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads or live downstream `401`, which returns the driver to phone lookup; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, recorded route cleanup, scanner rejection, and session reset; delivery server proof-media scan rejection hook and local/manual cleanup runner exist; token refresh/strong re-auth, production proof-media object storage/signed access/deployed scanner evidence, deployed cleanup evidence, and physical-device background smoke evidence remain follow-up work
