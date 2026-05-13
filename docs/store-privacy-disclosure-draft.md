@@ -38,10 +38,10 @@ Runtime source anchors for this worksheet:
 
 - `app.json`: native permission strings and background location flags
 - `docs/route-access-flow.md`: app-side API, event, proof, and offline queue boundaries
-- `src/continuousLocationStream.ts`: continuous/background-capable location task guard
-- `src/proofPhotoCapture.ts`, `src/proofMediaUpload.ts`: proof photo capture/upload
-- `src/proofSignatureCapture.ts`, `src/proofBarcodeCapture.ts`: signature/barcode proof metadata
-- `src/offlineSubmissionQueue.ts`: local retry retention/discard policy
+- `src/domain/location/continuousLocationStream.ts`: continuous/background-capable location task guard
+- `src/domain/proof/proofPhotoCapture.ts`, `src/domain/proof/proofMediaUpload.ts`: proof photo capture/upload
+- `src/domain/proof/proofSignatureCapture.ts`, `src/domain/proof/proofBarcodeCapture.ts`: signature/barcode proof metadata
+- `src/domain/offline/offlineSubmissionQueue.ts`: local retry retention/discard policy
 
 ## Data disclosure worksheet
 

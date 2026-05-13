@@ -10,13 +10,15 @@ import { createInMemoryOfflineSubmissionQueue } from '../offline/offlineSubmissi
 
 describe('driver event API boundary', () => {
   it('posts route started events with driver bearer token evidence', async () => {
-    const requests: { body: unknown; headers: Record<string, string>; method: string; url: string }[] = [];
+    const requests: { body: unknown; cache?: string; credentials?: string; headers: Record<string, string>; method: string; url: string }[] = [];
     const service = createDriverEventsApiClient({
       accessToken: 'fixture-driver-access-token',
       baseUrl: 'https://delivery.example.com/',
       fetchImpl: async (url, init) => {
         requests.push({
           body: JSON.parse(init?.body ?? '{}') as unknown,
+          cache: init?.cache,
+          credentials: init?.credentials,
           headers: init?.headers ?? {},
           method: String(init?.method),
           url: String(url),
@@ -42,6 +44,10 @@ describe('driver event API boundary', () => {
     assert.deepEqual(result, { duplicate: false, eventId: 'evt_123', status: 'recorded' });
     assert.equal(requests[0]?.url, 'https://delivery.example.com/driver/events');
     assert.equal(requests[0]?.method, 'POST');
+    assert.equal(requests[0]?.cache, 'no-store');
+    assert.equal(requests[0]?.credentials, 'omit');
+    assert.equal(requests[0]?.headers['Cache-Control'], 'no-store');
+    assert.equal(requests[0]?.headers.Pragma, 'no-cache');
     assert.equal(requests[0]?.headers.Authorization, 'Bearer fixture-driver-access-token');
     assert.deepEqual(requests[0]?.body, {
       clientEventId: 'route-started-1',

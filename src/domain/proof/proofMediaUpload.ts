@@ -4,6 +4,7 @@ import {
   formatDriverApiErrorForDriver,
   getDriverApiRecoveryReason,
 } from '../../api/deliveryServer/driverApiError';
+import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
 
 export type ProofMediaKind = 'photo';
 
@@ -59,6 +60,8 @@ export type FetchLike = (
   input: string,
   init?: {
     body?: unknown;
+    cache?: 'no-store';
+    credentials?: 'omit';
     headers?: Record<string, string>;
     method?: string;
   },
@@ -109,13 +112,13 @@ export function createProofMediaUploadApiClient(input: {
 
   return {
     uploadProofMedia: async (request) => {
-      const response = await fetchImpl(`${baseUrl}/driver/proof-media`, {
+      const response = await fetchImpl(`${baseUrl}/driver/proof-media`, withNoStoreDriverApiRequest({
         body: toProofMediaFormData(request),
         headers: {
           Authorization: `Bearer ${input.accessToken}`,
         },
         method: 'POST',
-      });
+      }));
       const payload = await response.json();
       if (!response.ok) {
         if (response.status === 422 && readDriverApiErrorCode(payload) === 'PROOF_MEDIA_REJECTED') {

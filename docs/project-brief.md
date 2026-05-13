@@ -276,7 +276,7 @@ unidentified
 - baseline 결정:
   - framework: Expo/React Native
   - package manager/runtime: npm `package-lock.json`, Node `>=20.19.4`
-  - 앱 구조: `index.ts`가 `App.tsx`를 등록하고, MVP state/guard 로직은 `src/driverFlow.ts`에서 순수 함수로 검증한다.
+  - 앱 구조: `index.ts`가 `App.tsx`를 등록하고, MVP state/guard 로직은 `src/domain/driverFlow/driverFlow.ts`에서 순수 함수로 검증한다.
   - iOS/Android 설정 위치: `app.json`에 bundle/package id, scheme, 기본 native runtime 옵션을 둔다.
   - background location 또는 실제 위치 수집은 이 단계에서 구현하지 않는다.
 - 산출물:

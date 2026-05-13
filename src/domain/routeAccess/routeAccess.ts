@@ -1,5 +1,6 @@
 import { getInitialAccessValidation, type DriverFlowState } from '../driverFlow/driverFlow';
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
+import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
 
 export type RouteAccessLookupInput = {
   routeContext?: string | null;
@@ -103,6 +104,8 @@ export type FetchLike = (
   input: string,
   init?: {
     body?: string;
+    cache?: 'no-store';
+    credentials?: 'omit';
     headers?: Record<string, string>;
     method?: string;
   },
@@ -283,14 +286,14 @@ export function createRouteAccessApiClient(input: {
 
   return {
     lookupRouteAccess: async (request) => {
-      const response = await fetchImpl(`${baseUrl}/driver/route-access/lookup`, {
+      const response = await fetchImpl(`${baseUrl}/driver/route-access/lookup`, withNoStoreDriverApiRequest({
         body: JSON.stringify({
           phoneE164: request.phoneE164,
           routeContext: request.routeContext?.trim() || null,
         }),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',
-      });
+      }));
       const payload = await response.json();
       if (!response.ok) {
         throw createDriverApiHttpError({
