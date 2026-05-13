@@ -51,6 +51,15 @@ import { createDriverRuntimeServices, readDriverRuntimeConfig } from './config/d
 import { createMockDriverConsentService, submitDriverConsent, type DriverConsentService, type DriverConsentSubmissionResult } from '../domain/consent/driverConsent';
 import { getMvpRouteTabs } from '../domain/driverFlow/driverFlow';
 import {
+  DEFAULT_DRIVER_PHONE_COUNTRY,
+  findDriverPhoneCountry,
+  formatDriverNationalPhoneInput,
+  getDriverPhoneCountryLabel,
+  normalizeDriverPhoneEntry,
+  searchDriverPhoneCountries,
+  type DriverPhoneCountry,
+} from '../domain/phone/phoneEntry';
+import {
   createMockRouteAccessService,
   sampleInvitedRouteAccess,
   submitRouteAccess,
@@ -85,13 +94,15 @@ type RouteSession = RouteAccessRouteChoice & {
   route: AssignedRoute;
 };
 
-const DEFAULT_PHONE_E164 = '';
 const DEFAULT_DRIVER_NAME = '';
 const COMPANY_STEP_INDEX = 0;
 
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>('login');
-  const [phoneE164, setPhoneE164] = useState(DEFAULT_PHONE_E164);
+  const [selectedPhoneCountryIso2, setSelectedPhoneCountryIso2] = useState(DEFAULT_DRIVER_PHONE_COUNTRY.iso2);
+  const [nationalPhoneInput, setNationalPhoneInput] = useState('');
+  const [countrySearchQuery, setCountrySearchQuery] = useState('');
+  const [isCountrySelectorOpen, setIsCountrySelectorOpen] = useState(false);
   const [verificationCode, setVerificationCode] = useState('');
   const [driverName, setDriverName] = useState(DEFAULT_DRIVER_NAME);
   const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
@@ -134,6 +145,16 @@ export default function App() {
   const mockAssignedRouteService = useMemo(() => createMockAssignedRouteService({ status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute }), []);
   const mockProofMediaUploadService = useMemo(() => createMockProofMediaUploadService({ mode: 'success' }), []);
   const routeTabs = useMemo(() => getMvpRouteTabs(), []);
+  const selectedPhoneCountry = findDriverPhoneCountry(selectedPhoneCountryIso2) ?? DEFAULT_DRIVER_PHONE_COUNTRY;
+  const visiblePhoneCountries = useMemo(
+    () => searchDriverPhoneCountries(countrySearchQuery),
+    [countrySearchQuery],
+  );
+  const normalizedPhoneEntry = normalizeDriverPhoneEntry({
+    countryIso2: selectedPhoneCountry.iso2,
+    nationalPhoneInput,
+  });
+  const phoneE164Preview = normalizedPhoneEntry.ok ? normalizedPhoneEntry.phoneE164 : null;
 
   const runtimeConfig = useMemo(
     () => readDriverRuntimeConfig({
@@ -215,6 +236,37 @@ export default function App() {
     return () => registerContinuousLocationTaskHandler(null);
   }, [deliveryFinishResult, deliveryStartResult, mockDriverEventService, offlineSubmissionQueue, runtimeConfig, selectedRoute?.id, submission]);
 
+  function handlePhoneInputChange(value: string) {
+    setNationalPhoneInput(formatDriverNationalPhoneInput({
+      countryIso2: selectedPhoneCountry.iso2,
+      nationalPhoneInput: value,
+    }));
+  }
+
+  function handlePhoneCountrySelect(country: DriverPhoneCountry) {
+    setSelectedPhoneCountryIso2(country.iso2);
+    setCountrySearchQuery('');
+    setIsCountrySelectorOpen(false);
+    setNationalPhoneInput(formatDriverNationalPhoneInput({
+      countryIso2: country.iso2,
+      nationalPhoneInput,
+    }));
+  }
+
+  function handleSendVerificationCode() {
+    const phoneEntry = normalizeDriverPhoneEntry({
+      countryIso2: selectedPhoneCountry.iso2,
+      nationalPhoneInput,
+    });
+
+    if (!phoneEntry.ok) {
+      setMessage(formatDriverPhoneEntryProblem(phoneEntry.reason));
+      return;
+    }
+
+    setMessage(`Verification code request is ready for server integration for ${phoneEntry.phoneE164}.`);
+  }
+
   async function handleLoginAndLoadRoutes() {
     if (driverName.trim().length === 0) {
       setMessage('Enter the driver name before continuing.');
@@ -231,7 +283,17 @@ export default function App() {
     resetRouteProgress();
 
     try {
-      const lookupResult = await submitRouteAccess({ phoneE164 }, routeAccessService);
+      const phoneEntry = normalizeDriverPhoneEntry({
+        countryIso2: selectedPhoneCountry.iso2,
+        nationalPhoneInput,
+      });
+
+      if (!phoneEntry.ok) {
+        setMessage(formatDriverPhoneEntryProblem(phoneEntry.reason));
+        return;
+      }
+
+      const lookupResult = await submitRouteAccess({ phoneE164: phoneEntry.phoneE164 }, routeAccessService);
       setSubmission(lookupResult);
 
       if (lookupResult.kind !== 'company_guidance' && lookupResult.kind !== 'route_choices') {
@@ -645,16 +707,24 @@ export default function App() {
             <LoginScreen
               acceptedLocation={acceptedLocation}
               acceptedPrivacy={acceptedPrivacy}
+              countrySearchQuery={countrySearchQuery}
+              driverPhoneCountries={visiblePhoneCountries}
               driverName={driverName}
               isLoggingIn={isLoggingIn}
+              isCountrySelectorOpen={isCountrySelectorOpen}
+              nationalPhoneInput={nationalPhoneInput}
               onAcceptedLocationChange={setAcceptedLocation}
               onAcceptedPrivacyChange={setAcceptedPrivacy}
+              onCountrySearchChange={setCountrySearchQuery}
+              onCountrySelect={handlePhoneCountrySelect}
+              onCountrySelectorToggle={() => setIsCountrySelectorOpen((current) => !current)}
               onDriverNameChange={setDriverName}
-              onPhoneChange={setPhoneE164}
-              onSendCode={() => setMessage('Verification code request is ready for server integration.')}
+              onPhoneChange={handlePhoneInputChange}
+              onSendCode={handleSendVerificationCode}
               onSubmit={handleLoginAndLoadRoutes}
               onVerificationCodeChange={setVerificationCode}
-              phoneE164={phoneE164}
+              phoneE164Preview={phoneE164Preview}
+              selectedPhoneCountry={selectedPhoneCountry}
               verificationCode={verificationCode}
             />
           ) : null}
@@ -770,30 +840,46 @@ export default function App() {
 function LoginScreen({
   acceptedLocation,
   acceptedPrivacy,
+  countrySearchQuery,
+  driverPhoneCountries,
   driverName,
+  isCountrySelectorOpen,
   isLoggingIn,
+  nationalPhoneInput,
   onAcceptedLocationChange,
   onAcceptedPrivacyChange,
+  onCountrySearchChange,
+  onCountrySelect,
+  onCountrySelectorToggle,
   onDriverNameChange,
   onPhoneChange,
   onSendCode,
   onSubmit,
   onVerificationCodeChange,
-  phoneE164,
+  phoneE164Preview,
+  selectedPhoneCountry,
   verificationCode,
 }: {
   acceptedLocation: boolean;
   acceptedPrivacy: boolean;
+  countrySearchQuery: string;
+  driverPhoneCountries: DriverPhoneCountry[];
   driverName: string;
+  isCountrySelectorOpen: boolean;
   isLoggingIn: boolean;
+  nationalPhoneInput: string;
   onAcceptedLocationChange(value: boolean): void;
   onAcceptedPrivacyChange(value: boolean): void;
+  onCountrySearchChange(value: string): void;
+  onCountrySelect(country: DriverPhoneCountry): void;
+  onCountrySelectorToggle(): void;
   onDriverNameChange(value: string): void;
   onPhoneChange(value: string): void;
   onSendCode(): void;
   onSubmit(): void;
   onVerificationCodeChange(value: string): void;
-  phoneE164: string;
+  phoneE164Preview: string | null;
+  selectedPhoneCountry: DriverPhoneCountry;
   verificationCode: string;
 }) {
   return (
@@ -804,7 +890,21 @@ function LoginScreen({
       </View>
 
       <View style={styles.formCard}>
-        <LabeledInput keyboardType="phone-pad" label="Phone Number" onChangeText={onPhoneChange} placeholder="Phone number" value={phoneE164} />
+        <CountrySelector
+          countries={driverPhoneCountries}
+          isOpen={isCountrySelectorOpen}
+          onSearchChange={onCountrySearchChange}
+          onSelectCountry={onCountrySelect}
+          onToggle={onCountrySelectorToggle}
+          searchQuery={countrySearchQuery}
+          selectedCountry={selectedPhoneCountry}
+        />
+        <PhoneNumberInput
+          callingCode={selectedPhoneCountry.callingCode}
+          e164Preview={phoneE164Preview}
+          onChangeText={onPhoneChange}
+          value={nationalPhoneInput}
+        />
         <LabeledInput
           label="Verification Code"
           onChangeText={onVerificationCodeChange}
@@ -1313,6 +1413,93 @@ function SegmentedTabs({ onSelectTab, selectedTab, tabs }: { onSelectTab(tab: Ro
   );
 }
 
+function CountrySelector({
+  countries,
+  isOpen,
+  onSearchChange,
+  onSelectCountry,
+  onToggle,
+  searchQuery,
+  selectedCountry,
+}: {
+  countries: DriverPhoneCountry[];
+  isOpen: boolean;
+  onSearchChange(value: string): void;
+  onSelectCountry(country: DriverPhoneCountry): void;
+  onToggle(): void;
+  searchQuery: string;
+  selectedCountry: DriverPhoneCountry;
+}) {
+  return (
+    <View style={styles.inputGroup}>
+      <Text style={styles.inputLabel}>Country</Text>
+      <Pressable accessibilityRole="button" onPress={onToggle} style={styles.countrySelectorButton}>
+        <View style={styles.routeHeaderText}>
+          <Text style={styles.countrySelectorText}>{getDriverPhoneCountryLabel(selectedCountry)}</Text>
+          <Text style={styles.helperText}>Search by country, ISO code, or calling code.</Text>
+        </View>
+        <Text style={styles.inlineActionText}>{isOpen ? 'Close' : 'Change'}</Text>
+      </Pressable>
+      {isOpen ? (
+        <View style={styles.countryListPanel}>
+          <LabeledInput
+            label="Search Country"
+            onChangeText={onSearchChange}
+            placeholder="Country, ISO, or + code"
+            value={searchQuery}
+          />
+          {countries.length > 0 ? countries.map((country) => (
+            <Pressable
+              accessibilityRole="button"
+              key={country.iso2}
+              onPress={() => onSelectCountry(country)}
+              style={[styles.countryRow, country.iso2 === selectedCountry.iso2 && styles.countryRowSelected]}
+            >
+              <Text style={styles.countrySelectorText}>{getDriverPhoneCountryLabel(country)}</Text>
+            </Pressable>
+          )) : <Text style={styles.helperText}>No supported countries matched this search.</Text>}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function PhoneNumberInput({
+  callingCode,
+  e164Preview,
+  onChangeText,
+  value,
+}: {
+  callingCode: string;
+  e164Preview: string | null;
+  onChangeText(value: string): void;
+  value: string;
+}) {
+  return (
+    <View style={styles.inputGroup}>
+      <Text style={styles.inputLabel}>Phone Number</Text>
+      <View style={styles.phoneInputShell}>
+        <View style={styles.callingCodePill}>
+          <Text style={styles.callingCodeText}>{callingCode}</Text>
+        </View>
+        <TextInput
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="phone-pad"
+          onChangeText={onChangeText}
+          placeholder="Phone number"
+          placeholderTextColor="#8a94a6"
+          style={styles.input}
+          value={value}
+        />
+      </View>
+      <Text style={styles.helperText}>
+        {e164Preview === null ? 'Enter the phone number registered with dispatch.' : `Will submit as ${e164Preview}.`}
+      </Text>
+    </View>
+  );
+}
+
 function LabeledInput({
   keyboardType,
   label,
@@ -1612,6 +1799,17 @@ function formatRouteAccessProblem(result: RouteAccessSubmissionResult): string {
   return 'Route access requires review.';
 }
 
+function formatDriverPhoneEntryProblem(reason: 'country_required' | 'phone_invalid' | 'phone_required'): string {
+  switch (reason) {
+    case 'country_required':
+      return 'Select a supported country before continuing.';
+    case 'phone_invalid':
+      return 'Enter a valid mobile phone number for the selected country.';
+    case 'phone_required':
+      return 'Enter the phone number registered with dispatch.';
+  }
+}
+
 function getRouteStatus(deliveryStartResult: DeliveryStartResult | null, deliveryFinishResult: DeliveryFinishResult | null): RouteStatus {
   if (deliveryFinishResult?.flowState === 'delivery_finished') {
     return 'completed';
@@ -1891,6 +2089,64 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     minHeight: 52,
     paddingHorizontal: 14,
+  },
+  countrySelectorButton: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderColor: '#d9dee8',
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 62,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  countrySelectorText: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  countryListPanel: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e5e7eb',
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 10,
+    padding: 12,
+  },
+  countryRow: {
+    borderColor: '#eef2f6',
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  countryRowSelected: {
+    backgroundColor: '#eef6ff',
+    borderColor: '#0b57d0',
+  },
+  phoneInputShell: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderColor: '#d9dee8',
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 52,
+    paddingHorizontal: 10,
+  },
+  callingCodePill: {
+    backgroundColor: '#eef6ff',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  callingCodeText: {
+    color: '#0b57d0',
+    fontSize: 15,
+    fontWeight: '900',
   },
   input: {
     color: '#111827',

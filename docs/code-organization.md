@@ -24,6 +24,7 @@ src/
     location/                   # foreground/background location event decisions
     offline/                    # offline queue model and retry/discard policy
     proof/                      # proof capture/upload decisions
+    phone/                      # country allowlist, national phone formatting, E.164 normalization
     route/                      # assigned-route model and lookup loading decisions
     routeAccess/                # phone/context route-access decisions
     stop/                       # stop navigation and proof-event decisions
@@ -91,6 +92,7 @@ Reserved roots from the target architecture remain valid for future additions wh
 | Location domain | `src/domain/location/continuousLocationStream.ts`, `src/domain/location/continuousLocationStream.test.ts`, `src/domain/location/foregroundLocationEvent.ts`, `src/domain/location/foregroundLocationEvent.test.ts` |
 | Offline domain | `src/domain/offline/offlineSubmissionQueue.ts`, `src/domain/offline/offlineSubmissionQueue.test.ts` |
 | Proof domain | `src/domain/proof/proofPhotoCapture.ts`, `src/domain/proof/proofPhotoCapture.test.ts`, `src/domain/proof/proofMediaUpload.ts`, `src/domain/proof/proofMediaUpload.test.ts`, `src/domain/proof/proofBarcodeCapture.ts`, `src/domain/proof/proofBarcodeCapture.test.ts`, `src/domain/proof/proofSignatureCapture.ts`, `src/domain/proof/proofSignatureCapture.test.ts` |
+| Phone domain | `src/domain/phone/phoneEntry.ts`, `src/domain/phone/phoneEntry.test.ts` |
 | Route domain | `src/domain/route/assignedRoute.ts`, `src/domain/route/assignedRoute.test.ts` |
 | Route-access domain | `src/domain/routeAccess/routeAccess.ts`, `src/domain/routeAccess/routeAccess.test.ts` |
 | Stop domain | `src/domain/stop/stopNavigation.ts`, `src/domain/stop/stopNavigation.test.ts`, `src/domain/stop/stopProofEvents.ts`, `src/domain/stop/stopProofEvents.test.ts` |

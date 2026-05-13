@@ -4,7 +4,7 @@ Dedicated native mobile app repository for Clever delivery drivers.
 
 ## MVP direction
 
-1. Driver accesses the app with route context plus phone number.
+1. Driver selects a supported country and enters the dispatch-registered phone number in national format.
 2. Driver confirms the company/shop/route guidance for the assigned work.
 3. Driver accepts location-information and personal-information consent.
 4. Driver views the route assigned for the current delivery day.
@@ -25,7 +25,7 @@ Dedicated native mobile app repository for Clever delivery drivers.
 
 The app includes an interactive route access screen:
 
-- route context + E.164 phone validation before lookup
+- country-aware phone entry for the initial CA/KR allowlist, national display formatting, and E.164 normalization before lookup
 - local mock service for delivery-server `POST /driver/route-access/lookup`
 - company/shop/route guidance for `INVITED`, plus safe multi-company ambiguity guidance that does not expose route/stop/customer data or driver access tokens
 - local proof-media upload smoke selector for success, retryable failure, and scanner rejection while the app is using mock services
@@ -37,7 +37,7 @@ The app includes an interactive route access screen:
 - explicit delivery start action that requests OS foreground location permission before `delivery_active`
 - route started, foreground one-shot location update, continuous background-capable location streaming, native proof photo URI capture, proof media upload references, scanner-rejected proof photo recapture guidance, signature/barcode proof capture, richer stop delivered/failed proof-event mock/API boundaries, and route-completed delivery finish cleanup for delivery-server `POST /driver/events` after delivery_active succeeds
 - safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
-- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup, native secure storage for the short-lived driver token, live downstream consent/assigned-route/driver-event/proof-media clients with no-store/no-cookie request options, and live `401` recovery that clears the active driver token and returns the driver to route context + phone lookup; durable app-side offline queue/retry for pending driver events and proof media using AsyncStorage-backed non-secret queue metadata, with app-side discard thresholds for repeated failure, stale age, recorded route completion cleanup, explicit scanner-rejected proof media discard/recapture handling, and an explicit driver session reset action that clears secure access plus queued retry state; delivery-server local/manual proof-media cleanup support and server-side scan rejection hook; production proof-media object storage, signed access, deployed scanner evidence, deployed cleanup evidence, physical-device smoke evidence, and store/privacy disclosure evidence left for follow-up slices
+- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup, native secure storage for the short-lived driver token, live downstream consent/assigned-route/driver-event/proof-media clients with no-store/no-cookie request options, and live `401` recovery that clears the active driver token and returns the driver to country-aware phone lookup; durable app-side offline queue/retry for pending driver events and proof media using AsyncStorage-backed non-secret queue metadata, with app-side discard thresholds for repeated failure, stale age, recorded route completion cleanup, explicit scanner-rejected proof media discard/recapture handling, and an explicit driver session reset action that clears secure access plus queued retry state; delivery-server local/manual proof-media cleanup support and server-side scan rejection hook; production proof-media object storage, signed access, deployed scanner evidence, deployed cleanup evidence, physical-device smoke evidence, and store/privacy disclosure evidence left for follow-up slices
 
 See `docs/route-access-flow.md` for the app-side route access, consent, assigned-route, native map handoff, and delivery evidence boundary.
 
@@ -60,7 +60,7 @@ npm install
 npm run start
 ```
 
-Optional live API mode (route lookup saves the returned short-lived driver token through Expo SecureStore, clears expired/invalid persisted tokens before reuse, and clears live downstream `401` tokens before requiring route context + phone lookup again; see `.env.example`):
+Optional live API mode (route lookup saves the returned short-lived driver token through Expo SecureStore, clears expired/invalid persisted tokens before reuse, and clears live downstream `401` tokens before requiring country-aware phone lookup again; see `.env.example`):
 
 ```bash
 EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://delivery.example.com npm run start
