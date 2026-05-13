@@ -22,7 +22,7 @@ agent 작업 절차, branch 운영, 테스트 순서, 완료 조건은 `AGENTS.m
 이 repo가 책임지는 것:
 
 - 배송원 모바일 UX와 앱 런타임 코드
-- route context와 전화번호 기반 접근 시작 화면, 회사 안내, 초대/접근 상태 표시
+- 전화번호 기반 접근 시작 화면, 회사 안내, 초대/접근 상태 표시
 - 위치정보 처리 동의 및 개인정보 이용 동의 UX
 - 배송원에게 배정된 당일 route/stop 조회 화면
 - 모바일 앱의 로컬 검증, 빌드, smoke evidence
@@ -47,7 +47,7 @@ Clever/Tomatono 배송 운영에는 관리자 콘솔과 delivery server는 준�
 
 ## 기대 결과
 
-배송원이 route context와 전화번호 기반으로 접근하고, 자신이 수행할 회사/shop/route 안내를 확인하고, 위치정보 및 개인정보 이용 동의를 완료한 뒤, 당일 자신에게 배정된 route를 확인해 배송을 준비할 수 있는 1차 MVP 앱을 만든다.
+배송원이 전화번호 기반으로 접근하고, 자신이 수행할 회사/shop/route 안내를 확인하고, 위치정보 및 개인정보 이용 동의를 완료한 뒤, 당일 자신에게 배정된 route를 확인해 배송을 준비할 수 있는 1차 MVP 앱을 만든다.
 
 ## 플랫폼 전략
 
@@ -94,7 +94,7 @@ MVP와 확장 경계:
 
 ### 포함
 
-- route context와 배송원 전화번호 입력 기반 접근 시작 UX
+- 배송원 전화번호 입력 기반 접근 시작 UX
 - 배송원이 자신이 수행할 회사/shop/route 안내를 확인하는 UX
 - 위치정보 처리 동의 및 개인정보 이용 동의 UX/기록 연동
 - 당일 배정 route 조회와 배송 준비 화면
@@ -114,8 +114,8 @@ MVP와 확장 경계:
 
 ## 기능 초안
 
-1. route context와 전화번호 입력 및 서버 driver invite 상태 확인
-2. 회사/shop/route 안내 표시
+1. 전화번호 입력 및 서버 driver route assignment 상태 확인
+2. 배정된 라우트 리스트 표시; 각 라우트에 회사/shop 안내를 귀속해서 표시
 3. 위치정보/개인정보 동의 수집 및 서버 기록 연동
 4. 당일 assigned route/stop list 조회
 5. stop detail에서 주소, 순서, 지도 이동 준비 정보 확인
@@ -126,12 +126,12 @@ MVP와 확장 경계:
 `회사`는 배송원이 인지하는 운영 주체이고, 서버 데이터 경계에서는 Shopify `Shop` 또는 tenant에 해당한다.
 
 - 같은 전화번호가 여러 회사/shop의 driver invite 또는 route assignment에 등장할 수 있다.
-- 앱은 전화번호만으로 회사, route, stop, 고객 주소를 확정하거나 노출하지 않는다.
-- 기본 접근 단위는 `route context + phone`이다. route context는 route invite link, route access code, company/route code, 또는 서버가 정의하는 동등한 scoped identifier가 될 수 있다.
-- `route context + phone`이 정확히 하나의 회사/shop route assignment와 매칭되면 앱은 회사 안내를 먼저 보여준다.
+- 기본 접근 단위는 서버에 등록된 배송원 전화번호다.
+- 전화번호가 서버에 존재하면 접근은 가능하며, 서버는 해당 전화번호의 활성 라우트 선택지를 반환한다. 활성 라우트가 없으면 빈 라우트 리스트를 반환한다.
+- 배송원 입장에서는 다중회사도 “여러 라우트”일 뿐이며, 회사/shop 정보는 각 라우트 정보에 귀속된다.
 - 회사 안내에는 회사/shop 표시명, route 이름 또는 배송일, shop/route timezone 기준 `deliveryDate`, 출발/픽업/집결 안내, 운영자 연락처, 회사별 배송 유의사항, consent/legal copy source가 포함될 수 있다.
-- 한 전화번호가 여러 회사/route에 동시에 매칭될 가능성이 있으면, 서버는 민감한 route/stop/customer data 없이 선택 가능한 회사/route display context만 반환하거나 route-specific link/code 재입력을 요구한다.
-- 회사 선택 또는 route context 확인 전에는 다른 회사의 route/stop/customer data를 보여주지 않는다.
+- 전화번호 확인 전에는 route/stop/customer data를 노출하지 않는다.
+- 서버가 반환한 route choice 전에는 다른 회사의 route/stop/customer data를 보여주지 않는다.
 
 ## 핵심 사용자 시나리오
 
@@ -139,14 +139,13 @@ MVP와 확장 경계:
 
 - 배송원이 iPhone 또는 Android phone에서 앱을 실행한다.
 - 앱은 관리자 기능 없이 배송원용 시작 화면을 보여준다.
-- 배송원은 route invite link를 통해 진입하거나 route/company access code를 입력한다.
 - 배송원은 전화번호를 입력한다.
-- 앱은 서버에 `route context + phone` lookup을 요청해 해당 회사/shop route에 초대된 배송원인지 확인한다.
-- 초대된 배송원이면 회사 안내를 보여준 뒤 동의 단계로 이동한다.
+- 앱은 서버에 phone-only lookup을 요청해 해당 전화번호에 활성 라우트가 배정되어 있는지 확인한다.
+- 배정된 활성 라우트가 있으면 앱은 route list를 보여주며, 각 route card에 회사 안내를 함께 표시한다.
 - 초대되지 않은 번호, 비활성 driver, 차단된 driver는 route 데이터를 받지 못하고 안내 화면에 머문다.
-- MVP 문서 기준 첫 관문은 `route context + 전화번호 + 초대 상태 확인`으로 둔다.
-- route context 없이 phone lookup만으로 production route/stop 데이터를 노출하지 않는다. 서버는 후속 driver API contract에서 driver-scoped short-lived session/access token 또는 동등한 접근 경계를 정의해야 한다.
-- 현재 앱은 short-lived token의 expiry/invalid payload와 live downstream `401`을 안전하게 처리해 secure token과 active route UI state를 지우고 route context + phone lookup을 다시 요구한다.
+- MVP 문서 기준 첫 관문은 `전화번호 + 서버 route assignment 확인`으로 둔다.
+- 서버는 phone lookup 성공 시 route-scoped short-lived driver access token을 함께 내려주고, 앱은 그 token으로 consent/assigned-route/event/proof-media API를 호출한다.
+- 현재 앱은 short-lived token의 expiry/invalid payload와 live downstream `401`을 안전하게 처리해 secure token과 active route UI state를 지우고 phone lookup을 다시 요구한다.
 - OTP, deep link invite token, managed identity 같은 강한 인증과 서버-issued refresh는 driver API contract 후속 이슈에서 결정한다.
 
 ### 시나리오 1-a: 회사 안내 확인
@@ -198,7 +197,7 @@ MVP와 확장 경계:
 
 ```text
 unidentified
-  -> route_context_entered
+  -> phone_entered
   -> company_context_confirmed
   -> invited
   -> consent_required
@@ -208,9 +207,9 @@ unidentified
   -> delivery_finished
 ```
 
-- `unidentified`: 앱 첫 실행 또는 session 없음. route context/전화번호 입력 전 상태.
-- `route_context_entered`: route invite link, route access code, company/route code 등 route context가 입력된 상태.
-- `company_context_confirmed`: `route context + phone`이 하나의 회사/shop route assignment와 매칭되어 회사 안내를 표시할 수 있는 상태.
+- `unidentified`: 앱 첫 실행 또는 session 없음. 전화번호 입력 전 상태.
+- `phone_entered`: 서버에 등록된 배송원 전화번호가 입력된 상태.
+- `company_context_confirmed`: phone lookup이 하나 이상의 회사/shop route assignment와 매칭되어 라우트별 회사 안내를 표시할 수 있는 상태.
 - `invited`: 서버가 초대된 배송원으로 확인했지만 필수 동의가 끝나지 않은 상태.
 - `consent_required`: 위치정보/개인정보 동의가 필요하거나 consent version이 갱신된 상태.
 - `consent_recorded`: 서버가 필수 동의를 기록했고 route 조회가 가능한 상태.
@@ -229,8 +228,8 @@ unidentified
 ## 실패/예외 시나리오
 
 - 초대되지 않은 전화번호: 가입/관리자 문의 안내를 보여주고 route/consent API로 진행하지 않는다.
-- route context와 전화번호 불일치: 회사/route data를 노출하지 않고 route code 재입력 또는 운영자 문의를 안내한다.
-- 같은 전화번호의 다중 회사/route 매칭: 서버가 허용한 non-sensitive company/route display context만 보여주거나 route-specific link/code를 요구한다.
+- 전화번호 미등록: 회사/route data를 노출하지 않고 운영자 문의를 안내한다. 등록된 번호이지만 활성 라우트가 없으면 빈 라우트 리스트를 보여준다.
+- 같은 전화번호의 다중 회사/route 매칭: 서버가 허용한 route choices를 보여주며, 각 choice에 회사 안내와 route metadata를 귀속한다.
 - 비활성 또는 차단된 driver: 접근 불가 안내를 보여주고 session을 만들지 않는다.
 - service/legal consent 철회 또는 consent version 갱신: `consent_required`로 되돌리고 route 화면 진입을 막는다.
 - consent submit 실패: route 화면으로 이동하지 않고 재시도와 지원 문의 안내를 제공한다.
@@ -240,15 +239,15 @@ unidentified
 - 서버/API 장애: 현재 화면의 민감 데이터 확대 표시를 피하고 재시도 가능한 오류 상태로 둔다.
 - 네트워크 불안정: driver event와 proof media submission은 durable app-side offline queue/retry 대상으로 관리하되, 중복 전송과 민감 payload logging을 피한다. 앱 로컬 queue는 5회 실패, 72시간 경과, route completion cleanup, 또는 명시적 driver session reset/sign-out 시 discard할 수 있는 기준과 앱 UI action을 둔다.
 - proof media scanner rejection: 서버가 `422 PROOF_MEDIA_REJECTED`를 반환하면 앱은 durable proof reference를 만들지 않고 해당 사진을 retry queue에 남기지 않는다. 배송원에게는 scanner 내부 사유를 노출하지 않고 다른 proof photo를 다시 촬영하라고 안내한다.
-- live downstream 인증 만료: consent, assigned-route, driver-event, proof-media upload, offline retry에서 `401`이 오면 secure driver token과 active route UI state를 제거하고 route context + phone lookup부터 다시 진행하도록 안내한다. retry 가능한 event/proof item은 token 없이 local queue에 남긴다.
+- live downstream 인증 만료: consent, assigned-route, driver-event, proof-media upload, offline retry에서 `401`이 오면 secure driver token과 active route UI state를 제거하고 phone lookup부터 다시 진행하도록 안내한다. retry 가능한 event/proof item은 token 없이 local queue에 남긴다.
 
 ## Server contract 필요 항목
 
 후속 server/API 이슈에서 아래 driver-facing contract를 정의해야 한다.
 
-- route+phone lookup: route context와 전화번호를 기준으로 tenant/company, route assignment, invited/not-found/disabled/blocked 상태를 구분한다.
+- phone lookup: 전화번호를 기준으로 tenant/company, route assignment, not-found/disabled/blocked 상태를 구분하고, 활성 배정 라우트 선택지를 반환한다.
 - company guidance payload: company/shop display name, deliveryDate, timezone, route display name/summary, pickup/depot/dispatch guidance, operator support contact, company-specific driver instructions를 민감 data 없이 반환한다.
-- driver session/access boundary: route+phone lookup 성공 후 route/stop read에 사용할 tenant-scoped and driver-scoped short-lived session/access token 또는 동등한 서버 검증 경계를 정의한다.
+- driver session/access boundary: phone lookup 성공 후 route/stop read에 사용할 tenant-scoped and driver-scoped short-lived session/access token 또는 동등한 서버 검증 경계를 정의한다.
 - consent record: consent type, consent version, driver identity, timestamp, device/app context를 서버에 기록한다.
 - assigned route read: shop/shopDomain tenant boundary와 assigned driver boundary 안에서만 shop/route timezone 기준 당일 route summary와 stop list를 반환한다.
 - stop detail read: 배송 준비에 필요한 주소/순서/지도 이동 정보를 반환하되 다른 driver route 접근은 차단한다.
@@ -288,28 +287,27 @@ unidentified
 - 완료 기준:
   - clean checkout에서 `npm install` 후 앱 시작 command가 준비된다.
   - PR 전 필수 검증 명령이 repo 현실에 맞게 정의되고 통과한다.
-  - route context + phone, consent gate, delivery active guard가 unit test로 고정된다.
+  - phone lookup, route choices, consent gate, delivery active guard가 unit test로 고정된다.
 
-### 2단계: route+phone access and company guidance UX
+### 2단계: phone access and route/company guidance UX
 
-- 목적: 배송원이 route context와 전화번호를 입력하고 서버에서 회사/shop route assignment와 driver invite/access 상태를 확인하는 시작 흐름을 만든다.
+- 목적: 배송원이 전화번호를 입력하고 서버에서 활성 route assignment와 driver access 상태를 확인하는 시작 흐름을 만든다.
 - 선행 계약:
-  - route invite link, route access code, company/route code 중 MVP 접근 context
   - E.164 phone normalization 기준
-  - delivery server의 driver-facing route+phone lookup endpoint
-  - company guidance payload shape
-  - invited/not-found/disabled/blocked/error 상태 코드
+  - delivery server의 driver-facing phone lookup endpoint
+  - `ROUTES_FOUND` route choice payload shape
+  - route-scoped driver access token payload shape
+  - not-found/disabled/blocked/error 상태 코드
 - 산출물:
-  - route context input or deep-link handling
   - phone input screen
-  - company guidance screen
+  - route list with company guidance per route
   - validation and API error state rendering
   - session/access state 저장 방식
 - 완료 기준:
   - 유효하지 않은 번호는 서버 요청 전에 막는다.
-  - route context 없이 phone만으로 production route/stop data를 노출하지 않는다.
-  - 매칭된 배송원은 회사/shop/route 안내를 확인한 뒤 consent 단계로 이동한다.
-  - 초대된 배송원만 consent 단계로 이동한다.
+  - phone lookup 성공 시 서버가 허용한 route choices만 표시한다.
+  - 매칭된 배송원은 라우트별 회사/shop/route 안내를 확인한 뒤 consent/route 단계로 이동한다.
+  - 서버가 route-scoped access token을 준 라우트만 consent/assigned-route API로 진행한다.
 
 ### 3단계: consent gate
 
@@ -317,7 +315,7 @@ unidentified
 - 선행 계약:
   - legal copy source
   - consent versioning
-  - delivery server consent record endpoint: app API boundary is implemented; live mode uses the route+phone `driverAccess` token for consent submission
+  - delivery server consent record endpoint: app API boundary is implemented; live mode uses the phone lookup `driverAccess` token for consent submission
   - foreground/background location 권한 요청 시점과 거절/재요청 UX
 - 산출물:
   - consent screen: implemented in local Expo flow
@@ -326,7 +324,7 @@ unidentified
 - 완료 기준:
   - 동의 전에는 route 화면에 접근할 수 없다.
   - 동의 성공 후 서버 기록 결과를 근거로 `consent_recorded` 상태로 이동한다.
-  - live server consent submission still requires route+phone 후속 driver access token/session issuance.
+  - live server consent submission still requires phone lookup 후속 driver access token/session issuance.
 
 ### 4단계: assigned route MVP
 
@@ -334,7 +332,7 @@ unidentified
 - 선행 계약:
   - assigned route 조회 endpoint: delivery-server `GET /driver/assigned-route` and app API boundary are implemented
   - route/stop response shape: route summary and ordered stop cards are implemented in the local Expo flow
-  - no-route, multiple-route, API error 상태 처리 기준: no-route and API error states are implemented; multi-company/multiple-route ambiguity is now an app-visible safe guidance state that shows only non-sensitive company/route display context and requires a route-specific link/code before route details
+  - no-route, multiple-route, API error 상태 처리 기준: no-route and API error states are implemented; multi-company/multiple-route assignments are now app-visible route choices with company guidance attached to each route
 - 산출물:
   - today's route screen: implemented after consent with local mock/API boundary
   - stop list and stop detail screen: implemented as ordered stop cards for route-ready MVP
@@ -342,7 +340,7 @@ unidentified
 - 완료 기준:
   - invited phone → consent accepted → today's route 확인 smoke flow가 가능하다.
   - route 없음/error 상태가 사용자에게 명확히 표시된다.
-  - live server calls can use route+phone `driverAccess` token handoff through native secure storage with expiry/invalid/live `401` clearing and route+phone re-lookup recovery; token refresh/strong re-auth remains later server/session work.
+  - live server calls can use phone lookup `driverAccess` token handoff through native secure storage with expiry/invalid/live `401` clearing and phone re-lookup recovery; token refresh/strong re-auth remains later server/session work.
 
 ### 5단계: release evidence and context sync
 
@@ -364,22 +362,21 @@ unidentified
 
 ## 데이터와 연동
 
-- input data: route context, E.164 phone, consent decisions, current date/device context
+- input data: E.164 phone, consent decisions, current date/device context, server-issued route assignment identifiers
 - output data: company guidance, consent record, assigned route/stop display state, driver session/access state, optional location update after MVP expansion
 - external systems: `clever-delivery-server`, Tomatono Shopify order context, mobile map/provider stack
-- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events, and `ROUTE_COMPLETED` delivery finish event with native photo URI capture, proof media upload references, scanner-rejected proof media handling, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads or live downstream `401`, which returns the driver to route context + phone lookup; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, recorded route cleanup, scanner rejection, and session reset; delivery server proof-media scan rejection hook and local/manual cleanup runner exist; token refresh/strong re-auth, production proof-media object storage/signed access/deployed scanner evidence, deployed cleanup evidence, and physical-device background smoke evidence remain follow-up work
+- public contract: delivery server route access lookup, consent record, assigned route read, route-started driver event, foreground and continuous/background-capable `LOCATION_UPDATED` events, richer `STOP_DELIVERED`/`STOP_FAILED` proof metadata events, and `ROUTE_COMPLETED` delivery finish event with native photo URI capture, proof media upload references, scanner-rejected proof media handling, signature drawing evidence, barcode scan evidence, and durable app-side offline queue/retry are implemented as app-side boundaries; short-lived driver access tokens are persisted in native secure storage and cleared on expiry/invalid payloads or live downstream `401`, which returns the driver to phone lookup; app-side offline queue retention/discard thresholds are implemented for repeated failure, stale age, recorded route cleanup, scanner rejection, and session reset; delivery server proof-media scan rejection hook and local/manual cleanup runner exist; token refresh/strong re-auth, production proof-media object storage/signed access/deployed scanner evidence, deployed cleanup evidence, and physical-device background smoke evidence remain follow-up work
 
 ## 검증 초안
 
 - local verification: lint, typecheck, unit tests, app start/build command after framework bootstrap
-- automated tests: route context validation, phone input validation, company guidance rendering, consent gate, assigned route rendering, API error states
-- smoke test: open app, enter route context and invited phone, confirm company guidance, accept consents, see today's route
+- automated tests: phone input validation, route choice parsing, company guidance rendering, consent gate, assigned route rendering, API error states
+- smoke test: open app, enter invited phone, confirm company guidance, accept consents, see today's route
 - release evidence: linked PR, CI output, mobile build artifact or local runtime screenshot/video
 
 ## 미정 사항
 
-- driver authentication/session method after route+phone lookup
-- route invite link/code format beyond current RoutePlan UUID-shaped route context
+- driver authentication/session method after phone lookup
 - consent legal copy source and production version registry
 - dedicated native map provider SDK choice and background location policy for post-MVP
 - minimum supported iOS/Android versions and physical-device background-location smoke matrix
@@ -388,8 +385,8 @@ unidentified
 ## 다음 작업 목록
 
 1. Merge mobile framework bootstrap and base navigation PR into `dev`. — completed
-2. Define driver-facing delivery server API contract for route+phone access and company guidance. — completed in `clever-delivery-server#48`
-3. Implement route+phone access and company guidance UX against the agreed mock/API boundary. — completed
+2. Define driver-facing delivery server API contract for phone access and route/company guidance. — completed in `clever-delivery-server#48`
+3. Implement phone access and route/company guidance UX against the agreed mock/API boundary. — completed
 4. Implement consent record app UX/API boundary. — completed
 5. Implement assigned route screen and app API boundary. — completed
 6. Implement driver access token handoff. — completed
@@ -408,7 +405,7 @@ unidentified
 19. Add release-readiness checklist for physical iOS/Android smoke matrix and production store/privacy disclosure evidence. — completed as documentation checklist; real device/store evidence remains pending
 20. Add EAS preview/production native build-profile scaffolding for iOS/Android release evidence. — completed
 21. Implement delivery finish with `ROUTE_COMPLETED`, tracking stop, and route-scoped local queue cleanup. — completed
-22. Implement app-side live downstream `401` expired-token recovery and route+phone re-lookup guidance. — completed as app-side boundary; physical-device/live-server evidence remains pending
+22. Implement app-side live downstream `401` expired-token recovery and phone re-lookup guidance. — completed as app-side boundary; physical-device/live-server evidence remains pending
 23. Implement app-side proof media scanner rejection handling. — completed as app-side boundary; live scanner/backend deployment evidence remains pending
 24. Add local proof-media scanner rejection smoke mock mode. — completed as physical-device verification aid; real device evidence remains pending
 25. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.

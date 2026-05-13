@@ -2,7 +2,7 @@ import { getInitialAccessValidation, type DriverFlowState } from './driverFlow';
 import { createDriverApiHttpError } from './driverApiError';
 
 export type RouteAccessLookupInput = {
-  routeContext: string;
+  routeContext?: string | null;
   phoneE164: string;
 };
 
@@ -35,16 +35,26 @@ export type DriverAccessToken = {
   use: 'consent_and_assigned_route';
 };
 
+export type RouteAccessRouteChoice = {
+  routeAccess: {
+    nextState: 'consent_required';
+    routeContext: string;
+    routePlanId: string;
+  };
+  driverAccess: DriverAccessToken;
+  companyGuidance: RouteAccessCompanyGuidance;
+};
+
 export type RouteAccessLookupResult =
   | {
       status: 'INVITED';
-      routeAccess: {
-        nextState: 'consent_required';
-        routeContext: string;
-        routePlanId: string;
-      };
-      driverAccess: DriverAccessToken;
-      companyGuidance: RouteAccessCompanyGuidance;
+      routeAccess: RouteAccessRouteChoice['routeAccess'];
+      driverAccess: RouteAccessRouteChoice['driverAccess'];
+      companyGuidance: RouteAccessRouteChoice['companyGuidance'];
+    }
+  | {
+      status: 'ROUTES_FOUND';
+      routes: RouteAccessRouteChoice[];
     }
   | {
       status: 'MULTIPLE_MATCHES';
@@ -61,7 +71,12 @@ export type RouteAccessSubmissionResult =
   | {
       kind: 'validation_error';
       message: string;
-      reason: 'phone_invalid' | 'phone_required' | 'route_context_required';
+      reason: 'phone_invalid' | 'phone_required';
+    }
+  | {
+      kind: 'route_choices';
+      flowState: Extract<DriverFlowState, 'company_context_confirmed'>;
+      routes: RouteAccessRouteChoice[];
     }
   | {
       kind: 'company_guidance';
@@ -130,7 +145,7 @@ export const sampleMultipleRouteAccess: Extract<RouteAccessLookupResult, { statu
       companyDisplayName: 'Tomatono Toronto',
       deliveryDate: '2026-05-12',
       operatorSupportContact: '+14165550000',
-      pickupGuidance: 'Use the route-specific invite link from dispatch.',
+      pickupGuidance: 'Contact dispatch if this route assignment looks unfamiliar.',
       routeName: 'Tuesday AM Route',
       shopDomain: 'tomatono.myshopify.com',
       timezone: 'America/Toronto',
@@ -139,13 +154,24 @@ export const sampleMultipleRouteAccess: Extract<RouteAccessLookupResult, { statu
       companyDisplayName: 'North Market',
       deliveryDate: '2026-05-12',
       operatorSupportContact: '+14165550001',
-      pickupGuidance: 'Confirm the North Market route code before continuing.',
+      pickupGuidance: 'Contact dispatch to confirm the North Market assignment.',
       routeName: 'North PM Route',
       shopDomain: 'north-market.myshopify.com',
       timezone: 'America/Toronto',
     },
   ],
-  resolutionHint: 'Use the route-specific invite link/code from dispatch.',
+  resolutionHint: 'Use the phone-only route list or contact dispatch.',
+};
+
+export const samplePhoneRouteChoices: Extract<RouteAccessLookupResult, { status: 'ROUTES_FOUND' }> = {
+  status: 'ROUTES_FOUND',
+  routes: [
+    {
+      routeAccess: sampleInvitedRouteAccess.routeAccess,
+      companyGuidance: sampleInvitedRouteAccess.companyGuidance,
+      driverAccess: sampleInvitedRouteAccess.driverAccess,
+    },
+  ],
 };
 
 export function createMockRouteAccessService(
@@ -160,7 +186,7 @@ export async function submitRouteAccess(
   input: RouteAccessLookupInput,
   service: RouteAccessService,
 ): Promise<RouteAccessSubmissionResult> {
-  const routeContext = input.routeContext.trim();
+  const routeContext = input.routeContext?.trim() || null;
   const phoneE164 = input.phoneE164.trim();
   const validation = getInitialAccessValidation({ routeContext, phoneE164 });
 
@@ -184,6 +210,14 @@ export async function submitRouteAccess(
     };
   }
 
+  if (lookup.status === 'ROUTES_FOUND') {
+    return {
+      kind: 'route_choices',
+      flowState: 'company_context_confirmed',
+      routes: lookup.routes,
+    };
+  }
+
   if (lookup.status === 'MULTIPLE_MATCHES') {
     return {
       kind: 'multiple_matches',
@@ -202,11 +236,9 @@ export async function submitRouteAccess(
 }
 
 export function getRouteAccessValidationMessage(
-  reason: 'phone_invalid' | 'phone_required' | 'route_context_required',
+  reason: 'phone_invalid' | 'phone_required',
 ): string {
   switch (reason) {
-    case 'route_context_required':
-      return 'Enter the company route link or route code before phone lookup.';
     case 'phone_required':
       return 'Enter the driver phone number in E.164 format.';
     case 'phone_invalid':
@@ -215,13 +247,13 @@ export function getRouteAccessValidationMessage(
 }
 
 export function getRouteAccessMultipleMatchesMessage(): string {
-  return 'Multiple company routes match this phone. Use the route-specific link/code or contact dispatch.';
+  return 'Multiple route assignments matched. Use the phone-only route list or contact dispatch.';
 }
 
 export function getRouteAccessDeniedMessage(status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND'): string {
   switch (status) {
     case 'NOT_FOUND':
-      return 'Route code and phone did not match an active assignment. Check the company route link/code or contact dispatch.';
+      return 'No active route is assigned to this phone number. Check the phone number or contact dispatch.';
     case 'DISABLED':
       return 'This driver profile is inactive. Contact dispatch before continuing.';
     case 'BLOCKED':
@@ -230,6 +262,8 @@ export function getRouteAccessDeniedMessage(status: 'BLOCKED' | 'DISABLED' | 'NO
 }
 
 const MULTIPLE_MATCHES_RESPONSE_KEYS = new Set(['matches', 'resolutionHint', 'status']);
+const ROUTES_FOUND_RESPONSE_KEYS = new Set(['routes', 'status']);
+const ROUTE_CHOICE_KEYS = new Set(['companyGuidance', 'driverAccess', 'routeAccess']);
 const MULTIPLE_MATCH_KEYS = new Set([
   'companyDisplayName',
   'deliveryDate',
@@ -250,7 +284,10 @@ export function createRouteAccessApiClient(input: {
   return {
     lookupRouteAccess: async (request) => {
       const response = await fetchImpl(`${baseUrl}/driver/route-access/lookup`, {
-        body: JSON.stringify(request),
+        body: JSON.stringify({
+          phoneE164: request.phoneE164,
+          routeContext: request.routeContext?.trim() || null,
+        }),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',
       });
@@ -290,6 +327,15 @@ function isRouteAccessLookupResult(value: unknown): value is RouteAccessLookupRe
     return true;
   }
 
+  if (status === 'ROUTES_FOUND') {
+    if (!hasOnlyKeys(value, ROUTES_FOUND_RESPONSE_KEYS)) {
+      return false;
+    }
+
+    const routes = (value as { routes?: unknown }).routes;
+    return Array.isArray(routes) && routes.every(isRouteAccessRouteChoice);
+  }
+
   if (status === 'MULTIPLE_MATCHES') {
     if (!hasOnlyKeys(value, MULTIPLE_MATCHES_RESPONSE_KEYS)) {
       return false;
@@ -313,6 +359,23 @@ function isRouteAccessLookupResult(value: unknown): value is RouteAccessLookupRe
   const driverAccess = (value as { driverAccess?: unknown }).driverAccess;
   const companyGuidance = (value as { companyGuidance?: unknown }).companyGuidance;
   return isRouteAccess(routeAccess) && isDriverAccessToken(driverAccess) && isCompanyGuidance(companyGuidance);
+}
+
+function isRouteAccessRouteChoice(value: unknown): value is RouteAccessRouteChoice {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  if (!hasOnlyKeys(value, ROUTE_CHOICE_KEYS)) {
+    return false;
+  }
+
+  const choice = value as Record<string, unknown>;
+  return (
+    isRouteAccess(choice.routeAccess) &&
+    isDriverAccessToken(choice.driverAccess) &&
+    isCompanyGuidance(choice.companyGuidance)
+  );
 }
 
 function isRouteAccess(value: unknown): value is Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess'] {

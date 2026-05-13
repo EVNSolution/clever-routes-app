@@ -10,21 +10,35 @@ import {
 } from './routeAccess';
 
 describe('driver route access UX flow', () => {
-  it('blocks phone-only access before lookup', async () => {
+  it('accepts phone-only access and maps returned routes to selectable route choices', async () => {
     let lookupCalls = 0;
     const result = await submitRouteAccess(
-      { routeContext: '', phoneE164: '+14165550123' },
+      { phoneE164: '+14165550123' },
       {
-        lookupRouteAccess: async () => {
+        lookupRouteAccess: async (input) => {
           lookupCalls += 1;
-          return sampleInvitedRouteAccess;
+          assert.deepEqual(input, { phoneE164: '+14165550123', routeContext: null });
+          return { status: 'ROUTES_FOUND', routes: [sampleInvitedRouteAccess] };
         },
       },
     );
 
-    assert.equal(result.kind, 'validation_error');
-    assert.equal(result.reason, 'route_context_required');
-    assert.equal(lookupCalls, 0);
+    assert.equal(result.kind, 'route_choices');
+    assert.equal(result.flowState, 'company_context_confirmed');
+    assert.equal(result.routes.length, 1);
+    assert.equal(result.routes[0].companyGuidance.companyDisplayName, 'Tomatono Toronto');
+    assert.equal(lookupCalls, 1);
+  });
+
+  it('accepts a registered phone with no active routes as an empty route choice list', async () => {
+    const result = await submitRouteAccess(
+      { phoneE164: '+14165550123' },
+      createMockRouteAccessService({ status: 'ROUTES_FOUND', routes: [] }),
+    );
+
+    assert.equal(result.kind, 'route_choices');
+    assert.equal(result.flowState, 'company_context_confirmed');
+    assert.equal(result.routes.length, 0);
   });
 
   it('maps invited lookup to company guidance before consent', async () => {
@@ -46,13 +60,45 @@ describe('driver route access UX flow', () => {
   it('maps denial statuses to safe app messages', () => {
     assert.equal(
       getRouteAccessDeniedMessage('NOT_FOUND'),
-      'Route code and phone did not match an active assignment. Check the company route link/code or contact dispatch.',
+      'No active route is assigned to this phone number. Check the phone number or contact dispatch.',
     );
     assert.equal(getRouteAccessDeniedMessage('DISABLED'), 'This driver profile is inactive. Contact dispatch before continuing.');
     assert.equal(getRouteAccessDeniedMessage('BLOCKED'), 'This driver profile is blocked. Contact dispatch before continuing.');
   });
 
-  it('maps multiple company matches to safe route-specific link guidance', async () => {
+  it('maps multiple phone matches to selectable routes with company metadata', async () => {
+    const secondRoute = {
+      ...sampleInvitedRouteAccess,
+      routeAccess: {
+        nextState: 'consent_required' as const,
+        routeContext: '22222222-2222-4222-8222-222222222222',
+        routePlanId: '22222222-2222-4222-8222-222222222222',
+      },
+      companyGuidance: {
+        ...sampleInvitedRouteAccess.companyGuidance,
+        companyDisplayName: 'North Market',
+        routeName: 'North PM Route',
+        shopDomain: 'north-market.myshopify.com',
+      },
+      driverAccess: {
+        ...sampleInvitedRouteAccess.driverAccess,
+        accessToken: 'second-route-token',
+      },
+    };
+
+    const result = await submitRouteAccess(
+      { phoneE164: '+14165550123' },
+      createMockRouteAccessService({ status: 'ROUTES_FOUND', routes: [sampleInvitedRouteAccess, secondRoute] }),
+    );
+
+    assert.equal(result.kind, 'route_choices');
+    assert.equal(result.routes.length, 2);
+    assert.equal(result.routes[1].companyGuidance.companyDisplayName, 'North Market');
+    assert.equal(result.routes[1].driverAccess.accessToken, 'second-route-token');
+    assert.equal(JSON.stringify(result).includes('address1'), false);
+  });
+
+  it('maps legacy ambiguous route-scope matches to guidance', async () => {
     const result = await submitRouteAccess(
       { routeContext: 'shared-dispatch-code', phoneE164: '+14165550123' },
       createMockRouteAccessService({
@@ -73,7 +119,7 @@ describe('driver route access UX flow', () => {
             timezone: 'America/Toronto',
           },
         ],
-        resolutionHint: 'Use the route-specific invite link/code from dispatch.',
+        resolutionHint: 'Use the phone-only route list or contact dispatch.',
       }),
     );
 
@@ -81,14 +127,14 @@ describe('driver route access UX flow', () => {
     assert.equal(result.flowState, 'route_context_entered');
     assert.equal(result.matches.length, 2);
     assert.equal(result.matches[0].companyDisplayName, 'Tomatono Toronto');
-    assert.equal(result.message, 'Multiple company routes match this phone. Use the route-specific link/code or contact dispatch.');
+    assert.equal(result.message, 'Multiple route assignments matched. Use the phone-only route list or contact dispatch.');
     assert.equal(JSON.stringify(result).includes('routePlanId'), false);
     assert.equal(JSON.stringify(result).includes('accessToken'), false);
     assert.equal(JSON.stringify(result).includes('deliveryStop'), false);
     assert.equal(JSON.stringify(result).includes('address1'), false);
   });
 
-  it('posts lookup requests to the delivery-server contract endpoint', async () => {
+  it('posts phone-only lookup requests to the delivery-server contract endpoint', async () => {
     const requests: { body: unknown; method: string; url: string }[] = [];
     const client = createRouteAccessApiClient({
       baseUrl: 'https://delivery.example.com',
@@ -106,7 +152,6 @@ describe('driver route access UX flow', () => {
     });
 
     const result = await client.lookupRouteAccess({
-      routeContext: '11111111-1111-4111-8111-111111111111',
       phoneE164: '+14165550123',
     });
 
@@ -114,8 +159,8 @@ describe('driver route access UX flow', () => {
     assert.deepEqual(requests, [
       {
         body: {
-          routeContext: '11111111-1111-4111-8111-111111111111',
           phoneE164: '+14165550123',
+          routeContext: null,
         },
         method: 'POST',
         url: 'https://delivery.example.com/driver/route-access/lookup',
@@ -147,13 +192,69 @@ describe('driver route access UX flow', () => {
     });
 
     const result = await client.lookupRouteAccess({
-      routeContext: '11111111-1111-4111-8111-111111111111',
       phoneE164: '+14165550123',
     });
 
     assert.equal(result.status, 'INVITED');
     assert.equal(result.driverAccess.accessToken, 'server-issued-driver-jwt');
     assert.equal(result.driverAccess.use, 'consent_and_assigned_route');
+  });
+
+
+
+  it('parses route choices with driver access tokens from phone-only lookup responses', async () => {
+    const client = createRouteAccessApiClient({
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ROUTES_FOUND',
+            routes: [
+              {
+                routeAccess: sampleInvitedRouteAccess.routeAccess,
+                companyGuidance: sampleInvitedRouteAccess.companyGuidance,
+                driverAccess: {
+                  accessToken: 'server-issued-driver-jwt',
+                  expiresAt: '2026-05-12T06:55:00.000Z',
+                  tokenType: 'Bearer',
+                  ttlSeconds: 900,
+                  use: 'consent_and_assigned_route',
+                },
+              },
+            ],
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.lookupRouteAccess({ phoneE164: '+14165550123' });
+
+    assert.equal(result.status, 'ROUTES_FOUND');
+    assert.equal(result.routes.length, 1);
+    assert.equal(result.routes[0].driverAccess.accessToken, 'server-issued-driver-jwt');
+  });
+
+  it('parses empty route choices for registered phones without active assignments', async () => {
+    const client = createRouteAccessApiClient({
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ROUTES_FOUND',
+            routes: [],
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.lookupRouteAccess({ phoneE164: '+14165550123' });
+
+    assert.equal(result.status, 'ROUTES_FOUND');
+    assert.equal(result.routes.length, 0);
   });
 
   it('parses multiple match lookup responses without requiring a driver token', async () => {
@@ -173,7 +274,7 @@ describe('driver route access UX flow', () => {
                 timezone: 'America/Toronto',
               },
             ],
-            resolutionHint: 'Use the route-specific invite link/code from dispatch.',
+            resolutionHint: 'Use the phone-only route list or contact dispatch.',
           },
           error: null,
         }),

@@ -80,7 +80,7 @@ Use sanitized references to external screenshots/videos/logs only.
 | Area | iPhone result | iPhone evidence reference | Android result | Android evidence reference | Blocker / notes |
 | --- | --- | --- | --- | --- | --- |
 | Fresh install and app launch | pending | pending | pending | pending | pending |
-| Route context + E.164 phone lookup | pending | pending | pending | pending | pending |
+| E.164 phone lookup | pending | pending | pending | pending | pending |
 | Company guidance and support contact display | pending | pending | pending | pending | pending |
 | Consent gate and retry/error handling | pending | pending | pending | pending | pending |
 | Assigned route and stop list | pending | pending | pending | pending | pending |

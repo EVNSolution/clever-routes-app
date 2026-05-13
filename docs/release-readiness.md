@@ -68,7 +68,7 @@ Before production release, capture evidence on at least one real iPhone and one 
 | Area | iPhone evidence | Android evidence | Notes |
 | --- | --- | --- | --- |
 | Fresh install and app launch | pending | pending | Include app version/build identifier. |
-| Route context + E.164 phone lookup | pending | pending | Verify tenant/company context before route data. |
+| E.164 phone lookup | pending | pending | Verify tenant/company context before route data. |
 | Company guidance and support contact display | pending | pending | Confirm multi-company wording. |
 | Consent gate and retry/error handling | pending | pending | Verify consent versions/copy source. |
 | Assigned route and stop list | pending | pending | Use shop/route timezone `deliveryDate`. |
@@ -79,7 +79,7 @@ Before production release, capture evidence on at least one real iPhone and one 
 | Proof media scan rejection UX | pending | pending | Local mock mode now exposes `scan_rejected`; live mode can use server `PROOF_MEDIA_REJECTED`. Confirm rejected photos show recapture guidance and are not queued as retryable proof. |
 | Signature and barcode proof capture | pending | pending | Confirm unavailable/denied states. |
 | Offline queue retry/discard UI after network loss | pending | pending | Confirm app restart hydration. |
-| Token expiry, invalid persisted token, or live downstream `401` recovery | pending | pending | App clears expired/malformed SecureStore payloads before reuse and live downstream `401` driver access plus active route UI state before requiring route+phone re-lookup; confirm on devices. |
+| Token expiry, invalid persisted token, or live downstream `401` recovery | pending | pending | App clears expired/malformed SecureStore payloads before reuse and live downstream `401` driver access plus active route UI state before requiring phone lookup re-lookup; confirm on devices. |
 | Driver session reset/sign-out cleanup | pending | pending | Confirm reset stops tracking, clears SecureStore driver access, clears queued retry state, blanks lookup inputs, and returns to safe lookup state. |
 | Delivery finish or route completion cleanup | pending | pending | App-side finish now stops tracking, records/queues `ROUTE_COMPLETED`, and cleans route queue after recorded completion; confirm on devices. |
 
@@ -91,8 +91,8 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 - Background location use: only after delivery start and only when native background tracking is enabled.
 - Camera/photos: proof-of-delivery photo capture/upload.
 - Camera barcode scanning: proof barcode capture when available.
-- Contacts/address book: current app uses manual route context plus manual E.164 phone entry and should not request Contacts permissions unless a future owner-approved feature changes that. `npm run check:native-release` rejects source-controlled Android Contacts permissions or iOS Contacts usage descriptions before EAS evidence builds.
-- Driver identifiers: route context, phone lookup, server-issued driver access token, route assignment identifiers.
+- Contacts/address book: current app uses manual E.164 phone entry and should not request Contacts permissions unless a future owner-approved feature changes that. `npm run check:native-release` rejects source-controlled Android Contacts permissions or iOS Contacts usage descriptions before EAS evidence builds.
+- Driver identifiers: phone lookup, server-issued driver access token, route assignment identifiers.
 - Proof media: photo file, signature metadata, barcode metadata, and related stop/route identifiers.
 - Offline queue: non-secret retry metadata and file URI references retained locally until retry/discard policy runs.
 - Offline queue app-side policy: pending driver event/proof-media retry items are discarded after five retained attempts, after 72 hours, when the completed route is explicitly purged, when driver sign-out/session reset clears local retry state, or when proof-media upload is rejected by the server scan hook.
