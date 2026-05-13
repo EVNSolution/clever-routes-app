@@ -205,6 +205,7 @@ The persisted payload stores only the driver token and route access identifiers 
 
 ## Follow-up
 
+- Plan the next phone entry slice from `docs/phone-verification-plan.md`: country selector/search, country-aware national formatting to E.164, and server-owned SMS OTP verification/cost controls.
 - Define release environment profiles and any server-issued token refresh, OTP, managed identity, or stronger re-auth UX beyond the current phone re-lookup recovery for short-lived token expiry.
 - Add production proof-media object storage, signed access, scanner backend deployment/private evidence storage, and deployed cleanup/scheduler evidence. The delivery server already exposes a scan rejection hook and a local/manual cleanup runner via `npm run driver:proof-media:cleanup`.
 - Add physical-device background tracking smoke evidence and production privacy disclosures for updates emitted while the app process cannot reach the live delivery server. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.
