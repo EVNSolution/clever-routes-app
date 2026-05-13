@@ -25,7 +25,7 @@ Dedicated native mobile app repository for Clever delivery drivers.
 
 The app includes an interactive route access screen:
 
-- country-aware phone entry for the initial CA/KR allowlist, national display formatting, and E.164 normalization before lookup
+- country-aware phone entry with a broad supported-country catalog, locale/language/culture metadata, national display formatting, and E.164 normalization before lookup
 - local mock service for delivery-server `POST /driver/route-access/lookup`
 - company/shop/route guidance for `INVITED`, plus safe multi-company ambiguity guidance that does not expose route/stop/customer data or driver access tokens
 - local proof-media upload smoke selector for success, retryable failure, and scanner rejection while the app is using mock services

@@ -24,7 +24,7 @@ src/
     location/                   # foreground/background location event decisions
     offline/                    # offline queue model and retry/discard policy
     proof/                      # proof capture/upload decisions
-    phone/                      # country allowlist, national phone formatting, E.164 normalization
+    phone/                      # supported-country i18n metadata, national phone formatting, E.164 normalization
     route/                      # assigned-route model and lookup loading decisions
     routeAccess/                # phone/context route-access decisions
     stop/                       # stop navigation and proof-event decisions

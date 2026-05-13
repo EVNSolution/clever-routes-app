@@ -2,23 +2,23 @@
 
 ## Purpose
 
-This document records the driver-app phone entry implementation and the remaining SMS verification plan. The current driver app is phone-first, but not yet SMS-verified: it accepts a selected country plus national phone input, normalizes the value to E.164 for route access, shows a verification-code field, and calls route access by phone. The remaining SMS slice should add OTP only through the backend.
+This document records the driver-app phone entry implementation, supported-country i18n metadata, and the remaining SMS verification plan. The current driver app is phone-first, but not yet SMS-verified: it accepts a selected country plus national phone input, normalizes the value to E.164 for route access, shows a verification-code field, and calls route access by phone. The remaining SMS slice should add OTP only through the backend.
 
 ## Current app state
 
 - `src/app/AppRoot.tsx` owns the current login screen state: selected phone country, national phone input, `verificationCode`, `driverName`, privacy consent, and location consent.
-- `LoginScreen` currently renders a country selector/search panel, calling-code prefix, national `Phone Number` input, E.164 preview, and one `Verification Code` input. `Send Code` is visible in the UI, but the current phone lookup path does not depend on SMS verification.
+- `LoginScreen` currently renders a country selector/search panel, localized country/language label, culture metadata row, calling-code prefix, national `Phone Number` input, E.164 preview, and one `Verification Code` input. `Send Code` is visible in the UI, but the current phone lookup path does not depend on SMS verification.
 - `handleLoginAndLoadRoutes()` normalizes selected country + national phone input and calls `submitRouteAccess({ phoneE164 }, routeAccessService)` after driver name and consent checks.
-- `src/domain/phone/phoneEntry.ts` formats/normalizes supported national phone input; `src/domain/driverFlow/driverFlow.ts` still validates the E.164 boundary with `E164_PHONE_PATTERN = /^\+[1-9]\d{7,14}$/`.
+- `src/domain/phone/phoneEntry.ts` owns the supported country catalog, localized country/language labels, culture metadata, search, and national formatting/E.164 normalization; `src/domain/driverFlow/driverFlow.ts` still validates the E.164 boundary with `E164_PHONE_PATTERN = /^\+[1-9]\d{7,14}$/`.
 - `src/domain/routeAccess/routeAccess.ts` sends `phoneE164` and `routeContext: null` to `POST /driver/route-access/lookup` in live mode.
 - Successful route lookup returns route choices, company guidance, and a short-lived driver bearer token. SMS must not be implemented in the app with provider credentials.
 
 ## Implementation status
 
-Implemented in the driver app for the initial phone-entry foundation:
+Implemented in the driver app for the phone-entry foundation:
 
-- `src/domain/phone/phoneEntry.ts` owns the `CA`/`KR` allowlist, country labels, search by country name/ISO/calling code, national formatting, and E.164 normalization.
-- `src/app/AppRoot.tsx` renders the selected country row, searchable country panel, calling-code prefix, national phone input, and E.164 preview.
+- `src/domain/phone/phoneEntry.ts` owns a broad supported-country catalog of 70+ driver markets, country calling codes derived from `libphonenumber-js` metadata, localized country/language labels, native country/language names, locale, text direction, week-start, measurement-system metadata, search by country/native name/ISO/calling code/locale/language, national formatting, and E.164 normalization.
+- `src/app/AppRoot.tsx` renders the selected country row, localized country/language label, culture metadata row, searchable country panel, calling-code prefix, national phone input, and E.164 preview. Selecting a country updates the phone-entry locale to that country's default locale.
 - Existing route access still receives only `phoneE164`; SMS sending remains server-integration-ready but not active in the app.
 
 Still pending from this plan:
@@ -35,9 +35,9 @@ Add a country selector before the phone input.
 
 Driver-facing behavior:
 
-1. The app shows a selected country row with country name, ISO code, and dialing prefix, for example `South Korea · KR · +82`.
+1. The app shows a selected country row with localized country name, ISO code, dialing prefix, and localized primary language, for example `대한민국 · KR · +82 · 한국어`.
 2. Tapping the country row opens a searchable country list.
-3. Search matches country name, ISO code, and calling code.
+3. Search matches English/localized/native country name, ISO code, calling code, locale, primary language code, English language name, and native language name.
 4. The default country should be server/config-driven. Use Canada (`CA`, `+1`) for Canadian production routes unless an environment or server profile says otherwise. Device locale can be a hint, not the authority.
 5. Store the selected country as data, not display text.
 
@@ -45,13 +45,19 @@ Planned state shape:
 
 ```ts
 type SelectedPhoneCountry = {
-  iso2: string;          // example: "KR"
-  callingCode: string;   // example: "+82"
-  displayName: string;   // localized display label
+  iso2: string;                 // example: "KR"
+  callingCode: string;          // example: "+82"
+  displayName: string;          // English fallback display label
+  nativeCountryName: string;    // example: "대한민국"
+  defaultLocale: string;        // example: "ko-KR"
+  primaryLanguageCode: string;  // example: "ko"
+  primaryLanguageName: string;  // example: "Korean"
+  nativeLanguageName: string;   // example: "한국어"
+  textDirection: "ltr" | "rtl";
 };
 ```
 
-Initial supported countries should be allowlisted rather than global-by-default. For the current product, start with `CA` and add `KR` for operator/test workflows. A global list can be enabled after SMS cost controls and compliance checks are in place.
+Supported countries are still explicit app data rather than unrestricted global-by-default input. The current app catalog includes 70+ driver markets for phone formatting and locale display, while server-side SMS sending must still apply provider support, compliance, country disable switches, fraud controls, and budget caps before enabling OTP in each market.
 
 ### 2. Country-aware phone input
 
@@ -230,11 +236,12 @@ Recommendation: do not use raw SMS for the first production OTP slice. Start wit
 
 ### Phase 1: Phone UX foundation, no SMS provider
 
-- Add country selector/search UI.
-- Add phone normalization domain module and tests.
-- Convert national input + country to E.164 before calling existing route access.
-- Keep current phone-only route lookup behavior.
-- Add UI tests for KR and CA formatting examples.
+- Add country selector/search UI. — completed
+- Add phone normalization domain module and tests. — completed
+- Expand supported-country i18n metadata and representative national phone formatting coverage across driver markets. — completed
+- Convert national input + country to E.164 before calling existing route access. — completed
+- Keep current phone-only route lookup behavior. — completed
+- Add phone-domain tests for KR, CA, and representative global formatting examples. — completed
 
 ### Phase 2: Server-owned OTP verification
 
@@ -255,7 +262,7 @@ Recommendation: do not use raw SMS for the first production OTP slice. Start wit
 ## Open decisions
 
 - Default country source: deployment config, server profile, or device locale fallback.
-- Initial supported countries: likely `CA` for production and `KR` for operator/testing.
+- SMS-enabled countries: phone formatting now supports a broad driver-market catalog, but OTP send/verify must be enabled per country only after provider support, compliance, fraud, and budget controls are approved.
 - OTP provider: Twilio Verify for fastest integration, AWS OTP for AWS consolidation and lower estimated KR cost, or another provider after procurement review.
 - Whether OTP gates every route lookup or only first device/session verification.
 - Whether the backend should return route choices immediately after OTP verification or require a separate route lookup call.
