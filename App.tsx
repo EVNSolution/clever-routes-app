@@ -1,4 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
+import * as Speech from 'expo-speech';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -8,6 +9,7 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -17,29 +19,10 @@ import {
   createMockAssignedRouteService,
   loadAssignedRouteAfterConsent,
   sampleAssignedRoute,
-  type AssignedRouteLoadResult,
-  type AssignedRouteLookupResult,
+  type AssignedRoute,
   type AssignedRouteService,
   type AssignedRouteStop,
 } from './src/assignedRoute';
-import {
-  startDeliveryWithForegroundPermission,
-  type DeliveryStartResult,
-} from './src/deliveryStart';
-import {
-  finishDeliveryAfterActive,
-  type DeliveryFinishResult,
-} from './src/deliveryFinish';
-import {
-  createMockDriverEventService,
-  recordRouteStartedAfterDeliveryStart,
-  type DriverEventService,
-  type RouteStartedRecordResult,
-} from './src/driverEvents';
-import {
-  recordForegroundLocationUpdateAfterDeliveryStart,
-  type ForegroundLocationUpdateResult,
-} from './src/foregroundLocationEvent';
 import {
   recordContinuousLocationUpdateBatch,
   startContinuousLocationUpdatesAfterDeliveryStart,
@@ -47,160 +30,100 @@ import {
   type ContinuousLocationStopResult,
   type ContinuousLocationStreamStartResult,
 } from './src/continuousLocationStream';
+import { finishDeliveryAfterActive, type DeliveryFinishResult } from './src/deliveryFinish';
+import { startDeliveryWithForegroundPermission, type DeliveryStartResult } from './src/deliveryStart';
+import { createDriverApiClientsFromRouteAccess } from './src/driverApiClients';
+import { createMockDriverEventService, recordRouteStartedAfterDeliveryStart, type DriverEventService, type RouteStartedRecordResult } from './src/driverEvents';
+import { createExpoContinuousLocationStreamService, registerContinuousLocationTaskHandler } from './src/expoContinuousLocationStreamService';
+import { createExpoForegroundLocationPermissionService } from './src/expoLocationPermissionService';
+import { createExpoOfflineSubmissionQueueStorage } from './src/expoOfflineSubmissionQueueStorage';
+import { createExpoProofPhotoCaptureService } from './src/expoProofPhotoCaptureService';
+import { createExpoSecureDriverAccessTokenStore } from './src/expoSecureDriverAccessTokenStore';
+import { createPersistentOfflineSubmissionQueue, type OfflineSubmissionQueue } from './src/offlineSubmissionQueue';
+import { captureProofPhoto, type ProofPhotoCaptureResult, type ProofPhotoCaptureSource } from './src/proofPhotoCapture';
 import {
-  recordStopProofEventAfterDeliveryStart,
-  type StopProofAction,
-  type StopProofEventResult,
-  type StopProofFailureReason,
-} from './src/stopProofEvents';
-import {
-  captureProofPhoto,
-  type ProofPhotoCaptureResult,
-  type ProofPhotoCaptureSource,
-} from './src/proofPhotoCapture';
-import {
-  uploadCapturedProofPhoto,
   createMockProofMediaUploadService,
   shouldQueueFailedProofMediaUpload,
-  type ProofMediaUploadMockMode,
+  uploadCapturedProofPhoto,
   type ProofMediaUploadResult,
   type ProofMediaUploadService,
 } from './src/proofMediaUpload';
-import {
-  captureProofSignature,
-  type ProofSignatureCaptureResult,
-} from './src/proofSignatureCapture';
-import {
-  captureProofBarcode,
-  type ProofBarcodeCaptureResult,
-} from './src/proofBarcodeCapture';
-import {
-  createInMemoryOfflineSubmissionQueue,
-  createPersistentOfflineSubmissionQueue,
-  retryOfflineSubmissions,
-  type OfflineSubmissionQueue,
-  type OfflineSubmissionRetryResult,
-} from './src/offlineSubmissionQueue';
-import {
-  canEnterDeliveryActive,
-  canRevealRouteDetails,
-  DRIVER_FLOW_STATES,
-  type DriverFlowState,
-} from './src/driverFlow';
-import { createDriverApiClientsFromRouteAccess } from './src/driverApiClients';
-import {
-  openStopNavigation,
-  type StopNavigationResult,
-} from './src/stopNavigation';
-import {
-  resetDriverSession,
-  type DriverSessionResetResult,
-} from './src/driverSessionReset';
-import { type DriverAccessRestoreResult } from './src/driverAccessTokenStore';
-import { createExpoSecureDriverAccessTokenStore } from './src/expoSecureDriverAccessTokenStore';
-import { createExpoForegroundLocationPermissionService } from './src/expoLocationPermissionService';
-import { createExpoForegroundLocationSnapshotService } from './src/expoForegroundLocationSnapshotService';
-import {
-  createExpoContinuousLocationStreamService,
-  registerContinuousLocationTaskHandler,
-} from './src/expoContinuousLocationStreamService';
-import { createExpoProofPhotoCaptureService } from './src/expoProofPhotoCaptureService';
-import { createExpoProofBarcodeCaptureService } from './src/expoProofBarcodeCaptureService';
-import { createExpoOfflineSubmissionQueueStorage } from './src/expoOfflineSubmissionQueueStorage';
-import {
-  createDriverRuntimeServices,
-  readDriverRuntimeConfig,
-} from './src/driverRuntimeConfig';
-import {
-  CONSENT_COPY_VERSIONS,
-  createMockDriverConsentService,
-  submitDriverConsent,
-  type DriverConsentService,
-  type DriverConsentSubmissionResult,
-} from './src/driverConsent';
+import { createDriverRuntimeServices, readDriverRuntimeConfig } from './src/driverRuntimeConfig';
+import { createMockDriverConsentService, submitDriverConsent, type DriverConsentService, type DriverConsentSubmissionResult } from './src/driverConsent';
+import { getMvpRouteTabs } from './src/driverFlow';
 import {
   createMockRouteAccessService,
-  sampleMultipleRouteAccess,
   sampleInvitedRouteAccess,
   submitRouteAccess,
+  type RouteAccessCompanyGuidance,
   type RouteAccessLookupResult,
+  type RouteAccessRouteChoice,
   type RouteAccessSubmissionResult,
 } from './src/routeAccess';
+import { openStopNavigation, type StopNavigationResult } from './src/stopNavigation';
+import { recordStopProofEventAfterDeliveryStart, type StopProofEventResult } from './src/stopProofEvents';
 
-const SAMPLE_PHONE_E164 = '+14165550123';
+type AppScreen = 'login' | 'navigation' | 'routeDetail' | 'routes' | 'stopProof';
+type RouteTabId = ReturnType<typeof getMvpRouteTabs>[number]['id'];
+type RouteStatus = 'active' | 'completed' | 'upcoming';
 
-type MockMode = RouteAccessLookupResult['status'];
-type ConsentMockMode = 'success' | 'failure';
-type AssignedRouteMockMode = 'assigned' | 'failure' | 'none';
-type ProofMediaMockMode = ProofMediaUploadMockMode;
-type OfflineQueueRestoreStatus = 'failed' | 'loading' | 'ready';
 type StopProofDraft = {
-  failureReason: StopProofFailureReason;
-  note: string;
-  photoUri: string;
-  signaturePointCount: number;
-  signerName: string;
+  locationTip: string;
+  todayNote: string;
 };
 
-const STOP_PROOF_FAILURE_REASONS: StopProofFailureReason[] = ['CUSTOMER_UNAVAILABLE', 'DAMAGED', 'INACCESSIBLE', 'OTHER'];
+type RouteSession = RouteAccessRouteChoice & {
+  route: AssignedRoute;
+};
+
+const SAMPLE_PHONE_E164 = '+14165550123';
+const DEFAULT_DRIVER_NAME = '배송원';
+const COMPANY_STEP_INDEX = 0;
 
 export default function App() {
-  const [routeContext, setRouteContext] = useState(sampleInvitedRouteAccess.routeAccess.routeContext);
+  const [screen, setScreen] = useState<AppScreen>('login');
   const [phoneE164, setPhoneE164] = useState(SAMPLE_PHONE_E164);
-  const [mockMode, setMockMode] = useState<MockMode>('INVITED');
-  const [consentMockMode, setConsentMockMode] = useState<ConsentMockMode>('success');
-  const [assignedRouteMockMode, setAssignedRouteMockMode] = useState<AssignedRouteMockMode>('assigned');
-  const [proofMediaMockMode, setProofMediaMockMode] = useState<ProofMediaMockMode>('success');
+  const [driverName, setDriverName] = useState(DEFAULT_DRIVER_NAME);
+  const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
+  const [acceptedLocation, setAcceptedLocation] = useState(false);
+  const [selectedTab, setSelectedTab] = useState<RouteTabId>('upcoming');
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [navigationStepIndex, setNavigationStepIndex] = useState(COMPANY_STEP_INDEX);
+  const [routeSessions, setRouteSessions] = useState<RouteSession[]>([]);
+
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
   const [consentSubmission, setConsentSubmission] = useState<DriverConsentSubmissionResult | null>(null);
-  const [assignedRouteSubmission, setAssignedRouteSubmission] = useState<AssignedRouteLoadResult | null>(null);
   const [deliveryStartResult, setDeliveryStartResult] = useState<DeliveryStartResult | null>(null);
   const [deliveryFinishResult, setDeliveryFinishResult] = useState<DeliveryFinishResult | null>(null);
   const [routeStartedEventResult, setRouteStartedEventResult] = useState<RouteStartedRecordResult | null>(null);
-  const [locationUpdateResult, setLocationUpdateResult] = useState<ForegroundLocationUpdateResult | null>(null);
   const [continuousLocationResult, setContinuousLocationResult] = useState<ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null>(null);
   const [stopProofResults, setStopProofResults] = useState<Record<string, StopProofEventResult>>({});
+  const [proofDrafts, setProofDrafts] = useState<Record<string, StopProofDraft>>({});
+  const [proofPhotoResults, setProofPhotoResults] = useState<Record<string, ProofPhotoCaptureResult>>({});
+  const [proofMediaResults, setProofMediaResults] = useState<Record<string, ProofMediaUploadResult>>({});
   const [stopNavigationResults, setStopNavigationResults] = useState<Record<string, StopNavigationResult>>({});
-  const [stopProofDrafts, setStopProofDrafts] = useState<Record<string, StopProofDraft>>({});
-  const [proofPhotoCaptureResults, setProofPhotoCaptureResults] = useState<Record<string, ProofPhotoCaptureResult>>({});
-  const [proofMediaUploadResults, setProofMediaUploadResults] = useState<Record<string, ProofMediaUploadResult>>({});
-  const [proofSignatureCaptureResults, setProofSignatureCaptureResults] = useState<Record<string, ProofSignatureCaptureResult>>({});
-  const [proofBarcodeCaptureResults, setProofBarcodeCaptureResults] = useState<Record<string, ProofBarcodeCaptureResult>>({});
+  const [completedStopIds, setCompletedStopIds] = useState<string[]>([]);
+  const [offlineSubmissionQueue, setOfflineSubmissionQueue] = useState<OfflineSubmissionQueue | null>(null);
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
-  const [offlineQueueRetryResult, setOfflineQueueRetryResult] = useState<OfflineSubmissionRetryResult | null>(null);
-  const [sessionResetResult, setSessionResetResult] = useState<DriverSessionResetResult | null>(null);
-  const [offlineQueueRestoreStatus, setOfflineQueueRestoreStatus] = useState<OfflineQueueRestoreStatus>('loading');
-  const [offlineSubmissionQueue, setOfflineSubmissionQueue] = useState<OfflineSubmissionQueue>(() => createInMemoryOfflineSubmissionQueue());
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isRecordingConsent, setIsRecordingConsent] = useState(false);
-  const [isLoadingAssignedRoute, setIsLoadingAssignedRoute] = useState(false);
-  const [isStartingDelivery, setIsStartingDelivery] = useState(false);
-  const [isRecordingRouteStarted, setIsRecordingRouteStarted] = useState(false);
-  const [isRecordingLocationUpdate, setIsRecordingLocationUpdate] = useState(false);
-  const [isStartingContinuousLocation, setIsStartingContinuousLocation] = useState(false);
-  const [isStoppingContinuousLocation, setIsStoppingContinuousLocation] = useState(false);
-  const [isFinishingDelivery, setIsFinishingDelivery] = useState(false);
-  const [recordingStopProofId, setRecordingStopProofId] = useState<string | null>(null);
-  const [capturingProofPhotoId, setCapturingProofPhotoId] = useState<string | null>(null);
-  const [uploadingProofMediaId, setUploadingProofMediaId] = useState<string | null>(null);
-  const [capturingProofSignatureId, setCapturingProofSignatureId] = useState<string | null>(null);
-  const [capturingProofBarcodeId, setCapturingProofBarcodeId] = useState<string | null>(null);
-  const [openingStopNavigationId, setOpeningStopNavigationId] = useState<string | null>(null);
-  const [isRetryingOfflineQueue, setIsRetryingOfflineQueue] = useState(false);
-  const [isResettingSession, setIsResettingSession] = useState(false);
-  const [driverAccessRestoreStatus, setDriverAccessRestoreStatus] = useState<DriverAccessRestoreResult['kind']>('missing');
+  const [message, setMessage] = useState<string | null>(null);
+
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isStartingRoute, setIsStartingRoute] = useState(false);
+  const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
+  const [isCompletingStop, setIsCompletingStop] = useState(false);
+  const [isFinishingRoute, setIsFinishingRoute] = useState(false);
+  const [isOpeningNavigation, setIsOpeningNavigation] = useState(false);
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
-  const foregroundLocationSnapshotService = useMemo(() => createExpoForegroundLocationSnapshotService(), []);
   const continuousLocationStreamService = useMemo(() => createExpoContinuousLocationStreamService(), []);
   const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
-  const proofBarcodeCaptureService = useMemo(() => createExpoProofBarcodeCaptureService(), []);
-  const proofMediaUploadService = useMemo(
-    () => createMockProofMediaUploadService({ mode: proofMediaMockMode }),
-    [proofMediaMockMode],
-  );
   const offlineSubmissionQueueStorage = useMemo(() => createExpoOfflineSubmissionQueueStorage(), []);
+  const mockDriverEventService = useMemo(() => createMockDriverEventService(), []);
+  const mockDriverConsentService = useMemo(() => createMockDriverConsentService(), []);
+  const mockAssignedRouteService = useMemo(() => createMockAssignedRouteService({ status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute }), []);
+  const mockProofMediaUploadService = useMemo(() => createMockProofMediaUploadService({ mode: 'success' }), []);
+  const routeTabs = useMemo(() => getMvpRouteTabs(), []);
 
   const runtimeConfig = useMemo(
     () => readDriverRuntimeConfig({
@@ -209,19 +132,36 @@ export default function App() {
     [],
   );
 
+  const routeAccessService = useMemo(() => {
+    if (runtimeConfig.mode === 'live') {
+      return createDriverRuntimeServices({ config: runtimeConfig }).routeAccessService;
+    }
+
+    return createMockRouteAccessService(sampleInvitedRouteAccess);
+  }, [runtimeConfig]);
+
+  const selectedRouteSession = routeSessions.find((session) => session.route.id === selectedRouteId) ?? routeSessions[0] ?? null;
+  const selectedRoute = selectedRouteSession?.route ?? null;
+  const routeStatus = getRouteStatus(deliveryStartResult, deliveryFinishResult);
+  const currentStop = selectedRoute === null ? null : selectedRoute.stops[navigationStepIndex - 1] ?? null;
+  const isCompanyStep = navigationStepIndex === COMPANY_STEP_INDEX;
+  const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => completedStopIds.includes(stop.deliveryStopId));
+  const currentCompany = selectedRouteSession?.companyGuidance ?? null;
+
   useEffect(() => {
     let isMounted = true;
     createPersistentOfflineSubmissionQueue({ storage: offlineSubmissionQueueStorage })
       .then((queue) => {
-        if (isMounted) {
-          setOfflineSubmissionQueue(queue);
-          setOfflineQueueCount(queue.listPending().length);
-          setOfflineQueueRestoreStatus('ready');
+        if (!isMounted) {
+          return;
         }
+
+        setOfflineSubmissionQueue(queue);
+        setOfflineQueueCount(queue.listPending().length);
       })
       .catch(() => {
         if (isMounted) {
-          setOfflineQueueRestoreStatus('failed');
+          setMessage('오프라인 큐 저장소를 열지 못했습니다. 현재 세션에서만 재시도합니다.');
         }
       });
 
@@ -231,562 +171,419 @@ export default function App() {
   }, [offlineSubmissionQueueStorage]);
 
   useEffect(() => {
-    let isMounted = true;
-    driverAccessTokenStore.loadActiveDriverAccess()
-      .then((result) => {
-        if (isMounted) {
-          setDriverAccessRestoreStatus(result.kind);
-        }
-      })
-      .catch(() => {
-        if (isMounted) {
-          setDriverAccessRestoreStatus('invalid');
-        }
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [driverAccessTokenStore]);
-
-  const routeAccessService = useMemo(() => {
-    if (runtimeConfig.mode === 'live') {
-      return createDriverRuntimeServices({ config: runtimeConfig }).routeAccessService;
-    }
-
-    const result: RouteAccessLookupResult =
-      mockMode === 'INVITED'
-        ? sampleInvitedRouteAccess
-        : mockMode === 'MULTIPLE_MATCHES'
-          ? sampleMultipleRouteAccess
-          : { status: mockMode };
-    return createMockRouteAccessService(result);
-  }, [mockMode, runtimeConfig]);
-
-  const driverConsentService = useMemo<DriverConsentService>(() => {
-    if (consentMockMode === 'failure') {
-      return {
-        recordDriverConsents: async () => {
-          throw new Error('Local consent mock failure');
-        },
-      };
-    }
-
-    return createMockDriverConsentService();
-  }, [consentMockMode]);
-
-  const driverEventService = useMemo<DriverEventService>(() => createMockDriverEventService(), []);
-
-  const assignedRouteService = useMemo<AssignedRouteService>(() => {
-    if (assignedRouteMockMode === 'failure') {
-      return {
-        getAssignedRoute: async () => {
-          throw new Error('Local assigned route mock failure');
-        },
-      };
-    }
-
-    const result: AssignedRouteLookupResult =
-      assignedRouteMockMode === 'none'
-        ? { status: 'NO_ASSIGNED_ROUTE' }
-        : { status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute };
-
-    return createMockAssignedRouteService(result);
-  }, [assignedRouteMockMode]);
-
-  const currentFlowState = getCurrentFlowState(
-    submission,
-    consentSubmission,
-    assignedRouteSubmission,
-    deliveryStartResult,
-    deliveryFinishResult,
-  );
-  const canRevealRoute = canRevealRouteDetails(currentFlowState);
-  const canStartDelivery = canEnterDeliveryActive({
-    state: currentFlowState,
-    hasLocationPermission: deliveryStartResult?.kind === 'delivery_active',
-  });
-
-  const activeRoutePlanId = assignedRouteSubmission?.kind === 'route_ready' ? assignedRouteSubmission.route.id : null;
-
-  useEffect(() => {
     if (deliveryStartResult?.kind !== 'delivery_active' || deliveryFinishResult?.flowState === 'delivery_finished') {
       registerContinuousLocationTaskHandler(null);
       return;
     }
 
     registerContinuousLocationTaskHandler(async (locations) => {
+      const queue = offlineSubmissionQueue;
+      const routePlanId = selectedRoute?.id ?? null;
+      if (queue === null || routePlanId === null) {
+        return;
+      }
+
       await recordContinuousLocationUpdateBatch({
         driverEventService: getDriverEventServiceForCurrentSubmission({
-          driverEventService,
+          fallback: mockDriverEventService,
           runtimeConfig,
           submission,
         }),
         locations,
-        offlineQueue: offlineSubmissionQueue,
-        routePlanId: activeRoutePlanId,
+        offlineQueue: queue,
+        routePlanId,
       });
-      setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
+      setOfflineQueueCount(queue.listPending().length);
     });
 
-    return () => {
-      registerContinuousLocationTaskHandler(null);
-    };
-  }, [activeRoutePlanId, deliveryFinishResult, deliveryStartResult, driverEventService, offlineSubmissionQueue, runtimeConfig, submission]);
+    return () => registerContinuousLocationTaskHandler(null);
+  }, [deliveryFinishResult, deliveryStartResult, mockDriverEventService, offlineSubmissionQueue, runtimeConfig, selectedRoute?.id, submission]);
 
-  async function handleLookup() {
-    setIsSubmitting(true);
-    setSessionResetResult(null);
-    setConsentSubmission(null);
-    setAssignedRouteSubmission(null);
-    setDeliveryStartResult(null);
-    setDeliveryFinishResult(null);
-    setRouteStartedEventResult(null);
-    setLocationUpdateResult(null);
-    setContinuousLocationResult(null);
-    setStopProofResults({});
-    setStopNavigationResults({});
-    setStopProofDrafts({});
-    setProofPhotoCaptureResults({});
-    setProofMediaUploadResults({});
-    setProofSignatureCaptureResults({});
-    setProofBarcodeCaptureResults({});
+  async function handleLoginAndLoadRoutes() {
+    if (driverName.trim().length === 0) {
+      setMessage('이름을 입력해 주세요.');
+      return;
+    }
+
+    if (!acceptedPrivacy || !acceptedLocation) {
+      setMessage('개인정보활용 동의와 위치기반서비스 동의가 모두 필요합니다.');
+      return;
+    }
+
+    setIsLoggingIn(true);
+    setMessage(null);
+    resetRouteProgress();
+
     try {
-      const result = await submitRouteAccess({ routeContext, phoneE164 }, routeAccessService);
-      setSubmission(result);
-      if (result.kind === 'company_guidance') {
-        await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(result));
-        setDriverAccessRestoreStatus('active');
-      } else if (result.kind === 'denied') {
-        await driverAccessTokenStore.clear();
-        setDriverAccessRestoreStatus('missing');
+      const lookupResult = await submitRouteAccess({ phoneE164 }, routeAccessService);
+      setSubmission(lookupResult);
+
+      if (lookupResult.kind !== 'company_guidance' && lookupResult.kind !== 'route_choices') {
+        setMessage(formatRouteAccessProblem(lookupResult));
+        return;
       }
+
+      const choices = getRouteChoicesFromSubmission(lookupResult);
+      if (choices.length === 0) {
+        setRouteSessions([]);
+        setSelectedRouteId(null);
+        setSelectedTab('upcoming');
+        setScreen('routes');
+        setMessage('등록된 전화번호를 확인했습니다. 현재 배정된 활성 라우트가 없습니다.');
+        return;
+      }
+
+      const loadedSessions: RouteSession[] = [];
+
+      for (const choice of choices) {
+        const choiceSubmission = toCompanyGuidanceSubmission(choice);
+        const consentResult = await submitDriverConsent(
+          {
+            appContext: { appVersion: '0.1.0', driverName: driverName.trim() },
+            deviceContext: { platform: Platform.OS },
+            routeContext: choice.routeAccess.routeContext,
+          },
+          getDriverConsentServiceForCurrentSubmission({
+            fallback: mockDriverConsentService,
+            runtimeConfig,
+            submission: choiceSubmission,
+          }),
+        );
+        setConsentSubmission(consentResult);
+
+        if (consentResult.kind !== 'consent_recorded') {
+          setMessage(consentResult.message);
+          continue;
+        }
+
+        const assignedRouteResult = await loadAssignedRouteAfterConsent(
+          {
+            consentState: consentResult.flowState,
+            routeContext: choice.routeAccess.routeContext,
+          },
+          getAssignedRouteServiceForCurrentSubmission({
+            fallback: mockAssignedRouteService,
+            runtimeConfig,
+            submission: choiceSubmission,
+          }),
+        );
+        if (assignedRouteResult.kind === 'route_ready') {
+          loadedSessions.push({
+            ...choice,
+            route: assignedRouteResult.route,
+          });
+        } else {
+          setMessage(assignedRouteResult.message);
+        }
+      }
+
+      if (loadedSessions.length === 0) {
+        setRouteSessions([]);
+        setSubmission(null);
+        setMessage('전화번호에 배정된 활성 라우트를 불러오지 못했습니다.');
+        return;
+      }
+
+      setRouteSessions(loadedSessions);
+      setSelectedRouteId(loadedSessions[0].route.id);
+      const firstSubmission = toCompanyGuidanceSubmission(loadedSessions[0]);
+      setSubmission(firstSubmission);
+      await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(firstSubmission));
+      setSelectedTab('upcoming');
+      setScreen('routes');
+      setMessage(`${loadedSessions.length}개 라우트를 불러왔습니다.`);
     } finally {
-      setIsSubmitting(false);
+      setIsLoggingIn(false);
     }
   }
 
-  async function handleRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']) {
-    setIsRecordingConsent(true);
-    setAssignedRouteSubmission(null);
-    setDeliveryFinishResult(null);
-    try {
-      const result = await submitDriverConsent(
-        {
-          appContext: { appVersion: '0.1.0' },
-          deviceContext: { platform: Platform.OS },
-          routeContext: routeAccess.routeContext,
-        },
-        getDriverConsentServiceForCurrentSubmission({
-          driverConsentService,
-          runtimeConfig,
-          submission,
-        }),
-      );
-      setConsentSubmission(result);
-      if (result.kind === 'consent_error' && result.reason === 'driver_access_expired') {
-        await markDriverAccessExpiredForRelookup();
-      }
-    } finally {
-      setIsRecordingConsent(false);
+  async function handleStartRoute(routeId?: string) {
+    const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
+    if (routeSession === null) {
+      setMessage('시작할 라우트가 없습니다.');
+      return;
     }
-  }
 
-  async function handleLoadAssignedRoute(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']) {
-    setIsLoadingAssignedRoute(true);
-    setDeliveryStartResult(null);
-    setDeliveryFinishResult(null);
-    setStopNavigationResults({});
-    try {
-      const result = await loadAssignedRouteAfterConsent(
-        {
-          consentState: consentSubmission?.flowState === 'consent_recorded' ? 'consent_recorded' : 'consent_required',
-          routeContext: routeAccess.routeContext,
-        },
-        getAssignedRouteServiceForCurrentSubmission({
-          assignedRouteService,
-          runtimeConfig,
-          submission,
-        }),
-      );
-      setAssignedRouteSubmission(result);
-      if (result.kind === 'route_error' && result.reason === 'driver_access_expired') {
-        await markDriverAccessExpiredForRelookup();
-      }
-    } finally {
-      setIsLoadingAssignedRoute(false);
-    }
-  }
+    setSelectedRouteId(routeSession.route.id);
+    const activeSubmission = toCompanyGuidanceSubmission(routeSession);
+    setSubmission(activeSubmission);
+    await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(activeSubmission));
+    setIsStartingRoute(true);
+    setMessage(null);
 
-
-  async function handleStartDelivery() {
-    setIsStartingDelivery(true);
     try {
       const deliveryStart = await startDeliveryWithForegroundPermission({
-        flowState: currentFlowState,
+        flowState: 'route_ready',
         permissionService: foregroundLocationPermissionService,
       });
       setDeliveryStartResult(deliveryStart);
-      setDeliveryFinishResult(null);
-      setRouteStartedEventResult(null);
-      setContinuousLocationResult(null);
 
-      if (deliveryStart.kind === 'delivery_active') {
-        setIsRecordingRouteStarted(true);
-        try {
-          const routeStartedResult = await recordRouteStartedAfterDeliveryStart({
-            deliveryStart,
-            driverEventService: getDriverEventServiceForCurrentSubmission({
-              driverEventService,
-              runtimeConfig,
-              submission,
-            }),
-            offlineQueue: offlineSubmissionQueue,
-            routePlanId: activeRoutePlanId,
-          });
-          setRouteStartedEventResult(routeStartedResult);
-          setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
-          if (routeStartedResult.kind === 'queued' && routeStartedResult.requiresRouteLookup === true) {
-            await markDriverAccessExpiredForRelookup();
-          }
-        } finally {
-          setIsRecordingRouteStarted(false);
-        }
+      if (deliveryStart.kind !== 'delivery_active') {
+        setMessage(deliveryStart.message);
+        return;
       }
+
+      const queue = offlineSubmissionQueue ?? undefined;
+      const eventService = getDriverEventServiceForCurrentSubmission({
+        fallback: mockDriverEventService,
+        runtimeConfig,
+        submission: activeSubmission,
+      });
+      const routeStartedResult = await recordRouteStartedAfterDeliveryStart({
+        deliveryStart,
+        driverEventService: eventService,
+        offlineQueue: queue,
+        routePlanId: routeSession.route.id,
+      });
+      setRouteStartedEventResult(routeStartedResult);
+
+      const continuousResult = await startContinuousLocationUpdatesAfterDeliveryStart({
+        deliveryStart,
+        routePlanId: routeSession.route.id,
+        streamService: continuousLocationStreamService,
+      });
+      setContinuousLocationResult(continuousResult);
+
+      setSelectedTab('active');
+      setNavigationStepIndex(COMPANY_STEP_INDEX);
+      setScreen('navigation');
+      setMessage('배송을 시작했습니다. 회사 픽업부터 순서대로 진행하세요.');
     } finally {
-      setIsStartingDelivery(false);
+      setIsStartingRoute(false);
+      refreshOfflineQueueCount();
     }
   }
 
+  function handleOpenRouteDetail(routeId?: string) {
+    const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
+    if (routeSession === null) {
+      setMessage('확인할 라우트가 없습니다.');
+      return;
+    }
 
+    setSelectedRouteId(routeSession.route.id);
+    setSubmission(toCompanyGuidanceSubmission(routeSession));
+    setScreen('routeDetail');
+  }
 
-  async function handleRecordLocationUpdate() {
-    const effectiveDeliveryStart: DeliveryStartResult = deliveryStartResult ?? {
-      flowState: 'route_ready',
-      kind: 'permission_denied',
-      reason: 'foreground_location_denied',
-      message: 'Delivery must be active before syncing foreground location.',
-    };
+  async function handleOpenCurrentNavigation() {
+    if (currentStop === null) {
+      setMessage('회사 픽업 단계는 회사 안내를 확인한 뒤 다음으로 이동하세요.');
+      return;
+    }
 
-    setIsRecordingLocationUpdate(true);
+    setIsOpeningNavigation(true);
     try {
-      const locationResult = await recordForegroundLocationUpdateAfterDeliveryStart({
-        deliveryStart: effectiveDeliveryStart,
-        driverEventService: getDriverEventServiceForCurrentSubmission({
-          driverEventService,
+      const result = await openStopNavigation({
+        linking: Linking,
+        platform: Platform.OS,
+        stop: currentStop,
+      });
+      setStopNavigationResults((current) => ({ ...current, [currentStop.deliveryStopId]: result }));
+      setMessage(result.message);
+    } finally {
+      setIsOpeningNavigation(false);
+    }
+  }
+
+  function handleAnnounceCurrentTip() {
+    const text = getNavigationTip({ company: currentCompany, isCompanyStep, stop: currentStop });
+    Speech.stop();
+    Speech.speak(text, { language: 'ko-KR', rate: 0.94 });
+    setMessage(`음성 안내: ${text}`);
+  }
+
+  function handleArrivedAtStep() {
+    if (selectedRoute === null) {
+      return;
+    }
+
+    if (isCompanyStep) {
+      setNavigationStepIndex(1);
+      setMessage('회사 픽업을 확인했습니다. 첫 번째 배송지로 이동하세요.');
+      return;
+    }
+
+    setScreen('stopProof');
+    setMessage('도착지 근방입니다. 사진 증빙을 남긴 뒤 배송완료를 기록하세요.');
+  }
+
+  async function handleCapturePhoto(source: ProofPhotoCaptureSource) {
+    if (currentStop === null || selectedRoute === null) {
+      return;
+    }
+
+    setIsCapturingPhoto(true);
+    setMessage(null);
+
+    try {
+      const captureResult = await captureProofPhoto({ captureService: proofPhotoCaptureService, source });
+      setProofPhotoResults((current) => ({ ...current, [currentStop.deliveryStopId]: captureResult }));
+
+      const uploadResult = await uploadCapturedProofPhoto({
+        captureResult,
+        uploadRequest: {
+          deliveryStopId: currentStop.deliveryStopId,
+          fileName: getFileNameFromUri(captureResult.kind === 'captured' ? captureResult.uri : '', currentStop.deliveryStopId),
+          routePlanId: selectedRoute.id,
+        },
+        uploadService: getProofMediaUploadServiceForCurrentSubmission({
+          fallback: mockProofMediaUploadService,
           runtimeConfig,
           submission,
         }),
-        locationService: foregroundLocationSnapshotService,
-        offlineQueue: offlineSubmissionQueue,
-        routePlanId: activeRoutePlanId,
       });
-      setLocationUpdateResult(locationResult);
-      setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
-      if (locationResult.kind === 'queued' && locationResult.requiresRouteLookup === true) {
-        await markDriverAccessExpiredForRelookup();
+      setProofMediaResults((current) => ({ ...current, [currentStop.deliveryStopId]: uploadResult }));
+
+      if (shouldQueueFailedProofMediaUpload(uploadResult) && captureResult.kind === 'captured') {
+        offlineSubmissionQueue?.enqueueProofMediaUpload({
+          deliveryStopId: currentStop.deliveryStopId,
+          fileName: getFileNameFromUri(captureResult.uri, currentStop.deliveryStopId),
+          routePlanId: selectedRoute.id,
+          source: captureResult.source,
+          uri: captureResult.uri,
+        });
       }
+
+      setMessage(formatPhotoResult(captureResult, uploadResult));
     } finally {
-      setIsRecordingLocationUpdate(false);
+      setIsCapturingPhoto(false);
+      refreshOfflineQueueCount();
     }
   }
 
-  async function handleStartContinuousLocation() {
-    const effectiveDeliveryStart: DeliveryStartResult = deliveryStartResult ?? {
-      flowState: 'route_ready',
-      kind: 'permission_denied',
-      reason: 'foreground_location_denied',
-      message: 'Delivery must be active before starting continuous location updates.',
-    };
+  async function handleCompleteCurrentStop() {
+    if (currentStop === null || selectedRoute === null || deliveryStartResult === null) {
+      return;
+    }
 
-    setIsStartingContinuousLocation(true);
+    const photoResult = proofPhotoResults[currentStop.deliveryStopId];
+    if (photoResult?.kind !== 'captured') {
+      setMessage('배송완료 사진은 필수입니다. 먼저 사진을 촬영하거나 선택해 주세요.');
+      return;
+    }
+
+    setIsCompletingStop(true);
+    setMessage(null);
+
     try {
-      setContinuousLocationResult(await startContinuousLocationUpdatesAfterDeliveryStart({
-        deliveryStart: effectiveDeliveryStart,
-        routePlanId: activeRoutePlanId,
-        streamService: continuousLocationStreamService,
-      }));
+      const draft = getProofDraft(proofDrafts[currentStop.deliveryStopId]);
+      const mediaResult = proofMediaResults[currentStop.deliveryStopId];
+      const result = await recordStopProofEventAfterDeliveryStart({
+        deliveryStart: deliveryStartResult,
+        driverEventService: getDriverEventServiceForCurrentSubmission({
+          fallback: mockDriverEventService,
+          runtimeConfig,
+          submission,
+        }),
+        input: {
+          action: 'delivered',
+          deliveryStopId: currentStop.deliveryStopId,
+          media: mediaResult?.kind === 'uploaded' ? [mediaResult.media] : [],
+          note: formatStopProofNote(draft),
+          photoUris: [photoResult.uri],
+          routePlanId: selectedRoute.id,
+        },
+        offlineQueue: offlineSubmissionQueue ?? undefined,
+      });
+      setStopProofResults((current) => ({ ...current, [currentStop.deliveryStopId]: result }));
+
+      if (result.kind === 'blocked') {
+        setMessage(result.message);
+        return;
+      }
+
+      const nextCompletedStopIds = [...new Set([...completedStopIds, currentStop.deliveryStopId])];
+      setCompletedStopIds(nextCompletedStopIds);
+
+      const isLastStop = selectedRoute.stops.every((stop) => nextCompletedStopIds.includes(stop.deliveryStopId));
+      if (isLastStop) {
+        await finishRoute(selectedRoute);
+        return;
+      }
+
+      setNavigationStepIndex((index) => index + 1);
+      setScreen('navigation');
+      setMessage('배송완료가 기록됐습니다. 다음 배송지로 이동하세요.');
     } finally {
-      setIsStartingContinuousLocation(false);
+      setIsCompletingStop(false);
+      refreshOfflineQueueCount();
     }
   }
 
-  async function handleStopContinuousLocation() {
-    setIsStoppingContinuousLocation(true);
-    try {
-      setContinuousLocationResult(await stopContinuousLocationUpdates({
-        streamService: continuousLocationStreamService,
-      }));
-    } finally {
-      setIsStoppingContinuousLocation(false);
+  async function finishRoute(route: AssignedRoute) {
+    if (deliveryStartResult === null) {
+      return;
     }
-  }
 
-  async function handleFinishDelivery() {
-    const effectiveDeliveryStart: DeliveryStartResult = deliveryStartResult ?? {
-      flowState: 'route_ready',
-      kind: 'permission_denied',
-      reason: 'foreground_location_denied',
-      message: 'Delivery must be active before finishing the route.',
-    };
-
-    setIsFinishingDelivery(true);
+    setIsFinishingRoute(true);
     try {
       const finishResult = await finishDeliveryAfterActive({
-        deliveryStart: effectiveDeliveryStart,
+        deliveryStart: deliveryStartResult,
         driverEventService: getDriverEventServiceForCurrentSubmission({
-          driverEventService,
+          fallback: mockDriverEventService,
           runtimeConfig,
           submission,
         }),
-        offlineQueue: offlineSubmissionQueue,
-        routePlanId: activeRoutePlanId,
+        offlineQueue: offlineSubmissionQueue ?? undefined,
+        routePlanId: route.id,
         streamService: continuousLocationStreamService,
       });
       setDeliveryFinishResult(finishResult);
       if (finishResult.kind !== 'blocked') {
-        setContinuousLocationResult({
-          kind: 'stopped',
-          taskName: finishResult.stoppedTaskName,
-        });
+        setContinuousLocationResult({ kind: 'stopped', taskName: finishResult.stoppedTaskName });
       }
-      setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
-      if (finishResult.kind === 'queued' && finishResult.requiresRouteLookup === true) {
-        await markDriverAccessExpiredForRelookup();
-      }
+      setSelectedTab('completed');
+      setScreen('routes');
+      setMessage(finishResult.message);
     } finally {
-      setIsFinishingDelivery(false);
+      setIsFinishingRoute(false);
+      refreshOfflineQueueCount();
     }
   }
 
+  async function handleManualFinishRoute() {
+    if (selectedRoute === null) {
+      return;
+    }
 
-  function updateStopProofDraft(deliveryStopId: string, patch: Partial<StopProofDraft>) {
-    setStopProofDrafts((current) => ({
+    await finishRoute(selectedRoute);
+  }
+
+  function updateCurrentStopDraft(patch: Partial<StopProofDraft>) {
+    if (currentStop === null) {
+      return;
+    }
+
+    setProofDrafts((current) => ({
       ...current,
-      [deliveryStopId]: {
-        ...getStopProofDraft(current[deliveryStopId]),
+      [currentStop.deliveryStopId]: {
+        ...getProofDraft(current[currentStop.deliveryStopId]),
         ...patch,
       },
     }));
   }
 
-  async function handleCaptureStopProofPhoto(stop: AssignedRouteStop, source: ProofPhotoCaptureSource) {
-    const captureKey = `${stop.deliveryStopId}:${source}`;
-    setCapturingProofPhotoId(captureKey);
-    try {
-      const result = await captureProofPhoto({
-        captureService: proofPhotoCaptureService,
-        source,
-      });
-      setProofPhotoCaptureResults((current) => ({ ...current, [stop.deliveryStopId]: result }));
-      if (result.kind === 'captured') {
-        updateStopProofDraft(stop.deliveryStopId, { photoUri: result.uri });
-      }
-      setUploadingProofMediaId(stop.deliveryStopId);
-      const uploadRequest = {
-        deliveryStopId: stop.deliveryStopId,
-        fileName: getFileNameFromUri(result.kind === 'captured' ? result.uri : '', stop.deliveryStopId),
-        routePlanId: activeRoutePlanId ?? '',
-      };
-      const uploadResult = await uploadCapturedProofPhoto({
-        captureResult: result,
-        uploadRequest,
-        uploadService: getProofMediaUploadServiceForCurrentSubmission({
-          proofMediaUploadService,
-          runtimeConfig,
-          submission,
-        }),
-      });
-      if (shouldQueueFailedProofMediaUpload(uploadResult) && result.kind === 'captured') {
-        offlineSubmissionQueue.enqueueProofMediaUpload({
-          ...uploadRequest,
-          source: result.source,
-          uri: result.uri,
-        });
-        setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
-      }
-      if (uploadResult.kind === 'upload_failed' && uploadResult.reason === 'driver_access_expired') {
-        await markDriverAccessExpiredForRelookup();
-      }
-      setProofMediaUploadResults((current) => ({ ...current, [stop.deliveryStopId]: uploadResult }));
-    } finally {
-      setCapturingProofPhotoId(null);
-      setUploadingProofMediaId(null);
-    }
-  }
-
-  async function handleCaptureStopProofSignature(stop: AssignedRouteStop) {
-    setCapturingProofSignatureId(stop.deliveryStopId);
-    try {
-      const draft = getStopProofDraft(stopProofDrafts[stop.deliveryStopId]);
-      const result = await captureProofSignature({
-        captureService: {
-          captureSignature: async () => ({
-            kind: 'captured',
-            signerName: draft.signerName,
-            strokes: [Array.from({ length: draft.signaturePointCount }, (_value, index) => ({ x: index, y: index }))],
-          }),
-        },
-      });
-      setProofSignatureCaptureResults((current) => ({ ...current, [stop.deliveryStopId]: result }));
-    } finally {
-      setCapturingProofSignatureId(null);
-    }
-  }
-
-  async function handleCaptureStopProofBarcode(stop: AssignedRouteStop) {
-    setCapturingProofBarcodeId(stop.deliveryStopId);
-    try {
-      const result = await captureProofBarcode({ barcodeService: proofBarcodeCaptureService });
-      setProofBarcodeCaptureResults((current) => ({ ...current, [stop.deliveryStopId]: result }));
-    } finally {
-      setCapturingProofBarcodeId(null);
-    }
-  }
-
-  async function handleOpenStopNavigation(stop: AssignedRouteStop) {
-    setOpeningStopNavigationId(stop.deliveryStopId);
-    try {
-      const result = await openStopNavigation({
-        linking: Linking,
-        platform: Platform.OS,
-        stop,
-      });
-      setStopNavigationResults((current) => ({ ...current, [stop.deliveryStopId]: result }));
-    } finally {
-      setOpeningStopNavigationId(null);
-    }
-  }
-
-  async function handleRecordStopProof(stop: AssignedRouteStop, action: StopProofAction) {
-    const effectiveDeliveryStart: DeliveryStartResult = deliveryStartResult ?? {
-      flowState: 'route_ready',
-      kind: 'permission_denied',
-      reason: 'foreground_location_denied',
-      message: 'Delivery must be active before recording stop proof.',
-    };
-    const proofKey = `${stop.deliveryStopId}:${action}`;
-    const draft = getStopProofDraft(stopProofDrafts[stop.deliveryStopId]);
-
-    setRecordingStopProofId(proofKey);
-    try {
-      const result = await recordStopProofEventAfterDeliveryStart({
-        deliveryStart: effectiveDeliveryStart,
-        driverEventService: getDriverEventServiceForCurrentSubmission({
-          driverEventService,
-          runtimeConfig,
-          submission,
-        }),
-        input: {
-          action,
-          barcodes: getScannedProofBarcodes(proofBarcodeCaptureResults[stop.deliveryStopId]),
-          deliveryStopId: stop.deliveryStopId,
-          media: getUploadedProofMedia(proofMediaUploadResults[stop.deliveryStopId]),
-          note: draft.note,
-          reason: action === 'failed' ? draft.failureReason : undefined,
-          routePlanId: activeRoutePlanId ?? '',
-          signatures: getCapturedProofSignatures(proofSignatureCaptureResults[stop.deliveryStopId]),
-        },
-        offlineQueue: offlineSubmissionQueue,
-      });
-      setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
-      if (result.kind === 'queued' && result.requiresRouteLookup === true) {
-        await markDriverAccessExpiredForRelookup();
-      }
-      setStopProofResults((current) => ({ ...current, [proofKey]: result }));
-    } finally {
-      setRecordingStopProofId(null);
-    }
-  }
-
-  async function handleRetryOfflineQueue() {
-    setIsRetryingOfflineQueue(true);
-    try {
-      const result = await retryOfflineSubmissions({
-        driverEventService: getDriverEventServiceForCurrentSubmission({
-          driverEventService,
-          runtimeConfig,
-          submission,
-        }),
-        proofMediaUploadService: getProofMediaUploadServiceForCurrentSubmission({
-          proofMediaUploadService,
-          runtimeConfig,
-          submission,
-        }),
-        queue: offlineSubmissionQueue,
-      });
-      setOfflineQueueRetryResult(result);
-      setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
-      if (result.requiresRouteLookup === true) {
-        await markDriverAccessExpiredForRelookup();
-      }
-    } finally {
-      setIsRetryingOfflineQueue(false);
-    }
-  }
-
-  async function handleResetDriverSession() {
-    setIsResettingSession(true);
-    try {
-      registerContinuousLocationTaskHandler(null);
-      await stopContinuousLocationUpdates({ streamService: continuousLocationStreamService });
-      const result = await resetDriverSession({
-        driverAccessTokenStore,
-        offlineQueue: offlineSubmissionQueue,
-      });
-
-      setRouteContext('');
-      setPhoneE164('');
-      setSubmission(null);
-      setConsentSubmission(null);
-      setAssignedRouteSubmission(null);
-      setDeliveryStartResult(null);
-      setDeliveryFinishResult(null);
-      setRouteStartedEventResult(null);
-      setLocationUpdateResult(null);
-      setContinuousLocationResult(null);
-      setStopProofResults({});
-      setStopNavigationResults({});
-      setStopProofDrafts({});
-      setProofPhotoCaptureResults({});
-      setProofMediaUploadResults({});
-      setProofSignatureCaptureResults({});
-      setProofBarcodeCaptureResults({});
-      setOfflineQueueRetryResult(null);
-      setOfflineQueueCount(offlineSubmissionQueue.listPending().length);
-      setDriverAccessRestoreStatus('missing');
-      setSessionResetResult(result);
-    } finally {
-      setIsResettingSession(false);
-    }
-  }
-
-  async function markDriverAccessExpiredForRelookup() {
+  function resetRouteProgress() {
     registerContinuousLocationTaskHandler(null);
-    try {
-      await stopContinuousLocationUpdates({ streamService: continuousLocationStreamService });
-    } catch {
-      // Session recovery must still clear stale driver access even if OS tracking is already stopped.
-    }
-    await driverAccessTokenStore.clear();
-    setSubmission(null);
+    setRouteSessions([]);
     setConsentSubmission(null);
-    setAssignedRouteSubmission(null);
     setDeliveryStartResult(null);
     setDeliveryFinishResult(null);
     setRouteStartedEventResult(null);
-    setLocationUpdateResult(null);
     setContinuousLocationResult(null);
     setStopProofResults({});
+    setProofDrafts({});
+    setProofPhotoResults({});
+    setProofMediaResults({});
     setStopNavigationResults({});
-    setStopProofDrafts({});
-    setProofPhotoCaptureResults({});
-    setProofMediaUploadResults({});
-    setProofSignatureCaptureResults({});
-    setProofBarcodeCaptureResults({});
-    setOfflineQueueRetryResult(null);
-    setSessionResetResult(null);
-    setDriverAccessRestoreStatus('expired');
+    setCompletedStopIds([]);
+    setNavigationStepIndex(COMPANY_STEP_INDEX);
+    setSelectedRouteId(null);
+  }
+
+  function refreshOfflineQueueCount() {
+    setOfflineQueueCount(offlineSubmissionQueue?.listPending().length ?? 0);
   }
 
   return (
@@ -794,333 +591,427 @@ export default function App() {
       <StatusBar style="dark" />
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.header}>
-          <Text style={styles.eyebrow}>Clever Driver MVP</Text>
-          <Text style={styles.title}>Route + phone access</Text>
-          <Text style={styles.subtitle}>
-            Enter the company route context and E.164 phone number. The app shows company
-            guidance before consent, and never reveals stop/customer data in this step.
-          </Text>
+          <Text style={styles.kicker}>Clever Driver</Text>
+          <Text style={styles.title}>{getScreenTitle(screen)}</Text>
+          <Text style={styles.subtitle}>배송원용 MVP: 전화번호 확인, 라우트 선택, 순서 배송, 도착지 증빙.</Text>
         </View>
 
-        <FlowProgress currentState={currentFlowState} />
+        <ProgressSteps activeScreen={screen} />
 
-        <View style={styles.guardPanel}>
-          <Text style={styles.sectionTitle}>Runtime API mode</Text>
-          <GuardRow
-            label="Delivery server"
-            value={runtimeConfig.mode === 'live' ? runtimeConfig.deliveryServerBaseUrl : 'local mock services'}
-          />
-          <GuardRow label="Secure driver token" value={formatDriverAccessRestoreStatus(driverAccessRestoreStatus)} />
-          <GuardRow label="Offline queue storage" value={formatOfflineQueueRestoreStatus(offlineQueueRestoreStatus)} />
-          <GuardRow label="Offline queue" value={`${offlineQueueCount} pending submission${offlineQueueCount === 1 ? '' : 's'}`} />
-          {offlineQueueRetryResult !== null ? (
-            <Text style={offlineQueueRetryResult.failed === 0 ? styles.deliveryStartSuccessText : styles.routeWarningText}>
-              {formatOfflineQueueRetryResult(offlineQueueRetryResult)}
-            </Text>
-          ) : null}
-          {sessionResetResult !== null ? (
-            <Text style={styles.deliveryStartSuccessText}>{formatDriverSessionResetResult(sessionResetResult)}</Text>
-          ) : null}
-          <Pressable
-            accessibilityRole="button"
-            disabled={isRetryingOfflineQueue || offlineQueueCount === 0}
-            onPress={handleRetryOfflineQueue}
-            style={[styles.secondaryButton, (isRetryingOfflineQueue || offlineQueueCount === 0) && styles.buttonDisabled]}
-          >
-            {isRetryingOfflineQueue ? (
-              <ActivityIndicator color="#0f172a" />
-            ) : (
-              <Text style={styles.secondaryButtonText}>Retry queued submissions</Text>
-            )}
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            disabled={isResettingSession}
-            onPress={handleResetDriverSession}
-            style={[styles.stopActionDangerButton, isResettingSession && styles.buttonDisabled]}
-          >
-            <Text style={styles.stopActionButtonText}>
-              {isResettingSession ? 'Resetting…' : 'Reset driver session'}
-            </Text>
-          </Pressable>
-        </View>
+        {message !== null ? <Text style={styles.message}>{message}</Text> : null}
 
-        <View style={styles.cardLight}>
-          <Text style={styles.sectionTitle}>Access lookup</Text>
-          <LabeledInput
-            label="Route context"
-            onChangeText={setRouteContext}
-            placeholder="Route link/code or RoutePlan UUID"
-            value={routeContext}
+        {screen === 'login' ? (
+          <LoginScreen
+            acceptedLocation={acceptedLocation}
+            acceptedPrivacy={acceptedPrivacy}
+            driverName={driverName}
+            isLoggingIn={isLoggingIn}
+            onAcceptedLocationChange={setAcceptedLocation}
+            onAcceptedPrivacyChange={setAcceptedPrivacy}
+            onDriverNameChange={setDriverName}
+            onPhoneChange={setPhoneE164}
+            onSubmit={handleLoginAndLoadRoutes}
+            phoneE164={phoneE164}
           />
-          <LabeledInput
-            keyboardType="phone-pad"
-            label="Driver phone (E.164)"
-            onChangeText={setPhoneE164}
-            placeholder="+14165550123"
-            value={phoneE164}
-          />
-          <MockModePicker mockMode={mockMode} setMockMode={setMockMode} />
-          <ProofMediaMockModePicker
-            proofMediaMockMode={proofMediaMockMode}
-            setProofMediaMockMode={setProofMediaMockMode}
-          />
-          <Pressable accessibilityRole="button" onPress={handleLookup} style={styles.primaryButton}>
-            {isSubmitting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>Look up assignment</Text>}
-          </Pressable>
-        </View>
+        ) : null}
 
-        {submission === null ? (
-          <EmptyStateCard />
-        ) : (
-          <RouteAccessResultCard
-            assignedRouteMockMode={assignedRouteMockMode}
-            assignedRouteResult={assignedRouteSubmission}
-            consentMockMode={consentMockMode}
-            consentResult={consentSubmission}
-            deliveryStartResult={deliveryStartResult}
-            deliveryFinishResult={deliveryFinishResult}
+        {screen === 'routes' ? (
+          <RouteListScreen
+            driverName={driverName}
+            isStartingRoute={isStartingRoute}
+            onOpenRouteDetail={handleOpenRouteDetail}
+            onSelectTab={setSelectedTab}
+            onStartRoute={handleStartRoute}
+            routeSessions={routeSessions}
+            routeStatus={routeStatus}
+            selectedRouteId={selectedRouteId}
+            selectedTab={selectedTab}
+            tabs={routeTabs}
+          />
+        ) : null}
+
+        {screen === 'routeDetail' && selectedRoute !== null ? (
+          <RouteDetailScreen
+            allStopsCompleted={allStopsCompleted}
+            company={currentCompany}
+            completedStopIds={completedStopIds}
             continuousLocationResult={continuousLocationResult}
-            isFinishingDelivery={isFinishingDelivery}
-            isLoadingAssignedRoute={isLoadingAssignedRoute}
-            isRecordingConsent={isRecordingConsent}
-            isRecordingLocationUpdate={isRecordingLocationUpdate}
-            isStartingContinuousLocation={isStartingContinuousLocation}
-            isRecordingRouteStarted={isRecordingRouteStarted}
-            isStartingDelivery={isStartingDelivery}
-            isStoppingContinuousLocation={isStoppingContinuousLocation}
-            locationUpdateResult={locationUpdateResult}
-            onLoadAssignedRoute={handleLoadAssignedRoute}
-            onRecordConsent={handleRecordConsent}
-            onRecordLocationUpdate={handleRecordLocationUpdate}
-            onStartContinuousLocation={handleStartContinuousLocation}
-            onStartDelivery={handleStartDelivery}
-            onStopContinuousLocation={handleStopContinuousLocation}
-            onFinishDelivery={handleFinishDelivery}
-            onCaptureStopProofBarcode={handleCaptureStopProofBarcode}
-            onCaptureStopProofPhoto={handleCaptureStopProofPhoto}
-            onCaptureStopProofSignature={handleCaptureStopProofSignature}
-            onRecordStopProof={handleRecordStopProof}
-            onOpenStopNavigation={handleOpenStopNavigation}
-            proofBarcodeCaptureResults={proofBarcodeCaptureResults}
-            proofMediaUploadResults={proofMediaUploadResults}
-            proofPhotoCaptureResults={proofPhotoCaptureResults}
-            proofSignatureCaptureResults={proofSignatureCaptureResults}
-            capturingProofBarcodeId={capturingProofBarcodeId}
-            capturingProofPhotoId={capturingProofPhotoId}
-            capturingProofSignatureId={capturingProofSignatureId}
-            uploadingProofMediaId={uploadingProofMediaId}
-            openingStopNavigationId={openingStopNavigationId}
-            result={submission}
-            recordingStopProofId={recordingStopProofId}
+            deliveryFinishResult={deliveryFinishResult}
+            isFinishingRoute={isFinishingRoute}
+            isStartingRoute={isStartingRoute}
+            onBack={() => setScreen('routes')}
+            onFinishRoute={handleManualFinishRoute}
+            onStartRoute={() => handleStartRoute(selectedRoute.id)}
+            route={selectedRoute}
             routeStartedEventResult={routeStartedEventResult}
-            stopProofDrafts={stopProofDrafts}
-            stopNavigationResults={stopNavigationResults}
-            stopProofResults={stopProofResults}
-            onUpdateStopProofDraft={updateStopProofDraft}
-            setAssignedRouteMockMode={setAssignedRouteMockMode}
-            setConsentMockMode={setConsentMockMode}
+            routeStatus={routeStatus}
           />
-        )}
+        ) : null}
 
-        <View style={styles.guardPanel}>
-          <Text style={styles.sectionTitle}>Current guard snapshot</Text>
-          <GuardRow label="Current flow state" value={currentFlowState} />
-          <GuardRow label="Route details visible" value={canRevealRoute ? 'yes' : 'blocked until consent'} />
-          <GuardRow label="Foreground location" value={formatForegroundLocationStatus(deliveryStartResult)} />
-          <GuardRow label="Delivery active allowed" value={formatDeliveryActiveGuard(currentFlowState, canStartDelivery)} />
+        {screen === 'navigation' && selectedRoute !== null ? (
+          <NavigationScreen
+            company={currentCompany}
+            currentStepIndex={navigationStepIndex}
+            isCompanyStep={isCompanyStep}
+            isOpeningNavigation={isOpeningNavigation}
+            onAnnounceTip={handleAnnounceCurrentTip}
+            onArrived={handleArrivedAtStep}
+            onBackToRoute={() => setScreen('routeDetail')}
+            onOpenNavigation={handleOpenCurrentNavigation}
+            route={selectedRoute}
+            stop={currentStop}
+            navigationResult={currentStop === null ? undefined : stopNavigationResults[currentStop.deliveryStopId]}
+          />
+        ) : null}
+
+        {screen === 'stopProof' && currentStop !== null ? (
+          <StopProofScreen
+            draft={getProofDraft(proofDrafts[currentStop.deliveryStopId])}
+            isCapturingPhoto={isCapturingPhoto}
+            isCompletingStop={isCompletingStop || isFinishingRoute}
+            onBack={() => setScreen('navigation')}
+            onCapturePhoto={handleCapturePhoto}
+            onCompleteStop={handleCompleteCurrentStop}
+            onDraftChange={updateCurrentStopDraft}
+            photoResult={proofPhotoResults[currentStop.deliveryStopId]}
+            proofResult={stopProofResults[currentStop.deliveryStopId]}
+            mediaResult={proofMediaResults[currentStop.deliveryStopId]}
+            stop={currentStop}
+          />
+        ) : null}
+
+        <View style={styles.footerCard}>
+          <Text style={styles.footerTitle}>상태</Text>
+          <InfoRow label="API" value={runtimeConfig.mode === 'live' ? runtimeConfig.deliveryServerBaseUrl : 'local mock'} />
+          <InfoRow label="오프라인 큐" value={`${offlineQueueCount}건`} />
+          <InfoRow label="현재 탭" value={selectedTab} />
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-
-
-function formatForegroundLocationStatus(deliveryStartResult: DeliveryStartResult | null): string {
-  if (deliveryStartResult?.kind === 'delivery_active') {
-    return 'granted for active delivery';
-  }
-
-  if (deliveryStartResult?.kind === 'permission_denied') {
-    return 'denied; retry or open system settings';
-  }
-
-  return 'not requested before delivery start';
+function LoginScreen({
+  acceptedLocation,
+  acceptedPrivacy,
+  driverName,
+  isLoggingIn,
+  onAcceptedLocationChange,
+  onAcceptedPrivacyChange,
+  onDriverNameChange,
+  onPhoneChange,
+  onSubmit,
+  phoneE164,
+}: {
+  acceptedLocation: boolean;
+  acceptedPrivacy: boolean;
+  driverName: string;
+  isLoggingIn: boolean;
+  onAcceptedLocationChange(value: boolean): void;
+  onAcceptedPrivacyChange(value: boolean): void;
+  onDriverNameChange(value: string): void;
+  onPhoneChange(value: string): void;
+  onSubmit(): void;
+  phoneE164: string;
+}) {
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>로그인</Text>
+      <Text style={styles.bodyText}>서버에 등록된 전화번호로 배정된 라우트를 확인합니다.</Text>
+      <LabeledInput keyboardType="phone-pad" label="전화번호" onChangeText={onPhoneChange} placeholder="+821012345678" value={phoneE164} />
+      <LabeledInput label="이름" onChangeText={onDriverNameChange} placeholder="배송원 이름" value={driverName} />
+      <ConsentRow label="개인정보활용에 동의합니다" onValueChange={onAcceptedPrivacyChange} value={acceptedPrivacy} />
+      <ConsentRow label="위치기반서비스에 동의합니다" onValueChange={onAcceptedLocationChange} value={acceptedLocation} />
+      <PrimaryButton disabled={isLoggingIn} label="전화번호 확인" loading={isLoggingIn} onPress={onSubmit} />
+    </View>
+  );
 }
 
-function formatDeliveryActiveGuard(currentFlowState: DriverFlowState, canStartDelivery: boolean): string {
-  if (currentFlowState === 'delivery_finished') {
-    return 'finished; tracking stopped';
-  }
-
-  if (currentFlowState === 'delivery_active') {
-    return 'active';
-  }
-
-  return canStartDelivery ? 'ready to start' : 'requires route_ready + foreground permission';
+function RouteListScreen({
+  driverName,
+  isStartingRoute,
+  onOpenRouteDetail,
+  onSelectTab,
+  onStartRoute,
+  routeSessions,
+  routeStatus,
+  selectedRouteId,
+  selectedTab,
+  tabs,
+}: {
+  driverName: string;
+  isStartingRoute: boolean;
+  onOpenRouteDetail(routeId: string): void;
+  onSelectTab(tab: RouteTabId): void;
+  onStartRoute(routeId: string): void;
+  routeSessions: RouteSession[];
+  routeStatus: RouteStatus;
+  selectedRouteId: string | null;
+  selectedTab: RouteTabId;
+  tabs: ReturnType<typeof getMvpRouteTabs>;
+}) {
+  const visibleRouteSessions = routeSessions.filter((session) => getRouteSessionStatus(session.route.id, selectedRouteId, routeStatus) === selectedTab);
+  return (
+    <View>
+      <Text style={styles.sectionHeading}>{driverName}님의 라우트</Text>
+      <View style={styles.tabs}>
+        {tabs.map((tab) => (
+          <Pressable
+            accessibilityRole="button"
+            key={tab.id}
+            onPress={() => onSelectTab(tab.id)}
+            style={[styles.tab, selectedTab === tab.id && styles.tabActive]}
+          >
+            <Text style={[styles.tabText, selectedTab === tab.id && styles.tabTextActive]}>{tab.label}</Text>
+          </Pressable>
+        ))}
+      </View>
+      {visibleRouteSessions.length > 0 ? (
+        visibleRouteSessions.map((session) => {
+          const sessionStatus = getRouteSessionStatus(session.route.id, selectedRouteId, routeStatus);
+          return (
+            <View key={session.route.id} style={styles.card}>
+              <View style={styles.cardHeaderRow}>
+                <Text style={styles.cardTitle}>{session.route.name}</Text>
+                <Text style={styles.badge}>{formatRouteStatus(sessionStatus)}</Text>
+              </View>
+              <InfoRow label="회사" value={session.companyGuidance.companyDisplayName} />
+              <InfoRow label="날짜" value={session.route.deliveryDate} />
+              <InfoRow label="지역" value={getRouteRegion(session.route)} />
+              <InfoRow label="경로" value={`${session.route.stops.length}개 배송지`} />
+              {selectedRouteId === session.route.id ? <Text style={styles.successText}>선택된 라우트입니다.</Text> : null}
+              {sessionStatus === 'active' ? (
+                <PrimaryButton label="배송 계속하기" onPress={() => onOpenRouteDetail(session.route.id)} />
+              ) : sessionStatus === 'completed' ? (
+                <PrimaryButton label="완료 내역 보기" onPress={() => onOpenRouteDetail(session.route.id)} />
+              ) : (
+                <View style={styles.buttonRow}>
+                  <SecondaryButton label="상세 보기" onPress={() => onOpenRouteDetail(session.route.id)} />
+                  <PrimaryButton disabled={isStartingRoute} label="배송 시작" loading={isStartingRoute} onPress={() => onStartRoute(session.route.id)} />
+                </View>
+              )}
+            </View>
+          );
+        })
+      ) : (
+        <View style={styles.emptyCard}>
+          <Text style={styles.emptyTitle}>표시할 라우트가 없습니다</Text>
+          <Text style={styles.bodyText}>배정된 라우트가 없거나 다른 탭에서 확인할 수 있습니다.</Text>
+        </View>
+      )}
+    </View>
+  );
 }
 
-function formatOfflineQueueRetryResult(result: OfflineSubmissionRetryResult): string {
-  return `Offline retry: ${result.succeeded}/${result.retried} synced, ${result.discarded} discarded by policy, ${result.failed} still pending.`;
+function RouteDetailScreen({
+  allStopsCompleted,
+  company,
+  completedStopIds,
+  continuousLocationResult,
+  deliveryFinishResult,
+  isFinishingRoute,
+  isStartingRoute,
+  onBack,
+  onFinishRoute,
+  onStartRoute,
+  route,
+  routeStartedEventResult,
+  routeStatus,
+}: {
+  allStopsCompleted: boolean;
+  company: RouteAccessCompanyGuidance | null;
+  completedStopIds: string[];
+  continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
+  deliveryFinishResult: DeliveryFinishResult | null;
+  isFinishingRoute: boolean;
+  isStartingRoute: boolean;
+  onBack(): void;
+  onFinishRoute(): void;
+  onStartRoute(): void;
+  route: AssignedRoute;
+  routeStartedEventResult: RouteStartedRecordResult | null;
+  routeStatus: RouteStatus;
+}) {
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>라우트 상세</Text>
+      <InfoRow label="회사" value={company?.companyDisplayName ?? route.shopDomain} />
+      <InfoRow label="회사 도메인" value={route.shopDomain} />
+      <InfoRow label="날짜" value={route.deliveryDate} />
+      <InfoRow label="지역" value={getRouteRegion(route)} />
+      <InfoRow label="상태" value={formatRouteStatus(routeStatus)} />
+      {company?.pickupGuidance !== null && company?.pickupGuidance !== undefined ? (
+        <Text style={styles.tipText}>회사 안내: {company.pickupGuidance}</Text>
+      ) : null}
+      {company?.driverInstructions.map((instruction) => <Text key={instruction} style={styles.tipText}>• {instruction}</Text>)}
+      <View style={styles.stopList}>
+        <Text style={styles.subheading}>정해진 순서</Text>
+        <RouteStepRow done={routeStatus !== 'upcoming'} label="회사" meta="픽업/회사 안내 확인" />
+        {route.stops.map((stop) => (
+          <RouteStepRow
+            done={completedStopIds.includes(stop.deliveryStopId)}
+            key={stop.deliveryStopId}
+            label={`${stop.sequence}. ${stop.orderName}`}
+            meta={formatStopAddress(stop)}
+          />
+        ))}
+      </View>
+      {routeStartedEventResult?.kind === 'recorded' ? <Text style={styles.successText}>배송 시작 이벤트 기록됨</Text> : null}
+      {continuousLocationResult !== null ? <Text style={styles.successText}>{formatContinuousLocationResult(continuousLocationResult)}</Text> : null}
+      {deliveryFinishResult?.flowState === 'delivery_finished' ? <Text style={styles.successText}>{deliveryFinishResult.message}</Text> : null}
+      <View style={styles.buttonRow}>
+        <SecondaryButton label="목록" onPress={onBack} />
+        {routeStatus === 'upcoming' ? (
+          <PrimaryButton disabled={isStartingRoute} label="배송 시작" loading={isStartingRoute} onPress={onStartRoute} />
+        ) : routeStatus === 'active' && allStopsCompleted ? (
+          <PrimaryButton disabled={isFinishingRoute} label="라우트 완료" loading={isFinishingRoute} onPress={onFinishRoute} />
+        ) : null}
+      </View>
+    </View>
+  );
 }
 
-function formatDriverSessionResetResult(result: DriverSessionResetResult): string {
-  return `Driver session reset: secure access cleared, ${result.clearedOfflineSubmissions} queued submission${result.clearedOfflineSubmissions === 1 ? '' : 's'} cleared.`;
+function NavigationScreen({
+  company,
+  currentStepIndex,
+  isCompanyStep,
+  isOpeningNavigation,
+  navigationResult,
+  onAnnounceTip,
+  onArrived,
+  onBackToRoute,
+  onOpenNavigation,
+  route,
+  stop,
+}: {
+  company: RouteAccessCompanyGuidance | null;
+  currentStepIndex: number;
+  isCompanyStep: boolean;
+  isOpeningNavigation: boolean;
+  navigationResult?: StopNavigationResult;
+  onAnnounceTip(): void;
+  onArrived(): void;
+  onBackToRoute(): void;
+  onOpenNavigation(): void;
+  route: AssignedRoute;
+  stop: AssignedRouteStop | null;
+}) {
+  const totalSteps = route.stops.length + 1;
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>내비게이션</Text>
+      <Text style={styles.badge}>순서 {currentStepIndex + 1} / {totalSteps}</Text>
+      {isCompanyStep ? (
+        <View>
+          <Text style={styles.destinationTitle}>회사: {company?.companyDisplayName ?? route.shopDomain}</Text>
+          <Text style={styles.bodyText}>{company?.pickupGuidance ?? '회사 픽업 안내를 확인하세요.'}</Text>
+        </View>
+      ) : stop !== null ? (
+        <View>
+          <Text style={styles.destinationTitle}>{stop.sequence}. {stop.orderName}</Text>
+          <Text style={styles.bodyText}>{stop.recipientName ?? '수령인 정보 없음'}</Text>
+          <Text style={styles.bodyText}>{formatStopAddress(stop)}</Text>
+          {navigationResult !== undefined ? <Text style={styles.successText}>{navigationResult.message}</Text> : null}
+        </View>
+      ) : null}
+      <Text style={styles.tipText}>지역 팁: {getNavigationTip({ company, isCompanyStep, stop })}</Text>
+      <View style={styles.buttonColumn}>
+        <SecondaryButton label="지역 팁 음성 안내" onPress={onAnnounceTip} />
+        {!isCompanyStep ? <SecondaryButton disabled={isOpeningNavigation} label="내비게이션 열기" loading={isOpeningNavigation} onPress={onOpenNavigation} /> : null}
+        <PrimaryButton label={isCompanyStep ? '회사 확인, 다음 배송지' : '도착, 증빙하기'} onPress={onArrived} />
+        <SecondaryButton label="라우트 상세" onPress={onBackToRoute} />
+      </View>
+    </View>
+  );
 }
 
-function formatOfflineQueueRestoreStatus(status: OfflineQueueRestoreStatus): string {
-  switch (status) {
-    case 'failed':
-      return 'durable queue unavailable; using session memory';
-    case 'loading':
-      return 'loading durable queue';
-    case 'ready':
-      return 'durable queue ready';
-  }
+function StopProofScreen({
+  draft,
+  isCapturingPhoto,
+  isCompletingStop,
+  mediaResult,
+  onBack,
+  onCapturePhoto,
+  onCompleteStop,
+  onDraftChange,
+  photoResult,
+  proofResult,
+  stop,
+}: {
+  draft: StopProofDraft;
+  isCapturingPhoto: boolean;
+  isCompletingStop: boolean;
+  mediaResult?: ProofMediaUploadResult;
+  onBack(): void;
+  onCapturePhoto(source: ProofPhotoCaptureSource): void;
+  onCompleteStop(): void;
+  onDraftChange(patch: Partial<StopProofDraft>): void;
+  photoResult?: ProofPhotoCaptureResult;
+  proofResult?: StopProofEventResult;
+  stop: AssignedRouteStop;
+}) {
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>도착지 배송완료 증빙</Text>
+      <Text style={styles.destinationTitle}>{stop.sequence}. {stop.orderName}</Text>
+      <Text style={styles.bodyText}>{formatStopAddress(stop)}</Text>
+      <Text style={styles.requiredText}>필수: 배송완료 사진</Text>
+      <View style={styles.buttonRow}>
+        <SecondaryButton disabled={isCapturingPhoto} label="사진 촬영" loading={isCapturingPhoto} onPress={() => onCapturePhoto('camera')} />
+        <SecondaryButton disabled={isCapturingPhoto} label="앨범 선택" loading={isCapturingPhoto} onPress={() => onCapturePhoto('library')} />
+      </View>
+      {photoResult !== undefined ? <Text style={photoResult.kind === 'captured' ? styles.successText : styles.warningText}>{formatPhotoCaptureResult(photoResult)}</Text> : null}
+      {mediaResult !== undefined ? <Text style={mediaResult.kind === 'uploaded' ? styles.successText : styles.warningText}>{formatMediaUploadResult(mediaResult)}</Text> : null}
+      <LabeledInput
+        label="금일 배송시 특이사항 (선택)"
+        multiline
+        onChangeText={(value) => onDraftChange({ todayNote: value })}
+        placeholder="예: 고객 부재, 경비실 전달 등"
+        value={draft.todayNote}
+      />
+      <LabeledInput
+        label="배송지의 특성 팁 (선택)"
+        multiline
+        onChangeText={(value) => onDraftChange({ locationTip: value })}
+        placeholder="예: 후문 이용, 주차 위치, 엘리베이터 위치 등"
+        value={draft.locationTip}
+      />
+      {proofResult !== undefined ? <Text style={proofResult.kind === 'recorded' ? styles.successText : styles.warningText}>{formatStopProofResult(proofResult)}</Text> : null}
+      <View style={styles.buttonColumn}>
+        <PrimaryButton disabled={isCompletingStop} label="배송완료 기록" loading={isCompletingStop} onPress={onCompleteStop} />
+        <SecondaryButton label="내비게이션으로 돌아가기" onPress={onBack} />
+      </View>
+    </View>
+  );
 }
 
-function toInvitedRouteAccess(
-  result: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>,
-): Extract<RouteAccessLookupResult, { status: 'INVITED' }> {
-  return {
-    status: 'INVITED',
-    companyGuidance: result.companyGuidance,
-    driverAccess: result.driverAccess,
-    routeAccess: result.routeAccess,
-  };
-}
-
-function getDriverConsentServiceForCurrentSubmission(input: {
-  driverConsentService: DriverConsentService;
-  runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
-  submission: RouteAccessSubmissionResult | null;
-}): DriverConsentService {
-  if (input.runtimeConfig.mode !== 'live' || input.submission?.kind !== 'company_guidance') {
-    return input.driverConsentService;
-  }
-
-  return createDriverApiClientsFromRouteAccess({
-    baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
-    routeAccess: toInvitedRouteAccess(input.submission),
-  }).driverConsentService;
-}
-
-function getAssignedRouteServiceForCurrentSubmission(input: {
-  assignedRouteService: AssignedRouteService;
-  runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
-  submission: RouteAccessSubmissionResult | null;
-}): AssignedRouteService {
-  if (input.runtimeConfig.mode !== 'live' || input.submission?.kind !== 'company_guidance') {
-    return input.assignedRouteService;
-  }
-
-  return createDriverApiClientsFromRouteAccess({
-    baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
-    routeAccess: toInvitedRouteAccess(input.submission),
-  }).assignedRouteService;
-}
-
-
-function getDriverEventServiceForCurrentSubmission(input: {
-  driverEventService: DriverEventService;
-  runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
-  submission: RouteAccessSubmissionResult | null;
-}): DriverEventService {
-  if (input.runtimeConfig.mode !== 'live' || input.submission?.kind !== 'company_guidance') {
-    return input.driverEventService;
-  }
-
-  return createDriverApiClientsFromRouteAccess({
-    baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
-    routeAccess: toInvitedRouteAccess(input.submission),
-  }).driverEventService;
-}
-
-function getProofMediaUploadServiceForCurrentSubmission(input: {
-  proofMediaUploadService: ProofMediaUploadService;
-  runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
-  submission: RouteAccessSubmissionResult | null;
-}): ProofMediaUploadService {
-  if (input.runtimeConfig.mode !== 'live' || input.submission?.kind !== 'company_guidance') {
-    return input.proofMediaUploadService;
-  }
-
-  return createDriverApiClientsFromRouteAccess({
-    baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
-    routeAccess: toInvitedRouteAccess(input.submission),
-  }).proofMediaUploadService;
-}
-
-function getUploadedProofMedia(result?: ProofMediaUploadResult) {
-  return result?.kind === 'uploaded' ? [result.media] : [];
-}
-
-function getCapturedProofSignatures(result?: ProofSignatureCaptureResult) {
-  return result?.kind === 'captured' ? [result.signature] : [];
-}
-
-function getScannedProofBarcodes(result?: ProofBarcodeCaptureResult) {
-  return result?.kind === 'scanned' ? [result.barcode] : [];
-}
-
-function getFileNameFromUri(uri: string, deliveryStopId: string): string {
-  const fileName = uri.split('/').pop()?.trim();
-  return fileName === undefined || fileName === '' ? `${deliveryStopId}.jpg` : fileName;
-}
-
-function formatDriverAccessRestoreStatus(status: DriverAccessRestoreResult['kind']): string {
-  switch (status) {
-    case 'active':
-      return 'active in native secure storage';
-    case 'expired':
-      return 'expired and cleared; look up assignment again';
-    case 'invalid':
-      return 'invalid and cleared';
-    case 'missing':
-      return 'no active token';
-  }
-}
-
-function getCurrentFlowState(
-  submission: RouteAccessSubmissionResult | null,
-  consentSubmission: DriverConsentSubmissionResult | null,
-  assignedRouteSubmission: AssignedRouteLoadResult | null,
-  deliveryStartResult: DeliveryStartResult | null,
-  deliveryFinishResult: DeliveryFinishResult | null,
-): DriverFlowState {
-  if (deliveryFinishResult?.flowState === 'delivery_finished') {
-    return deliveryFinishResult.flowState;
-  }
-
-  if (deliveryStartResult?.kind === 'delivery_active') {
-    return deliveryStartResult.flowState;
-  }
-
-  if (assignedRouteSubmission?.kind === 'route_ready') {
-    return assignedRouteSubmission.flowState;
-  }
-
-  if (consentSubmission !== null) {
-    return consentSubmission.flowState;
-  }
-
-  if (submission?.kind === 'company_guidance') {
-    return submission.nextState;
-  }
-
-  return 'route_context_entered';
+function ProgressSteps({ activeScreen }: { activeScreen: AppScreen }) {
+  const steps: { id: AppScreen; label: string }[] = [
+    { id: 'login', label: '로그인' },
+    { id: 'routes', label: '내용' },
+    { id: 'navigation', label: '내비게이션' },
+    { id: 'stopProof', label: '증빙' },
+  ];
+  return (
+    <View style={styles.progressRow}>
+      {steps.map((step) => (
+        <Text key={step.id} style={[styles.progressItem, step.id === activeScreen && styles.progressItemActive]}>{step.label}</Text>
+      ))}
+    </View>
+  );
 }
 
 function LabeledInput({
   keyboardType,
   label,
+  multiline,
   onChangeText,
   placeholder,
   value,
 }: {
   keyboardType?: 'default' | 'phone-pad';
   label: string;
+  multiline?: boolean;
   onChangeText(value: string): void;
   placeholder: string;
   value: string;
@@ -1132,1071 +1023,39 @@ function LabeledInput({
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType={keyboardType ?? 'default'}
+        multiline={multiline}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        style={styles.input}
+        placeholderTextColor="#94a3b8"
+        style={[styles.input, multiline === true && styles.multilineInput]}
         value={value}
       />
     </View>
   );
 }
 
-function MockModePicker({
-  mockMode,
-  setMockMode,
-}: {
-  mockMode: MockMode;
-  setMockMode(value: MockMode): void;
-}) {
-  const modes: MockMode[] = ['INVITED', 'MULTIPLE_MATCHES', 'NOT_FOUND', 'DISABLED', 'BLOCKED'];
+function ConsentRow({ label, onValueChange, value }: { label: string; onValueChange(value: boolean): void; value: boolean }) {
   return (
-    <View style={styles.mockPanel}>
-      <Text style={styles.inputLabel}>Local mock response</Text>
-      <View style={styles.chipGrid}>
-        {modes.map((mode) => (
-          <Pressable
-            accessibilityRole="button"
-            key={mode}
-            onPress={() => setMockMode(mode)}
-            style={[styles.chip, mockMode === mode && styles.chipActive]}
-          >
-            <Text style={[styles.chipText, mockMode === mode && styles.chipTextActive]}>{mode}</Text>
-          </Pressable>
-        ))}
-      </View>
+    <View style={styles.consentRow}>
+      <Text style={styles.consentText}>{label}</Text>
+      <Switch onValueChange={onValueChange} value={value} />
     </View>
   );
 }
 
-function ProofMediaMockModePicker({
-  proofMediaMockMode,
-  setProofMediaMockMode,
-}: {
-  proofMediaMockMode: ProofMediaMockMode;
-  setProofMediaMockMode(value: ProofMediaMockMode): void;
-}) {
-  const modes: ProofMediaMockMode[] = ['success', 'failure', 'scan_rejected'];
+function PrimaryButton({ disabled, label, loading, onPress }: { disabled?: boolean; label: string; loading?: boolean; onPress(): void }) {
   return (
-    <View style={styles.mockPanel}>
-      <Text style={styles.inputLabel}>Local proof media upload mock</Text>
-      <Text style={styles.helpText}>
-        Used only when the app is running with local mock services. Live delivery-server mode ignores this selector.
-      </Text>
-      <View style={styles.chipGrid}>
-        {modes.map((mode) => (
-          <Pressable
-            accessibilityRole="button"
-            key={mode}
-            onPress={() => setProofMediaMockMode(mode)}
-            style={[styles.chip, proofMediaMockMode === mode && styles.chipActive]}
-          >
-            <Text style={[styles.chipText, proofMediaMockMode === mode && styles.chipTextActive]}>{mode}</Text>
-          </Pressable>
-        ))}
-      </View>
-    </View>
+    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.primaryButton, disabled === true && styles.buttonDisabled]}>
+      {loading === true ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>{label}</Text>}
+    </Pressable>
   );
 }
 
-function RouteAccessResultCard({
-  assignedRouteMockMode,
-  assignedRouteResult,
-  consentMockMode,
-  continuousLocationResult,
-  consentResult,
-  deliveryFinishResult,
-  deliveryStartResult,
-  isFinishingDelivery,
-  isLoadingAssignedRoute,
-  isRecordingConsent,
-  isRecordingLocationUpdate,
-  isRecordingRouteStarted,
-  isStartingContinuousLocation,
-  isStartingDelivery,
-  isStoppingContinuousLocation,
-  locationUpdateResult,
-  onLoadAssignedRoute,
-  onRecordConsent,
-  onRecordLocationUpdate,
-  onCaptureStopProofBarcode,
-  onCaptureStopProofPhoto,
-  onCaptureStopProofSignature,
-  onStartContinuousLocation,
-  onStartDelivery,
-  onStopContinuousLocation,
-  onFinishDelivery,
-  onRecordStopProof,
-  onOpenStopNavigation,
-  proofBarcodeCaptureResults,
-  proofMediaUploadResults,
-  proofPhotoCaptureResults,
-  proofSignatureCaptureResults,
-  capturingProofBarcodeId,
-  capturingProofPhotoId,
-  capturingProofSignatureId,
-  uploadingProofMediaId,
-  openingStopNavigationId,
-  result,
-  recordingStopProofId,
-  routeStartedEventResult,
-  stopProofDrafts,
-  stopNavigationResults,
-  stopProofResults,
-  onUpdateStopProofDraft,
-  setAssignedRouteMockMode,
-  setConsentMockMode,
-}: {
-  assignedRouteMockMode: AssignedRouteMockMode;
-  assignedRouteResult: AssignedRouteLoadResult | null;
-  consentMockMode: ConsentMockMode;
-  consentResult: DriverConsentSubmissionResult | null;
-  continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
-  deliveryFinishResult: DeliveryFinishResult | null;
-  deliveryStartResult: DeliveryStartResult | null;
-  isFinishingDelivery: boolean;
-  isLoadingAssignedRoute: boolean;
-  isRecordingConsent: boolean;
-  isRecordingLocationUpdate: boolean;
-  isRecordingRouteStarted: boolean;
-  isStartingContinuousLocation: boolean;
-  isStartingDelivery: boolean;
-  isStoppingContinuousLocation: boolean;
-  locationUpdateResult: ForegroundLocationUpdateResult | null;
-  onLoadAssignedRoute(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
-  onRecordConsent(routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess']): void;
-  onRecordLocationUpdate(): void;
-  onCaptureStopProofBarcode(stop: AssignedRouteStop): void;
-  onCaptureStopProofPhoto(stop: AssignedRouteStop, source: ProofPhotoCaptureSource): void;
-  onCaptureStopProofSignature(stop: AssignedRouteStop): void;
-  onStartContinuousLocation(): void;
-  onStartDelivery(): void;
-  onStopContinuousLocation(): void;
-  onFinishDelivery(): void;
-  onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
-  onOpenStopNavigation(stop: AssignedRouteStop): void;
-  proofBarcodeCaptureResults: Record<string, ProofBarcodeCaptureResult>;
-  proofMediaUploadResults: Record<string, ProofMediaUploadResult>;
-  proofPhotoCaptureResults: Record<string, ProofPhotoCaptureResult>;
-  proofSignatureCaptureResults: Record<string, ProofSignatureCaptureResult>;
-  capturingProofBarcodeId: string | null;
-  capturingProofPhotoId: string | null;
-  capturingProofSignatureId: string | null;
-  uploadingProofMediaId: string | null;
-  openingStopNavigationId: string | null;
-  result: RouteAccessSubmissionResult;
-  recordingStopProofId: string | null;
-  routeStartedEventResult: RouteStartedRecordResult | null;
-  stopProofDrafts: Record<string, StopProofDraft>;
-  stopNavigationResults: Record<string, StopNavigationResult>;
-  stopProofResults: Record<string, StopProofEventResult>;
-  onUpdateStopProofDraft(deliveryStopId: string, patch: Partial<StopProofDraft>): void;
-  setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
-  setConsentMockMode(value: ConsentMockMode): void;
-}) {
-  if (result.kind === 'validation_error') {
-    return (
-      <View style={styles.warningCard}>
-        <Text style={styles.cardKickerDark}>Fix input</Text>
-        <Text style={styles.cardTitleDark}>Lookup blocked before server call</Text>
-        <Text style={styles.cardBodyDark}>{result.message}</Text>
-      </View>
-    );
-  }
-
-  if (result.kind === 'denied') {
-    return (
-      <View style={styles.warningCard}>
-        <Text style={styles.cardKickerDark}>{result.status}</Text>
-        <Text style={styles.cardTitleDark}>Assignment not available</Text>
-        <Text style={styles.cardBodyDark}>{result.message}</Text>
-      </View>
-    );
-  }
-
-  if (result.kind === 'multiple_matches') {
-    return (
-      <View style={styles.warningCard}>
-        <Text style={styles.cardKickerDark}>MULTIPLE_MATCHES</Text>
-        <Text style={styles.cardTitleDark}>Use a route-specific link or code</Text>
-        <Text style={styles.cardBodyDark}>{result.message}</Text>
-        {result.resolutionHint !== null ? (
-          <Text style={styles.cardBodyDark}>{result.resolutionHint}</Text>
-        ) : null}
-        {result.matches.map((match) => (
-          <View
-            key={`${match.shopDomain}-${match.routeName}-${match.deliveryDate}`}
-            style={styles.ambiguousMatchCard}
-          >
-            <Text style={styles.ambiguousMatchTitle}>{match.companyDisplayName}</Text>
-            <Text style={styles.ambiguousMatchText}>{match.routeName}</Text>
-            <Text style={styles.ambiguousMatchText}>
-              {match.deliveryDate} · {match.timezone ?? 'timezone pending'}
-            </Text>
-            <Text style={styles.ambiguousMatchText}>{match.shopDomain}</Text>
-            {match.operatorSupportContact ? (
-              <Text style={styles.ambiguousMatchText}>Support: {match.operatorSupportContact}</Text>
-            ) : null}
-          </View>
-        ))}
-        <Text style={styles.cardBodyDark}>
-          Route details, customer addresses, proof controls, and driver access are blocked until exactly one company route is confirmed.
-        </Text>
-      </View>
-    );
-  }
-
+function SecondaryButton({ disabled, label, loading, onPress }: { disabled?: boolean; label: string; loading?: boolean; onPress(): void }) {
   return (
-    <View style={styles.cardDark}>
-      <Text style={styles.cardKicker}>Company guidance</Text>
-      <Text style={styles.cardTitle}>{result.companyGuidance.companyDisplayName}</Text>
-      <Text style={styles.cardBody}>{result.companyGuidance.routeName}</Text>
-      <InfoRow label="Shop" value={result.companyGuidance.shopDomain} />
-      <InfoRow label="Delivery date" value={result.companyGuidance.deliveryDate} />
-      <InfoRow label="Timezone" value={result.companyGuidance.timezone ?? 'pending'} />
-      <InfoRow label="Pickup" value={result.companyGuidance.pickupGuidance ?? 'No pickup guidance yet'} />
-      <InfoRow label="Support" value={result.companyGuidance.operatorSupportContact ?? 'Contact dispatch'} />
-      {result.companyGuidance.driverInstructions.map((instruction) => (
-        <Text key={instruction} style={styles.instructionText}>• {instruction}</Text>
-      ))}
-      <View style={styles.actionPreview}>
-        <Text style={styles.actionPreviewLabel}>Next</Text>
-        <Text style={styles.actionPreviewText}>Record required consent before route details</Text>
-      </View>
-      <ConsentGateCard
-        consentMockMode={consentMockMode}
-        consentResult={consentResult}
-        isRecordingConsent={isRecordingConsent}
-        onRecordConsent={() => onRecordConsent(result.routeAccess)}
-        setConsentMockMode={setConsentMockMode}
-      />
-      {consentResult?.kind === 'consent_recorded' ? (
-        <AssignedRouteCard
-          assignedRouteMockMode={assignedRouteMockMode}
-          assignedRouteResult={assignedRouteResult}
-          continuousLocationResult={continuousLocationResult}
-          deliveryFinishResult={deliveryFinishResult}
-          deliveryStartResult={deliveryStartResult}
-          isFinishingDelivery={isFinishingDelivery}
-          isLoadingAssignedRoute={isLoadingAssignedRoute}
-          isRecordingLocationUpdate={isRecordingLocationUpdate}
-          isRecordingRouteStarted={isRecordingRouteStarted}
-          isStartingContinuousLocation={isStartingContinuousLocation}
-          isStartingDelivery={isStartingDelivery}
-          isStoppingContinuousLocation={isStoppingContinuousLocation}
-          locationUpdateResult={locationUpdateResult}
-          onLoadAssignedRoute={() => onLoadAssignedRoute(result.routeAccess)}
-          onRecordLocationUpdate={onRecordLocationUpdate}
-          onCaptureStopProofBarcode={onCaptureStopProofBarcode}
-          onCaptureStopProofPhoto={onCaptureStopProofPhoto}
-          onCaptureStopProofSignature={onCaptureStopProofSignature}
-          onRecordStopProof={onRecordStopProof}
-          onOpenStopNavigation={onOpenStopNavigation}
-          proofBarcodeCaptureResults={proofBarcodeCaptureResults}
-          proofMediaUploadResults={proofMediaUploadResults}
-          proofPhotoCaptureResults={proofPhotoCaptureResults}
-          proofSignatureCaptureResults={proofSignatureCaptureResults}
-          capturingProofBarcodeId={capturingProofBarcodeId}
-          capturingProofPhotoId={capturingProofPhotoId}
-          capturingProofSignatureId={capturingProofSignatureId}
-          uploadingProofMediaId={uploadingProofMediaId}
-          openingStopNavigationId={openingStopNavigationId}
-          onStartContinuousLocation={onStartContinuousLocation}
-          onStartDelivery={onStartDelivery}
-          onStopContinuousLocation={onStopContinuousLocation}
-          onFinishDelivery={onFinishDelivery}
-          recordingStopProofId={recordingStopProofId}
-          routeStartedEventResult={routeStartedEventResult}
-          stopProofDrafts={stopProofDrafts}
-          stopNavigationResults={stopNavigationResults}
-          stopProofResults={stopProofResults}
-          onUpdateStopProofDraft={onUpdateStopProofDraft}
-          setAssignedRouteMockMode={setAssignedRouteMockMode}
-        />
-      ) : null}
-    </View>
-  );
-}
-
-function ConsentGateCard({
-  consentMockMode,
-  consentResult,
-  isRecordingConsent,
-  onRecordConsent,
-  setConsentMockMode,
-}: {
-  consentMockMode: ConsentMockMode;
-  consentResult: DriverConsentSubmissionResult | null;
-  isRecordingConsent: boolean;
-  onRecordConsent(): void;
-  setConsentMockMode(value: ConsentMockMode): void;
-}) {
-  return (
-    <View style={styles.consentPanel}>
-      <Text style={styles.consentKicker}>Consent gate</Text>
-      <Text style={styles.consentTitle}>Required before assigned route</Text>
-      <Text style={styles.consentBody}>
-        The app records location-information and personal-information consent before route
-        stops, customer addresses, or delivery location flows can be shown.
-      </Text>
-      <InfoRow label="Location consent" value={CONSENT_COPY_VERSIONS.locationInformation} />
-      <InfoRow label="Privacy consent" value={CONSENT_COPY_VERSIONS.personalInformation} />
-      <ConsentMockModePicker consentMockMode={consentMockMode} setConsentMockMode={setConsentMockMode} />
-      {consentResult?.kind === 'consent_error' ? (
-        <Text style={styles.consentErrorText}>{consentResult.message}</Text>
-      ) : null}
-      {consentResult?.kind === 'consent_recorded' ? (
-        <View style={styles.consentSuccessBox}>
-          <Text style={styles.consentSuccessTitle}>Consent recorded</Text>
-          <Text style={styles.consentSuccessText}>{consentResult.recordedAt}</Text>
-        </View>
-      ) : (
-        <Pressable
-          accessibilityRole="button"
-          disabled={isRecordingConsent}
-          onPress={onRecordConsent}
-          style={[styles.secondaryButton, isRecordingConsent && styles.buttonDisabled]}
-        >
-          {isRecordingConsent ? (
-            <ActivityIndicator color="#0f172a" />
-          ) : (
-            <Text style={styles.secondaryButtonText}>Record required consents</Text>
-          )}
-        </Pressable>
-      )}
-    </View>
-  );
-}
-
-function ConsentMockModePicker({
-  consentMockMode,
-  setConsentMockMode,
-}: {
-  consentMockMode: ConsentMockMode;
-  setConsentMockMode(value: ConsentMockMode): void;
-}) {
-  const modes: ConsentMockMode[] = ['success', 'failure'];
-  return (
-    <View style={styles.mockPanel}>
-      <Text style={styles.inputLabel}>Local consent mock</Text>
-      <View style={styles.chipGrid}>
-        {modes.map((mode) => (
-          <Pressable
-            accessibilityRole="button"
-            key={mode}
-            onPress={() => setConsentMockMode(mode)}
-            style={[styles.chip, consentMockMode === mode && styles.chipActive]}
-          >
-            <Text style={[styles.chipText, consentMockMode === mode && styles.chipTextActive]}>{mode}</Text>
-          </Pressable>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-function AssignedRouteCard({
-  assignedRouteMockMode,
-  assignedRouteResult,
-  continuousLocationResult,
-  deliveryFinishResult,
-  deliveryStartResult,
-  isFinishingDelivery,
-  isLoadingAssignedRoute,
-  isRecordingLocationUpdate,
-  isRecordingRouteStarted,
-  isStartingContinuousLocation,
-  isStartingDelivery,
-  isStoppingContinuousLocation,
-  locationUpdateResult,
-  onLoadAssignedRoute,
-  onRecordLocationUpdate,
-  onCaptureStopProofBarcode,
-  onCaptureStopProofPhoto,
-  onCaptureStopProofSignature,
-  onRecordStopProof,
-  onOpenStopNavigation,
-  onStartContinuousLocation,
-  onStartDelivery,
-  onStopContinuousLocation,
-  onFinishDelivery,
-  recordingStopProofId,
-  routeStartedEventResult,
-  proofBarcodeCaptureResults,
-  proofMediaUploadResults,
-  proofPhotoCaptureResults,
-  proofSignatureCaptureResults,
-  capturingProofBarcodeId,
-  capturingProofPhotoId,
-  capturingProofSignatureId,
-  uploadingProofMediaId,
-  openingStopNavigationId,
-  stopProofDrafts,
-  stopNavigationResults,
-  stopProofResults,
-  onUpdateStopProofDraft,
-  setAssignedRouteMockMode,
-}: {
-  assignedRouteMockMode: AssignedRouteMockMode;
-  assignedRouteResult: AssignedRouteLoadResult | null;
-  continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
-  deliveryFinishResult: DeliveryFinishResult | null;
-  deliveryStartResult: DeliveryStartResult | null;
-  isFinishingDelivery: boolean;
-  isLoadingAssignedRoute: boolean;
-  isRecordingLocationUpdate: boolean;
-  isRecordingRouteStarted: boolean;
-  isStartingContinuousLocation: boolean;
-  isStartingDelivery: boolean;
-  isStoppingContinuousLocation: boolean;
-  locationUpdateResult: ForegroundLocationUpdateResult | null;
-  onLoadAssignedRoute(): void;
-  onRecordLocationUpdate(): void;
-  onCaptureStopProofBarcode(stop: AssignedRouteStop): void;
-  onCaptureStopProofPhoto(stop: AssignedRouteStop, source: ProofPhotoCaptureSource): void;
-  onCaptureStopProofSignature(stop: AssignedRouteStop): void;
-  onRecordStopProof(stop: AssignedRouteStop, action: StopProofAction): void;
-  onOpenStopNavigation(stop: AssignedRouteStop): void;
-  onStartContinuousLocation(): void;
-  onStartDelivery(): void;
-  onStopContinuousLocation(): void;
-  onFinishDelivery(): void;
-  recordingStopProofId: string | null;
-  routeStartedEventResult: RouteStartedRecordResult | null;
-  proofBarcodeCaptureResults: Record<string, ProofBarcodeCaptureResult>;
-  proofMediaUploadResults: Record<string, ProofMediaUploadResult>;
-  proofPhotoCaptureResults: Record<string, ProofPhotoCaptureResult>;
-  proofSignatureCaptureResults: Record<string, ProofSignatureCaptureResult>;
-  capturingProofBarcodeId: string | null;
-  capturingProofPhotoId: string | null;
-  capturingProofSignatureId: string | null;
-  uploadingProofMediaId: string | null;
-  openingStopNavigationId: string | null;
-  stopProofDrafts: Record<string, StopProofDraft>;
-  stopNavigationResults: Record<string, StopNavigationResult>;
-  stopProofResults: Record<string, StopProofEventResult>;
-  onUpdateStopProofDraft(deliveryStopId: string, patch: Partial<StopProofDraft>): void;
-  setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
-}) {
-  return (
-    <View style={styles.routePanel}>
-      <Text style={styles.consentKicker}>Assigned route</Text>
-      <Text style={styles.consentTitle}>Today's route after consent</Text>
-      <Text style={styles.consentBody}>
-        The app loads route and stop context only after consent is recorded. Delivery start asks
-        for OS foreground location permission only after route_ready.
-      </Text>
-      <AssignedRouteMockModePicker
-        assignedRouteMockMode={assignedRouteMockMode}
-        setAssignedRouteMockMode={setAssignedRouteMockMode}
-      />
-      {assignedRouteResult === null ? (
-        <Text style={styles.routeHelpText}>Load the assigned route to move from consent_recorded to route_ready.</Text>
-      ) : null}
-      {assignedRouteResult?.kind === 'route_ready' ? (
-        <View style={styles.routeReadyBox}>
-          <Text style={styles.routeReadyKicker}>route_ready</Text>
-          <Text style={styles.routeReadyTitle}>{assignedRouteResult.route.name}</Text>
-          <InfoRow label="Delivery date" value={assignedRouteResult.route.deliveryDate} />
-          <InfoRow label="Shop" value={assignedRouteResult.route.shopDomain} />
-          <InfoRow label="Timezone" value={assignedRouteResult.route.timezone} />
-          {assignedRouteResult.route.stops.map((stop) => (
-            <AssignedRouteStopCard
-              isDeliveryActive={deliveryStartResult?.kind === 'delivery_active' && deliveryFinishResult?.flowState !== 'delivery_finished'}
-              key={stop.deliveryStopId}
-              onRecordStopProof={(action) => onRecordStopProof(stop, action)}
-              onOpenNavigation={() => onOpenStopNavigation(stop)}
-              barcodeResult={proofBarcodeCaptureResults[stop.deliveryStopId]}
-              captureResult={proofPhotoCaptureResults[stop.deliveryStopId]}
-              mediaUploadResult={proofMediaUploadResults[stop.deliveryStopId]}
-              signatureResult={proofSignatureCaptureResults[stop.deliveryStopId]}
-              capturingProofBarcodeId={capturingProofBarcodeId}
-              capturingProofPhotoId={capturingProofPhotoId}
-              capturingProofSignatureId={capturingProofSignatureId}
-              draft={getStopProofDraft(stopProofDrafts[stop.deliveryStopId])}
-              onCaptureProofBarcode={() => onCaptureStopProofBarcode(stop)}
-              onCaptureProofPhoto={(source) => onCaptureStopProofPhoto(stop, source)}
-              onCaptureProofSignature={() => onCaptureStopProofSignature(stop)}
-              onUpdateDraft={(patch) => onUpdateStopProofDraft(stop.deliveryStopId, patch)}
-              recordingStopProofId={recordingStopProofId}
-              stop={stop}
-              stopProofResults={stopProofResults}
-              uploadingProofMediaId={uploadingProofMediaId}
-              navigationResult={stopNavigationResults[stop.deliveryStopId]}
-              isOpeningNavigation={openingStopNavigationId === stop.deliveryStopId}
-            />
-          ))}
-        </View>
-      ) : null}
-      {assignedRouteResult !== null && assignedRouteResult.kind !== 'route_ready' ? (
-        <Text style={styles.routeWarningText}>{assignedRouteResult.message}</Text>
-      ) : null}
-      {assignedRouteResult?.kind === 'route_ready' ? (
-        <DeliveryStartCard
-          continuousLocationResult={continuousLocationResult}
-          deliveryFinishResult={deliveryFinishResult}
-          deliveryStartResult={deliveryStartResult}
-          isFinishingDelivery={isFinishingDelivery}
-          isRecordingLocationUpdate={isRecordingLocationUpdate}
-          isRecordingRouteStarted={isRecordingRouteStarted}
-          isStartingContinuousLocation={isStartingContinuousLocation}
-          isStartingDelivery={isStartingDelivery}
-          isStoppingContinuousLocation={isStoppingContinuousLocation}
-          locationUpdateResult={locationUpdateResult}
-          onRecordLocationUpdate={onRecordLocationUpdate}
-          onStartContinuousLocation={onStartContinuousLocation}
-          onStartDelivery={onStartDelivery}
-          onStopContinuousLocation={onStopContinuousLocation}
-          onFinishDelivery={onFinishDelivery}
-          routeStartedEventResult={routeStartedEventResult}
-        />
-      ) : null}
-      <Pressable
-        accessibilityRole="button"
-        disabled={isLoadingAssignedRoute}
-        onPress={onLoadAssignedRoute}
-        style={[styles.secondaryButton, isLoadingAssignedRoute && styles.buttonDisabled]}
-      >
-        {isLoadingAssignedRoute ? (
-          <ActivityIndicator color="#0f172a" />
-        ) : (
-          <Text style={styles.secondaryButtonText}>Load assigned route</Text>
-        )}
-      </Pressable>
-    </View>
-  );
-}
-
-
-function DeliveryStartCard({
-  continuousLocationResult,
-  deliveryFinishResult,
-  deliveryStartResult,
-  isFinishingDelivery,
-  isRecordingLocationUpdate,
-  isRecordingRouteStarted,
-  isStartingContinuousLocation,
-  isStartingDelivery,
-  isStoppingContinuousLocation,
-  locationUpdateResult,
-  onRecordLocationUpdate,
-  onStartContinuousLocation,
-  onStartDelivery,
-  onStopContinuousLocation,
-  onFinishDelivery,
-  routeStartedEventResult,
-}: {
-  continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
-  deliveryFinishResult: DeliveryFinishResult | null;
-  deliveryStartResult: DeliveryStartResult | null;
-  isFinishingDelivery: boolean;
-  isRecordingLocationUpdate: boolean;
-  isRecordingRouteStarted: boolean;
-  isStartingContinuousLocation: boolean;
-  isStartingDelivery: boolean;
-  isStoppingContinuousLocation: boolean;
-  locationUpdateResult: ForegroundLocationUpdateResult | null;
-  onRecordLocationUpdate(): void;
-  onStartContinuousLocation(): void;
-  onStartDelivery(): void;
-  onStopContinuousLocation(): void;
-  onFinishDelivery(): void;
-  routeStartedEventResult: RouteStartedRecordResult | null;
-}) {
-  const isFinished = deliveryFinishResult?.flowState === 'delivery_finished';
-  const isActive = deliveryStartResult?.kind === 'delivery_active' && !isFinished;
-  return (
-    <View style={styles.deliveryStartPanel}>
-      <Text style={styles.consentKicker}>delivery_active gate</Text>
-      <Text style={styles.consentTitle}>Start delivery with foreground location</Text>
-      <Text style={styles.consentBody}>
-        The app requests OS foreground location permission only after the driver explicitly starts
-        delivery. The app records ROUTE_STARTED, foreground LOCATION_UPDATED, and continuous
-        background-capable LOCATION_UPDATED events after delivery_active succeeds.
-      </Text>
-      {deliveryStartResult !== null ? (
-        <Text style={isActive ? styles.deliveryStartSuccessText : styles.routeWarningText}>
-          {deliveryStartResult.message}
-        </Text>
-      ) : null}
-      {isRecordingRouteStarted ? (
-        <Text style={styles.routeHelpText}>Recording route started event…</Text>
-      ) : null}
-      {routeStartedEventResult?.kind === 'recorded' ? (
-        <Text style={styles.deliveryStartSuccessText}>Route started event recorded: {routeStartedEventResult.eventId}</Text>
-      ) : null}
-      {routeStartedEventResult?.kind === 'queued' ? (
-        <Text style={styles.routeWarningText}>Route started event queued: {routeStartedEventResult.queueItemId}</Text>
-      ) : null}
-      {isRecordingLocationUpdate ? (
-        <Text style={styles.routeHelpText}>Recording foreground location update…</Text>
-      ) : null}
-      {locationUpdateResult?.kind === 'recorded' ? (
-        <Text style={styles.deliveryStartSuccessText}>Foreground location update recorded: {locationUpdateResult.eventId}</Text>
-      ) : null}
-      {locationUpdateResult?.kind === 'queued' ? (
-        <Text style={styles.routeWarningText}>Foreground location update queued: {locationUpdateResult.queueItemId}</Text>
-      ) : null}
-      {continuousLocationResult !== null ? (
-        <Text style={continuousLocationResult.kind === 'streaming' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
-          {formatContinuousLocationResult(continuousLocationResult)}
-        </Text>
-      ) : null}
-      {isFinishingDelivery ? (
-        <Text style={styles.routeHelpText}>Finishing delivery and stopping route tracking…</Text>
-      ) : null}
-      {deliveryFinishResult !== null ? (
-        <Text style={deliveryFinishResult.kind === 'recorded' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
-          {formatDeliveryFinishResult(deliveryFinishResult)}
-        </Text>
-      ) : null}
-      {isActive ? (
-        <Pressable
-          accessibilityRole="button"
-          disabled={isRecordingLocationUpdate}
-          onPress={onRecordLocationUpdate}
-          style={[styles.secondaryButton, isRecordingLocationUpdate && styles.buttonDisabled]}
-        >
-          {isRecordingLocationUpdate ? (
-            <ActivityIndicator color="#0f172a" />
-          ) : (
-            <Text style={styles.secondaryButtonText}>Sync foreground location</Text>
-          )}
-        </Pressable>
-      ) : null}
-      {isActive ? (
-        <View style={styles.stopActionRow}>
-          <Pressable
-            accessibilityRole="button"
-            disabled={isStartingContinuousLocation}
-            onPress={onStartContinuousLocation}
-            style={[styles.stopActionButton, isStartingContinuousLocation && styles.buttonDisabled]}
-          >
-            <Text style={styles.stopActionButtonText}>
-              {isStartingContinuousLocation ? 'Starting…' : 'Start continuous tracking'}
-            </Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            disabled={isStoppingContinuousLocation}
-            onPress={onStopContinuousLocation}
-            style={[styles.stopActionDangerButton, isStoppingContinuousLocation && styles.buttonDisabled]}
-          >
-            <Text style={styles.stopActionButtonText}>
-              {isStoppingContinuousLocation ? 'Stopping…' : 'Stop tracking'}
-            </Text>
-          </Pressable>
-        </View>
-      ) : null}
-      {isActive ? (
-        <Pressable
-          accessibilityRole="button"
-          disabled={isFinishingDelivery}
-          onPress={onFinishDelivery}
-          style={[styles.stopActionDangerButton, isFinishingDelivery && styles.buttonDisabled]}
-        >
-          <Text style={styles.stopActionButtonText}>
-            {isFinishingDelivery ? 'Finishing…' : 'Finish delivery'}
-          </Text>
-        </Pressable>
-      ) : null}
-      <Pressable
-        accessibilityRole="button"
-        disabled={isStartingDelivery || isActive || isFinished}
-        onPress={onStartDelivery}
-        style={[styles.secondaryButton, (isStartingDelivery || isActive || isFinished) && styles.buttonDisabled]}
-      >
-        {isStartingDelivery ? (
-          <ActivityIndicator color="#0f172a" />
-        ) : (
-          <Text style={styles.secondaryButtonText}>
-            {isFinished ? 'Delivery finished' : isActive ? 'Delivery active' : 'Start delivery'}
-          </Text>
-        )}
-      </Pressable>
-    </View>
-  );
-}
-
-
-function formatContinuousLocationResult(result: ContinuousLocationStreamStartResult | ContinuousLocationStopResult): string {
-  if (result.kind === 'streaming') {
-    return result.alreadyStarted
-      ? `Continuous location already active: ${result.taskName}`
-      : `Continuous location active: ${result.taskName}`;
-  }
-
-  if (result.kind === 'stopped') {
-    return `Continuous location stopped: ${result.taskName}`;
-  }
-
-  return result.message;
-}
-
-function formatDeliveryFinishResult(result: DeliveryFinishResult): string {
-  if (result.kind === 'recorded') {
-    return `${result.message} Event: ${result.eventId}. Tracking stopped: ${result.stoppedTaskName}.`;
-  }
-
-  if (result.kind === 'queued') {
-    return `${result.message} Queue item: ${result.queueItemId}. Tracking stopped: ${result.stoppedTaskName}.`;
-  }
-
-  return result.message;
-}
-
-function AssignedRouteMockModePicker({
-  assignedRouteMockMode,
-  setAssignedRouteMockMode,
-}: {
-  assignedRouteMockMode: AssignedRouteMockMode;
-  setAssignedRouteMockMode(value: AssignedRouteMockMode): void;
-}) {
-  const modes: AssignedRouteMockMode[] = ['assigned', 'none', 'failure'];
-  return (
-    <View style={styles.mockPanel}>
-      <Text style={styles.inputLabel}>Local assigned route mock</Text>
-      <View style={styles.chipGrid}>
-        {modes.map((mode) => (
-          <Pressable
-            accessibilityRole="button"
-            key={mode}
-            onPress={() => setAssignedRouteMockMode(mode)}
-            style={[styles.chip, assignedRouteMockMode === mode && styles.chipActive]}
-          >
-            <Text style={[styles.chipText, assignedRouteMockMode === mode && styles.chipTextActive]}>{mode}</Text>
-          </Pressable>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-
-
-function formatProofPhotoCaptureResult(result: ProofPhotoCaptureResult): string {
-  if (result.kind === 'captured') {
-    return `Proof photo attached from ${result.source}: ${result.uri}`;
-  }
-
-  if (result.kind === 'cancelled') {
-    return `Proof photo ${result.source} selection cancelled.`;
-  }
-
-  return result.message;
-}
-
-function formatProofMediaUploadResult(result: ProofMediaUploadResult): string {
-  if (result.kind === 'uploaded') {
-    return `Proof media uploaded: ${result.media.mediaId}`;
-  }
-
-  return result.message;
-}
-
-function formatProofSignatureCaptureResult(result: ProofSignatureCaptureResult): string {
-  if (result.kind === 'captured') {
-    return `Signature captured: ${result.signature.signatureId} (${result.signature.pointCount} points)`;
-  }
-
-  return result.message;
-}
-
-function formatProofBarcodeCaptureResult(result: ProofBarcodeCaptureResult): string {
-  if (result.kind === 'scanned') {
-    return `Barcode scanned: ${result.barcode.symbology} ${result.barcode.data}`;
-  }
-
-  return result.message;
-}
-
-function getStopProofDraft(draft?: StopProofDraft): StopProofDraft {
-  return {
-    failureReason: draft?.failureReason ?? 'OTHER',
-    note: draft?.note ?? 'Driver proof recorded in MVP app.',
-    photoUri: draft?.photoUri ?? '',
-    signaturePointCount: draft?.signaturePointCount ?? 0,
-    signerName: draft?.signerName ?? 'Recipient',
-  };
-}
-
-function AssignedRouteStopCard({
-  barcodeResult,
-  captureResult,
-  mediaUploadResult,
-  signatureResult,
-  capturingProofBarcodeId,
-  capturingProofPhotoId,
-  capturingProofSignatureId,
-  draft,
-  isDeliveryActive,
-  onCaptureProofBarcode,
-  onCaptureProofPhoto,
-  onCaptureProofSignature,
-  onRecordStopProof,
-  onOpenNavigation,
-  onUpdateDraft,
-  recordingStopProofId,
-  navigationResult,
-  isOpeningNavigation,
-  stop,
-  stopProofResults,
-  uploadingProofMediaId,
-}: {
-  barcodeResult?: ProofBarcodeCaptureResult;
-  captureResult?: ProofPhotoCaptureResult;
-  mediaUploadResult?: ProofMediaUploadResult;
-  signatureResult?: ProofSignatureCaptureResult;
-  capturingProofBarcodeId: string | null;
-  capturingProofPhotoId: string | null;
-  capturingProofSignatureId: string | null;
-  draft: StopProofDraft;
-  isDeliveryActive: boolean;
-  onCaptureProofBarcode(): void;
-  onCaptureProofPhoto(source: ProofPhotoCaptureSource): void;
-  onCaptureProofSignature(): void;
-  onRecordStopProof(action: StopProofAction): void;
-  onOpenNavigation(): void;
-  onUpdateDraft(patch: Partial<StopProofDraft>): void;
-  recordingStopProofId: string | null;
-  navigationResult?: StopNavigationResult;
-  isOpeningNavigation: boolean;
-  stop: AssignedRouteStop;
-  stopProofResults: Record<string, StopProofEventResult>;
-  uploadingProofMediaId: string | null;
-}) {
-  const deliveredKey = `${stop.deliveryStopId}:delivered`;
-  const failedKey = `${stop.deliveryStopId}:failed`;
-  const deliveredResult = stopProofResults[deliveredKey];
-  const failedResult = stopProofResults[failedKey];
-  return (
-    <View style={styles.stopCard}>
-      <Text style={styles.stopSequence}>Stop {stop.sequence}</Text>
-      <Text style={styles.stopTitle}>{stop.orderName}</Text>
-      <Text style={styles.stopBody}>{stop.recipientName ?? 'Recipient pending'}</Text>
-      <Text style={styles.stopBody}>{formatStopAddress(stop)}</Text>
-      <Text style={styles.stopMeta}>Phone: {stop.phone ?? 'Contact dispatch'}</Text>
-      <Text style={styles.stopMeta}>Coordinates: {formatCoordinates(stop)}</Text>
-      {navigationResult !== undefined ? (
-        <Text style={navigationResult.kind === 'opened' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
-          {navigationResult.message}
-        </Text>
-      ) : null}
-      <View style={styles.stopActionRow}>
-        <Pressable
-          accessibilityRole="button"
-          disabled={isOpeningNavigation}
-          onPress={onOpenNavigation}
-          style={[styles.stopActionButton, isOpeningNavigation && styles.buttonDisabled]}
-        >
-          <Text style={styles.stopActionButtonText}>{isOpeningNavigation ? 'Opening map…' : 'Open map'}</Text>
-        </Pressable>
-      </View>
-      {isDeliveryActive ? (
-        <View style={styles.stopActionPanel}>
-          <Text style={styles.stopMeta}>Proof evidence: uploaded photo media, signature drawing evidence, barcode scan evidence, note, and failure reason.</Text>
-          <TextInput
-            onChangeText={(value) => onUpdateDraft({ note: value })}
-            placeholder="Proof note"
-            placeholderTextColor="#94a3b8"
-            style={styles.stopProofInput}
-            value={draft.note}
-          />
-          <TextInput
-            autoCapitalize="none"
-            onChangeText={(value) => onUpdateDraft({ photoUri: value })}
-            placeholder="Captured photo URI before upload"
-            placeholderTextColor="#94a3b8"
-            style={styles.stopProofInput}
-            value={draft.photoUri}
-          />
-          {captureResult !== undefined ? (
-            <Text style={captureResult.kind === 'captured' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
-              {formatProofPhotoCaptureResult(captureResult)}
-            </Text>
-          ) : null}
-          {uploadingProofMediaId === stop.deliveryStopId ? (
-            <Text style={styles.routeHelpText}>Uploading proof media…</Text>
-          ) : null}
-          {mediaUploadResult !== undefined ? (
-            <Text style={mediaUploadResult.kind === 'uploaded' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
-              {formatProofMediaUploadResult(mediaUploadResult)}
-            </Text>
-          ) : null}
-          <View style={styles.stopActionRow}>
-            <Pressable
-              accessibilityRole="button"
-              disabled={capturingProofPhotoId === `${stop.deliveryStopId}:camera`}
-              onPress={() => onCaptureProofPhoto('camera')}
-              style={[styles.stopActionButton, capturingProofPhotoId === `${stop.deliveryStopId}:camera` && styles.buttonDisabled]}
-            >
-              <Text style={styles.stopActionButtonText}>
-                {capturingProofPhotoId === `${stop.deliveryStopId}:camera` ? 'Opening…' : 'Take photo'}
-              </Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              disabled={capturingProofPhotoId === `${stop.deliveryStopId}:library`}
-              onPress={() => onCaptureProofPhoto('library')}
-              style={[styles.stopActionButton, capturingProofPhotoId === `${stop.deliveryStopId}:library` && styles.buttonDisabled]}
-            >
-              <Text style={styles.stopActionButtonText}>
-                {capturingProofPhotoId === `${stop.deliveryStopId}:library` ? 'Opening…' : 'Choose photo'}
-              </Text>
-            </Pressable>
-          </View>
-          <TextInput
-            onChangeText={(value) => onUpdateDraft({ signerName: value })}
-            placeholder="Signer name"
-            placeholderTextColor="#94a3b8"
-            style={styles.stopProofInput}
-            value={draft.signerName}
-          />
-          <View
-            onTouchMove={() => onUpdateDraft({ signaturePointCount: draft.signaturePointCount + 1 })}
-            onTouchStart={() => onUpdateDraft({ signaturePointCount: draft.signaturePointCount + 1 })}
-            style={styles.signaturePad}
-          >
-            <Text style={styles.signaturePadText}>Draw signature here: {draft.signaturePointCount} captured points</Text>
-          </View>
-          <View style={styles.stopActionRow}>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => onUpdateDraft({ signaturePointCount: 0 })}
-              style={styles.stopActionButton}
-            >
-              <Text style={styles.stopActionButtonText}>Clear signature</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              disabled={capturingProofSignatureId === stop.deliveryStopId}
-              onPress={onCaptureProofSignature}
-              style={[styles.stopActionButton, capturingProofSignatureId === stop.deliveryStopId && styles.buttonDisabled]}
-            >
-              <Text style={styles.stopActionButtonText}>
-                {capturingProofSignatureId === stop.deliveryStopId ? 'Capturing…' : 'Capture signature'}
-              </Text>
-            </Pressable>
-          </View>
-          {signatureResult !== undefined ? (
-            <Text style={signatureResult.kind === 'captured' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
-              {formatProofSignatureCaptureResult(signatureResult)}
-            </Text>
-          ) : null}
-          <View style={styles.stopActionRow}>
-            <Pressable
-              accessibilityRole="button"
-              disabled={capturingProofBarcodeId === stop.deliveryStopId}
-              onPress={onCaptureProofBarcode}
-              style={[styles.stopActionButton, capturingProofBarcodeId === stop.deliveryStopId && styles.buttonDisabled]}
-            >
-              <Text style={styles.stopActionButtonText}>
-                {capturingProofBarcodeId === stop.deliveryStopId ? 'Scanning…' : 'Scan barcode'}
-              </Text>
-            </Pressable>
-          </View>
-          {barcodeResult !== undefined ? (
-            <Text style={barcodeResult.kind === 'scanned' ? styles.deliveryStartSuccessText : styles.routeWarningText}>
-              {formatProofBarcodeCaptureResult(barcodeResult)}
-            </Text>
-          ) : null}
-          <View style={styles.stopActionRow}>
-            {STOP_PROOF_FAILURE_REASONS.map((reason) => (
-              <Pressable
-                accessibilityRole="button"
-                key={reason}
-                onPress={() => onUpdateDraft({ failureReason: reason })}
-                style={[styles.reasonChip, draft.failureReason === reason && styles.reasonChipActive]}
-              >
-                <Text style={[styles.reasonChipText, draft.failureReason === reason && styles.reasonChipTextActive]}>{reason}</Text>
-              </Pressable>
-            ))}
-          </View>
-          {deliveredResult?.kind === 'recorded' ? (
-            <Text style={styles.deliveryStartSuccessText}>Delivered event: {deliveredResult.eventId}</Text>
-          ) : null}
-          {deliveredResult?.kind === 'queued' ? (
-            <Text style={styles.routeWarningText}>Delivered event queued: {deliveredResult.queueItemId}</Text>
-          ) : null}
-          {failedResult?.kind === 'recorded' ? (
-            <Text style={styles.routeWarningText}>Failed event: {failedResult.eventId}</Text>
-          ) : null}
-          {failedResult?.kind === 'queued' ? (
-            <Text style={styles.routeWarningText}>Failed event queued: {failedResult.queueItemId}</Text>
-          ) : null}
-          <View style={styles.stopActionRow}>
-            <Pressable
-              accessibilityRole="button"
-              disabled={recordingStopProofId === deliveredKey}
-              onPress={() => onRecordStopProof('delivered')}
-              style={[styles.stopActionButton, recordingStopProofId === deliveredKey && styles.buttonDisabled]}
-            >
-              <Text style={styles.stopActionButtonText}>
-                {recordingStopProofId === deliveredKey ? 'Recording…' : 'Mark delivered'}
-              </Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              disabled={recordingStopProofId === failedKey}
-              onPress={() => onRecordStopProof('failed')}
-              style={[styles.stopActionDangerButton, recordingStopProofId === failedKey && styles.buttonDisabled]}
-            >
-              <Text style={styles.stopActionButtonText}>
-                {recordingStopProofId === failedKey ? 'Recording…' : 'Mark failed'}
-              </Text>
-            </Pressable>
-          </View>
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-function formatStopAddress(stop: AssignedRouteStop): string {
-  return [
-    stop.address.address1,
-    stop.address.address2,
-    stop.address.city,
-    stop.address.province,
-    stop.address.postalCode,
-    stop.address.countryCode,
-  ].filter(Boolean).join(', ');
-}
-
-function formatCoordinates(stop: AssignedRouteStop): string {
-  if (stop.coordinates === null) {
-    return 'pending';
-  }
-
-  return `${stop.coordinates.latitude.toFixed(4)}, ${stop.coordinates.longitude.toFixed(4)}`;
-}
-
-function EmptyStateCard() {
-  return (
-    <View style={styles.cardDark}>
-      <Text style={styles.cardKicker}>Before route data</Text>
-      <Text style={styles.cardTitle}>Company confirmation comes first</Text>
-      <Text style={styles.cardBody}>
-        The lookup step only returns safe company guidance. Consent, route stops, customer
-        address, and location collection remain blocked for later states.
-      </Text>
-    </View>
-  );
-}
-
-function FlowProgress({ currentState }: { currentState: DriverFlowState }) {
-  return (
-    <View style={styles.progressPanel}>
-      <Text style={styles.sectionTitle}>Documented state flow</Text>
-      <View style={styles.chipGrid}>
-        {DRIVER_FLOW_STATES.map((state) => (
-          <View key={state} style={[styles.chip, state === currentState && styles.chipActive]}>
-            <Text style={[styles.chipText, state === currentState && styles.chipTextActive]}>
-              {state}
-            </Text>
-          </View>
-        ))}
-      </View>
-    </View>
+    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.secondaryButton, disabled === true && styles.buttonDisabled]}>
+      {loading === true ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.secondaryButtonText}>{label}</Text>}
+    </Pressable>
   );
 }
 
@@ -2209,72 +1068,416 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function GuardRow({ label, value }: { label: string; value: string }) {
+function RouteStepRow({ done, label, meta }: { done: boolean; label: string; meta: string }) {
   return (
-    <View style={styles.guardRow}>
-      <Text style={styles.guardLabel}>{label}</Text>
-      <Text style={styles.guardValue}>{value}</Text>
+    <View style={styles.stepRow}>
+      <Text style={[styles.stepDot, done && styles.stepDotDone]}>{done ? '✓' : '•'}</Text>
+      <View style={styles.stepTextColumn}>
+        <Text style={styles.stepLabel}>{label}</Text>
+        <Text style={styles.stepMeta}>{meta}</Text>
+      </View>
     </View>
   );
 }
 
+function getDriverConsentServiceForCurrentSubmission(input: {
+  fallback: DriverConsentService;
+  runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
+  submission: RouteAccessSubmissionResult | null;
+}): DriverConsentService {
+  if (input.runtimeConfig.mode !== 'live' || input.submission?.kind !== 'company_guidance') {
+    return input.fallback;
+  }
+
+  return createDriverApiClientsFromRouteAccess({
+    baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
+    routeAccess: toInvitedRouteAccess(input.submission),
+  }).driverConsentService;
+}
+
+function getAssignedRouteServiceForCurrentSubmission(input: {
+  fallback: AssignedRouteService;
+  runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
+  submission: RouteAccessSubmissionResult | null;
+}): AssignedRouteService {
+  if (input.runtimeConfig.mode !== 'live' || input.submission?.kind !== 'company_guidance') {
+    return input.fallback;
+  }
+
+  return createDriverApiClientsFromRouteAccess({
+    baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
+    routeAccess: toInvitedRouteAccess(input.submission),
+  }).assignedRouteService;
+}
+
+function getDriverEventServiceForCurrentSubmission(input: {
+  fallback: DriverEventService;
+  runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
+  submission: RouteAccessSubmissionResult | null;
+}): DriverEventService {
+  if (input.runtimeConfig.mode !== 'live' || input.submission?.kind !== 'company_guidance') {
+    return input.fallback;
+  }
+
+  return createDriverApiClientsFromRouteAccess({
+    baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
+    routeAccess: toInvitedRouteAccess(input.submission),
+  }).driverEventService;
+}
+
+function getProofMediaUploadServiceForCurrentSubmission(input: {
+  fallback: ProofMediaUploadService;
+  runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
+  submission: RouteAccessSubmissionResult | null;
+}): ProofMediaUploadService {
+  if (input.runtimeConfig.mode !== 'live' || input.submission?.kind !== 'company_guidance') {
+    return input.fallback;
+  }
+
+  return createDriverApiClientsFromRouteAccess({
+    baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
+    routeAccess: toInvitedRouteAccess(input.submission),
+  }).proofMediaUploadService;
+}
+
+function toInvitedRouteAccess(result: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>): Extract<RouteAccessLookupResult, { status: 'INVITED' }> {
+  return {
+    status: 'INVITED',
+    companyGuidance: result.companyGuidance,
+    driverAccess: result.driverAccess,
+    routeAccess: result.routeAccess,
+  };
+}
+
+function getRouteChoicesFromSubmission(result: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' | 'route_choices' }>): RouteAccessRouteChoice[] {
+  if (result.kind === 'route_choices') {
+    return result.routes;
+  }
+
+  return [
+    {
+      companyGuidance: result.companyGuidance,
+      driverAccess: result.driverAccess,
+      routeAccess: result.routeAccess,
+    },
+  ];
+}
+
+function toCompanyGuidanceSubmission(choice: RouteAccessRouteChoice): Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }> {
+  return {
+    kind: 'company_guidance',
+    flowState: 'company_context_confirmed',
+    nextState: 'consent_required',
+    companyGuidance: choice.companyGuidance,
+    driverAccess: choice.driverAccess,
+    routeAccess: choice.routeAccess,
+  };
+}
+
+function getRouteSessionForAction(routeSessions: RouteSession[], routeId: string | null): RouteSession | null {
+  if (routeId !== null) {
+    return routeSessions.find((session) => session.route.id === routeId) ?? null;
+  }
+
+  return routeSessions[0] ?? null;
+}
+
+function getRouteSessionStatus(routeId: string, selectedRouteId: string | null, selectedRouteStatus: RouteStatus): RouteStatus {
+  return routeId === selectedRouteId ? selectedRouteStatus : 'upcoming';
+}
+
+function formatRouteAccessProblem(result: RouteAccessSubmissionResult): string {
+  if (result.kind === 'validation_error' || result.kind === 'denied' || result.kind === 'multiple_matches') {
+    return result.message;
+  }
+
+  return '라우트 확인이 필요합니다.';
+}
+
+function getRouteStatus(deliveryStartResult: DeliveryStartResult | null, deliveryFinishResult: DeliveryFinishResult | null): RouteStatus {
+  if (deliveryFinishResult?.flowState === 'delivery_finished') {
+    return 'completed';
+  }
+
+  if (deliveryStartResult?.kind === 'delivery_active') {
+    return 'active';
+  }
+
+  return 'upcoming';
+}
+
+function formatRouteStatus(status: RouteStatus): string {
+  switch (status) {
+    case 'active':
+      return '배송중';
+    case 'completed':
+      return '배송완료';
+    case 'upcoming':
+      return '배송전';
+  }
+}
+
+function getScreenTitle(screen: AppScreen): string {
+  switch (screen) {
+    case 'login':
+      return '로그인';
+    case 'routes':
+      return '내용';
+    case 'routeDetail':
+      return '라우트 상세';
+    case 'navigation':
+      return '내비게이션';
+    case 'stopProof':
+      return '도착지 처리';
+  }
+}
+
+function getRouteRegion(route: AssignedRoute): string {
+  const cities = [...new Set(route.stops.map((stop) => stop.address.city).filter(Boolean))];
+  return cities.length === 0 ? route.timezone : `${cities.join(', ')} · ${route.timezone}`;
+}
+
+function formatStopAddress(stop: AssignedRouteStop): string {
+  return [
+    stop.address.address1,
+    stop.address.address2,
+    stop.address.city,
+    stop.address.province,
+    stop.address.postalCode,
+    stop.address.countryCode,
+  ]
+    .map((part) => part?.trim() ?? '')
+    .filter(Boolean)
+    .join(', ');
+}
+
+function getNavigationTip(input: {
+  company: RouteAccessCompanyGuidance | null;
+  isCompanyStep: boolean;
+  stop: AssignedRouteStop | null;
+}): string {
+  if (input.isCompanyStep) {
+    return input.company?.pickupGuidance ?? '회사 픽업 지점에서 담당자 안내를 확인하세요.';
+  }
+
+  if (input.stop === null) {
+    return '다음 배송지를 확인하세요.';
+  }
+
+  const area = input.stop.address.city || input.stop.address.province;
+  return `${area} 지역입니다. 건물 출입구와 주차 가능 위치를 먼저 확인하고, 특이사항은 배송완료 화면에 남겨 주세요.`;
+}
+
+function getProofDraft(draft?: StopProofDraft): StopProofDraft {
+  return {
+    locationTip: draft?.locationTip ?? '',
+    todayNote: draft?.todayNote ?? '',
+  };
+}
+
+function formatStopProofNote(draft: StopProofDraft): string {
+  return [
+    draft.todayNote.trim().length > 0 ? `금일 특이사항: ${draft.todayNote.trim()}` : null,
+    draft.locationTip.trim().length > 0 ? `배송지 팁: ${draft.locationTip.trim()}` : null,
+  ]
+    .filter((value): value is string => value !== null)
+    .join('\n') || '배송완료 사진 증빙.';
+}
+
+function formatPhotoResult(captureResult: ProofPhotoCaptureResult, uploadResult: ProofMediaUploadResult): string {
+  return `${formatPhotoCaptureResult(captureResult)} ${formatMediaUploadResult(uploadResult)}`.trim();
+}
+
+function formatPhotoCaptureResult(result: ProofPhotoCaptureResult): string {
+  if (result.kind === 'captured') {
+    return `사진 첨부됨: ${result.source}`;
+  }
+
+  if (result.kind === 'cancelled') {
+    return '사진 선택이 취소됐습니다.';
+  }
+
+  return result.message;
+}
+
+function formatMediaUploadResult(result: ProofMediaUploadResult): string {
+  if (result.kind === 'uploaded') {
+    return `업로드됨: ${result.media.mediaId}`;
+  }
+
+  return result.message;
+}
+
+function formatStopProofResult(result: StopProofEventResult): string {
+  if (result.kind === 'recorded') {
+    return `배송완료 기록됨: ${result.eventId}`;
+  }
+
+  if (result.kind === 'queued') {
+    return `오프라인 큐에 저장됨: ${result.queueItemId}`;
+  }
+
+  return result.message;
+}
+
+function formatContinuousLocationResult(result: ContinuousLocationStreamStartResult | ContinuousLocationStopResult): string {
+  if (result.kind === 'streaming') {
+    return '위치 추적 실행 중';
+  }
+
+  if (result.kind === 'stopped') {
+    return '위치 추적 중지됨';
+  }
+
+  return result.message;
+}
+
+function getFileNameFromUri(uri: string, deliveryStopId: string): string {
+  const fileName = uri.split('/').pop()?.trim();
+  return fileName === undefined || fileName === '' ? `${deliveryStopId}.jpg` : fileName;
+}
+
 const styles = StyleSheet.create({
   safeArea: {
+    backgroundColor: '#f8fafc',
     flex: 1,
-    backgroundColor: '#f6f8fb',
   },
   container: {
-    gap: 20,
-    padding: 24,
+    gap: 16,
+    padding: 20,
+    paddingBottom: 40,
   },
   header: {
     gap: 8,
+    paddingTop: 12,
   },
-  eyebrow: {
+  kicker: {
     color: '#2563eb',
     fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 0.7,
+    fontWeight: '700',
+    letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
   title: {
     color: '#0f172a',
-    fontSize: 32,
+    fontSize: 30,
     fontWeight: '800',
-    lineHeight: 38,
   },
   subtitle: {
     color: '#475569',
-    fontSize: 16,
-    lineHeight: 24,
+    fontSize: 15,
+    lineHeight: 22,
   },
-  progressPanel: {
+  progressRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  progressItem: {
+    backgroundColor: '#e2e8f0',
+    borderRadius: 999,
+    color: '#475569',
+    fontSize: 13,
+    fontWeight: '700',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  progressItemActive: {
+    backgroundColor: '#0f172a',
+    color: '#ffffff',
+  },
+  message: {
+    backgroundColor: '#e0f2fe',
+    borderColor: '#7dd3fc',
+    borderRadius: 16,
+    borderWidth: 1,
+    color: '#075985',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+    padding: 14,
+  },
+  card: {
     backgroundColor: '#ffffff',
+    borderColor: '#e2e8f0',
     borderRadius: 24,
+    borderWidth: 1,
     gap: 14,
     padding: 18,
-    shadowColor: '#0f172a',
-    shadowOffset: { height: 8, width: 0 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
   },
-  sectionTitle: {
+  cardHeaderRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  cardTitle: {
+    color: '#0f172a',
+    flex: 1,
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  sectionHeading: {
+    color: '#0f172a',
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 10,
+  },
+  subheading: {
     color: '#0f172a',
     fontSize: 16,
     fontWeight: '800',
   },
-  cardLight: {
-    backgroundColor: '#ffffff',
-    borderRadius: 24,
-    gap: 14,
-    padding: 18,
+  bodyText: {
+    color: '#475569',
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  destinationTitle: {
+    color: '#0f172a',
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  badge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#dcfce7',
+    borderRadius: 999,
+    color: '#166534',
+    fontSize: 13,
+    fontWeight: '800',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  tabs: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  tab: {
+    backgroundColor: '#e2e8f0',
+    borderRadius: 999,
+    flex: 1,
+    paddingVertical: 10,
+  },
+  tabActive: {
+    backgroundColor: '#2563eb',
+  },
+  tabText: {
+    color: '#475569',
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  tabTextActive: {
+    color: '#ffffff',
   },
   inputGroup: {
     gap: 6,
   },
   inputLabel: {
-    color: '#475569',
-    fontSize: 13,
+    color: '#334155',
+    fontSize: 14,
     fontWeight: '800',
   },
   input: {
@@ -2283,409 +1486,170 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     color: '#0f172a',
-    fontSize: 15,
+    fontSize: 16,
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
-  mockPanel: {
-    gap: 8,
+  multilineInput: {
+    minHeight: 88,
+    textAlignVertical: 'top',
   },
-  chipGrid: {
+  consentRow: {
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
-  chip: {
-    backgroundColor: '#e2e8f0',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  chipActive: {
-    backgroundColor: '#1d4ed8',
-  },
-  chipText: {
-    color: '#334155',
-    fontSize: 12,
+  consentText: {
+    color: '#0f172a',
+    flex: 1,
+    fontSize: 15,
     fontWeight: '700',
-  },
-  chipTextActive: {
-    color: '#ffffff',
   },
   primaryButton: {
     alignItems: 'center',
     backgroundColor: '#2563eb',
     borderRadius: 16,
-    paddingHorizontal: 18,
+    minHeight: 52,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
     paddingVertical: 14,
   },
   primaryButtonText: {
     color: '#ffffff',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '800',
   },
   secondaryButton: {
     alignItems: 'center',
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#e2e8f0',
     borderRadius: 16,
-    paddingHorizontal: 18,
+    minHeight: 52,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
     paddingVertical: 14,
   },
   secondaryButtonText: {
     color: '#0f172a',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '800',
   },
   buttonDisabled: {
-    opacity: 0.6,
+    opacity: 0.55,
   },
-  cardDark: {
-    backgroundColor: '#0f172a',
-    borderRadius: 28,
-    gap: 12,
-    padding: 22,
-  },
-  warningCard: {
-    backgroundColor: '#fff7ed',
-    borderColor: '#fed7aa',
-    borderRadius: 24,
-    borderWidth: 1,
+  buttonRow: {
+    flexDirection: 'row',
     gap: 10,
-    padding: 18,
   },
-  cardKicker: {
-    color: '#93c5fd',
-    fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
-  cardKickerDark: {
-    color: '#c2410c',
-    fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
-  cardTitle: {
-    color: '#ffffff',
-    fontSize: 28,
-    fontWeight: '800',
-  },
-  cardTitleDark: {
-    color: '#7c2d12',
-    fontSize: 22,
-    fontWeight: '800',
-  },
-  cardBody: {
-    color: '#cbd5e1',
-    fontSize: 16,
-    lineHeight: 24,
-  },
-  cardBodyDark: {
-    color: '#9a3412',
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  ambiguousMatchCard: {
-    backgroundColor: '#ffedd5',
-    borderColor: '#fdba74',
-    borderRadius: 16,
-    borderWidth: 1,
-    gap: 4,
-    padding: 12,
-  },
-  ambiguousMatchTitle: {
-    color: '#7c2d12',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  ambiguousMatchText: {
-    color: '#9a3412',
-    fontSize: 13,
-    fontWeight: '700',
-    lineHeight: 18,
+  buttonColumn: {
+    gap: 10,
   },
   infoRow: {
-    borderTopColor: '#1e293b',
-    borderTopWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    borderBottomWidth: 1,
     gap: 4,
-    paddingTop: 10,
+    paddingBottom: 10,
   },
   infoLabel: {
-    color: '#93c5fd',
-    fontSize: 12,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-  },
-  infoValue: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  instructionText: {
-    color: '#dbeafe',
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  actionPreview: {
-    backgroundColor: '#1e293b',
-    borderRadius: 18,
-    gap: 4,
-    marginTop: 8,
-    padding: 14,
-  },
-  actionPreviewLabel: {
-    color: '#93c5fd',
-    fontSize: 12,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-  },
-  actionPreviewText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  consentPanel: {
-    backgroundColor: '#172554',
-    borderColor: '#1d4ed8',
-    borderRadius: 22,
-    borderWidth: 1,
-    gap: 12,
-    marginTop: 8,
-    padding: 16,
-  },
-  consentKicker: {
-    color: '#bfdbfe',
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
-  consentTitle: {
-    color: '#ffffff',
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  consentBody: {
-    color: '#dbeafe',
-    fontSize: 14,
-    lineHeight: 21,
-  },
-  consentErrorText: {
-    backgroundColor: '#7f1d1d',
-    borderRadius: 14,
-    color: '#fee2e2',
-    fontSize: 14,
-    fontWeight: '700',
-    lineHeight: 20,
-    padding: 12,
-  },
-  consentSuccessBox: {
-    backgroundColor: '#14532d',
-    borderRadius: 16,
-    gap: 4,
-    padding: 14,
-  },
-  consentSuccessTitle: {
-    color: '#bbf7d0',
+    color: '#64748b',
     fontSize: 13,
     fontWeight: '800',
-    textTransform: 'uppercase',
   },
-  consentSuccessText: {
-    color: '#ffffff',
-    fontSize: 15,
+  infoValue: {
+    color: '#0f172a',
+    fontSize: 16,
     fontWeight: '700',
+    lineHeight: 22,
   },
-  deliveryStartPanel: {
-    backgroundColor: '#ecfeff',
-    borderColor: '#06b6d4',
-    borderRadius: 18,
-    borderWidth: 1,
+  stopList: {
     gap: 10,
-    marginTop: 16,
-    padding: 16,
   },
-  deliveryStartSuccessText: {
-    color: '#0f766e',
-    fontSize: 14,
-    fontWeight: '700',
-    lineHeight: 20,
+  stepRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 10,
   },
-  routePanel: {
-    backgroundColor: '#052e16',
-    borderColor: '#16a34a',
-    borderRadius: 22,
-    borderWidth: 1,
-    gap: 12,
-    marginTop: 8,
-    padding: 16,
-  },
-  routeHelpText: {
-    backgroundColor: '#064e3b',
-    borderRadius: 14,
-    color: '#d1fae5',
-    fontSize: 14,
-    fontWeight: '700',
-    lineHeight: 20,
-    padding: 12,
-  },
-  helpText: {
+  stepDot: {
+    backgroundColor: '#e2e8f0',
+    borderRadius: 999,
     color: '#475569',
+    fontSize: 16,
+    fontWeight: '900',
+    height: 28,
+    lineHeight: 28,
+    overflow: 'hidden',
+    textAlign: 'center',
+    width: 28,
+  },
+  stepDotDone: {
+    backgroundColor: '#22c55e',
+    color: '#ffffff',
+  },
+  stepTextColumn: {
+    flex: 1,
+    gap: 2,
+  },
+  stepLabel: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  stepMeta: {
+    color: '#64748b',
     fontSize: 13,
     lineHeight: 18,
   },
-  routeReadyBox: {
-    backgroundColor: '#0f172a',
-    borderRadius: 18,
-    gap: 10,
-    padding: 14,
-  },
-  routeReadyKicker: {
-    color: '#86efac',
-    fontSize: 12,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-  },
-  routeReadyTitle: {
-    color: '#ffffff',
-    fontSize: 22,
-    fontWeight: '800',
-  },
-  routeWarningText: {
-    backgroundColor: '#7f1d1d',
+  tipText: {
+    backgroundColor: '#fef9c3',
     borderRadius: 14,
-    color: '#fee2e2',
+    color: '#713f12',
     fontSize: 14,
     fontWeight: '700',
     lineHeight: 20,
     padding: 12,
   },
-  stopCard: {
-    backgroundColor: '#1e293b',
-    borderRadius: 16,
-    gap: 5,
-    padding: 12,
-  },
-  stopSequence: {
-    color: '#86efac',
-    fontSize: 12,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-  },
-  stopTitle: {
-    color: '#ffffff',
-    fontSize: 17,
-    fontWeight: '800',
-  },
-  stopBody: {
-    color: '#dbeafe',
+  requiredText: {
+    color: '#dc2626',
     fontSize: 14,
+    fontWeight: '800',
+  },
+  successText: {
+    color: '#047857',
+    fontSize: 14,
+    fontWeight: '800',
     lineHeight: 20,
   },
-  stopMeta: {
-    color: '#cbd5e1',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  stopActionPanel: {
-    backgroundColor: '#0f172a',
-    borderColor: '#334155',
-    borderRadius: 14,
-    borderWidth: 1,
-    gap: 8,
-    marginTop: 8,
-    padding: 10,
-  },
-  stopActionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  stopActionButton: {
-    backgroundColor: '#16a34a',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  stopActionDangerButton: {
-    backgroundColor: '#dc2626',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  stopActionButtonText: {
-    color: '#ffffff',
-    fontSize: 12,
+  warningText: {
+    color: '#b45309',
+    fontSize: 14,
     fontWeight: '800',
+    lineHeight: 20,
   },
-  stopProofInput: {
-    backgroundColor: '#1e293b',
-    borderColor: '#334155',
-    borderRadius: 12,
-    borderWidth: 1,
-    color: '#e2e8f0',
-    fontSize: 13,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  signaturePad: {
-    alignItems: 'center',
-    backgroundColor: '#1e293b',
-    borderColor: '#64748b',
-    borderRadius: 14,
-    borderStyle: 'dashed',
-    borderWidth: 1,
-    justifyContent: 'center',
-    minHeight: 92,
-    padding: 12,
-  },
-  signaturePadText: {
-    color: '#cbd5e1',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  reasonChip: {
-    backgroundColor: '#1e293b',
-    borderColor: '#475569',
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-  },
-  reasonChipActive: {
-    backgroundColor: '#f8fafc',
-    borderColor: '#f8fafc',
-  },
-  reasonChipText: {
-    color: '#cbd5e1',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  reasonChipTextActive: {
-    color: '#0f172a',
-  },
-  guardPanel: {
+  emptyCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 24,
-    gap: 12,
+    borderColor: '#e2e8f0',
+    borderRadius: 20,
+    borderWidth: 1,
+    gap: 8,
     padding: 18,
   },
-  guardRow: {
-    borderTopColor: '#e2e8f0',
-    borderTopWidth: 1,
-    gap: 4,
-    paddingTop: 12,
-  },
-  guardLabel: {
-    color: '#64748b',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  guardValue: {
+  emptyTitle: {
     color: '#0f172a',
-    fontSize: 15,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  footerCard: {
+    backgroundColor: '#f1f5f9',
+    borderRadius: 20,
+    gap: 10,
+    padding: 16,
+  },
+  footerTitle: {
+    color: '#0f172a',
+    fontSize: 16,
     fontWeight: '800',
   },
 });

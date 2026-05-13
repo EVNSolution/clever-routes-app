@@ -13,7 +13,7 @@ export const DRIVER_FLOW_STATES = [
 export type DriverFlowState = (typeof DRIVER_FLOW_STATES)[number];
 
 export type InitialAccessValidationInput = {
-  routeContext: string;
+  routeContext?: string | null;
   phoneE164: string;
 };
 
@@ -21,7 +21,7 @@ export type InitialAccessValidationResult =
   | { ok: true }
   | {
       ok: false;
-      reason: 'route_context_required' | 'phone_required' | 'phone_invalid';
+      reason: 'phone_required' | 'phone_invalid';
     };
 
 export type DeliveryActiveGuardInput = {
@@ -29,19 +29,29 @@ export type DeliveryActiveGuardInput = {
   hasLocationPermission: boolean;
 };
 
-export type PlaceholderScreenId =
-  | 'routeAccess'
-  | 'companyGuidance'
-  | 'consentGate'
-  | 'assignedRoute'
-  | 'deliveryActive';
+export type MvpScenarioScreenId =
+  | 'login'
+  | 'routeList'
+  | 'routeDetail'
+  | 'navigation'
+  | 'stopProof';
 
-export type PlaceholderScreen = {
-  id: PlaceholderScreenId;
+export type MvpScenarioScreen = {
+  id: MvpScenarioScreenId;
   title: string;
-  state: DriverFlowState;
   purpose: string;
   primaryAction: string;
+};
+
+export type MvpRouteTab = {
+  id: 'active' | 'completed' | 'upcoming';
+  label: '배송완료' | '배송전' | '배송중';
+};
+
+export type StopCompletionProofField = {
+  id: 'locationTip' | 'photo' | 'todayNote';
+  label: string;
+  required: boolean;
 };
 
 const ROUTE_REVEAL_STATES = new Set<DriverFlowState>([
@@ -54,13 +64,8 @@ const ROUTE_REVEAL_STATES = new Set<DriverFlowState>([
 const E164_PHONE_PATTERN = /^\+[1-9]\d{7,14}$/;
 
 export function getInitialAccessValidation({
-  routeContext,
   phoneE164,
 }: InitialAccessValidationInput): InitialAccessValidationResult {
-  if (routeContext.trim().length === 0) {
-    return { ok: false, reason: 'route_context_required' };
-  }
-
   if (phoneE164.trim().length === 0) {
     return { ok: false, reason: 'phone_required' };
   }
@@ -83,42 +88,53 @@ export function canEnterDeliveryActive({
   return state === 'route_ready' && hasLocationPermission;
 }
 
-export function getPlaceholderScreens(): PlaceholderScreen[] {
+export function getMvpScenarioScreens(): MvpScenarioScreen[] {
   return [
     {
-      id: 'routeAccess',
-      title: 'Route access',
-      state: 'route_context_entered',
-      purpose: 'Collect a route invite/code and E.164 phone number before any server lookup.',
-      primaryAction: 'Validate route context + phone',
+      id: 'login',
+      title: '로그인',
+      purpose: 'Confirm the driver by phone, then collect name and required consent.',
+      primaryAction: '전화번호 확인',
     },
     {
-      id: 'companyGuidance',
-      title: 'Company guidance',
-      state: 'company_context_confirmed',
-      purpose: 'Show the matched company/shop route context before revealing route details.',
-      primaryAction: 'Confirm this is my delivery work',
+      id: 'routeList',
+      title: '내용',
+      purpose: 'Show assigned routes grouped into 배송전, 배송중, and 배송완료 tabs.',
+      primaryAction: '라우트 선택',
     },
     {
-      id: 'consentGate',
-      title: 'Consent gate',
-      state: 'consent_required',
-      purpose: 'Require location-information and personal-information consent before route access.',
-      primaryAction: 'Record required consents',
+      id: 'routeDetail',
+      title: '라우트 상세',
+      purpose: 'Show company information, route date, region, and ordered stops before delivery starts.',
+      primaryAction: '배송 시작',
     },
     {
-      id: 'assignedRoute',
-      title: 'Assigned route',
-      state: 'route_ready',
-      purpose: 'Display today\'s assigned route after consent is recorded by the server.',
-      primaryAction: 'Review route and stops',
+      id: 'navigation',
+      title: '내비게이션',
+      purpose: 'Guide the driver through company pickup and each delivery stop in fixed order.',
+      primaryAction: '다음 목적지로 이동',
     },
     {
-      id: 'deliveryActive',
-      title: 'Delivery active',
-      state: 'delivery_active',
-      purpose: 'Start foreground/background location flow only after explicit delivery start.',
-      primaryAction: 'Start delivery with OS location permission',
+      id: 'stopProof',
+      title: '도착지 처리',
+      purpose: 'Collect required photo proof and optional driver notes/tips at each stop.',
+      primaryAction: '배송완료 증빙',
     },
+  ];
+}
+
+export function getMvpRouteTabs(): MvpRouteTab[] {
+  return [
+    { id: 'upcoming', label: '배송전' },
+    { id: 'active', label: '배송중' },
+    { id: 'completed', label: '배송완료' },
+  ];
+}
+
+export function getStopCompletionProofFields(): StopCompletionProofField[] {
+  return [
+    { id: 'photo', label: '배송완료 사진', required: true },
+    { id: 'todayNote', label: '금일 배송시 특이사항', required: false },
+    { id: 'locationTip', label: '배송지의 특성 팁', required: false },
   ];
 }

@@ -6,7 +6,9 @@ import {
   canRevealRouteDetails,
   DRIVER_FLOW_STATES,
   getInitialAccessValidation,
-  getPlaceholderScreens,
+  getMvpRouteTabs,
+  getMvpScenarioScreens,
+  getStopCompletionProofFields,
 } from './driverFlow';
 
 describe('driver app MVP flow', () => {
@@ -24,17 +26,16 @@ describe('driver app MVP flow', () => {
     ]);
   });
 
-  it('rejects phone-only access before server lookup', () => {
+  it('accepts phone-only access as the lookup starting point', () => {
     assert.deepEqual(
-      getInitialAccessValidation({ routeContext: '', phoneE164: '+14165550123' }),
+      getInitialAccessValidation({ phoneE164: '+14165550123' }),
       {
-        ok: false,
-        reason: 'route_context_required',
+        ok: true,
       },
     );
   });
 
-  it('accepts route context plus E.164 phone as the access starting point', () => {
+  it('still accepts route context plus E.164 phone as an optional narrowed lookup', () => {
     assert.deepEqual(
       getInitialAccessValidation({ routeContext: 'route-tomato-2026-05-12', phoneE164: '+14165550123' }),
       {
@@ -55,10 +56,26 @@ describe('driver app MVP flow', () => {
     assert.equal(canEnterDeliveryActive({ state: 'route_ready', hasLocationPermission: true }), true);
   });
 
-  it('defines placeholders for the first implementation navigation skeleton', () => {
+  it('defines the user-facing MVP screens instead of a debug guard page', () => {
     assert.deepEqual(
-      getPlaceholderScreens().map((screen) => screen.id),
-      ['routeAccess', 'companyGuidance', 'consentGate', 'assignedRoute', 'deliveryActive'],
+      getMvpScenarioScreens().map((screen) => screen.id),
+      ['login', 'routeList', 'routeDetail', 'navigation', 'stopProof'],
     );
+  });
+
+  it('shows route lists by delivery status tabs', () => {
+    assert.deepEqual(getMvpRouteTabs(), [
+      { id: 'upcoming', label: '배송전' },
+      { id: 'active', label: '배송중' },
+      { id: 'completed', label: '배송완료' },
+    ]);
+  });
+
+  it('keeps optional stop proof inputs implemented as driver choices', () => {
+    assert.deepEqual(getStopCompletionProofFields(), [
+      { id: 'photo', label: '배송완료 사진', required: true },
+      { id: 'todayNote', label: '금일 배송시 특이사항', required: false },
+      { id: 'locationTip', label: '배송지의 특성 팁', required: false },
+    ]);
   });
 });

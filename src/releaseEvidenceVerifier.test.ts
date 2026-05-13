@@ -52,7 +52,7 @@ const completeManifest = `# Clever Driver release evidence manifest
 | Area | iPhone result | iPhone evidence reference | Android result | Android evidence reference | Blocker / notes |
 | --- | --- | --- | --- | --- | --- |
 | Fresh install and app launch | pass | ios-launch-ref | pass | android-launch-ref | none |
-| Route context + E.164 phone lookup | pass | ios-route-ref | pass | android-route-ref | none |
+| E.164 phone lookup | pass | ios-route-ref | pass | android-route-ref | none |
 | Company guidance and support contact display | pass | ios-company-ref | pass | android-company-ref | none |
 | Consent gate and retry/error handling | pass | ios-consent-ref | pass | android-consent-ref | none |
 | Assigned route and stop list | pass | ios-route-list-ref | pass | android-route-list-ref | none |

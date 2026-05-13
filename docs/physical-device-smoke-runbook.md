@@ -70,7 +70,7 @@ Use synthetic route, stop, proof, barcode, and signature data unless production 
 | Step | Expected evidence | Stop condition |
 | --- | --- | --- |
 | Fresh install and launch | App opens with version/build identifier recorded. | App cannot launch or crashes before route lookup. |
-| Route context + E.164 phone lookup | Company guidance appears before any stop/customer data. | Route data appears before company guidance or consent. |
+| E.164 phone lookup | Company guidance appears before any stop/customer data. | Route data appears before company guidance or consent. |
 | Multi-company guidance | Shop/company name, route name/date, timezone, pickup guidance, and support contact match the test assignment. | Wrong tenant/company guidance appears. |
 | Consent gate | Required location-information and personal-information consent can be recorded; failure/retry state is visible if simulated. | Assigned route appears before consent success. |
 | Assigned route and stop list | Route summary and ordered stop cards match synthetic route data. | Wrong route, wrong date/timezone, or another driver's stop appears. |
@@ -82,7 +82,7 @@ Use synthetic route, stop, proof, barcode, and signature data unless production 
 | Offline retry/discard | Network loss queues driver events/proof media; retry syncs or discards according to policy; app restart hydrates queue count. | Queue loses pending evidence unexpectedly or stores driver access tokens. |
 | Delivery finish cleanup | Finish stops continuous tracking, records or queues `ROUTE_COMPLETED`, and only clears route-scoped queue items after recorded completion. | Tracking continues after finish or queued completion evidence is discarded after failed record. |
 | Driver session reset | Reset stops tracking, clears SecureStore driver access, clears queued retry state, blanks lookup inputs, and returns to safe lookup state. | Secure token or queued retry state remains after reset. |
-| Token expiry/invalid token recovery | Expired or malformed persisted token is cleared before reuse; live downstream `401` from consent, assigned route, event, proof media, or offline retry clears the active token, stops/clears active route UI state, and requires route context + phone lookup again. | Expired token can still access downstream route/event/proof APIs or retry loops without re-lookup guidance. |
+| Token expiry/invalid token recovery | Expired or malformed persisted token is cleared before reuse; live downstream `401` from consent, assigned route, event, proof media, or offline retry clears the active token, stops/clears active route UI state, and requires phone lookup again. | Expired token can still access downstream route/event/proof APIs or retry loops without re-lookup guidance. |
 
 ## Evidence notes
 
