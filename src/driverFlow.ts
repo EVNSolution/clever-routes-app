@@ -33,8 +33,11 @@ export type MvpScenarioScreenId =
   | 'login'
   | 'routeList'
   | 'routeDetail'
-  | 'navigation'
-  | 'stopProof';
+  | 'liveTracking'
+  | 'stopDetails'
+  | 'arrivalCheck'
+  | 'stopCompleted'
+  | 'completedDeliveries';
 
 export type MvpScenarioScreen = {
   id: MvpScenarioScreenId;
@@ -45,11 +48,11 @@ export type MvpScenarioScreen = {
 
 export type MvpRouteTab = {
   id: 'active' | 'completed' | 'upcoming';
-  label: '배송완료' | '배송전' | '배송중';
+  label: 'Completed' | 'In Progress' | 'Pending';
 };
 
 export type StopCompletionProofField = {
-  id: 'locationTip' | 'photo' | 'todayNote';
+  id: 'additionalNotes' | 'locationTip' | 'photo' | 'todayNote';
   label: string;
   required: boolean;
 };
@@ -92,49 +95,68 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
   return [
     {
       id: 'login',
-      title: '로그인',
+      title: 'Login / Driver Verification',
       purpose: 'Confirm the driver by phone, then collect name and required consent.',
-      primaryAction: '전화번호 확인',
+      primaryAction: 'Continue',
     },
     {
       id: 'routeList',
-      title: '내용',
-      purpose: 'Show assigned routes grouped into 배송전, 배송중, and 배송완료 tabs.',
-      primaryAction: '라우트 선택',
+      title: 'Today’s Route',
+      purpose: 'Show assigned routes grouped into Pending, In Progress, and Completed tabs.',
+      primaryAction: 'Start Route',
     },
     {
       id: 'routeDetail',
-      title: '라우트 상세',
+      title: 'Route Details',
       purpose: 'Show company information, route date, region, and ordered stops before delivery starts.',
-      primaryAction: '배송 시작',
+      primaryAction: 'Begin Tracking',
     },
     {
-      id: 'navigation',
-      title: '내비게이션',
-      purpose: 'Guide the driver through company pickup and each delivery stop in fixed order.',
-      primaryAction: '다음 목적지로 이동',
+      id: 'liveTracking',
+      title: 'Live Tracking',
+      purpose: 'Show GPS tracking status and route overview without turn-by-turn navigation.',
+      primaryAction: 'Arrived',
     },
     {
-      id: 'stopProof',
-      title: '도착지 처리',
-      purpose: 'Collect required photo proof and optional driver notes/tips at each stop.',
-      primaryAction: '배송완료 증빙',
+      id: 'stopDetails',
+      title: 'Stop Details',
+      purpose: 'Show address, delivery instructions, location tips, and contact actions for the current stop.',
+      primaryAction: 'Arrived',
+    },
+    {
+      id: 'arrivalCheck',
+      title: 'Arrival Check',
+      purpose: 'Collect required photo proof, delivery notes, location tips, and optional notes at the stop.',
+      primaryAction: 'Complete Stop',
+    },
+    {
+      id: 'stopCompleted',
+      title: 'Stop Completed',
+      purpose: 'Confirm stop completion and guide the driver to the next stop or route summary.',
+      primaryAction: 'Continue to Next Stop',
+    },
+    {
+      id: 'completedDeliveries',
+      title: 'Completed Deliveries',
+      purpose: 'Show completed stops and proof status for the selected route or day.',
+      primaryAction: 'Back to Route',
     },
   ];
 }
 
 export function getMvpRouteTabs(): MvpRouteTab[] {
   return [
-    { id: 'upcoming', label: '배송전' },
-    { id: 'active', label: '배송중' },
-    { id: 'completed', label: '배송완료' },
+    { id: 'upcoming', label: 'Pending' },
+    { id: 'active', label: 'In Progress' },
+    { id: 'completed', label: 'Completed' },
   ];
 }
 
 export function getStopCompletionProofFields(): StopCompletionProofField[] {
   return [
-    { id: 'photo', label: '배송완료 사진', required: true },
-    { id: 'todayNote', label: '금일 배송시 특이사항', required: false },
-    { id: 'locationTip', label: '배송지의 특성 팁', required: false },
+    { id: 'photo', label: 'Photo Proof', required: true },
+    { id: 'todayNote', label: 'Today’s Delivery Notes', required: false },
+    { id: 'locationTip', label: 'Location Tip', required: false },
+    { id: 'additionalNotes', label: 'Additional Notes', required: false },
   ];
 }

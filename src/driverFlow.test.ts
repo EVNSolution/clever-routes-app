@@ -59,23 +59,47 @@ describe('driver app MVP flow', () => {
   it('defines the user-facing MVP screens instead of a debug guard page', () => {
     assert.deepEqual(
       getMvpScenarioScreens().map((screen) => screen.id),
-      ['login', 'routeList', 'routeDetail', 'navigation', 'stopProof'],
+      [
+        'login',
+        'routeList',
+        'routeDetail',
+        'liveTracking',
+        'stopDetails',
+        'arrivalCheck',
+        'stopCompleted',
+        'completedDeliveries',
+      ],
+    );
+
+    assert.deepEqual(
+      getMvpScenarioScreens().map((screen) => screen.title),
+      [
+        'Login / Driver Verification',
+        'Today’s Route',
+        'Route Details',
+        'Live Tracking',
+        'Stop Details',
+        'Arrival Check',
+        'Stop Completed',
+        'Completed Deliveries',
+      ],
     );
   });
 
-  it('shows route lists by delivery status tabs', () => {
+  it('shows route lists by English delivery status tabs', () => {
     assert.deepEqual(getMvpRouteTabs(), [
-      { id: 'upcoming', label: '배송전' },
-      { id: 'active', label: '배송중' },
-      { id: 'completed', label: '배송완료' },
+      { id: 'upcoming', label: 'Pending' },
+      { id: 'active', label: 'In Progress' },
+      { id: 'completed', label: 'Completed' },
     ]);
   });
 
-  it('keeps optional stop proof inputs implemented as driver choices', () => {
+  it('keeps proof and optional stop inputs aligned to the English arrival check design', () => {
     assert.deepEqual(getStopCompletionProofFields(), [
-      { id: 'photo', label: '배송완료 사진', required: true },
-      { id: 'todayNote', label: '금일 배송시 특이사항', required: false },
-      { id: 'locationTip', label: '배송지의 특성 팁', required: false },
+      { id: 'photo', label: 'Photo Proof', required: true },
+      { id: 'todayNote', label: 'Today’s Delivery Notes', required: false },
+      { id: 'locationTip', label: 'Location Tip', required: false },
+      { id: 'additionalNotes', label: 'Additional Notes', required: false },
     ]);
   });
 });
