@@ -119,12 +119,14 @@ describe('driver assigned route UX flow', () => {
   });
 
   it('gets assigned route from the delivery-server contract endpoint', async () => {
-    const requests: { headers: Record<string, string>; method: string; url: string }[] = [];
+    const requests: { cache?: string; credentials?: string; headers: Record<string, string>; method: string; url: string }[] = [];
     const client = createAssignedRouteApiClient({
       accessToken: 'driver.jwt',
       baseUrl: 'https://delivery.example.com/',
       fetchImpl: async (url, init) => {
         requests.push({
+          cache: init?.cache,
+          credentials: init?.credentials,
           headers: init?.headers ?? {},
           method: String(init?.method),
           url: String(url),
@@ -146,7 +148,11 @@ describe('driver assigned route UX flow', () => {
     assert.equal(result.status, 'ASSIGNED_ROUTE');
     assert.deepEqual(requests, [
       {
+        cache: 'no-store',
+        credentials: 'omit',
         headers: {
+          'Cache-Control': 'no-store',
+          Pragma: 'no-cache',
           Authorization: 'Bearer driver.jwt',
         },
         method: 'GET',

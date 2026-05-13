@@ -104,13 +104,15 @@ describe('driver consent gate UX flow', () => {
   });
 
   it('posts consent records to the delivery-server consent endpoint', async () => {
-    const requests: { body: unknown; headers: Record<string, string>; method: string; url: string }[] = [];
+    const requests: { body: unknown; cache?: string; credentials?: string; headers: Record<string, string>; method: string; url: string }[] = [];
     const client = createDriverConsentApiClient({
       accessToken: 'driver.jwt',
       baseUrl: 'https://delivery.example.com/',
       fetchImpl: async (url, init) => {
         requests.push({
           body: JSON.parse(String(init?.body)),
+          cache: init?.cache,
+          credentials: init?.credentials,
           headers: init?.headers ?? {},
           method: String(init?.method),
           url: String(url),
@@ -157,7 +159,11 @@ describe('driver consent gate UX flow', () => {
           recordedAt: '2026-05-12T06:20:00.000Z',
           routeContext: '11111111-1111-4111-8111-111111111111',
         },
+        cache: 'no-store',
+        credentials: 'omit',
         headers: {
+          'Cache-Control': 'no-store',
+          Pragma: 'no-cache',
           Authorization: 'Bearer driver.jwt',
           'Content-Type': 'application/json',
         },

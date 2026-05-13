@@ -135,12 +135,15 @@ describe('driver route access UX flow', () => {
   });
 
   it('posts phone-only lookup requests to the delivery-server contract endpoint', async () => {
-    const requests: { body: unknown; method: string; url: string }[] = [];
+    const requests: { body: unknown; cache?: string; credentials?: string; headers: Record<string, string>; method: string; url: string }[] = [];
     const client = createRouteAccessApiClient({
       baseUrl: 'https://delivery.example.com',
       fetchImpl: async (url, init) => {
         requests.push({
           body: JSON.parse(String(init?.body)),
+          cache: init?.cache,
+          credentials: init?.credentials,
+          headers: init?.headers ?? {},
           method: String(init?.method),
           url: String(url),
         });
@@ -161,6 +164,13 @@ describe('driver route access UX flow', () => {
         body: {
           phoneE164: '+14165550123',
           routeContext: null,
+        },
+        cache: 'no-store',
+        credentials: 'omit',
+        headers: {
+          'Cache-Control': 'no-store',
+          Pragma: 'no-cache',
+          'Content-Type': 'application/json',
         },
         method: 'POST',
         url: 'https://delivery.example.com/driver/route-access/lookup',

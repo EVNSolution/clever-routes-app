@@ -12,13 +12,15 @@ import {
 
 describe('proof media upload', () => {
   it('uploads captured proof photo with driver bearer token and returns durable media reference', async () => {
-    const requests: { body: FormData; headers: Record<string, string>; method: string; url: string }[] = [];
+    const requests: { body: FormData; cache?: string; credentials?: string; headers: Record<string, string>; method: string; url: string }[] = [];
     const service = createProofMediaUploadApiClient({
       accessToken: 'driver-token',
       baseUrl: 'https://delivery.example.com/',
       fetchImpl: async (url, init) => {
         requests.push({
           body: init?.body as FormData,
+          cache: init?.cache,
+          credentials: init?.credentials,
           headers: init?.headers ?? {},
           method: String(init?.method),
           url: String(url),
@@ -65,6 +67,10 @@ describe('proof media upload', () => {
     });
     assert.equal(requests[0]?.url, 'https://delivery.example.com/driver/proof-media');
     assert.equal(requests[0]?.method, 'POST');
+    assert.equal(requests[0]?.cache, 'no-store');
+    assert.equal(requests[0]?.credentials, 'omit');
+    assert.equal(requests[0]?.headers['Cache-Control'], 'no-store');
+    assert.equal(requests[0]?.headers.Pragma, 'no-cache');
     assert.equal(requests[0]?.headers.Authorization, 'Bearer driver-token');
     assert.equal(requests[0]?.headers['Content-Type'], undefined);
     assert.equal(requests[0]?.body.get('deliveryStopId'), 'stop-1');

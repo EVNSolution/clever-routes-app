@@ -49,7 +49,7 @@ Reserved roots from the target architecture remain valid for future additions wh
 | `App.tsx` | Expo bootstrap only. | `src/app/AppRoot`. | Business logic, UI implementation, native adapters. | No tests unless bootstrap logic is added. |
 | `src/app/` | App composition, provider/dependency wiring, app-level state, current screen flow host. | `api`, `domain`, `platform`, `ui`. | New standalone domain decisions that belong under `domain/*`. | Co-located tests for app/config/state helpers. |
 | `src/app/config/` | Runtime env parsing and service factory selection. | `api`, `domain`, `platform`. | React Native UI components. | Co-located tests. |
-| `src/api/deliveryServer/` | Delivery-server clients, bearer-token headers, response parsing, driver API error mapping. | `domain` contracts and standard `fetch` injection. | UI components and Expo native adapters. | Co-located API boundary tests with fake `fetchImpl`. |
+| `src/api/deliveryServer/` | Delivery-server client composition, bearer-token headers, no-store/no-cookie request options, response parsing, driver API error mapping. | `domain` contracts and standard `fetch` injection. | UI components and Expo native adapters. | Co-located API boundary tests with fake `fetchImpl`. |
 | `src/domain/` | Pure business decisions and service contracts. | Sibling domain modules plus API error types where currently required. | React, React Native, Expo modules, AsyncStorage, SecureStore, direct UI composition. | Co-located `*.test.ts` next to each module. |
 | `src/platform/expo/` | Expo/React Native adapters for native capabilities. | Domain service interfaces. | UI screens and delivery-server client composition. | Co-located adapter tests only when native calls can be faked. |
 | `src/release/` | Release readiness checks, source layout guardrails, release evidence seed/verification. | Node standard library and release-local helpers. | Runtime app state and UI screens. | Co-located tests. |
@@ -82,7 +82,7 @@ Reserved roots from the target architecture remain valid for future additions wh
 | --- | --- |
 | Bootstrap | `App.tsx`, `src/app/AppRoot.tsx` |
 | Runtime config | `src/app/config/driverRuntimeConfig.ts`, `src/app/config/driverRuntimeConfig.test.ts` |
-| Delivery-server API | `src/api/deliveryServer/driverApiClients.ts`, `src/api/deliveryServer/driverApiClients.test.ts`, `src/api/deliveryServer/driverApiError.ts` |
+| Delivery-server API | `src/api/deliveryServer/driverApiClients.ts`, `src/api/deliveryServer/driverApiClients.test.ts`, `src/api/deliveryServer/driverApiError.ts`, `src/api/deliveryServer/driverApiRequestOptions.ts`, `src/api/deliveryServer/driverApiRequestOptions.test.ts` |
 | Consent domain | `src/domain/consent/driverConsent.ts`, `src/domain/consent/driverConsent.test.ts` |
 | Delivery lifecycle domain | `src/domain/delivery/deliveryStart.ts`, `src/domain/delivery/deliveryStart.test.ts`, `src/domain/delivery/deliveryFinish.ts`, `src/domain/delivery/deliveryFinish.test.ts` |
 | Driver domain | `src/domain/driver/driverAccessTokenStore.ts`, `src/domain/driver/driverAccessTokenStore.test.ts`, `src/domain/driver/driverSessionReset.ts`, `src/domain/driver/driverSessionReset.test.ts` |

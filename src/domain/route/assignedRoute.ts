@@ -4,6 +4,7 @@ import {
   DRIVER_ACCESS_EXPIRED_MESSAGE,
   isDriverApiUnauthorizedError,
 } from '../../api/deliveryServer/driverApiError';
+import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
 
 export type AssignedRouteAddress = {
   address1: string;
@@ -87,6 +88,8 @@ export type AssignedRouteLoadResult =
 export type FetchLike = (
   input: string,
   init?: {
+    cache?: 'no-store';
+    credentials?: 'omit';
     headers?: Record<string, string>;
     method?: string;
   },
@@ -215,12 +218,12 @@ export function createAssignedRouteApiClient(input: {
     getAssignedRoute: async (request) => {
       const routeContext = request.routeContext?.trim();
       const query = routeContext ? `?routeContext=${encodeURIComponent(routeContext)}` : '';
-      const response = await fetchImpl(`${baseUrl}/driver/assigned-route${query}`, {
+      const response = await fetchImpl(`${baseUrl}/driver/assigned-route${query}`, withNoStoreDriverApiRequest({
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
         method: 'GET',
-      });
+      }));
       const payload = await response.json();
       if (!response.ok) {
         throw createDriverApiHttpError({

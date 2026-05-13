@@ -4,6 +4,7 @@ import {
   DRIVER_ACCESS_EXPIRED_MESSAGE,
   isDriverApiUnauthorizedError,
 } from '../../api/deliveryServer/driverApiError';
+import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
 
 export type DriverConsentType = 'LOCATION_INFORMATION' | 'PERSONAL_INFORMATION';
 
@@ -62,6 +63,8 @@ export type FetchLike = (
   input: string,
   init?: {
     body?: string;
+    cache?: 'no-store';
+    credentials?: 'omit';
     headers?: Record<string, string>;
     method?: string;
   },
@@ -151,7 +154,7 @@ export function createDriverConsentApiClient(input: {
 
   return {
     recordDriverConsents: async (request) => {
-      const response = await fetchImpl(`${baseUrl}/driver/consents`, {
+      const response = await fetchImpl(`${baseUrl}/driver/consents`, withNoStoreDriverApiRequest({
         body: JSON.stringify({
           appContext: request.appContext,
           consents: request.consents,
@@ -164,7 +167,7 @@ export function createDriverConsentApiClient(input: {
           'Content-Type': 'application/json',
         },
         method: 'POST',
-      });
+      }));
       const payload = await response.json();
       if (!response.ok) {
         throw createDriverApiHttpError({

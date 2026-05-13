@@ -5,6 +5,7 @@ import {
   getDriverApiRequiresRouteLookup,
 } from '../../api/deliveryServer/driverApiError';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
+import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
 
 export type DriverEventType =
   | 'LOCATION_UPDATED'
@@ -49,6 +50,8 @@ export type FetchLike = (
   input: string,
   init?: {
     body?: string;
+    cache?: 'no-store';
+    credentials?: 'omit';
     headers?: Record<string, string>;
     method?: string;
   },
@@ -83,14 +86,14 @@ export function createDriverEventsApiClient(input: {
 
   return {
     recordDriverEvent: async (event) => {
-      const response = await fetchImpl(`${baseUrl}/driver/events`, {
+      const response = await fetchImpl(`${baseUrl}/driver/events`, withNoStoreDriverApiRequest({
         body: JSON.stringify(toDriverEventRequestBody(event)),
         headers: {
           Authorization: `Bearer ${input.accessToken}`,
           'Content-Type': 'application/json',
         },
         method: 'POST',
-      });
+      }));
       const payload = await response.json();
       if (!response.ok) {
         throw createDriverApiHttpError({
