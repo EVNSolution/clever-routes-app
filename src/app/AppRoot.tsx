@@ -100,6 +100,7 @@ const COMPANY_STEP_INDEX = 0;
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>('login');
   const [selectedPhoneCountryIso2, setSelectedPhoneCountryIso2] = useState(DEFAULT_DRIVER_PHONE_COUNTRY.iso2);
+  const [selectedDriverLocale, setSelectedDriverLocale] = useState(DEFAULT_DRIVER_PHONE_COUNTRY.defaultLocale);
   const [nationalPhoneInput, setNationalPhoneInput] = useState('');
   const [countrySearchQuery, setCountrySearchQuery] = useState('');
   const [isCountrySelectorOpen, setIsCountrySelectorOpen] = useState(false);
@@ -245,6 +246,7 @@ export default function App() {
 
   function handlePhoneCountrySelect(country: DriverPhoneCountry) {
     setSelectedPhoneCountryIso2(country.iso2);
+    setSelectedDriverLocale(country.defaultLocale);
     setCountrySearchQuery('');
     setIsCountrySelectorOpen(false);
     setNationalPhoneInput(formatDriverNationalPhoneInput({
@@ -724,6 +726,7 @@ export default function App() {
               onSubmit={handleLoginAndLoadRoutes}
               onVerificationCodeChange={setVerificationCode}
               phoneE164Preview={phoneE164Preview}
+              selectedDriverLocale={selectedDriverLocale}
               selectedPhoneCountry={selectedPhoneCountry}
               verificationCode={verificationCode}
             />
@@ -857,6 +860,7 @@ function LoginScreen({
   onSubmit,
   onVerificationCodeChange,
   phoneE164Preview,
+  selectedDriverLocale,
   selectedPhoneCountry,
   verificationCode,
 }: {
@@ -879,6 +883,7 @@ function LoginScreen({
   onSubmit(): void;
   onVerificationCodeChange(value: string): void;
   phoneE164Preview: string | null;
+  selectedDriverLocale: string;
   selectedPhoneCountry: DriverPhoneCountry;
   verificationCode: string;
 }) {
@@ -898,6 +903,7 @@ function LoginScreen({
           onToggle={onCountrySelectorToggle}
           searchQuery={countrySearchQuery}
           selectedCountry={selectedPhoneCountry}
+          selectedLocale={selectedDriverLocale}
         />
         <PhoneNumberInput
           callingCode={selectedPhoneCountry.callingCode}
@@ -1421,6 +1427,7 @@ function CountrySelector({
   onToggle,
   searchQuery,
   selectedCountry,
+  selectedLocale,
 }: {
   countries: DriverPhoneCountry[];
   isOpen: boolean;
@@ -1429,14 +1436,18 @@ function CountrySelector({
   onToggle(): void;
   searchQuery: string;
   selectedCountry: DriverPhoneCountry;
+  selectedLocale: string;
 }) {
   return (
     <View style={styles.inputGroup}>
       <Text style={styles.inputLabel}>Country</Text>
       <Pressable accessibilityRole="button" onPress={onToggle} style={styles.countrySelectorButton}>
         <View style={styles.routeHeaderText}>
-          <Text style={styles.countrySelectorText}>{getDriverPhoneCountryLabel(selectedCountry)}</Text>
-          <Text style={styles.helperText}>Search by country, ISO code, or calling code.</Text>
+          <Text style={styles.countrySelectorText}>{getDriverPhoneCountryLabel(selectedCountry, { locale: selectedLocale })}</Text>
+          <Text style={styles.helperText}>
+            {selectedCountry.nativeCountryName} · {selectedCountry.defaultLocale} · {selectedCountry.measurementSystem} · {selectedCountry.textDirection.toUpperCase()}
+          </Text>
+          <Text style={styles.helperText}>Search by country, ISO code, calling code, locale, or language.</Text>
         </View>
         <Text style={styles.inlineActionText}>{isOpen ? 'Close' : 'Change'}</Text>
       </Pressable>
@@ -1445,7 +1456,7 @@ function CountrySelector({
           <LabeledInput
             label="Search Country"
             onChangeText={onSearchChange}
-            placeholder="Country, ISO, or + code"
+            placeholder="Country, ISO, + code, locale, or language"
             value={searchQuery}
           />
           {countries.length > 0 ? countries.map((country) => (
@@ -1455,7 +1466,8 @@ function CountrySelector({
               onPress={() => onSelectCountry(country)}
               style={[styles.countryRow, country.iso2 === selectedCountry.iso2 && styles.countryRowSelected]}
             >
-              <Text style={styles.countrySelectorText}>{getDriverPhoneCountryLabel(country)}</Text>
+              <Text style={styles.countrySelectorText}>{getDriverPhoneCountryLabel(country, { locale: selectedLocale })}</Text>
+              <Text style={styles.helperText}>{country.nativeCountryName} · {country.defaultLocale} · {country.nativeLanguageName}</Text>
             </Pressable>
           )) : <Text style={styles.helperText}>No supported countries matched this search.</Text>}
         </View>

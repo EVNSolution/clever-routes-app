@@ -205,7 +205,7 @@ The persisted payload stores only the driver token and route access identifiers 
 
 ## Follow-up
 
-- Country-aware phone entry is implemented for the initial `CA`/`KR` allowlist. The remaining slice from `docs/phone-verification-plan.md` is server-owned SMS OTP verification/cost controls.
+- Country-aware phone entry now uses the supported-country i18n catalog in `src/domain/phone/phoneEntry.ts`: country labels include localized country name, ISO, calling code, and language; search covers name/native name/ISO/calling code/locale/language; national input is normalized to E.164 before route access. The remaining slice from `docs/phone-verification-plan.md` is server-owned SMS OTP verification/cost controls and per-country SMS compliance/rate-limit policy.
 - Define release environment profiles and any server-issued token refresh, OTP, managed identity, or stronger re-auth UX beyond the current phone re-lookup recovery for short-lived token expiry.
 - Add production proof-media object storage, signed access, scanner backend deployment/private evidence storage, and deployed cleanup/scheduler evidence. The delivery server already exposes a scan rejection hook and a local/manual cleanup runner via `npm run driver:proof-media:cleanup`.
 - Add physical-device background tracking smoke evidence and production privacy disclosures for updates emitted while the app process cannot reach the live delivery server. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.
