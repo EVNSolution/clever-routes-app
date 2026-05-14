@@ -54,7 +54,6 @@ import {
   DEFAULT_DRIVER_PHONE_COUNTRY,
   findDriverPhoneCountry,
   formatDriverNationalPhoneInput,
-  getDriverPhoneCountryLabel,
   normalizeDriverPhoneEntry,
   searchDriverPhoneCountries,
   type DriverPhoneCountry,
@@ -69,6 +68,11 @@ import {
   type RouteAccessSubmissionResult,
 } from '../domain/routeAccess/routeAccess';
 import { recordStopProofEventAfterDeliveryStart, type StopProofEventResult } from '../domain/stop/stopProofEvents';
+import {
+  COUNTRY_SELECTOR_OVERLAY_BEHAVIOR,
+  getCountrySelectorRowText,
+  getSelectedCountryCardText,
+} from '../ui/components/countrySelectorBehavior';
 import { TransientToast } from '../ui/components/TransientToast';
 import { scheduleTransientToastDismiss } from '../ui/components/transientToastBehavior';
 
@@ -1438,18 +1442,22 @@ function CountrySelector({
   selectedCountry: DriverPhoneCountry;
   selectedLocale: string;
 }) {
+  const selectedText = getSelectedCountryCardText(selectedCountry, { locale: selectedLocale });
+
   return (
-    <View style={styles.inputGroup}>
+    <View style={[styles.inputGroup, styles.countrySelectorGroup, isOpen && styles.countrySelectorGroupOpen]}>
       <Text style={styles.inputLabel}>Country</Text>
-      <Pressable accessibilityRole="button" onPress={onToggle} style={styles.countrySelectorButton}>
+      <Pressable
+        accessibilityHint={isOpen ? 'Closes the country search list.' : 'Opens the country search list.'}
+        accessibilityLabel={`Country ${selectedText.title} ${selectedText.callingCode}`}
+        accessibilityRole="button"
+        onPress={onToggle}
+        style={styles.countrySelectorButton}
+      >
         <View style={styles.routeHeaderText}>
-          <Text style={styles.countrySelectorText}>{getDriverPhoneCountryLabel(selectedCountry, { locale: selectedLocale })}</Text>
-          <Text style={styles.helperText}>
-            {selectedCountry.nativeCountryName} · {selectedCountry.defaultLocale} · {selectedCountry.measurementSystem} · {selectedCountry.textDirection.toUpperCase()}
-          </Text>
-          <Text style={styles.helperText}>Search by country, ISO code, calling code, locale, or language.</Text>
+          <Text numberOfLines={1} style={styles.countrySelectorText}>{selectedText.title}</Text>
         </View>
-        <Text style={styles.inlineActionText}>{isOpen ? 'Close' : 'Change'}</Text>
+        <Text style={styles.countryCallingCodeText}>{selectedText.callingCode}</Text>
       </Pressable>
       {isOpen ? (
         <View style={styles.countryListPanel}>
@@ -1459,17 +1467,23 @@ function CountrySelector({
             placeholder="Country, ISO, + code, locale, or language"
             value={searchQuery}
           />
-          {countries.length > 0 ? countries.map((country) => (
-            <Pressable
-              accessibilityRole="button"
-              key={country.iso2}
-              onPress={() => onSelectCountry(country)}
-              style={[styles.countryRow, country.iso2 === selectedCountry.iso2 && styles.countryRowSelected]}
-            >
-              <Text style={styles.countrySelectorText}>{getDriverPhoneCountryLabel(country, { locale: selectedLocale })}</Text>
-              <Text style={styles.helperText}>{country.nativeCountryName} · {country.defaultLocale} · {country.nativeLanguageName}</Text>
-            </Pressable>
-          )) : <Text style={styles.helperText}>No supported countries matched this search.</Text>}
+          <ScrollView nestedScrollEnabled style={styles.countryListScroll}>
+            {countries.length > 0 ? countries.map((country) => {
+              const rowText = getCountrySelectorRowText(country, { locale: selectedLocale });
+
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  key={country.iso2}
+                  onPress={() => onSelectCountry(country)}
+                  style={[styles.countryRow, country.iso2 === selectedCountry.iso2 && styles.countryRowSelected]}
+                >
+                  <Text numberOfLines={1} style={styles.countrySelectorText}>{rowText.title}</Text>
+                  <Text numberOfLines={1} style={styles.helperText}>{rowText.subtitle}</Text>
+                </Pressable>
+              );
+            }) : <Text style={styles.helperText}>No supported countries matched this search.</Text>}
+          </ScrollView>
         </View>
       ) : null}
     </View>
@@ -2030,6 +2044,7 @@ const styles = StyleSheet.create({
   },
   screenStack: {
     gap: 22,
+    overflow: 'visible',
   },
   pageHeader: {
     gap: 6,
@@ -2083,6 +2098,7 @@ const styles = StyleSheet.create({
   },
   formCard: {
     gap: 18,
+    overflow: 'visible',
   },
   inputGroup: {
     gap: 8,
@@ -2102,6 +2118,14 @@ const styles = StyleSheet.create({
     minHeight: 52,
     paddingHorizontal: 14,
   },
+  countrySelectorGroup: {
+    overflow: 'visible',
+    position: 'relative',
+    zIndex: 20,
+  },
+  countrySelectorGroupOpen: {
+    zIndex: COUNTRY_SELECTOR_OVERLAY_BEHAVIOR.zIndex,
+  },
   countrySelectorButton: {
     alignItems: 'center',
     backgroundColor: '#ffffff',
@@ -2110,22 +2134,44 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: 'row',
     gap: 12,
-    minHeight: 62,
+    minHeight: 54,
     paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingVertical: 10,
   },
   countrySelectorText: {
     color: '#111827',
     fontSize: 15,
     fontWeight: '800',
   },
+  countryCallingCodeText: {
+    backgroundColor: '#eef6ff',
+    borderRadius: 999,
+    color: '#0b57d0',
+    fontSize: 14,
+    fontWeight: '900',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
   countryListPanel: {
     backgroundColor: '#ffffff',
     borderColor: '#e5e7eb',
     borderRadius: 16,
     borderWidth: 1,
+    elevation: COUNTRY_SELECTOR_OVERLAY_BEHAVIOR.elevation,
     gap: 10,
+    left: 0,
     padding: 12,
+    position: COUNTRY_SELECTOR_OVERLAY_BEHAVIOR.position,
+    right: 0,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.16,
+    shadowRadius: 24,
+    top: 84,
+    zIndex: COUNTRY_SELECTOR_OVERLAY_BEHAVIOR.zIndex,
+  },
+  countryListScroll: {
+    maxHeight: COUNTRY_SELECTOR_OVERLAY_BEHAVIOR.maxVisibleRows * 62,
   },
   countryRow: {
     borderColor: '#eef2f6',
