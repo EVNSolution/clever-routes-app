@@ -78,6 +78,123 @@ const WEEK_START_BY_FIRST_DAY: Record<number, DriverWeekStartDay> = {
   7: 'sunday',
 };
 
+const FALLBACK_REGION_NAMES: Partial<Record<DriverPhoneCountryIso2, string>> = {
+  AE: 'United Arab Emirates',
+  AR: 'Argentina',
+  AT: 'Austria',
+  AU: 'Australia',
+  BD: 'Bangladesh',
+  BE: 'Belgium',
+  BH: 'Bahrain',
+  BO: 'Bolivia',
+  BR: 'Brazil',
+  CA: 'Canada',
+  CH: 'Switzerland',
+  CL: 'Chile',
+  CN: 'China',
+  CO: 'Colombia',
+  CR: 'Costa Rica',
+  CZ: 'Czechia',
+  DE: 'Germany',
+  DK: 'Denmark',
+  DO: 'Dominican Republic',
+  EC: 'Ecuador',
+  EG: 'Egypt',
+  ES: 'Spain',
+  ET: 'Ethiopia',
+  FI: 'Finland',
+  FR: 'France',
+  GB: 'United Kingdom',
+  GH: 'Ghana',
+  GR: 'Greece',
+  HK: 'Hong Kong',
+  HU: 'Hungary',
+  ID: 'Indonesia',
+  IE: 'Ireland',
+  IL: 'Israel',
+  IN: 'India',
+  IT: 'Italy',
+  JM: 'Jamaica',
+  JP: 'Japan',
+  KE: 'Kenya',
+  KH: 'Cambodia',
+  KR: 'South Korea',
+  KW: 'Kuwait',
+  LA: 'Laos',
+  LK: 'Sri Lanka',
+  MA: 'Morocco',
+  MM: 'Myanmar',
+  MN: 'Mongolia',
+  MX: 'Mexico',
+  MY: 'Malaysia',
+  NG: 'Nigeria',
+  NL: 'Netherlands',
+  NO: 'Norway',
+  NP: 'Nepal',
+  NZ: 'New Zealand',
+  OM: 'Oman',
+  PA: 'Panama',
+  PE: 'Peru',
+  PH: 'Philippines',
+  PK: 'Pakistan',
+  PL: 'Poland',
+  PT: 'Portugal',
+  PY: 'Paraguay',
+  QA: 'Qatar',
+  RO: 'Romania',
+  SA: 'Saudi Arabia',
+  SE: 'Sweden',
+  SG: 'Singapore',
+  TH: 'Thailand',
+  TR: 'Turkey',
+  TW: 'Taiwan',
+  US: 'United States',
+  UY: 'Uruguay',
+  VN: 'Vietnam',
+  ZA: 'South Africa',
+};
+
+const FALLBACK_LANGUAGE_NAMES: Partial<Record<string, string>> = {
+  am: 'Amharic',
+  ar: 'Arabic',
+  bn: 'Bengali',
+  cs: 'Czech',
+  da: 'Danish',
+  de: 'German',
+  el: 'Greek',
+  en: 'English',
+  es: 'Spanish',
+  fi: 'Finnish',
+  fil: 'Filipino',
+  fr: 'French',
+  he: 'Hebrew',
+  hi: 'Hindi',
+  hu: 'Hungarian',
+  id: 'Indonesian',
+  it: 'Italian',
+  ja: 'Japanese',
+  km: 'Khmer',
+  ko: 'Korean',
+  lo: 'Lao',
+  mn: 'Mongolian',
+  ms: 'Malay',
+  my: 'Burmese',
+  nb: 'Norwegian Bokmål',
+  ne: 'Nepali',
+  nl: 'Dutch',
+  pl: 'Polish',
+  pt: 'Portuguese',
+  ro: 'Romanian',
+  si: 'Sinhala',
+  sv: 'Swedish',
+  sw: 'Swahili',
+  th: 'Thai',
+  tr: 'Turkish',
+  ur: 'Urdu',
+  vi: 'Vietnamese',
+  zh: 'Chinese',
+};
+
 const DRIVER_PHONE_COUNTRY_SEEDS: DriverPhoneCountrySeed[] = [
   { iso2: 'CA', defaultLocale: 'en-CA', primaryLanguageCode: 'en', measurementSystem: 'mixed' },
   { iso2: 'KR', defaultLocale: 'ko-KR', primaryLanguageCode: 'ko' },
@@ -266,15 +383,37 @@ function getDisplayName({
   locale: string;
   type: 'language' | 'region';
 }): string {
-  if (DISPLAY_NAMES === undefined) {
-    return code;
+  try {
+    if (DISPLAY_NAMES !== undefined) {
+      const displayName = new DISPLAY_NAMES([locale], { type }).of(code);
+
+      if (isUsefulDisplayName(displayName, code)) {
+        return displayName;
+      }
+    }
+  } catch {
+    // Fall through to deterministic fallback names below.
   }
 
-  try {
-    return new DISPLAY_NAMES([locale], { type }).of(code) ?? code;
-  } catch {
-    return code;
+  return getFallbackDisplayName({ code, type });
+}
+
+function isUsefulDisplayName(displayName: string | undefined, code: string): displayName is string {
+  return displayName !== undefined && displayName.trim().toLowerCase() !== code.toLowerCase();
+}
+
+function getFallbackDisplayName({
+  code,
+  type,
+}: {
+  code: string;
+  type: 'language' | 'region';
+}): string {
+  if (type === 'region') {
+    return FALLBACK_REGION_NAMES[code as DriverPhoneCountryIso2] ?? code;
   }
+
+  return FALLBACK_LANGUAGE_NAMES[code] ?? code;
 }
 
 function getWeekStartsOn(locale: string): DriverWeekStartDay {
