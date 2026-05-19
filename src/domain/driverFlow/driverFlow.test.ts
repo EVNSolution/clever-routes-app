@@ -75,7 +75,7 @@ describe('driver app MVP flow', () => {
       getMvpScenarioScreens().map((screen) => screen.title),
       [
         'Login / Driver Verification',
-        'Today’s Route',
+        'Upcoming Routes',
         'Route Details',
         'Live Tracking',
         'Stop Details',

@@ -101,8 +101,8 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
     },
     {
       id: 'routeList',
-      title: 'Today’s Route',
-      purpose: 'Show assigned routes grouped into Pending, In Progress, and Completed tabs.',
+      title: 'Upcoming Routes',
+      purpose: 'Show current and future assigned routes from nearest date to farthest, grouped into Pending, In Progress, and Completed tabs.',
       primaryAction: 'Start Route',
     },
     {
