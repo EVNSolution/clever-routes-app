@@ -15,7 +15,8 @@
     "android": {
       "package": "com.evns.cleverdriverapp",
       "edgeToEdgeEnabled": true,
-      "versionCode": 1
+      "versionCode": 1,
+      "softwareKeyboardLayoutMode": "resize"
     },
     "extra": {
       "projectStartIssue": "EVNSolution/clever-change-control#145",
