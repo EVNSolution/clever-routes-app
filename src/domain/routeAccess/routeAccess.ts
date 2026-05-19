@@ -34,6 +34,8 @@ export type DriverAccessToken = {
   tokenType: 'Bearer';
   ttlSeconds: number;
   use: 'consent_and_assigned_route';
+  refreshToken?: string;
+  refreshTokenExpiresAt?: string;
 };
 
 export type RouteAccessRouteChoice = {
@@ -449,7 +451,9 @@ export function isDriverAccessToken(value: unknown): value is DriverAccessToken 
     typeof token.ttlSeconds === 'number' &&
     Number.isFinite(token.ttlSeconds) &&
     token.ttlSeconds > 0 &&
-    token.use === 'consent_and_assigned_route'
+    token.use === 'consent_and_assigned_route' &&
+    (token.refreshToken === undefined || typeof token.refreshToken === 'string') &&
+    (token.refreshTokenExpiresAt === undefined || typeof token.refreshTokenExpiresAt === 'string')
   );
 }
 

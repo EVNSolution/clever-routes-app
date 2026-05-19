@@ -45,4 +45,46 @@ describe('driver runtime API config', () => {
       },
     ]);
   });
+
+  it('uses live driver auth API client when a delivery server base URL is configured', async () => {
+    const requests: { body: unknown; method: string; url: string }[] = [];
+    const config = readDriverRuntimeConfig({
+      EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: 'https://delivery.example.com/',
+    });
+    const services = createDriverRuntimeServices({
+      config,
+      fetchImpl: async (url, init) => {
+        requests.push({ body: JSON.parse(String(init?.body)), method: String(init?.method), url: String(url) });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              accessToken: 'access-token',
+              expiresAt: '2026-05-15T00:15:00.000Z',
+              refreshToken: 'refresh-token',
+              refreshTokenExpiresAt: '2026-06-15T00:00:00.000Z',
+            },
+            error: null,
+          }),
+        };
+      },
+    });
+
+    const result = await services.driverAuthService.verifyCode({
+      inviteCode: 'ABC123',
+      phoneE164: '+14165550123',
+      displayName: 'Minji Kim',
+    });
+
+    assert.equal(result.driverAccess.accessToken, 'access-token');
+    assert.equal(result.driverAccess.refreshToken, 'refresh-token');
+    assert.deepEqual(requests, [
+      {
+        body: { phone: '+14165550123', inviteCode: 'ABC123', displayName: 'Minji Kim' },
+        method: 'POST',
+        url: 'https://delivery.example.com/driver/auth/verify-invite',
+      },
+    ]);
+  });
 });

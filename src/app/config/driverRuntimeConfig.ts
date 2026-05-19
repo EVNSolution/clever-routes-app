@@ -1,4 +1,5 @@
 import { createMockRouteAccessService, createRouteAccessApiClient, type FetchLike, type RouteAccessService } from '../../domain/routeAccess/routeAccess';
+import { createDriverAuthApiClient, createMockDriverAuthService, type DriverAuthService } from '../../domain/driverAuth/driverAuth';
 
 export type DriverRuntimeConfig =
   | {
@@ -10,6 +11,7 @@ export type DriverRuntimeConfig =
     };
 
 export type DriverRuntimeServices = {
+  driverAuthService: DriverAuthService;
   routeAccessService: RouteAccessService;
 };
 
@@ -31,11 +33,16 @@ export function createDriverRuntimeServices(input: {
 }): DriverRuntimeServices {
   if (input.config.mode === 'mock') {
     return {
+      driverAuthService: createMockDriverAuthService(),
       routeAccessService: createMockRouteAccessService(),
     };
   }
 
   return {
+    driverAuthService: createDriverAuthApiClient({
+      baseUrl: input.config.deliveryServerBaseUrl,
+      fetchImpl: input.fetchImpl,
+    }),
     routeAccessService: createRouteAccessApiClient({
       baseUrl: input.config.deliveryServerBaseUrl,
       fetchImpl: input.fetchImpl,
