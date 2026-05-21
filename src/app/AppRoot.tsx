@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   BackHandler,
+  InputAccessoryView,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -87,7 +89,9 @@ import {
 import {
   getConsentCheckboxVisualState,
   getKeyboardInputNavigationState,
+  getKeyboardNavigationAccessoryControls,
   type KeyboardInputNavigationState,
+  type KeyboardNavigationAccessoryIcon,
 } from '../ui/components/authFormUxBehavior';
 import { TransientToast } from '../ui/components/TransientToast';
 import { scheduleTransientToastDismiss } from '../ui/components/transientToastBehavior';
@@ -118,6 +122,7 @@ type RouteSession = RouteAccessRouteChoice & {
 const COMPANY_STEP_INDEX = 0;
 const DRIVER_APP_VERSION = '0.1.0';
 const ANDROID_SYSTEM_NAV_CLEARANCE = 56;
+const LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID = 'login-detail-keyboard-navigation';
 const LOGIN_DETAIL_INPUT_ORDER = ['verificationCode', 'driverFirstName', 'driverLastName'] as const;
 
 type LoginDetailInputId = typeof LOGIN_DETAIL_INPUT_ORDER[number];
@@ -244,6 +249,10 @@ export default function App() {
   const focusNextLoginDetailInput = useCallback(() => {
     focusLoginDetailInput(loginDetailKeyboardNavigation.nextInputId);
   }, [focusLoginDetailInput, loginDetailKeyboardNavigation.nextInputId]);
+  const dismissLoginDetailKeyboard = useCallback(() => {
+    Keyboard.dismiss();
+    setFocusedLoginDetailInputId(null);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -1153,9 +1162,20 @@ export default function App() {
             />
           ) : null}
         </ScrollView>
-        {screen === 'loginDetail' && focusedLoginDetailInputId !== null ? (
+        {screen === 'loginDetail' && Platform.OS === 'ios' ? (
+          <InputAccessoryView nativeID={LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID}>
+            <KeyboardNavigationBar
+              navigationState={loginDetailKeyboardNavigation}
+              onDone={dismissLoginDetailKeyboard}
+              onFocusNext={focusNextLoginDetailInput}
+              onFocusPrevious={focusPreviousLoginDetailInput}
+            />
+          </InputAccessoryView>
+        ) : null}
+        {screen === 'loginDetail' && focusedLoginDetailInputId !== null && Platform.OS !== 'ios' ? (
           <KeyboardNavigationBar
             navigationState={loginDetailKeyboardNavigation}
+            onDone={dismissLoginDetailKeyboard}
             onFocusNext={focusNextLoginDetailInput}
             onFocusPrevious={focusPreviousLoginDetailInput}
           />
@@ -1278,6 +1298,7 @@ function LoginDetailScreen({
       <View style={styles.formCard}>
         <LabeledInput
           blurOnSubmit={false}
+          inputAccessoryViewID={Platform.OS === 'ios' ? LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID : undefined}
           inputRef={inputRefs.verificationCode}
           label="Verification Code"
           onChangeText={onVerificationCodeChange}
@@ -1289,6 +1310,7 @@ function LoginDetailScreen({
         />
         <LabeledInput
           blurOnSubmit={false}
+          inputAccessoryViewID={Platform.OS === 'ios' ? LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID : undefined}
           inputRef={inputRefs.driverFirstName}
           label="First Name"
           onChangeText={onDriverFirstNameChange}
@@ -1299,6 +1321,7 @@ function LoginDetailScreen({
           value={driverFirstName}
         />
         <LabeledInput
+          inputAccessoryViewID={Platform.OS === 'ios' ? LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID : undefined}
           inputRef={inputRefs.driverLastName}
           label="Last Name"
           onChangeText={onDriverLastNameChange}
@@ -1470,7 +1493,7 @@ function RoutesPage({
     <View style={styles.screenStack}>
       <View style={styles.pageHeader}>
         <Text style={styles.pageTitle}>Routes</Text>
-        <Text style={styles.helperText}>{driverName.trim() ? `${driverName.trim()}, view today and upcoming routes first.` : 'View today and upcoming routes first.'}</Text>
+        <Text style={styles.helperText}>{driverName.trim() ? `${driverName.trim()}, view current and upcoming routes first.` : 'View current and upcoming routes first.'}</Text>
       </View>
       <SegmentedTabs onSelectTab={onSelectTab} selectedTab={selectedTab} tabs={tabs} />
       {selectedTab === 'completed' ? (
@@ -1826,7 +1849,7 @@ function ArrivalCheckScreen({
       {mediaResult !== undefined ? <StatusBanner tone={mediaResult.kind === 'uploaded' ? 'green' : 'warning'} text={formatMediaUploadResult(mediaResult)} /> : null}
 
       <LabeledInput
-        label="Today’s Delivery Notes"
+        label="Delivery Notes"
         onChangeText={(value) => onDraftChange({ todayNote: value })}
         placeholder="Select an issue"
         value={draft.todayNote}
@@ -1910,7 +1933,7 @@ function CompletedDeliveriesScreen({
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Completed Deliveries" rightLabel="Filter" />
       <View>
-        <Text style={styles.pageTitleSmall}>Today</Text>
+        <Text style={styles.pageTitleSmall}>Current session</Text>
         <Text style={styles.helperText}>{route.deliveryDate}</Text>
       </View>
       <View style={styles.completionSummaryCard}>
@@ -2075,6 +2098,7 @@ function PhoneNumberInput({
 
 function LabeledInput({
   blurOnSubmit,
+  inputAccessoryViewID,
   inputRef,
   keyboardType,
   label,
@@ -2089,6 +2113,7 @@ function LabeledInput({
   value,
 }: {
   blurOnSubmit?: boolean;
+  inputAccessoryViewID?: string;
   inputRef?: (input: TextInput | null) => void;
   keyboardType?: 'default' | 'phone-pad';
   label: string;
@@ -2110,6 +2135,7 @@ function LabeledInput({
           autoCapitalize="none"
           autoCorrect={false}
           blurOnSubmit={blurOnSubmit}
+          inputAccessoryViewID={inputAccessoryViewID}
           keyboardType={keyboardType ?? 'default'}
           multiline={multiline}
           onChangeText={onChangeText}
@@ -2134,34 +2160,69 @@ function LabeledInput({
 
 function KeyboardNavigationBar({
   navigationState,
+  onDone,
   onFocusNext,
   onFocusPrevious,
 }: {
   navigationState: KeyboardInputNavigationState<LoginDetailInputId>;
+  onDone(): void;
   onFocusNext(): void;
   onFocusPrevious(): void;
 }) {
+  const controls = getKeyboardNavigationAccessoryControls(navigationState);
+
   return (
     <View style={styles.keyboardNavigationBar}>
-      <Pressable
-        accessibilityLabel="Previous text box"
-        accessibilityRole="button"
-        disabled={!navigationState.canFocusPrevious}
-        onPress={onFocusPrevious}
-        style={[styles.keyboardNavigationButton, !navigationState.canFocusPrevious && styles.keyboardNavigationButtonDisabled]}
-      >
-        <Text style={[styles.keyboardNavigationButtonText, !navigationState.canFocusPrevious && styles.keyboardNavigationButtonTextDisabled]}>↑</Text>
-      </Pressable>
-      <Text style={styles.keyboardNavigationPosition}>{navigationState.positionLabel}</Text>
-      <Pressable
-        accessibilityLabel="Next text box"
-        accessibilityRole="button"
-        disabled={!navigationState.canFocusNext}
-        onPress={onFocusNext}
-        style={[styles.keyboardNavigationButton, !navigationState.canFocusNext && styles.keyboardNavigationButtonDisabled]}
-      >
-        <Text style={[styles.keyboardNavigationButtonText, !navigationState.canFocusNext && styles.keyboardNavigationButtonTextDisabled]}>↓</Text>
-      </Pressable>
+      <View style={styles.keyboardNavigationGroup}>
+        <Pressable
+          accessibilityLabel={controls.previous.accessibilityLabel}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: controls.previous.disabled }}
+          disabled={controls.previous.disabled}
+          onPress={onFocusPrevious}
+          style={[styles.keyboardNavigationIconButton, controls.previous.disabled && styles.keyboardNavigationButtonDisabled]}
+        >
+          <KeyboardNavigationArrowIcon disabled={controls.previous.disabled} icon={controls.previous.icon} />
+        </Pressable>
+      </View>
+      <View style={[styles.keyboardNavigationGroup, styles.keyboardNavigationGroupEnd]}>
+        <Pressable
+          accessibilityLabel={controls.next.accessibilityLabel}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: controls.next.disabled }}
+          disabled={controls.next.disabled}
+          onPress={onFocusNext}
+          style={[styles.keyboardNavigationIconButton, controls.next.disabled && styles.keyboardNavigationButtonDisabled]}
+        >
+          <KeyboardNavigationArrowIcon disabled={controls.next.disabled} icon={controls.next.icon} />
+        </Pressable>
+        <Pressable
+          accessibilityLabel={controls.done.accessibilityLabel}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: controls.done.disabled }}
+          disabled={controls.done.disabled}
+          onPress={onDone}
+          style={styles.keyboardNavigationDoneButton}
+        >
+          <Text style={styles.keyboardNavigationDoneText}>{controls.done.label}</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function KeyboardNavigationArrowIcon({ disabled, icon }: { disabled: boolean; icon: KeyboardNavigationAccessoryIcon }) {
+  const isUpIcon = icon === 'keyboard_arrow_up';
+
+  return (
+    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.keyboardNavigationIconBox}>
+      <View
+        style={[
+          styles.keyboardNavigationMaterialChevron,
+          isUpIcon ? styles.keyboardNavigationMaterialChevronUp : styles.keyboardNavigationMaterialChevronDown,
+          disabled && styles.keyboardNavigationMaterialChevronDisabled,
+        ]}
+      />
     </View>
   );
 }
@@ -2848,43 +2909,72 @@ const styles = StyleSheet.create({
   keyboardNavigationBar: {
     alignItems: 'center',
     backgroundColor: '#ffffff',
-    borderColor: '#d9dee8',
-    borderTopWidth: 1,
+    borderTopColor: '#d1d5db',
+    borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
-    gap: 12,
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    justifyContent: 'space-between',
+    minHeight: 46,
+    paddingHorizontal: 8,
   },
-  keyboardNavigationButton: {
+  keyboardNavigationGroup: {
     alignItems: 'center',
-    backgroundColor: '#eef6ff',
-    borderColor: '#cfe0ff',
-    borderRadius: 999,
-    borderWidth: 1,
-    height: 36,
+    flex: 1,
+    flexDirection: 'row',
+  },
+  keyboardNavigationGroupEnd: {
+    justifyContent: 'flex-end',
+  },
+  keyboardNavigationIconButton: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    height: 44,
     justifyContent: 'center',
-    width: 44,
+    minWidth: 48,
+    paddingHorizontal: 12,
   },
-  keyboardNavigationButtonDisabled: {
-    backgroundColor: '#f3f4f6',
-    borderColor: '#e5e7eb',
+  keyboardNavigationDoneButton: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    height: 44,
+    justifyContent: 'center',
+    minWidth: 64,
+    paddingHorizontal: 12,
   },
-  keyboardNavigationButtonText: {
-    color: '#0b57d0',
-    fontSize: 20,
-    fontWeight: '900',
-    lineHeight: 22,
+  keyboardNavigationButtonDisabled: {},
+  keyboardNavigationIconBox: {
+    alignItems: 'center',
+    height: 24,
+    justifyContent: 'center',
+    width: 24,
+  },
+  keyboardNavigationMaterialChevron: {
+    borderBottomWidth: 3,
+    borderColor: '#111111',
+    borderLeftWidth: 3,
+    height: 14,
+    width: 14,
+  },
+  keyboardNavigationMaterialChevronUp: {
+    transform: [{ translateY: 3 }, { rotate: '135deg' }],
+  },
+  keyboardNavigationMaterialChevronDown: {
+    transform: [{ translateY: -3 }, { rotate: '-45deg' }],
+  },
+  keyboardNavigationMaterialChevronDisabled: {
+    borderColor: '#6b7280',
+  },
+  keyboardNavigationDoneText: {
+    color: '#111111',
+    fontSize: 16,
+    fontWeight: '600',
+    height: 44,
+    includeFontPadding: false,
+    lineHeight: 44,
+    textAlign: 'center',
+    textAlignVertical: 'center',
   },
   keyboardNavigationButtonTextDisabled: {
-    color: '#98a2b3',
-  },
-  keyboardNavigationPosition: {
-    color: '#667085',
-    fontSize: 13,
-    fontWeight: '800',
-    minWidth: 52,
-    textAlign: 'center',
+    color: '#9ca3af',
   },
   consentStack: {
     gap: 6,

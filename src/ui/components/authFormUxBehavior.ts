@@ -9,6 +9,26 @@ export type KeyboardInputNavigationState<InputId extends string> = {
   previousInputId: InputId | null;
 };
 
+export type KeyboardNavigationAccessoryIcon = 'keyboard_arrow_down' | 'keyboard_arrow_up';
+
+export type KeyboardNavigationAccessoryControls = {
+  done: {
+    accessibilityLabel: 'Done entering text';
+    disabled: false;
+    label: '완료';
+  };
+  next: {
+    accessibilityLabel: 'Next text box';
+    disabled: boolean;
+    icon: 'keyboard_arrow_down';
+  };
+  previous: {
+    accessibilityLabel: 'Previous text box';
+    disabled: boolean;
+    icon: 'keyboard_arrow_up';
+  };
+};
+
 export function getKeyboardInputNavigationState<InputId extends string>(
   orderedInputIds: readonly InputId[],
   activeInputId: InputId | null,
@@ -26,6 +46,28 @@ export function getKeyboardInputNavigationState<InputId extends string>(
     nextInputId,
     positionLabel: activeIndex >= 0 ? `${activeIndex + 1} of ${orderedInputIds.length}` : `0 of ${orderedInputIds.length}`,
     previousInputId,
+  };
+}
+
+export function getKeyboardNavigationAccessoryControls<InputId extends string>(
+  navigationState: KeyboardInputNavigationState<InputId>,
+): KeyboardNavigationAccessoryControls {
+  return {
+    done: {
+      accessibilityLabel: 'Done entering text',
+      disabled: false,
+      label: '완료',
+    },
+    next: {
+      accessibilityLabel: 'Next text box',
+      disabled: !navigationState.canFocusNext,
+      icon: 'keyboard_arrow_down',
+    },
+    previous: {
+      accessibilityLabel: 'Previous text box',
+      disabled: !navigationState.canFocusPrevious,
+      icon: 'keyboard_arrow_up',
+    },
   };
 }
 

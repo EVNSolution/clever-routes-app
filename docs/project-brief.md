@@ -328,17 +328,17 @@ unidentified
 
 ### 4단계: assigned route MVP
 
-- 목적: 배송원이 당일 자신에게 배정된 route와 stop list를 확인한다.
+- 목적: 배송원이 현재/예정 route session과 stop list를 확인한다.
 - 선행 계약:
   - assigned route 조회 endpoint: delivery-server `GET /driver/assigned-route` and app API boundary are implemented
   - route/stop response shape: route summary and ordered stop cards are implemented in the local Expo flow
   - no-route, multiple-route, API error 상태 처리 기준: no-route and API error states are implemented; multi-company/multiple-route assignments are now app-visible route choices with company guidance attached to each route
 - 산출물:
-  - today's route screen: implemented after consent with local mock/API boundary
+  - current/upcoming routes screen: implemented after consent with local mock/API boundary
   - stop list and stop detail screen: implemented as ordered stop cards for route-ready MVP
   - 주소/순서/지도 이동 준비 정보 표시: address, sequence, phone, coordinate text, and OS map handoff are implemented; provider SDK selection remains a later product decision
 - 완료 기준:
-  - invited phone → consent accepted → today's route 확인 smoke flow가 가능하다.
+  - invited phone → consent accepted → current/upcoming route 확인 smoke flow가 가능하다.
   - route 없음/error 상태가 사용자에게 명확히 표시된다.
   - live server calls can use phone lookup `driverAccess` token handoff through native secure storage with expiry/invalid/live `401` clearing and phone re-lookup recovery; token refresh/strong re-auth remains later server/session work.
 
@@ -371,7 +371,7 @@ unidentified
 
 - local verification: lint, typecheck, unit tests, app start/build command after framework bootstrap
 - automated tests: phone input validation, route choice parsing, company guidance rendering, consent gate, assigned route rendering, API error states
-- smoke test: open app, enter invited phone, confirm company guidance, accept consents, see today's route
+- smoke test: open app, enter invited phone, confirm company guidance, accept consents, see current/upcoming route choices
 - release evidence: linked PR, CI output, mobile build artifact or local runtime screenshot/video
 
 ## 미정 사항

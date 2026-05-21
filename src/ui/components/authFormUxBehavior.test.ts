@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   CONSENT_CHECKMARK_SYMBOL,
   getConsentCheckboxVisualState,
+  getKeyboardNavigationAccessoryControls,
   getKeyboardInputNavigationState,
 } from './authFormUxBehavior';
 
@@ -31,6 +32,40 @@ describe('auth form UX helpers', () => {
     assert.equal(last.previousInputId, 'firstName');
     assert.equal(last.nextInputId, null);
     assert.equal(last.canFocusNext, false);
+  });
+
+  it('uses icon identifiers for keyboard movement controls without text arrow glyphs or position chrome', () => {
+    const navigationState = getKeyboardInputNavigationState(['verificationCode', 'firstName', 'lastName'], 'firstName');
+    const controls = getKeyboardNavigationAccessoryControls(navigationState);
+    const serializedControls = JSON.stringify(controls);
+
+    assert.deepEqual(controls, {
+      done: {
+        accessibilityLabel: 'Done entering text',
+        disabled: false,
+        label: '완료',
+      },
+      next: {
+        accessibilityLabel: 'Next text box',
+        disabled: false,
+        icon: 'keyboard_arrow_down',
+      },
+      previous: {
+        accessibilityLabel: 'Previous text box',
+        disabled: false,
+        icon: 'keyboard_arrow_up',
+      },
+    });
+    assert.equal(serializedControls.includes('2 of 3'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(controls.previous, 'label'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(controls.next, 'label'), false);
+    assert.equal(serializedControls.includes('^'), false);
+    assert.equal(serializedControls.includes('⌃'), false);
+    assert.equal(serializedControls.includes('⌄'), false);
+    assert.equal(serializedControls.includes('˄'), false);
+    assert.equal(serializedControls.includes('˅'), false);
+    assert.equal(serializedControls.includes('['), false);
+    assert.equal(serializedControls.includes(']'), false);
   });
 
   it('shows a visible checkmark only when a consent checkbox is checked', () => {
