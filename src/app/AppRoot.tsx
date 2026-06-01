@@ -3,6 +3,7 @@ import * as Speech from 'expo-speech';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   BackHandler,
   InputAccessoryView,
   Keyboard,
@@ -124,6 +125,12 @@ type RouteSession = RouteAccessRouteChoice & {
   route: AssignedRoute;
 };
 
+type RouteLoadOptions = {
+  navigateOnSuccess?: boolean;
+  resetProgress?: boolean;
+  successMessagePrefix?: string;
+};
+
 const COMPANY_STEP_INDEX = 0;
 const DRIVER_APP_VERSION = '0.1.0';
 const ANDROID_SYSTEM_NAV_CLEARANCE = 56;
@@ -172,6 +179,7 @@ export default function App() {
   const [message, setMessage] = useState<string | null>(null);
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isRefreshingRoutes, setIsRefreshingRoutes] = useState(false);
   const [isStartingRoute, setIsStartingRoute] = useState(false);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [isCompletingStop, setIsCompletingStop] = useState(false);
@@ -443,11 +451,16 @@ export default function App() {
     openMainTab('routes');
   }
 
-  const handleLoginAndLoadRoutes = useCallback(async (driverPhone: { phoneE164: string }, routeDriverName: string) => {
+  const handleLoginAndLoadRoutes = useCallback(async (driverPhone: { phoneE164: string }, routeDriverName: string, options: RouteLoadOptions = {}) => {
+    const shouldResetProgress = options.resetProgress ?? true;
+    const shouldNavigateOnSuccess = options.navigateOnSuccess ?? true;
+    const successMessagePrefix = options.successMessagePrefix ?? 'current/upcoming';
     setIsLoggingIn(true);
     setMessage(null);
     setVerifiedDriverPhoneE164(driverPhone.phoneE164);
-    resetRouteProgress();
+    if (shouldResetProgress) {
+      resetRouteProgress();
+    }
 
     try {
       const lookupResult = await submitRouteAccess({ phoneE164: driverPhone.phoneE164 }, routeAccessService);
@@ -537,14 +550,18 @@ export default function App() {
       }
 
       setRouteSessions(currentAndFutureSessions);
-      setSelectedRouteId(currentAndFutureSessions[0].route.id);
-      const firstSubmission = toCompanyGuidanceSubmission(currentAndFutureSessions[0]);
+      const nextSelectedRouteId = currentAndFutureSessions.some((session) => session.route.id === selectedRouteId)
+        ? selectedRouteId
+        : currentAndFutureSessions[0].route.id;
+      setSelectedRouteId(nextSelectedRouteId);
+      const selectedSession = currentAndFutureSessions.find((session) => session.route.id === nextSelectedRouteId) ?? currentAndFutureSessions[0];
+      const firstSubmission = toCompanyGuidanceSubmission(selectedSession);
       setSubmission(firstSubmission);
       await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(firstSubmission));
       setSelectedTab('upcoming');
-      setSelectedMainTab('home');
+      setSelectedMainTab(shouldNavigateOnSuccess ? 'home' : 'routes');
       setScreen('mainTabs');
-      setMessage(`${currentAndFutureSessions.length} current/upcoming route${currentAndFutureSessions.length === 1 ? '' : 's'} loaded. ${buildAuthSuccessMessage({ runtimeConfig, phase: 'route_access' })}`);
+      setMessage(`${currentAndFutureSessions.length} ${successMessagePrefix} route${currentAndFutureSessions.length === 1 ? '' : 's'} loaded. ${buildAuthSuccessMessage({ runtimeConfig, phase: 'route_access' })}`);
     } catch (error) {
       const failure = buildAuthFailureMessage({
         runtimeConfig,
@@ -561,6 +578,39 @@ export default function App() {
     mockDriverConsentService,
     routeAccessService,
     runtimeConfig,
+    selectedRouteId,
+  ]);
+
+  const handleRefreshRoutes = useCallback(async () => {
+    if (verifiedDriverPhoneE164 === null) {
+      setMessage('Saved driver phone is unavailable. Sign in again to refresh routes.');
+      return;
+    }
+    if (isRefreshingRoutes || isLoggingIn) {
+      return;
+    }
+
+    setIsRefreshingRoutes(true);
+    try {
+      await handleLoginAndLoadRoutes(
+        { phoneE164: verifiedDriverPhoneE164 },
+        driverName || driverFirstName.trim() || 'Returning Driver',
+        {
+          navigateOnSuccess: false,
+          resetProgress: false,
+          successMessagePrefix: 'refreshed current/upcoming',
+        },
+      );
+    } finally {
+      setIsRefreshingRoutes(false);
+    }
+  }, [
+    driverFirstName,
+    driverName,
+    handleLoginAndLoadRoutes,
+    isLoggingIn,
+    isRefreshingRoutes,
+    verifiedDriverPhoneE164,
   ]);
 
   useEffect(() => {
@@ -585,6 +635,21 @@ export default function App() {
     });
     return () => { isMounted = false; };
   }, [driverAccessTokenStore, handleLoginAndLoadRoutes]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (
+        state === 'active' &&
+        screen === 'mainTabs' &&
+        selectedMainTab === 'routes' &&
+        verifiedDriverPhoneE164 !== null
+      ) {
+        void handleRefreshRoutes();
+      }
+    });
+
+    return () => subscription.remove();
+  }, [handleRefreshRoutes, screen, selectedMainTab, verifiedDriverPhoneE164]);
 
   async function handleStartRoute(routeId?: string) {
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
@@ -1066,9 +1131,11 @@ export default function App() {
           {screen === 'mainTabs' && selectedMainTab === 'routes' ? (
             <RoutesPage
               driverName={driverName}
+              isRefreshingRoutes={isRefreshingRoutes || isLoggingIn}
               isStartingRoute={isStartingRoute}
               onOpenCompletedDeliveries={() => setScreen('completedDeliveries')}
               onOpenRouteDetail={handleOpenRouteDetail}
+              onRefreshRoutes={handleRefreshRoutes}
               onSelectRoute={setSelectedRouteId}
               onSelectTab={setSelectedTab}
               onStartRoute={handleStartRoute}
@@ -1458,9 +1525,11 @@ function HomePage({
 
 function RoutesPage({
   driverName,
+  isRefreshingRoutes,
   isStartingRoute,
   onOpenCompletedDeliveries,
   onOpenRouteDetail,
+  onRefreshRoutes,
   onSelectRoute,
   onSelectTab,
   onStartRoute,
@@ -1471,9 +1540,11 @@ function RoutesPage({
   tabs,
 }: {
   driverName: string;
+  isRefreshingRoutes: boolean;
   isStartingRoute: boolean;
   onOpenCompletedDeliveries(): void;
   onOpenRouteDetail(routeId: string): void;
+  onRefreshRoutes(): void;
   onSelectRoute(routeId: string): void;
   onSelectTab(tab: RouteTabId): void;
   onStartRoute(routeId: string): void;
@@ -1512,6 +1583,7 @@ function RoutesPage({
         <Text style={styles.pageTitle}>Routes</Text>
         <Text style={styles.helperText}>{driverName.trim() ? `${driverName.trim()}, view current and upcoming routes first.` : 'View current and upcoming routes first.'}</Text>
       </View>
+      <SecondaryButton disabled={isRefreshingRoutes} label="Refresh routes" loading={isRefreshingRoutes} onPress={onRefreshRoutes} />
       <SegmentedTabs onSelectTab={onSelectTab} selectedTab={selectedTab} tabs={tabs} />
       {selectedTab === 'completed' ? (
         <InfoPanel tone="green" title="Current-session completion only" body={getDriverPlaceholderCopy('routeHistory')} />
