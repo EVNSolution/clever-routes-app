@@ -95,6 +95,11 @@ import {
 } from '../ui/components/authFormUxBehavior';
 import { TransientToast } from '../ui/components/TransientToast';
 import { scheduleTransientToastDismiss } from '../ui/components/transientToastBehavior';
+import {
+  buildAuthFailureMessage,
+  buildAuthSuccessMessage,
+  getRuntimeHostLabel,
+} from './authDiagnostics';
 
 type AppScreen =
   | 'arrivalCheck'
@@ -350,7 +355,7 @@ export default function App() {
     } else {
       setIsLoggingIn(true);
       try {
-        setMessage(`Enter the invite code sent by dispatch for ${phoneEntry.phoneE164}.`);
+        setMessage(`Enter the invite code sent by dispatch. ${getRuntimeHostLabel(runtimeConfig)}.`);
         setScreen('loginDetail');
       } finally {
         setIsLoggingIn(false);
@@ -386,7 +391,7 @@ export default function App() {
     }
 
     setIsLoggingIn(true);
-    setMessage(null);
+    setMessage(`Verifying invite code... ${getRuntimeHostLabel(runtimeConfig)}.`);
     try {
       const verifyResult = await driverAuthService.verifyCode({
         phoneE164: phoneEntry.phoneE164,
@@ -398,8 +403,14 @@ export default function App() {
         driverAccess: verifyResult.driverAccess,
         phoneE164: phoneEntry.phoneE164,
       });
-    } catch {
-      setMessage('Invite code verification failed. Check the code or contact dispatch.');
+      setMessage(buildAuthSuccessMessage({ runtimeConfig, phase: 'invite_verify' }));
+    } catch (error) {
+      const failure = buildAuthFailureMessage({
+        runtimeConfig,
+        phase: 'invite_verify',
+        error,
+      });
+      setMessage(failure.message);
       setIsLoggingIn(false);
       return;
     }
@@ -439,7 +450,6 @@ export default function App() {
     resetRouteProgress();
 
     try {
-
       const lookupResult = await submitRouteAccess({ phoneE164: driverPhone.phoneE164 }, routeAccessService);
       setSubmission(lookupResult);
 
@@ -534,7 +544,14 @@ export default function App() {
       setSelectedTab('upcoming');
       setSelectedMainTab('home');
       setScreen('mainTabs');
-      setMessage(`${currentAndFutureSessions.length} current/upcoming route${currentAndFutureSessions.length === 1 ? '' : 's'} loaded.`);
+      setMessage(`${currentAndFutureSessions.length} current/upcoming route${currentAndFutureSessions.length === 1 ? '' : 's'} loaded. ${buildAuthSuccessMessage({ runtimeConfig, phase: 'route_access' })}`);
+    } catch (error) {
+      const failure = buildAuthFailureMessage({
+        runtimeConfig,
+        phase: 'route_access',
+        error,
+      });
+      setMessage(failure.message);
     } finally {
       setIsLoggingIn(false);
     }
