@@ -101,6 +101,13 @@ import {
   buildAuthSuccessMessage,
   getRuntimeHostLabel,
 } from './authDiagnostics';
+import {
+  getInviteCodeFallbackMessage,
+  getVerifiedDriverNoAssignedRouteMessage,
+  shouldOpenRoutesForVerifiedNoRoute,
+  shouldRequestInviteCodeForRouteNotFound,
+  type VerifiedDriverNoAssignedRouteReason,
+} from './verifiedDriverNoAssignedRoutes';
 
 type AppScreen =
   | 'arrivalCheck'
@@ -126,6 +133,8 @@ type RouteSession = RouteAccessRouteChoice & {
 };
 
 type RouteLoadOptions = {
+  allowInviteCodeFallbackOnRouteNotFound?: boolean;
+  allowVerifiedDriverNoRoute?: boolean;
   navigateOnSuccess?: boolean;
   resetProgress?: boolean;
   successMessagePrefix?: string;
@@ -359,7 +368,11 @@ export default function App() {
     }
 
     if (isReturningDriver) {
-      await handleLoginAndLoadRoutes({ phoneE164: phoneEntry.phoneE164 }, 'Returning Driver');
+      await handleLoginAndLoadRoutes(
+        { phoneE164: phoneEntry.phoneE164 },
+        'Returning Driver',
+        { allowInviteCodeFallbackOnRouteNotFound: true },
+      );
     } else {
       setIsLoggingIn(true);
       try {
@@ -424,7 +437,11 @@ export default function App() {
     }
     setIsLoggingIn(false);
 
-    await handleLoginAndLoadRoutes({ phoneE164: phoneEntry.phoneE164 }, driverName);
+    await handleLoginAndLoadRoutes(
+      { phoneE164: phoneEntry.phoneE164 },
+      driverName,
+      { allowVerifiedDriverNoRoute: true },
+    );
   }
 
   function handleLoginDetailInputSubmit(inputId: LoginDetailInputId) {
@@ -451,7 +468,19 @@ export default function App() {
     openMainTab('routes');
   }
 
+  const openVerifiedNoAssignedRoute = useCallback((reason: VerifiedDriverNoAssignedRouteReason) => {
+    setRouteSessions([]);
+    setSelectedRouteId(null);
+    setSelectedTab('upcoming');
+    setSubmission(null);
+    setSelectedMainTab('routes');
+    setScreen('mainTabs');
+    setMessage(getVerifiedDriverNoAssignedRouteMessage(reason));
+  }, []);
+
   const handleLoginAndLoadRoutes = useCallback(async (driverPhone: { phoneE164: string }, routeDriverName: string, options: RouteLoadOptions = {}) => {
+    const allowInviteCodeFallback = options.allowInviteCodeFallbackOnRouteNotFound ?? false;
+    const allowVerifiedDriverNoRoute = options.allowVerifiedDriverNoRoute ?? false;
     const shouldResetProgress = options.resetProgress ?? true;
     const shouldNavigateOnSuccess = options.navigateOnSuccess ?? true;
     const successMessagePrefix = options.successMessagePrefix ?? 'current/upcoming';
@@ -467,18 +496,27 @@ export default function App() {
       setSubmission(lookupResult);
 
       if (lookupResult.kind !== 'company_guidance' && lookupResult.kind !== 'route_choices') {
+        if (shouldOpenRoutesForVerifiedNoRoute({ allowVerifiedDriverNoRoute, lookupResult })) {
+          openVerifiedNoAssignedRoute('route_lookup_not_found');
+          return;
+        }
+
+        if (shouldRequestInviteCodeForRouteNotFound({ allowInviteCodeFallback, lookupResult })) {
+          setSubmission(null);
+          setVerificationCode('');
+          setIsReturningDriver(false);
+          setScreen('loginDetail');
+          setMessage(getInviteCodeFallbackMessage());
+          return;
+        }
+
         setMessage(formatRouteAccessProblem(lookupResult));
         return;
       }
 
       const choices = getRouteChoicesFromSubmission(lookupResult);
       if (choices.length === 0) {
-        setRouteSessions([]);
-        setSelectedRouteId(null);
-        setSelectedTab('upcoming');
-        setSelectedMainTab('routes');
-        setScreen('mainTabs');
-        setMessage('Phone number verified. No current or upcoming route is assigned right now.');
+        openVerifiedNoAssignedRoute('no_route_choices');
         return;
       }
 
@@ -529,23 +567,13 @@ export default function App() {
       }
 
       if (loadedSessions.length === 0) {
-        setRouteSessions([]);
-        setSelectedRouteId(null);
-        setSelectedTab('upcoming');
-        setSubmission(null);
-        setMessage('No current or upcoming assigned route could be loaded for this phone number.');
+        openVerifiedNoAssignedRoute('assigned_route_load_empty');
         return;
       }
 
       const currentAndFutureSessions = getCurrentAndFutureRouteSessions(loadedSessions, { now: new Date() });
       if (currentAndFutureSessions.length === 0) {
-        setRouteSessions([]);
-        setSelectedRouteId(null);
-        setSelectedTab('upcoming');
-        setSubmission(null);
-        setSelectedMainTab('routes');
-        setScreen('mainTabs');
-        setMessage('Phone number verified. Past routes are hidden and no current or upcoming route is assigned right now.');
+        openVerifiedNoAssignedRoute('past_routes_hidden');
         return;
       }
 
@@ -576,6 +604,7 @@ export default function App() {
     driverAccessTokenStore,
     mockAssignedRouteService,
     mockDriverConsentService,
+    openVerifiedNoAssignedRoute,
     routeAccessService,
     runtimeConfig,
     selectedRouteId,
@@ -630,6 +659,7 @@ export default function App() {
         void handleLoginAndLoadRoutes(
           { phoneE164: result.driverProfile.phoneE164 },
           result.driverProfile.displayName,
+          { allowInviteCodeFallbackOnRouteNotFound: true },
         );
       }
     });
