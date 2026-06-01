@@ -246,6 +246,42 @@ describe('driver route access UX flow', () => {
     assert.equal(result.routes[0].driverAccess.accessToken, 'server-issued-driver-jwt');
   });
 
+  it('accepts the current server route-choice envelope with nested invited status', async () => {
+    const client = createRouteAccessApiClient({
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ROUTES_FOUND',
+            routes: [
+              {
+                status: 'INVITED',
+                routeAccess: sampleInvitedRouteAccess.routeAccess,
+                companyGuidance: sampleInvitedRouteAccess.companyGuidance,
+                driverAccess: {
+                  accessToken: 'server-issued-driver-jwt',
+                  expiresAt: '2026-05-12T06:55:00.000Z',
+                  scopes: ['route:assigned:read'],
+                  tokenType: 'Bearer',
+                  ttlSeconds: 900,
+                  use: 'consent_and_assigned_route',
+                },
+              },
+            ],
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.lookupRouteAccess({ phoneE164: '+14165550123' });
+
+    assert.equal(result.status, 'ROUTES_FOUND');
+    assert.equal(result.routes.length, 1);
+    assert.equal(result.routes[0].driverAccess.accessToken, 'server-issued-driver-jwt');
+  });
+
   it('parses empty route choices for registered phones without active assignments', async () => {
     const client = createRouteAccessApiClient({
       baseUrl: 'https://delivery.example.com',

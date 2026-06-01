@@ -268,7 +268,7 @@ export function getRouteAccessDeniedMessage(status: 'BLOCKED' | 'DISABLED' | 'NO
 
 const MULTIPLE_MATCHES_RESPONSE_KEYS = new Set(['matches', 'resolutionHint', 'status']);
 const ROUTES_FOUND_RESPONSE_KEYS = new Set(['routes', 'status']);
-const ROUTE_CHOICE_KEYS = new Set(['companyGuidance', 'driverAccess', 'routeAccess']);
+const ROUTE_CHOICE_KEYS = new Set(['companyGuidance', 'driverAccess', 'routeAccess', 'status']);
 const MULTIPLE_MATCH_KEYS = new Set([
   'companyDisplayName',
   'deliveryDate',
@@ -377,6 +377,7 @@ function isRouteAccessRouteChoice(value: unknown): value is RouteAccessRouteChoi
 
   const choice = value as Record<string, unknown>;
   return (
+    (choice.status === undefined || choice.status === 'INVITED') &&
     isRouteAccess(choice.routeAccess) &&
     isDriverAccessToken(choice.driverAccess) &&
     isCompanyGuidance(choice.companyGuidance)
