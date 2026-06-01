@@ -1,0 +1,61 @@
+name: Driver App CI
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+  push:
+    branches:
+      - dev
+      - main
+
+concurrency:
+  group: driver-app-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify driver app workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run workspace checks
+        run: npm run check:workspace
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run native release preflight
+        run: npm run check:native-release
+
+      - name: Render non-secret release evidence seed
+        run: npm run release:evidence:seed
+
+      - name: Build exported app bundles
+        run: npm run build
+
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=moderate
+
+      - name: Check Expo dependency alignment
+        run: npx expo install --check
+
+      - name: Check git diff whitespace
+        run: git diff --check

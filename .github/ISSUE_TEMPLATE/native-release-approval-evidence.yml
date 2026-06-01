@@ -1,0 +1,81 @@
+name: Native release approval evidence
+about: Track EAS, signing, store/private distribution, privacy, and license approval evidence.
+title: "Collect native release approval evidence: <release candidate>"
+labels: [evidence, release, store-privacy]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for owner-controlled release approvals tracked by `docs/release-readiness.md` and `docs/store-privacy-disclosure-draft.md`.
+
+        Do not paste Expo project IDs, EAS env values, Apple/Google credentials, signing files, service-account keys, store-console screenshots, raw logs, privacy-policy drafts with private URLs, or completed evidence manifests in this public issue. Use the approved external evidence store and paste sanitized references only.
+  - type: input
+    id: source_revision
+    attributes:
+      label: Source revision
+      description: Commit SHA or PR/merge commit selected for EAS/store approval evidence.
+      placeholder: ba8b8b9de3a0a98ec28a6ce85a4e9138a7e5e098
+    validations:
+      required: true
+  - type: input
+    id: external_manifest
+    attributes:
+      label: External release evidence manifest reference
+      description: Sanitized reference to the external copy of docs/release-evidence-manifest.template.md.
+      placeholder: external-evidence://clever-driver/release-candidate/<date>-<sha>
+    validations:
+      required: true
+  - type: checkboxes
+    id: source_gates
+    attributes:
+      label: Source-controlled gates
+      options:
+        - label: '`npm run check:workspace` passed for the selected revision.'
+          required: true
+        - label: '`npm run lint` passed for the selected revision.'
+          required: true
+        - label: '`npm run check:native-release` passed for the selected revision.'
+          required: true
+        - label: '`npm run release:evidence:seed` was copied into the external evidence store.'
+          required: true
+  - type: checkboxes
+    id: owner_gates
+    attributes:
+      label: Owner-controlled approval gates
+      options:
+        - label: Expo/EAS project ownership and preview/production environment values approved.
+        - label: Apple team/signing authority approved.
+        - label: Google Play/signing authority approved.
+        - label: Store/TestFlight/Google Play or private/managed distribution path approved.
+        - label: Privacy policy URL approved.
+        - label: App Store privacy answers reviewed against the final build.
+        - label: Google Play Data safety answers reviewed against the final build.
+        - label: Background location declaration/rationale approved if enabled.
+        - label: Photo/video/media permission review approved.
+        - label: Contacts/address-book absence confirmed in native manifest and minimum-scope review.
+        - label: Public license/reuse decision approved.
+  - type: textarea
+    id: sanitized_evidence
+    attributes:
+      label: Sanitized approval summary
+      description: Include only sanitized external evidence references and remaining gaps.
+      placeholder: |
+        - EAS/build authority:
+        - Apple/Google signing:
+        - Distribution path:
+        - Privacy/store review:
+        - License/reuse decision:
+        - Gaps/blockers:
+    validations:
+      required: true
+  - type: checkboxes
+    id: closure_gate
+    attributes:
+      label: Closure gate
+      options:
+        - label: External release manifest has owner/legal approval rows filled and no `pending` placeholders.
+          required: true
+        - label: '`npm run release:evidence:verify -- <external-manifest-path>` passed against a local copy.'
+          required: true
+        - label: No private artifacts, secrets, raw PII, signing files, screenshots, videos, or completed manifests were committed or pasted into GitHub.
+          required: true

@@ -1,0 +1,43 @@
+# Normalize text files across macOS/Linux/Windows contributors.
+* text=auto eol=lf
+
+# Source-controlled text formats.
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Evidence, release binaries, media, and signing artifacts should not be
+# committed, but keep them binary if an explicit owner-approved exception is
+# ever introduced.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.heic binary
+*.heif binary
+*.gif binary
+*.webp binary
+*.mp4 binary
+*.mov binary
+*.m4v binary
+*.webm binary
+*.pdf binary
+*.apk binary
+*.apks binary
+*.aab binary
+*.ipa binary
+*.app binary
+*.dSYM binary
+*.keystore binary
+*.jks binary
+*.p8 binary
+*.p12 binary
+*.mobileprovision binary
+*.cer binary
+*.pem binary

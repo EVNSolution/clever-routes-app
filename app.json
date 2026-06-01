@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "Clever Driver",
+    "slug": "clever-driver-app",
+    "scheme": "clever-driver",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.evns.cleverdriverapp",
+      "buildNumber": "1"
+    },
+    "android": {
+      "package": "com.evns.cleverdriverapp",
+      "edgeToEdgeEnabled": true,
+      "versionCode": 1,
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "extra": {
+      "projectStartIssue": "EVNSolution/clever-change-control#145",
+      "frameworkBootstrapIssue": "EVNSolution/clever-change-control#146"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Clever Driver to use your location while you are actively delivering a route.",
+          "locationAlwaysAndWhenInUsePermission": "Allow Clever Driver to use your location for active delivery tracking.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allow Clever Driver to take proof photos for active deliveries.",
+          "photosPermission": "Allow Clever Driver to attach proof photos for active deliveries."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Clever Driver to scan proof barcodes for active deliveries."
+        }
+      ]
+    ]
+  }
+}

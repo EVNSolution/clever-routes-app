@@ -45,6 +45,20 @@
 
 ## Context/wiki completion
 
+- repo docs checked:
+  - `.gitignore`
+  - `.dockerignore`
+  - `.editorconfig` / `.gitattributes`
+  - `.github/ISSUE_TEMPLATE/`
+  - `.github/workflows/ci.yml`
+  - `.env.example`
+  - `app.json` / `eas.json`
+  - `README.md`
+  - `docs/project-brief.md`
+  - `docs/repository-setup.md`
+  - `docs/route-access-flow.md`
+  - `docs/release-readiness.md`
+  - `CONTRIBUTING.md` / `SECURITY.md`
 - context docs checked:
   - `clever-context-monorepo/docs/services/<service>/index.md`
   - `clever-context-monorepo/docs/wiki/`

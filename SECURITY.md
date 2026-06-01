@@ -1,0 +1,39 @@
+# Security Policy
+
+## Reporting a vulnerability
+
+Report security or privacy issues privately to the EVNSolution maintainers. If GitHub private vulnerability reporting is enabled for this repository, use that channel. Otherwise, contact the repository owner or the project maintainer through the existing EVNSolution coordination channel before opening a public issue.
+
+Do not post real driver phone numbers, customer addresses, route data, access tokens, proof media, signing files, or production secrets in public issues, pull requests, logs, or screenshots.
+
+## Scope
+
+Security review for this app includes:
+
+- route context + phone access boundary
+- tenant/company and assigned-driver authorization assumptions
+- SecureStore driver access token handling
+- location permission and foreground/background tracking behavior
+- proof photo, signature, and barcode capture flows
+- offline queue retry metadata and retention behavior
+- scanner-rejected proof media discard behavior
+- environment variables, mobile signing files, and release artifacts
+
+## Current supported branches
+
+- `main`: deploy branch
+- `dev`: integration branch
+- active issue-linked `cc-<change-control>-<scope>` branches under review
+
+## Data-handling expectations
+
+- Driver access tokens must remain in native secure storage.
+- Expired, malformed, or live downstream `401` driver access must be cleared from native secure storage before route context + phone re-lookup.
+- `.env*` files, signing artifacts, generated binaries, and local runtime state must remain ignored.
+- AsyncStorage queue payloads are not encrypted and must not become a secret store.
+- Scanner-rejected proof media must not be converted into durable proof evidence or retained for repeated retry.
+- Production proof-media object storage/signed access, deployed scanner evidence, deployed cleanup evidence, physical-device smoke evidence, and store privacy disclosures remain release-gating work tracked in `docs/release-readiness.md`.
+
+## Evidence handling
+
+When sharing reproduction evidence, use synthetic route contexts, synthetic phone numbers, synthetic proof media, and redacted logs. If real production data is unavoidable for diagnosis, coordinate privately and keep the evidence out of git.

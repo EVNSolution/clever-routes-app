@@ -1,0 +1,50 @@
+{
+  "name": "clever-driver-app",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "lint": "expo lint",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-tests.mjs",
+    "check:native-release": "tsx src/release/preflight/nativeReleasePreflightCli.ts",
+    "release:evidence:seed": "tsx src/release/evidence/releaseEvidenceSeedCli.ts",
+    "release:evidence:verify": "tsx src/release/evidence/releaseEvidenceVerifierCli.ts",
+    "check:workspace": "npm run check:source-layout && npm run typecheck && npm run test",
+    "build": "npm run build:android && npm run build:ios",
+    "build:android": "expo export -p android --output-dir dist/android",
+    "build:ios": "expo export -p ios --output-dir dist/ios",
+    "check:source-layout": "tsx src/release/preflight/sourceLayoutPreflightCli.ts"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "~54.0.33",
+    "expo-camera": "~17.0.10",
+    "expo-image-picker": "~17.0.11",
+    "expo-location": "~19.0.8",
+    "expo-secure-store": "~15.0.8",
+    "expo-speech": "~14.0.8",
+    "expo-status-bar": "~3.0.9",
+    "expo-task-manager": "~14.0.9",
+    "libphonenumber-js": "1.13.1",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.41",
+    "@types/react": "~19.1.0",
+    "eslint": "^9.0.0",
+    "eslint-config-expo": "~10.0.0",
+    "tsx": "^4.20.6",
+    "typescript": "~5.9.2"
+  },
+  "engines": {
+    "node": ">=20.19.4"
+  },
+  "overrides": {
+    "postcss": "8.5.10"
+  }
+}
