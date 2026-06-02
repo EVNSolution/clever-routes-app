@@ -24,6 +24,12 @@ import {
   type AssignedRouteStop,
 } from '../domain/route/assignedRoute';
 import {
+  classifyAssignedRouteSession,
+  filterVisibleAssignedRouteSessions,
+  getInitialAssignedRouteTab,
+  type RouteSessionStatus,
+} from '../domain/route/routeSessionClassification';
+import {
   recordContinuousLocationUpdateBatch,
   startContinuousLocationUpdatesAfterDeliveryStart,
   type ContinuousLocationStopResult,
@@ -38,7 +44,13 @@ import { createExpoForegroundLocationPermissionService } from '../platform/expo/
 import { createExpoOfflineSubmissionQueueStorage } from '../platform/expo/storage/expoOfflineSubmissionQueueStorage';
 import { createExpoProofPhotoCaptureService } from '../platform/expo/camera/expoProofPhotoCaptureService';
 import { createExpoSecureDriverAccessTokenStore } from '../platform/expo/secureStore/expoSecureDriverAccessTokenStore';
-import { createPersistentOfflineSubmissionQueue, type OfflineSubmissionQueue } from '../domain/offline/offlineSubmissionQueue';
+import {
+  createInMemoryOfflineSubmissionQueue,
+  createPersistentOfflineSubmissionQueue,
+  retryOfflineSubmissions,
+  type OfflineSubmissionQueue,
+  type OfflineSubmissionRetryResult,
+} from '../domain/offline/offlineSubmissionQueue';
 import { captureProofPhoto, type ProofPhotoCaptureResult, type ProofPhotoCaptureSource } from '../domain/proof/proofPhotoCapture';
 import {
   createMockProofMediaUploadService,
@@ -75,6 +87,10 @@ import {
 } from '../ui/components/countrySelectorBehavior';
 import { TransientToast } from '../ui/components/TransientToast';
 import { scheduleTransientToastDismiss } from '../ui/components/transientToastBehavior';
+import {
+  APP_CONTENT_BOTTOM_CLEARANCE,
+  BOTTOM_NAV_MIN_HEIGHT,
+} from './appLayoutMetrics';
 
 type AppScreen =
   | 'arrivalCheck'
@@ -86,7 +102,7 @@ type AppScreen =
   | 'stopCompleted'
   | 'stopDetails';
 type RouteTabId = ReturnType<typeof getMvpRouteTabs>[number]['id'];
-type RouteStatus = 'active' | 'completed' | 'upcoming';
+type RouteStatus = RouteSessionStatus;
 
 type StopProofDraft = {
   additionalNotes: string;
@@ -139,6 +155,7 @@ export default function App() {
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [isCompletingStop, setIsCompletingStop] = useState(false);
   const [isFinishingRoute, setIsFinishingRoute] = useState(false);
+  const [isSyncingOfflineQueue, setIsSyncingOfflineQueue] = useState(false);
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
@@ -198,6 +215,9 @@ export default function App() {
       })
       .catch(() => {
         if (isMounted) {
+          const fallbackQueue = createInMemoryOfflineSubmissionQueue();
+          setOfflineSubmissionQueue(fallbackQueue);
+          setOfflineQueueCount(fallbackQueue.listPending().length);
           setMessage('Offline retry storage is unavailable. This session will retry in memory only.');
         }
       });
@@ -321,6 +341,8 @@ export default function App() {
 
       for (const choice of choices) {
         const choiceSubmission = toCompanyGuidanceSubmission(choice);
+        await syncOfflineSubmissionsForSubmission(choiceSubmission);
+
         const consentResult = await submitDriverConsent(
           {
             appContext: { appVersion: '0.1.0', driverName: driverName.trim() },
@@ -373,7 +395,10 @@ export default function App() {
       const firstSubmission = toCompanyGuidanceSubmission(loadedSessions[0]);
       setSubmission(firstSubmission);
       await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(firstSubmission));
-      setSelectedTab('upcoming');
+      setSelectedTab(getInitialAssignedRouteTab({
+        now: new Date(),
+        route: loadedSessions[0].route,
+      }));
       setScreen('routes');
       setMessage(`${loadedSessions.length} route${loadedSessions.length === 1 ? '' : 's'} loaded.`);
     } finally {
@@ -600,6 +625,10 @@ export default function App() {
         setMessage(result.message);
         return;
       }
+      if (result.kind === 'queued') {
+        setMessage('Stop proof was queued for retry. Sync it before finishing this route.');
+        return;
+      }
 
       const nextCompletedStopIds = [...new Set([...completedStopIds, currentStop.deliveryStopId])];
       setCompletedStopIds(nextCompletedStopIds);
@@ -696,6 +725,43 @@ export default function App() {
     setSelectedRouteId(null);
   }
 
+  async function syncOfflineSubmissionsForSubmission(
+    activeSubmission: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>,
+  ): Promise<OfflineSubmissionRetryResult | null> {
+    const queue = offlineSubmissionQueue;
+    if (queue === null || queue.listPending().length === 0) {
+      return null;
+    }
+
+    setIsSyncingOfflineQueue(true);
+    try {
+      const retryResult = await retryOfflineSubmissions({
+        driverEventService: getDriverEventServiceForCurrentSubmission({
+          fallback: mockDriverEventService,
+          runtimeConfig,
+          submission: activeSubmission,
+        }),
+        proofMediaUploadService: getProofMediaUploadServiceForCurrentSubmission({
+          fallback: mockProofMediaUploadService,
+          runtimeConfig,
+          submission: activeSubmission,
+        }),
+        queue,
+      });
+      await queue.whenPersisted();
+      if (retryResult.succeeded > 0 || retryResult.discarded > 0) {
+        setMessage(formatOfflineRetryResult(retryResult));
+      }
+      if (retryResult.requiresRouteLookup) {
+        setMessage('Offline sync needs a fresh route lookup. Sign in again before continuing.');
+      }
+      return retryResult;
+    } finally {
+      setIsSyncingOfflineQueue(false);
+      refreshOfflineQueueCount();
+    }
+  }
+
   function refreshOfflineQueueCount() {
     setOfflineQueueCount(offlineSubmissionQueue?.listPending().length ?? 0);
   }
@@ -716,7 +782,7 @@ export default function App() {
               countrySearchQuery={countrySearchQuery}
               driverPhoneCountries={visiblePhoneCountries}
               driverName={driverName}
-              isLoggingIn={isLoggingIn}
+              isLoggingIn={isLoggingIn || isSyncingOfflineQueue || offlineSubmissionQueue === null}
               isCountrySelectorOpen={isCountrySelectorOpen}
               nationalPhoneInput={nationalPhoneInput}
               onAcceptedLocationChange={setAcceptedLocation}
@@ -971,9 +1037,18 @@ function RouteListScreen({
   selectedTab: RouteTabId;
   tabs: ReturnType<typeof getMvpRouteTabs>;
 }) {
-  const visibleRouteSessions = routeSessions.filter((session) => getRouteSessionStatus(session.route.id, selectedRouteId, routeStatus) === selectedTab);
+  const classificationNow = new Date();
+  const visibleRouteSessions = filterVisibleAssignedRouteSessions(routeSessions, {
+    now: classificationNow,
+    selectedRouteId,
+    selectedRouteStatus: routeStatus,
+    selectedTab,
+  });
   const activeSession = visibleRouteSessions.find((session) => session.route.id === selectedRouteId) ?? visibleRouteSessions[0] ?? null;
   const activeIndex = activeSession === null ? -1 : visibleRouteSessions.findIndex((session) => session.route.id === activeSession.route.id);
+  const activeSessionStatus = activeSession === null
+    ? selectedTab
+    : getRouteSessionStatus(activeSession.route, selectedRouteId, routeStatus, classificationNow);
 
   function selectRelativeRoute(offset: number) {
     if (visibleRouteSessions.length === 0 || activeIndex < 0) {
@@ -987,7 +1062,7 @@ function RouteListScreen({
   return (
     <View style={styles.screenStack}>
       <View style={styles.pageHeader}>
-        <Text style={styles.pageTitle}>Today’s Route</Text>
+        <Text style={styles.pageTitle}>Assigned Routes</Text>
         <Text style={styles.helperText}>{driverName.trim() ? `${driverName.trim()}, your assigned route is ready.` : 'Your assigned route is ready.'}</Text>
       </View>
       <SegmentedTabs onSelectTab={onSelectTab} selectedTab={selectedTab} tabs={tabs} />
@@ -1002,7 +1077,7 @@ function RouteListScreen({
               <Text numberOfLines={1} style={styles.cardTitle}>{activeSession.companyGuidance.companyDisplayName}</Text>
               <Text numberOfLines={1} style={styles.helperText}>{activeSession.route.name}</Text>
             </View>
-            <StatusChip tone={getChipTone(getRouteSessionStatus(activeSession.route.id, selectedRouteId, routeStatus))} label={formatRouteStatus(getRouteSessionStatus(activeSession.route.id, selectedRouteId, routeStatus))} />
+            <StatusChip tone={getChipTone(activeSessionStatus)} label={formatRouteStatus(activeSessionStatus)} />
           </View>
 
           <DataRow label="Company" value={activeSession.companyGuidance.companyDisplayName} />
@@ -1035,7 +1110,7 @@ function RouteListScreen({
       ) : (
         <EmptyState
           title="No assigned route"
-          body={selectedTab === 'completed' && completedStopIds.length > 0 ? 'Completed stops are available after route completion.' : 'No route is available for this status.'}
+          body={formatRouteEmptyState(selectedTab, completedStopIds.length)}
         />
       )}
 
@@ -1813,8 +1888,13 @@ function getRouteSessionForAction(routeSessions: RouteSession[], routeId: string
   return routeSessions[0] ?? null;
 }
 
-function getRouteSessionStatus(routeId: string, selectedRouteId: string | null, selectedRouteStatus: RouteStatus): RouteStatus {
-  return routeId === selectedRouteId ? selectedRouteStatus : 'upcoming';
+function getRouteSessionStatus(route: AssignedRoute, selectedRouteId: string | null, selectedRouteStatus: RouteStatus, now: Date): RouteStatus {
+  return classifyAssignedRouteSession({
+    now,
+    route,
+    selectedRouteId,
+    selectedRouteStatus,
+  });
 }
 
 function formatRouteAccessProblem(result: RouteAccessSubmissionResult): string {
@@ -1854,9 +1934,34 @@ function formatRouteStatus(status: RouteStatus): string {
       return 'In progress';
     case 'completed':
       return 'Completed';
+    case 'unfinished':
+      return 'Unfinished';
     case 'upcoming':
       return 'Pending';
   }
+}
+
+function formatRouteEmptyState(selectedTab: RouteTabId, completedStopCount: number): string {
+  if (selectedTab === 'completed' && completedStopCount > 0) {
+    return 'Completed stops are available after route completion.';
+  }
+  if (selectedTab === 'unfinished') {
+    return 'No unfinished route is available.';
+  }
+
+  return 'No route is available for this status.';
+}
+
+function formatOfflineRetryResult(result: OfflineSubmissionRetryResult): string {
+  const parts = [
+    result.succeeded > 0 ? `${result.succeeded} synced` : null,
+    result.discarded > 0 ? `${result.discarded} discarded` : null,
+    result.failed > 0 ? `${result.failed} still pending` : null,
+  ].filter((value): value is string => value !== null);
+
+  return parts.length === 0
+    ? 'Offline sync checked. No pending updates were sent.'
+    : `Offline sync complete: ${parts.join(', ')}.`;
 }
 
 function getRouteRegion(route: AssignedRoute): string {
@@ -1967,6 +2072,8 @@ function getChipTone(status: RouteStatus): 'blue' | 'green' | 'neutral' {
       return 'blue';
     case 'completed':
       return 'green';
+    case 'unfinished':
+      return 'neutral';
     case 'upcoming':
       return 'neutral';
   }
@@ -2040,7 +2147,7 @@ const styles = StyleSheet.create({
   container: {
     gap: 22,
     padding: 22,
-    paddingBottom: 36,
+    paddingBottom: APP_CONTENT_BOTTOM_CLEARANCE,
   },
   screenStack: {
     gap: 22,
@@ -2439,7 +2546,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-around',
-    minHeight: 62,
+    minHeight: BOTTOM_NAV_MIN_HEIGHT,
     paddingHorizontal: 10,
   },
   bottomNavLabel: {

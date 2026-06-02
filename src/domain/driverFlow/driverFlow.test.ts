@@ -90,6 +90,7 @@ describe('driver app MVP flow', () => {
     assert.deepEqual(getMvpRouteTabs(), [
       { id: 'upcoming', label: 'Pending' },
       { id: 'active', label: 'In Progress' },
+      { id: 'unfinished', label: 'Unfinished' },
       { id: 'completed', label: 'Completed' },
     ]);
   });

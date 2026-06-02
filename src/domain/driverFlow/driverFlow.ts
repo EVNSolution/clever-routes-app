@@ -47,8 +47,8 @@ export type MvpScenarioScreen = {
 };
 
 export type MvpRouteTab = {
-  id: 'active' | 'completed' | 'upcoming';
-  label: 'Completed' | 'In Progress' | 'Pending';
+  id: 'active' | 'completed' | 'unfinished' | 'upcoming';
+  label: 'Completed' | 'In Progress' | 'Pending' | 'Unfinished';
 };
 
 export type StopCompletionProofField = {
@@ -102,7 +102,7 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
     {
       id: 'routeList',
       title: 'Today’s Route',
-      purpose: 'Show assigned routes grouped into Pending, In Progress, and Completed tabs.',
+      purpose: 'Show assigned routes grouped into Pending, In Progress, Unfinished, and Completed tabs.',
       primaryAction: 'Start Route',
     },
     {
@@ -148,6 +148,7 @@ export function getMvpRouteTabs(): MvpRouteTab[] {
   return [
     { id: 'upcoming', label: 'Pending' },
     { id: 'active', label: 'In Progress' },
+    { id: 'unfinished', label: 'Unfinished' },
     { id: 'completed', label: 'Completed' },
   ];
 }
