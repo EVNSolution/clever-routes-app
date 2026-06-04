@@ -21,13 +21,25 @@ import {
 
 import {
   createMockAssignedRouteService,
+  formatAssignedRouteDistance,
+  formatAssignedRouteDuration,
   loadAssignedRouteAfterConsent,
   sampleAssignedRoute,
   type AssignedRoute,
   type AssignedRouteService,
   type AssignedRouteStop,
 } from '../domain/route/assignedRoute';
-import { getCurrentAndFutureRouteSessions } from '../domain/route/routeSchedule';
+import {
+  classifyAssignedRouteSession,
+  filterVisibleAssignedRouteSessions,
+  getInitialAssignedRouteTab,
+  type RouteSessionStatus,
+} from '../domain/route/routeSessionClassification';
+import {
+  getCurrentRouteStop,
+  getStopDetailsProgressState,
+  ROUTE_COMPANY_STEP_INDEX,
+} from '../domain/route/routeStepProgress';
 import {
   recordContinuousLocationUpdateBatch,
   startContinuousLocationUpdatesAfterDeliveryStart,
@@ -59,7 +71,6 @@ import { resetDriverSession } from '../domain/driver/driverSessionReset';
 import {
   getDriverMainTabs,
   getDriverPlaceholderCopy,
-  getDriverRouteStatusForTabs,
   getVisibleBottomTab,
   shouldShowDriverBottomTabs,
   type DriverMainTabId,
@@ -82,6 +93,7 @@ import {
   type RouteAccessSubmissionResult,
 } from '../domain/routeAccess/routeAccess';
 import { recordStopProofEventAfterDeliveryStart, type StopProofEventResult } from '../domain/stop/stopProofEvents';
+import { openRouteNavigation, openStopNavigation } from '../domain/stop/stopNavigation';
 import {
   COUNTRY_SELECTOR_OVERLAY_BEHAVIOR,
   getCountrySelectorRowText,
@@ -120,7 +132,8 @@ type AppScreen =
   | 'stopCompleted'
   | 'stopDetails';
 type RouteTabId = ReturnType<typeof getMvpRouteTabs>[number]['id'];
-type RouteStatus = 'active' | 'completed' | 'upcoming';
+type RouteStatus = RouteSessionStatus;
+type StopDetailsBackTarget = 'liveTracking' | 'routeDetail';
 
 type StopProofDraft = {
   additionalNotes: string;
@@ -140,7 +153,7 @@ type RouteLoadOptions = {
   successMessagePrefix?: string;
 };
 
-const COMPANY_STEP_INDEX = 0;
+const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
 const DRIVER_APP_VERSION = '0.1.0';
 const ANDROID_SYSTEM_NAV_CLEARANCE = 56;
 const LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID = 'login-detail-keyboard-navigation';
@@ -167,6 +180,8 @@ export default function App() {
   const [selectedTab, setSelectedTab] = useState<RouteTabId>('upcoming');
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [navigationStepIndex, setNavigationStepIndex] = useState(COMPANY_STEP_INDEX);
+  const [selectedStopDetailsId, setSelectedStopDetailsId] = useState<string | null>(null);
+  const [stopDetailsBackTarget, setStopDetailsBackTarget] = useState<StopDetailsBackTarget>('liveTracking');
   const [routeSessions, setRouteSessions] = useState<RouteSession[]>([]);
   const [routeReviewNote, setRouteReviewNote] = useState('');
 
@@ -240,7 +255,16 @@ export default function App() {
   const selectedRouteSession = routeSessions.find((session) => session.route.id === selectedRouteId) ?? routeSessions[0] ?? null;
   const selectedRoute = selectedRouteSession?.route ?? null;
   const routeStatus = getRouteStatus(deliveryStartResult, deliveryFinishResult);
-  const currentStop = selectedRoute === null ? null : selectedRoute.stops[navigationStepIndex - 1] ?? null;
+  const currentStop = selectedRoute === null ? null : getCurrentRouteStop({ navigationStepIndex, route: selectedRoute });
+  const stopDetailsProgressState = selectedRoute === null
+    ? null
+    : getStopDetailsProgressState({
+      navigationStepIndex,
+      route: selectedRoute,
+      selectedStopDetailsId,
+    });
+  const stopDetailsStop = stopDetailsProgressState?.stop ?? null;
+  const stopDetailsCanMarkArrived = stopDetailsProgressState?.canMarkArrived === true;
   const isCompanyStep = navigationStepIndex === COMPANY_STEP_INDEX;
   const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => completedStopIds.includes(stop.deliveryStopId));
   const currentCompany = selectedRouteSession?.companyGuidance ?? null;
@@ -483,7 +507,7 @@ export default function App() {
     const allowVerifiedDriverNoRoute = options.allowVerifiedDriverNoRoute ?? false;
     const shouldResetProgress = options.resetProgress ?? true;
     const shouldNavigateOnSuccess = options.navigateOnSuccess ?? true;
-    const successMessagePrefix = options.successMessagePrefix ?? 'current/upcoming';
+    const successMessagePrefix = options.successMessagePrefix ?? 'assigned';
     setIsLoggingIn(true);
     setMessage(null);
     setVerifiedDriverPhoneE164(driverPhone.phoneE164);
@@ -571,25 +595,22 @@ export default function App() {
         return;
       }
 
-      const currentAndFutureSessions = getCurrentAndFutureRouteSessions(loadedSessions, { now: new Date() });
-      if (currentAndFutureSessions.length === 0) {
-        openVerifiedNoAssignedRoute('past_routes_hidden');
-        return;
-      }
-
-      setRouteSessions(currentAndFutureSessions);
-      const nextSelectedRouteId = currentAndFutureSessions.some((session) => session.route.id === selectedRouteId)
+      setRouteSessions(loadedSessions);
+      const nextSelectedRouteId = loadedSessions.some((session) => session.route.id === selectedRouteId)
         ? selectedRouteId
-        : currentAndFutureSessions[0].route.id;
+        : loadedSessions[0].route.id;
       setSelectedRouteId(nextSelectedRouteId);
-      const selectedSession = currentAndFutureSessions.find((session) => session.route.id === nextSelectedRouteId) ?? currentAndFutureSessions[0];
+      const selectedSession = loadedSessions.find((session) => session.route.id === nextSelectedRouteId) ?? loadedSessions[0];
       const firstSubmission = toCompanyGuidanceSubmission(selectedSession);
       setSubmission(firstSubmission);
       await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(firstSubmission));
-      setSelectedTab('upcoming');
+      setSelectedTab(getInitialAssignedRouteTab({
+        now: new Date(),
+        route: selectedSession.route,
+      }));
       setSelectedMainTab(shouldNavigateOnSuccess ? 'home' : 'routes');
       setScreen('mainTabs');
-      setMessage(`${currentAndFutureSessions.length} ${successMessagePrefix} route${currentAndFutureSessions.length === 1 ? '' : 's'} loaded. ${buildAuthSuccessMessage({ runtimeConfig, phase: 'route_access' })}`);
+      setMessage(`${loadedSessions.length} ${successMessagePrefix} route${loadedSessions.length === 1 ? '' : 's'} loaded. ${buildAuthSuccessMessage({ runtimeConfig, phase: 'route_access' })}`);
     } catch (error) {
       const failure = buildAuthFailureMessage({
         runtimeConfig,
@@ -627,7 +648,7 @@ export default function App() {
         {
           navigateOnSuccess: false,
           resetProgress: false,
-          successMessagePrefix: 'refreshed current/upcoming',
+          successMessagePrefix: 'refreshed assigned',
         },
       );
     } finally {
@@ -752,8 +773,8 @@ export default function App() {
     setScreen('routeDetail');
   }
 
-  async function handleCallCurrentStop() {
-    const phone = currentStop?.phone ?? currentCompany?.operatorSupportContact;
+  async function handleCallStop(stop: AssignedRouteStop | null) {
+    const phone = stop?.phone ?? currentCompany?.operatorSupportContact;
     if (phone === null || phone === undefined || phone.trim().length === 0) {
       setMessage('No contact number is available for this stop.');
       return;
@@ -762,8 +783,8 @@ export default function App() {
     await Linking.openURL(`tel:${phone}`);
   }
 
-  async function handleMessageCurrentStop() {
-    const phone = currentStop?.phone ?? currentCompany?.operatorSupportContact;
+  async function handleMessageStop(stop: AssignedRouteStop | null) {
+    const phone = stop?.phone ?? currentCompany?.operatorSupportContact;
     if (phone === null || phone === undefined || phone.trim().length === 0) {
       setMessage('No message contact is available for this stop.');
       return;
@@ -773,7 +794,15 @@ export default function App() {
   }
 
   function handleAnnounceCurrentTip() {
-    const text = getNavigationTip({ company: currentCompany, isCompanyStep, stop: currentStop });
+    handleAnnounceNavigationTip({ isCompanyStep, stop: currentStop });
+  }
+
+  function handleAnnounceStopTip(stop: AssignedRouteStop | null) {
+    handleAnnounceNavigationTip({ isCompanyStep: false, stop });
+  }
+
+  function handleAnnounceNavigationTip(input: { isCompanyStep: boolean; stop: AssignedRouteStop | null }) {
+    const text = getNavigationTip({ company: currentCompany, isCompanyStep: input.isCompanyStep, stop: input.stop });
     Speech.stop();
     Speech.speak(text, { language: 'en-CA', rate: 0.94 });
     setMessage(`Voice tip: ${text}`);
@@ -801,7 +830,57 @@ export default function App() {
       return;
     }
 
+    setSelectedStopDetailsId(currentStop.deliveryStopId);
+    setStopDetailsBackTarget('liveTracking');
     setScreen('stopDetails');
+  }
+
+  function handleContinueTracking() {
+    setScreen('liveTracking');
+  }
+
+  function handleOpenStopFromRouteDetail(stop: AssignedRouteStop) {
+    if (selectedRoute === null) {
+      setMessage('No route is available to review.');
+      return;
+    }
+
+    const selectedStop = selectedRoute.stops.find((candidate) => candidate.deliveryStopId === stop.deliveryStopId);
+    if (selectedStop === undefined) {
+      setMessage('This stop is no longer available on the selected route.');
+      return;
+    }
+
+    setSelectedStopDetailsId(selectedStop.deliveryStopId);
+    setStopDetailsBackTarget('routeDetail');
+    setScreen('stopDetails');
+  }
+
+  async function handleOpenRouteNavigation(route: AssignedRoute | null) {
+    if (route === null) {
+      setMessage('No route is available to open in map.');
+      return;
+    }
+
+    const result = await openRouteNavigation({
+      linking: Linking,
+      route,
+    });
+    setMessage(result.message);
+  }
+
+  async function handleOpenNavigationForStop(stop: AssignedRouteStop | null) {
+    if (stop === null || selectedRoute === null) {
+      setMessage('No stop is available to open in map.');
+      return;
+    }
+
+    const result = await openStopNavigation({
+      linking: Linking,
+      platform: Platform.OS,
+      stop,
+    });
+    setMessage(result.message);
   }
 
   function handleContinueAfterStopCompleted() {
@@ -996,6 +1075,8 @@ export default function App() {
     setCompletedStopTimes({});
     setRecentlyCompletedStopId(null);
     setNavigationStepIndex(COMPANY_STEP_INDEX);
+    setSelectedStopDetailsId(null);
+    setStopDetailsBackTarget('liveTracking');
     setSelectedRouteId(null);
   }
 
@@ -1071,7 +1152,8 @@ export default function App() {
           setScreen('routeDetail');
           return true;
         case 'stopDetails':
-          setScreen('liveTracking');
+          setSelectedStopDetailsId(null);
+          setScreen(stopDetailsBackTarget);
           return true;
         case 'arrivalCheck':
           setScreen('stopDetails');
@@ -1087,7 +1169,7 @@ export default function App() {
     });
 
     return () => subscription.remove();
-  }, [screen]);
+  }, [screen, stopDetailsBackTarget]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -1199,11 +1281,15 @@ export default function App() {
               company={currentCompany}
               completedStopIds={completedStopIds}
               continuousLocationResult={continuousLocationResult}
+              currentNavigationStepIndex={navigationStepIndex}
               deliveryFinishResult={deliveryFinishResult}
               isFinishingRoute={isFinishingRoute}
               isStartingRoute={isStartingRoute}
               onBack={openHomeRoot}
+              onContinueTracking={handleContinueTracking}
               onFinishRoute={handleManualFinishRoute}
+              onOpenNavigation={() => handleOpenRouteNavigation(selectedRoute)}
+              onOpenStop={handleOpenStopFromRouteDetail}
               onStartRoute={() => handleStartRoute(selectedRoute.id)}
               route={selectedRoute}
               routeStartedEventResult={routeStartedEventResult}
@@ -1219,6 +1305,7 @@ export default function App() {
               isCompanyStep={isCompanyStep}
               onArrived={handleArrivedAtStep}
               onBack={() => setScreen('routeDetail')}
+              onOpenNavigation={() => handleOpenRouteNavigation(selectedRoute)}
               onViewStop={handleViewCurrentStop}
               route={selectedRoute}
               routeStatus={routeStatus}
@@ -1226,15 +1313,20 @@ export default function App() {
             />
           ) : null}
 
-          {screen === 'stopDetails' && currentStop !== null ? (
+          {screen === 'stopDetails' && stopDetailsStop !== null ? (
             <StopDetailsScreen
+              canMarkArrived={stopDetailsCanMarkArrived}
               company={currentCompany}
-              onAnnounceTip={handleAnnounceCurrentTip}
+              onAnnounceTip={() => handleAnnounceStopTip(stopDetailsStop)}
               onArrived={handleArrivedAtStep}
-              onBack={() => setScreen('liveTracking')}
-              onCall={handleCallCurrentStop}
-              onMessage={handleMessageCurrentStop}
-              stop={currentStop}
+              onBack={() => {
+                setSelectedStopDetailsId(null);
+                setScreen(stopDetailsBackTarget);
+              }}
+              onCall={() => handleCallStop(stopDetailsStop)}
+              onMessage={() => handleMessageStop(stopDetailsStop)}
+              onOpenNavigation={() => handleOpenNavigationForStop(stopDetailsStop)}
+              stop={stopDetailsStop}
             />
           ) : null}
 
@@ -1584,19 +1676,23 @@ function RoutesPage({
   selectedTab: RouteTabId;
   tabs: ReturnType<typeof getMvpRouteTabs>;
 }) {
-  const currentAndFutureRouteSessions = getCurrentAndFutureRouteSessions(routeSessions, { now: new Date() });
-  const visibleRouteSessions = currentAndFutureRouteSessions.filter((session) => getDriverRouteStatusForTabs({
-    routeId: session.route.id,
+  const classificationNow = new Date();
+  const visibleRouteSessions = filterVisibleAssignedRouteSessions(routeSessions, {
+    now: classificationNow,
     selectedRouteId,
     selectedRouteStatus: routeStatus,
-  }) === selectedTab);
+    selectedTab,
+  });
   const activeSession = visibleRouteSessions.find((session) => session.route.id === selectedRouteId) ?? visibleRouteSessions[0] ?? null;
   const activeIndex = activeSession === null ? -1 : visibleRouteSessions.findIndex((session) => session.route.id === activeSession.route.id);
-  const activeRouteStatusForTabs = activeSession === null ? null : getDriverRouteStatusForTabs({
-    routeId: activeSession.route.id,
-    selectedRouteId,
-    selectedRouteStatus: routeStatus,
-  });
+  const activeRouteStatusForTabs = activeSession === null
+    ? null
+    : classifyAssignedRouteSession({
+      now: classificationNow,
+      route: activeSession.route,
+      selectedRouteId,
+      selectedRouteStatus: routeStatus,
+    });
 
   function selectRelativeRoute(offset: number) {
     if (visibleRouteSessions.length === 0 || activeIndex < 0) {
@@ -1640,8 +1736,8 @@ function RoutesPage({
           <DataRow label="Region" value={getRouteRegion(activeSession.route)} />
           <DataRow label="Route" value={formatRouteSequence(activeSession.route)} />
           <DataRow label="Stops" value={formatStopCount(activeSession.route.stops.length)} />
-          <DataRow label="Estimated Distance" value="Not available" />
-          <DataRow label="Estimated Time" value="Not available" />
+          <DataRow label="Estimated Distance" value={formatAssignedRouteDistance(activeSession.route.routeMetrics)} />
+          <DataRow label="Estimated Time" value={formatAssignedRouteDuration(activeSession.route.routeMetrics)} />
 
           {visibleRouteSessions.length > 1 ? (
             <View style={styles.routePagerRow}>
@@ -1665,7 +1761,7 @@ function RoutesPage({
       ) : (
         <EmptyState
           title="No assigned route"
-          body={selectedTab === 'completed' ? getDriverPlaceholderCopy('routeHistory') : 'No current or upcoming route is available for this status.'}
+          body={selectedTab === 'completed' ? getDriverPlaceholderCopy('routeHistory') : 'No assigned route is available for this status.'}
         />
       )}
     </View>
@@ -1738,11 +1834,15 @@ function RouteDetailScreen({
   company,
   completedStopIds,
   continuousLocationResult,
+  currentNavigationStepIndex,
   deliveryFinishResult,
   isFinishingRoute,
   isStartingRoute,
   onBack,
+  onContinueTracking,
   onFinishRoute,
+  onOpenNavigation,
+  onOpenStop,
   onStartRoute,
   route,
   routeStartedEventResult,
@@ -1752,16 +1852,25 @@ function RouteDetailScreen({
   company: RouteAccessCompanyGuidance | null;
   completedStopIds: string[];
   continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
+  currentNavigationStepIndex: number;
   deliveryFinishResult: DeliveryFinishResult | null;
   isFinishingRoute: boolean;
   isStartingRoute: boolean;
   onBack(): void;
+  onContinueTracking(): void;
   onFinishRoute(): void;
+  onOpenNavigation(): void;
+  onOpenStop(stop: AssignedRouteStop): void;
   onStartRoute(): void;
   route: AssignedRoute;
   routeStartedEventResult: RouteStartedRecordResult | null;
   routeStatus: RouteStatus;
 }) {
+  const depotIsProcessing = routeStatus === 'active' && currentNavigationStepIndex === COMPANY_STEP_INDEX;
+  const depotMeta = depotIsProcessing ? 'Processing' : routeStatus === 'upcoming' ? 'Start' : 'Done';
+  const depotMetaTone = depotIsProcessing ? 'blue' : routeStatus === 'upcoming' ? 'neutral' : 'green';
+  const depotState = routeStatus === 'upcoming' || depotIsProcessing ? 'current' : 'completed';
+
   return (
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Route Details" />
@@ -1770,8 +1879,8 @@ function RouteDetailScreen({
         <DataRow label="Date" value={route.deliveryDate} />
         <View style={styles.summaryGrid}>
           <MetricBlock label="Stops" value={formatStopCount(route.stops.length)} />
-          <MetricBlock label="Distance" value="Not available" />
-          <MetricBlock label="Duration" value="Not available" />
+          <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
+          <MetricBlock label="Duration" value={formatAssignedRouteDuration(route.routeMetrics)} />
         </View>
       </View>
 
@@ -1789,10 +1898,13 @@ function RouteDetailScreen({
 
       <View style={styles.timelineCard}>
         <Text style={styles.sectionTitle}>Route Sequence</Text>
-        <TimelineRow marker="D" title="Depot" subtitle="Pickup point" state={routeStatus === 'upcoming' ? 'current' : 'completed'} meta="Start" />
-        {route.stops.map((stop) => {
+        <TimelineRow marker="D" title="Depot" subtitle="Pickup point" state={depotState} meta={depotMeta} metaTone={depotMetaTone} />
+        {route.stops.map((stop, index) => {
           const completed = completedStopIds.includes(stop.deliveryStopId);
-          const state = completed ? 'completed' : routeStatus === 'active' && !completed ? 'current' : 'upcoming';
+          const isProcessing = routeStatus === 'active' && currentNavigationStepIndex === index + 1 && !completed;
+          const state = completed ? 'completed' : isProcessing ? 'current' : 'upcoming';
+          const meta = completed ? 'Done' : isProcessing ? 'Processing' : 'Pending';
+          const metaTone = completed ? 'green' : isProcessing ? 'blue' : 'neutral';
           return (
             <TimelineRow
               key={stop.deliveryStopId}
@@ -1800,7 +1912,9 @@ function RouteDetailScreen({
               title={`Stop ${stop.sequence}`}
               subtitle={formatStopAddress(stop)}
               state={state}
-              meta="ETA"
+              meta={meta}
+              metaTone={metaTone}
+              onPress={() => onOpenStop(stop)}
             />
           );
         })}
@@ -1815,7 +1929,10 @@ function RouteDetailScreen({
           <PrimaryButton disabled={isStartingRoute} label="Begin Tracking" loading={isStartingRoute} onPress={onStartRoute} />
         ) : routeStatus === 'active' && allStopsCompleted ? (
           <PrimaryButton disabled={isFinishingRoute} label="Finish Route" loading={isFinishingRoute} onPress={onFinishRoute} />
+        ) : routeStatus === 'active' ? (
+          <PrimaryButton label="Continue Tracking" onPress={onContinueTracking} />
         ) : null}
+        <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
         <SecondaryButton label="Back to Routes" onPress={onBack} />
       </View>
     </View>
@@ -1829,6 +1946,7 @@ function LiveTrackingScreen({
   isCompanyStep,
   onArrived,
   onBack,
+  onOpenNavigation,
   onViewStop,
   route,
   routeStatus,
@@ -1840,6 +1958,7 @@ function LiveTrackingScreen({
   isCompanyStep: boolean;
   onArrived(): void;
   onBack(): void;
+  onOpenNavigation(): void;
   onViewStop(): void;
   route: AssignedRoute;
   routeStatus: RouteStatus;
@@ -1860,11 +1979,12 @@ function LiveTrackingScreen({
           <Text style={styles.labelText}>Next Stop</Text>
           <Text numberOfLines={2} style={styles.sheetTitle}>{address}</Text>
           <View style={styles.trackingMetrics}>
-            <MetricBlock label="Distance" value="Not available" />
-            <MetricBlock label="ETA" value="Not available" />
+            <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
+            <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
             <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : 'Pending'} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
           </View>
           <View style={styles.buttonRow}>
+            <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
             <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
             <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
           </View>
@@ -1876,20 +1996,24 @@ function LiveTrackingScreen({
 }
 
 function StopDetailsScreen({
+  canMarkArrived,
   company,
   onAnnounceTip,
   onArrived,
   onBack,
   onCall,
   onMessage,
+  onOpenNavigation,
   stop,
 }: {
+  canMarkArrived: boolean;
   company: RouteAccessCompanyGuidance | null;
   onAnnounceTip(): void;
   onArrived(): void;
   onBack(): void;
   onCall(): void;
   onMessage(): void;
+  onOpenNavigation(): void;
   stop: AssignedRouteStop;
 }) {
   const tip = getNavigationTip({ company, isCompanyStep: false, stop });
@@ -1909,11 +2033,19 @@ function StopDetailsScreen({
       <Text style={styles.sectionTitle}>Location Tips</Text>
       <TextCard text={tip} />
       <View style={styles.buttonRow}>
+        <SecondaryButton label="Open Stop Map" onPress={onOpenNavigation} />
         <SecondaryButton label="Call" onPress={onCall} />
         <SecondaryButton label="Message" onPress={onMessage} />
       </View>
       <View style={styles.buttonColumn}>
-        <PrimaryButton label="Arrived" onPress={onArrived} />
+        {canMarkArrived ? (
+          <PrimaryButton label="Arrived" onPress={onArrived} />
+        ) : (
+          <StatusBanner
+            tone="warning"
+            text="Preview only. Use Live Tracking and the current-step button to advance route progress."
+          />
+        )}
         <SecondaryButton label="I’m Nearby" onPress={onAnnounceTip} />
       </View>
     </View>
@@ -2404,9 +2536,25 @@ function StatusChip({ label, tone }: { label: string; tone: 'blue' | 'green' | '
   return <Text style={[styles.statusChip, toneStyle]}>{label}</Text>;
 }
 
-function TimelineRow({ marker, meta, state, subtitle, title }: { marker: string; meta: string; state: 'completed' | 'current' | 'upcoming'; subtitle: string; title: string }) {
-  return (
-    <View style={[styles.timelineRow, state === 'current' && styles.timelineRowCurrent]}>
+function TimelineRow({
+  marker,
+  meta,
+  metaTone = 'neutral',
+  onPress,
+  state,
+  subtitle,
+  title,
+}: {
+  marker: string;
+  meta: string;
+  metaTone?: 'blue' | 'green' | 'neutral';
+  onPress?: () => void;
+  state: 'completed' | 'current' | 'upcoming';
+  subtitle: string;
+  title: string;
+}) {
+  const content = (
+    <>
       <View style={[styles.timelineMarker, state === 'completed' && styles.timelineMarkerCompleted, state === 'current' && styles.timelineMarkerCurrent]}>
         <Text style={[styles.timelineMarkerText, (state === 'completed' || state === 'current') && styles.timelineMarkerTextActive]}>{marker}</Text>
       </View>
@@ -2414,9 +2562,28 @@ function TimelineRow({ marker, meta, state, subtitle, title }: { marker: string;
         <Text style={styles.timelineTitle}>{title}</Text>
         <Text numberOfLines={2} style={styles.helperText}>{subtitle}</Text>
       </View>
-      <Text style={styles.timelineMeta}>{meta}</Text>
-    </View>
+      <StatusChip label={meta} tone={metaTone} />
+    </>
   );
+
+  if (onPress !== undefined) {
+    return (
+      <Pressable
+        accessibilityLabel={`${title}. ${subtitle}. ${meta}.`}
+        accessibilityRole="button"
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.timelineRow,
+          state === 'current' && styles.timelineRowCurrent,
+          pressed && { opacity: 0.88 },
+        ]}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+
+  return <View style={[styles.timelineRow, state === 'current' && styles.timelineRowCurrent]}>{content}</View>;
 }
 
 function MapOverview({ currentStepIndex, route }: { currentStepIndex: number; route: AssignedRoute }) {
@@ -2651,6 +2818,8 @@ function formatRouteStatus(status: RouteStatus): string {
       return 'In progress';
     case 'completed':
       return 'Completed';
+    case 'unfinished':
+      return 'Unfinished';
     case 'upcoming':
       return 'Pending';
   }
@@ -2764,6 +2933,8 @@ function getChipTone(status: RouteStatus): 'blue' | 'green' | 'neutral' {
       return 'blue';
     case 'completed':
       return 'green';
+    case 'unfinished':
+      return 'neutral';
     case 'upcoming':
       return 'neutral';
   }

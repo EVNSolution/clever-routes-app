@@ -33,7 +33,7 @@ export type DriverAppScreenId =
   | 'stopCompleted'
   | 'stopDetails';
 
-export type DriverRouteStatusForTabs = 'active' | 'completed' | 'upcoming';
+export type DriverRouteStatusForTabs = 'active' | 'completed' | 'unfinished' | 'upcoming';
 
 export function getDriverMainTabs(): DriverMainTab[] {
   return [...DRIVER_MAIN_TABS];
