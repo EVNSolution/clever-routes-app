@@ -79,7 +79,9 @@ import {
   type RouteAccessRouteChoice,
   type RouteAccessSubmissionResult,
 } from '../domain/routeAccess/routeAccess';
+import { resetDriverSession } from '../domain/driver/driverSessionReset';
 import { recordStopProofEventAfterDeliveryStart, type StopProofEventResult } from '../domain/stop/stopProofEvents';
+import { openStopNavigation } from '../domain/stop/stopNavigation';
 import {
   COUNTRY_SELECTOR_OVERLAY_BEHAVIOR,
   getCountrySelectorRowText,
@@ -116,6 +118,7 @@ type RouteSession = RouteAccessRouteChoice & {
 
 const DEFAULT_DRIVER_NAME = '';
 const COMPANY_STEP_INDEX = 0;
+const ADMIN_SESSION_ENABLED = __DEV__ || process.env.EXPO_PUBLIC_ENABLE_ADMIN_SESSION === '1';
 
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>('login');
@@ -156,6 +159,8 @@ export default function App() {
   const [isCompletingStop, setIsCompletingStop] = useState(false);
   const [isFinishingRoute, setIsFinishingRoute] = useState(false);
   const [isSyncingOfflineQueue, setIsSyncingOfflineQueue] = useState(false);
+  const [isLoadingBackdoorSession, setIsLoadingBackdoorSession] = useState(false);
+  const [isAdminToolsVisible, setIsAdminToolsVisible] = useState(false);
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
@@ -527,6 +532,77 @@ export default function App() {
     setScreen('stopDetails');
   }
 
+  async function handleLoadBackdoorSession() {
+    setIsLoadingBackdoorSession(true);
+    setMessage(null);
+    resetRouteProgress();
+    const now = new Date();
+
+    try {
+      const backdoorRouteChoice: RouteAccessRouteChoice = {
+        companyGuidance: sampleInvitedRouteAccess.companyGuidance,
+        driverAccess: sampleInvitedRouteAccess.driverAccess,
+        routeAccess: sampleInvitedRouteAccess.routeAccess,
+      };
+      const adminSession: RouteSession = {
+        ...backdoorRouteChoice,
+        route: sampleAssignedRoute,
+      };
+      const backdoorSubmission = toCompanyGuidanceSubmission(adminSession);
+
+      await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(backdoorSubmission));
+      setRouteSessions([adminSession]);
+      setSelectedRouteId(adminSession.route.id);
+      setSubmission(backdoorSubmission);
+      setSelectedTab(getInitialAssignedRouteTab({ now, route: adminSession.route }));
+      setNavigationStepIndex(COMPANY_STEP_INDEX);
+      setScreen('routes');
+      setMessage('Loaded admin backdoor session for route testing.');
+      if (driverName.trim().length === 0) {
+        setDriverName('Test Driver');
+      }
+    } catch {
+      setMessage('Unable to load backdoor session. Try again.');
+    } finally {
+      setIsLoadingBackdoorSession(false);
+    }
+  }
+
+  async function handleOpenNavigationForCurrentStop(stop: AssignedRouteStop | null) {
+    if (stop === null || selectedRoute === null) {
+      setMessage('No stop is available to open in map.');
+      return;
+    }
+
+    const result = await openStopNavigation({
+      linking: Linking,
+      platform: Platform.OS,
+      stop,
+    });
+    setMessage(result.message);
+  }
+
+  async function handleResetSessionForAdmin() {
+    if (offlineSubmissionQueue === null) {
+      setMessage('Offline queue is unavailable. Wait for app initialization and try again.');
+      return;
+    }
+
+    const queueToReset = offlineSubmissionQueue;
+    try {
+      const resetResult = await resetDriverSession({
+        driverAccessTokenStore,
+        offlineQueue: queueToReset,
+      });
+      resetRouteProgress();
+      setSubmission(null);
+      setScreen('login');
+      setMessage(`Session reset. Cleared ${resetResult.clearedOfflineSubmissions} queued item(s).`);
+    } catch {
+      setMessage('Session reset failed.');
+    }
+  }
+
   function handleContinueAfterStopCompleted() {
     if (selectedRoute === null) {
       setScreen('routes');
@@ -779,17 +855,27 @@ export default function App() {
             <LoginScreen
               acceptedLocation={acceptedLocation}
               acceptedPrivacy={acceptedPrivacy}
+              adminToolsEnabled={ADMIN_SESSION_ENABLED}
+              isAdminToolsVisible={isAdminToolsVisible}
+              isBackdoorLoading={isLoadingBackdoorSession}
               countrySearchQuery={countrySearchQuery}
               driverPhoneCountries={visiblePhoneCountries}
               driverName={driverName}
-              isLoggingIn={isLoggingIn || isSyncingOfflineQueue || offlineSubmissionQueue === null}
+              isLoggingIn={isLoggingIn || isSyncingOfflineQueue || offlineSubmissionQueue === null || isLoadingBackdoorSession}
               isCountrySelectorOpen={isCountrySelectorOpen}
               nationalPhoneInput={nationalPhoneInput}
+              onAdminToolsToggle={() => {
+                if (ADMIN_SESSION_ENABLED) {
+                  setIsAdminToolsVisible((value) => !value);
+                }
+              }}
               onAcceptedLocationChange={setAcceptedLocation}
               onAcceptedPrivacyChange={setAcceptedPrivacy}
               onCountrySearchChange={setCountrySearchQuery}
               onCountrySelect={handlePhoneCountrySelect}
               onCountrySelectorToggle={() => setIsCountrySelectorOpen((current) => !current)}
+              onLoadAdminSession={handleLoadBackdoorSession}
+              onResetSession={handleResetSessionForAdmin}
               onDriverNameChange={setDriverName}
               onPhoneChange={handlePhoneInputChange}
               onSendCode={handleSendVerificationCode}
@@ -846,6 +932,7 @@ export default function App() {
               isCompanyStep={isCompanyStep}
               onArrived={handleArrivedAtStep}
               onBack={() => setScreen('routeDetail')}
+              onOpenNavigation={() => handleOpenNavigationForCurrentStop(currentStop)}
               onViewStop={handleViewCurrentStop}
               route={selectedRoute}
               routeStatus={routeStatus}
@@ -861,6 +948,7 @@ export default function App() {
               onBack={() => setScreen('liveTracking')}
               onCall={handleCallCurrentStop}
               onMessage={handleMessageCurrentStop}
+              onOpenNavigation={() => handleOpenNavigationForCurrentStop(currentStop)}
               stop={currentStop}
             />
           ) : null}
@@ -913,18 +1001,24 @@ export default function App() {
 function LoginScreen({
   acceptedLocation,
   acceptedPrivacy,
+  adminToolsEnabled,
   countrySearchQuery,
   driverPhoneCountries,
   driverName,
   isCountrySelectorOpen,
   isLoggingIn,
   nationalPhoneInput,
+  isAdminToolsVisible,
+  isBackdoorLoading,
+  onAdminToolsToggle,
   onAcceptedLocationChange,
   onAcceptedPrivacyChange,
   onCountrySearchChange,
   onCountrySelect,
   onCountrySelectorToggle,
+  onLoadAdminSession,
   onDriverNameChange,
+  onResetSession,
   onPhoneChange,
   onSendCode,
   onSubmit,
@@ -936,18 +1030,24 @@ function LoginScreen({
 }: {
   acceptedLocation: boolean;
   acceptedPrivacy: boolean;
+  adminToolsEnabled: boolean;
   countrySearchQuery: string;
   driverPhoneCountries: DriverPhoneCountry[];
   driverName: string;
   isCountrySelectorOpen: boolean;
+  isAdminToolsVisible: boolean;
+  isBackdoorLoading: boolean;
   isLoggingIn: boolean;
   nationalPhoneInput: string;
+  onAdminToolsToggle(): void;
   onAcceptedLocationChange(value: boolean): void;
   onAcceptedPrivacyChange(value: boolean): void;
   onCountrySearchChange(value: string): void;
   onCountrySelect(country: DriverPhoneCountry): void;
   onCountrySelectorToggle(): void;
+  onLoadAdminSession(): void;
   onDriverNameChange(value: string): void;
+  onResetSession(): void;
   onPhoneChange(value: string): void;
   onSendCode(): void;
   onSubmit(): void;
@@ -959,10 +1059,36 @@ function LoginScreen({
 }) {
   return (
     <View style={styles.screenStack}>
-      <View style={styles.brandPanel}>
-        <Text style={styles.brandName}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Driver</Text></Text>
-        <Text style={styles.brandTagline}>Smarter routes for faster deliveries.</Text>
-      </View>
+      <Pressable
+        accessibilityHint={adminToolsEnabled ? 'Long press to show admin tools.' : undefined}
+        accessibilityRole={adminToolsEnabled ? 'button' : undefined}
+        onLongPress={adminToolsEnabled ? onAdminToolsToggle : undefined}
+        delayLongPress={700}
+      >
+        <View style={styles.brandPanel}>
+          <Text style={styles.brandName}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Driver</Text></Text>
+          <Text style={styles.brandTagline}>Smarter routes for faster deliveries.</Text>
+        </View>
+      </Pressable>
+
+      {adminToolsEnabled && isAdminToolsVisible ? (
+        <View style={styles.adminPanel}>
+          <Text style={styles.adminPanelTitle}>Admin session tools</Text>
+          <Text style={styles.helperText}>Use these controls for QA and internal testing only.</Text>
+          <View style={styles.buttonColumn}>
+            <SecondaryButton
+              disabled={isBackdoorLoading || isLoggingIn}
+              label="Load admin backdoor session"
+              onPress={onLoadAdminSession}
+            />
+            <SecondaryButton
+              disabled={isBackdoorLoading || isLoggingIn}
+              label="Reset driver session"
+              onPress={onResetSession}
+            />
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.formCard}>
         <CountrySelector
@@ -1215,6 +1341,7 @@ function LiveTrackingScreen({
   isCompanyStep,
   onArrived,
   onBack,
+  onOpenNavigation,
   onViewStop,
   route,
   routeStatus,
@@ -1226,6 +1353,7 @@ function LiveTrackingScreen({
   isCompanyStep: boolean;
   onArrived(): void;
   onBack(): void;
+  onOpenNavigation(): void;
   onViewStop(): void;
   route: AssignedRoute;
   routeStatus: RouteStatus;
@@ -1252,6 +1380,7 @@ function LiveTrackingScreen({
           </View>
           <View style={styles.buttonRow}>
             <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
+            <SecondaryButton disabled={stop === null} label="Open Map" onPress={onOpenNavigation} />
             <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
           </View>
           <Text style={styles.helperText}>{stepLabel}</Text>
@@ -1268,6 +1397,7 @@ function StopDetailsScreen({
   onBack,
   onCall,
   onMessage,
+  onOpenNavigation,
   stop,
 }: {
   company: RouteAccessCompanyGuidance | null;
@@ -1276,6 +1406,7 @@ function StopDetailsScreen({
   onBack(): void;
   onCall(): void;
   onMessage(): void;
+  onOpenNavigation(): void;
   stop: AssignedRouteStop;
 }) {
   const tip = getNavigationTip({ company, isCompanyStep: false, stop });
@@ -1295,6 +1426,7 @@ function StopDetailsScreen({
       <Text style={styles.sectionTitle}>Location Tips</Text>
       <TextCard text={tip} />
       <View style={styles.buttonRow}>
+        <SecondaryButton label="Open Map" onPress={onOpenNavigation} />
         <SecondaryButton label="Call" onPress={onCall} />
         <SecondaryButton label="Message" onPress={onMessage} />
       </View>
@@ -2184,6 +2316,19 @@ const styles = StyleSheet.create({
     minHeight: 240,
     justifyContent: 'center',
     paddingTop: 28,
+  },
+  adminPanel: {
+    backgroundColor: '#fff7ed',
+    borderColor: '#fdba74',
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 8,
+    padding: 14,
+  },
+  adminPanelTitle: {
+    color: '#8a4f09',
+    fontSize: 15,
+    fontWeight: '800',
   },
   brandName: {
     fontSize: 34,
