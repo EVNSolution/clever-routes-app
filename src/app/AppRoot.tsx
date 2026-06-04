@@ -1,10 +1,12 @@
 import { StatusBar } from 'expo-status-bar';
 import * as Speech from 'expo-speech';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   KeyboardAvoidingView,
   Linking,
+  PanResponder,
   Platform,
   Pressable,
   SafeAreaView,
@@ -19,7 +21,6 @@ import {
   createMockAssignedRouteService,
   formatAssignedRouteDistance,
   formatAssignedRouteDuration,
-  hasAssignedRouteGeometry,
   loadAssignedRouteAfterConsent,
   sampleAssignedRoute,
   type AssignedRoute,
@@ -84,7 +85,7 @@ import {
 } from '../domain/routeAccess/routeAccess';
 import { resetDriverSession } from '../domain/driver/driverSessionReset';
 import { recordStopProofEventAfterDeliveryStart, type StopProofEventResult } from '../domain/stop/stopProofEvents';
-import { openStopNavigation } from '../domain/stop/stopNavigation';
+import { openRouteNavigation, openStopNavigation } from '../domain/stop/stopNavigation';
 import {
   COUNTRY_SELECTOR_OVERLAY_BEHAVIOR,
   getCountrySelectorRowText,
@@ -108,6 +109,7 @@ type AppScreen =
   | 'stopDetails';
 type RouteTabId = ReturnType<typeof getMvpRouteTabs>[number]['id'];
 type RouteStatus = RouteSessionStatus;
+type StopDetailsBackTarget = 'liveTracking' | 'routeDetail';
 
 type StopProofDraft = {
   additionalNotes: string;
@@ -122,6 +124,9 @@ type RouteSession = RouteAccessRouteChoice & {
 const DEFAULT_DRIVER_NAME = '';
 const COMPANY_STEP_INDEX = 0;
 const ADMIN_SESSION_ENABLED = __DEV__ || process.env.EXPO_PUBLIC_ENABLE_ADMIN_SESSION === '1';
+const SWIPE_BACK_DISTANCE = 90;
+const SWIPE_BACK_MAX_VERTICAL_DELTA = 90;
+const SWIPE_BACK_DIRECTIONALITY_RATIO = 1.45;
 
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>('login');
@@ -137,6 +142,7 @@ export default function App() {
   const [selectedTab, setSelectedTab] = useState<RouteTabId>('upcoming');
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [navigationStepIndex, setNavigationStepIndex] = useState(COMPANY_STEP_INDEX);
+  const [stopDetailsBackTarget, setStopDetailsBackTarget] = useState<StopDetailsBackTarget>('liveTracking');
   const [routeSessions, setRouteSessions] = useState<RouteSession[]>([]);
 
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
@@ -532,6 +538,28 @@ export default function App() {
       return;
     }
 
+    setStopDetailsBackTarget('liveTracking');
+    setScreen('stopDetails');
+  }
+
+  function handleContinueTracking() {
+    setScreen('liveTracking');
+  }
+
+  function handleOpenStopFromRouteDetail(stop: AssignedRouteStop) {
+    if (selectedRoute === null) {
+      setMessage('No route is available to review.');
+      return;
+    }
+
+    const stopIndex = selectedRoute.stops.findIndex((candidate) => candidate.deliveryStopId === stop.deliveryStopId);
+    if (stopIndex === -1) {
+      setMessage('This stop is no longer available on the selected route.');
+      return;
+    }
+
+    setNavigationStepIndex(stopIndex + 1);
+    setStopDetailsBackTarget('routeDetail');
     setScreen('stopDetails');
   }
 
@@ -569,6 +597,19 @@ export default function App() {
     } finally {
       setIsLoadingBackdoorSession(false);
     }
+  }
+
+  async function handleOpenRouteNavigation(route: AssignedRoute | null) {
+    if (route === null) {
+      setMessage('No route is available to open in map.');
+      return;
+    }
+
+    const result = await openRouteNavigation({
+      linking: Linking,
+      route,
+    });
+    setMessage(result.message);
   }
 
   async function handleOpenNavigationForCurrentStop(stop: AssignedRouteStop | null) {
@@ -801,6 +842,7 @@ export default function App() {
     setCompletedStopTimes({});
     setRecentlyCompletedStopId(null);
     setNavigationStepIndex(COMPANY_STEP_INDEX);
+    setStopDetailsBackTarget('liveTracking');
     setSelectedRouteId(null);
   }
 
@@ -845,10 +887,69 @@ export default function App() {
     setOfflineQueueCount(offlineSubmissionQueue?.listPending().length ?? 0);
   }
 
+  const handleAppBack = useCallback((): boolean => {
+    switch (screen) {
+      case 'arrivalCheck':
+        setScreen('stopDetails');
+        return true;
+      case 'completedDeliveries':
+        setScreen('routes');
+        return true;
+      case 'liveTracking':
+        setScreen('routeDetail');
+        return true;
+      case 'routeDetail':
+        setScreen('routes');
+        return true;
+      case 'stopCompleted':
+        setScreen('routeDetail');
+        return true;
+      case 'stopDetails':
+        setScreen(stopDetailsBackTarget);
+        return true;
+      case 'login':
+      case 'routes':
+        return false;
+    }
+  }, [screen, stopDetailsBackTarget]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return undefined;
+    }
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', handleAppBack);
+    return () => subscription.remove();
+  }, [handleAppBack]);
+
+  const swipeBackResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_event, gestureState) => {
+      if (screen === 'login' || screen === 'routes') {
+        return false;
+      }
+
+      const horizontalDistance = Math.abs(gestureState.dx);
+      const verticalDistance = Math.abs(gestureState.dy);
+      return horizontalDistance > 35 && horizontalDistance > verticalDistance * SWIPE_BACK_DIRECTIONALITY_RATIO;
+    },
+    onPanResponderRelease: (_event, gestureState) => {
+      const horizontalDistance = Math.abs(gestureState.dx);
+      const verticalDistance = Math.abs(gestureState.dy);
+
+      if (horizontalDistance >= SWIPE_BACK_DISTANCE && verticalDistance <= SWIPE_BACK_MAX_VERTICAL_DELTA) {
+        handleAppBack();
+      }
+    },
+  }), [handleAppBack, screen]);
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.keyboardArea}>
+      <KeyboardAvoidingView
+        {...swipeBackResponder.panHandlers}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.keyboardArea}
+      >
         <ScrollView
           contentContainerStyle={styles.container}
           keyboardShouldPersistTaps="handled"
@@ -914,12 +1015,14 @@ export default function App() {
               allStopsCompleted={allStopsCompleted}
               company={currentCompany}
               completedStopIds={completedStopIds}
-              continuousLocationResult={continuousLocationResult}
+              currentNavigationStepIndex={navigationStepIndex}
               deliveryFinishResult={deliveryFinishResult}
               isFinishingRoute={isFinishingRoute}
               isStartingRoute={isStartingRoute}
               onBack={() => setScreen('routes')}
+              onContinueTracking={handleContinueTracking}
               onFinishRoute={handleManualFinishRoute}
+              onOpenStop={handleOpenStopFromRouteDetail}
               onStartRoute={() => handleStartRoute(selectedRoute.id)}
               route={selectedRoute}
               routeStartedEventResult={routeStartedEventResult}
@@ -931,11 +1034,10 @@ export default function App() {
             <LiveTrackingScreen
               company={currentCompany}
               continuousLocationResult={continuousLocationResult}
-              currentStepIndex={navigationStepIndex}
               isCompanyStep={isCompanyStep}
               onArrived={handleArrivedAtStep}
               onBack={() => setScreen('routeDetail')}
-              onOpenNavigation={() => handleOpenNavigationForCurrentStop(currentStop)}
+              onOpenNavigation={() => handleOpenRouteNavigation(selectedRoute)}
               onViewStop={handleViewCurrentStop}
               route={selectedRoute}
               routeStatus={routeStatus}
@@ -948,7 +1050,7 @@ export default function App() {
               company={currentCompany}
               onAnnounceTip={handleAnnounceCurrentTip}
               onArrived={handleArrivedAtStep}
-              onBack={() => setScreen('liveTracking')}
+              onBack={() => setScreen(stopDetailsBackTarget)}
               onCall={handleCallCurrentStop}
               onMessage={handleMessageCurrentStop}
               onOpenNavigation={() => handleOpenNavigationForCurrentStop(currentStop)}
@@ -1252,12 +1354,14 @@ function RouteDetailScreen({
   allStopsCompleted,
   company,
   completedStopIds,
-  continuousLocationResult,
+  currentNavigationStepIndex,
   deliveryFinishResult,
   isFinishingRoute,
   isStartingRoute,
   onBack,
+  onContinueTracking,
   onFinishRoute,
+  onOpenStop,
   onStartRoute,
   route,
   routeStartedEventResult,
@@ -1266,17 +1370,24 @@ function RouteDetailScreen({
   allStopsCompleted: boolean;
   company: RouteAccessCompanyGuidance | null;
   completedStopIds: string[];
-  continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
+  currentNavigationStepIndex: number;
   deliveryFinishResult: DeliveryFinishResult | null;
   isFinishingRoute: boolean;
   isStartingRoute: boolean;
   onBack(): void;
+  onContinueTracking(): void;
   onFinishRoute(): void;
+  onOpenStop(stop: AssignedRouteStop): void;
   onStartRoute(): void;
   route: AssignedRoute;
   routeStartedEventResult: RouteStartedRecordResult | null;
   routeStatus: RouteStatus;
 }) {
+  const depotIsProcessing = routeStatus === 'active' && currentNavigationStepIndex === COMPANY_STEP_INDEX;
+  const depotMeta = depotIsProcessing ? 'Processing' : routeStatus === 'upcoming' ? 'Start' : 'Done';
+  const depotMetaTone = depotIsProcessing ? 'blue' : routeStatus === 'upcoming' ? 'neutral' : 'green';
+  const depotState = routeStatus === 'upcoming' || depotIsProcessing ? 'current' : 'completed';
+
   return (
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Route Details" />
@@ -1304,10 +1415,13 @@ function RouteDetailScreen({
 
       <View style={styles.timelineCard}>
         <Text style={styles.sectionTitle}>Route Sequence</Text>
-        <TimelineRow marker="D" title="Depot" subtitle="Pickup point" state={routeStatus === 'upcoming' ? 'current' : 'completed'} meta="Start" />
-        {route.stops.map((stop) => {
+        <TimelineRow marker="D" title="Depot" subtitle="Pickup point" state={depotState} meta={depotMeta} metaTone={depotMetaTone} />
+        {route.stops.map((stop, index) => {
           const completed = completedStopIds.includes(stop.deliveryStopId);
-          const state = completed ? 'completed' : routeStatus === 'active' && !completed ? 'current' : 'upcoming';
+          const isProcessing = routeStatus === 'active' && currentNavigationStepIndex === index + 1 && !completed;
+          const state = completed ? 'completed' : isProcessing ? 'current' : 'upcoming';
+          const meta = completed ? 'Done' : isProcessing ? 'Processing' : 'Pending';
+          const metaTone = completed ? 'green' : isProcessing ? 'blue' : 'neutral';
           return (
             <TimelineRow
               key={stop.deliveryStopId}
@@ -1315,14 +1429,15 @@ function RouteDetailScreen({
               title={`Stop ${stop.sequence}`}
               subtitle={formatStopAddress(stop)}
               state={state}
-              meta="ETA"
+              meta={meta}
+              metaTone={metaTone}
+              onPress={() => onOpenStop(stop)}
             />
           );
         })}
       </View>
 
       {routeStartedEventResult?.kind === 'recorded' ? <StatusBanner tone="green" text="Route start event recorded." /> : null}
-      {continuousLocationResult !== null ? <StatusBanner tone="green" text={formatContinuousLocationResult(continuousLocationResult)} /> : null}
       {deliveryFinishResult?.flowState === 'delivery_finished' ? <StatusBanner tone="green" text={deliveryFinishResult.message} /> : null}
 
       <View style={styles.buttonColumn}>
@@ -1330,8 +1445,10 @@ function RouteDetailScreen({
           <PrimaryButton disabled={isStartingRoute} label="Begin Tracking" loading={isStartingRoute} onPress={onStartRoute} />
         ) : routeStatus === 'active' && allStopsCompleted ? (
           <PrimaryButton disabled={isFinishingRoute} label="Finish Route" loading={isFinishingRoute} onPress={onFinishRoute} />
+        ) : routeStatus === 'active' ? (
+          <PrimaryButton label="Continue Tracking" onPress={onContinueTracking} />
         ) : null}
-        <SecondaryButton label="Back to Routes" onPress={onBack} />
+        <SecondaryButton label="Back to Menu" onPress={onBack} />
       </View>
     </View>
   );
@@ -1340,7 +1457,6 @@ function RouteDetailScreen({
 function LiveTrackingScreen({
   company,
   continuousLocationResult,
-  currentStepIndex,
   isCompanyStep,
   onArrived,
   onBack,
@@ -1352,7 +1468,6 @@ function LiveTrackingScreen({
 }: {
   company: RouteAccessCompanyGuidance | null;
   continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
-  currentStepIndex: number;
   isCompanyStep: boolean;
   onArrived(): void;
   onBack(): void;
@@ -1363,30 +1478,32 @@ function LiveTrackingScreen({
   stop: AssignedRouteStop | null;
 }) {
   const stepLabel = isCompanyStep ? 'Company Pickup' : stop === null ? 'Next Stop' : `Stop ${stop.sequence}`;
-  const address = isCompanyStep ? company?.pickupGuidance ?? 'Pickup guidance' : stop === null ? 'Stop address' : formatStopAddress(stop);
+  const destination = isCompanyStep ? company?.pickupGuidance ?? 'Pickup guidance' : stop === null ? 'Stop address' : formatStopAddress(stop);
   const trackingLabel = continuousLocationResult?.kind === 'streaming' || routeStatus === 'active' ? 'GPS tracking active' : 'GPS tracking pending';
 
   return (
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Live Tracking" />
-      <View style={styles.mapPanel}>
-        <View style={styles.gpsPill}><View style={styles.statusDot} /><Text style={styles.gpsPillText}>{trackingLabel}</Text></View>
-        <MapOverview route={route} currentStepIndex={currentStepIndex} />
-        <View style={styles.trackingSheet}>
-          <View style={styles.sheetHandle} />
-          <Text style={styles.labelText}>Next Stop</Text>
-          <Text numberOfLines={2} style={styles.sheetTitle}>{address}</Text>
-          <View style={styles.trackingMetrics}>
-            <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
-            <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
-            <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : 'Pending'} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
-          </View>
-          <View style={styles.buttonRow}>
-            <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
-            <SecondaryButton disabled={stop === null} label="Open Map" onPress={onOpenNavigation} />
-            <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
-          </View>
+      <View style={styles.trackingCard}>
+        <View style={styles.gpsStatusRow}>
+          <View style={styles.statusDot} />
+          <Text style={styles.gpsPillText}>{trackingLabel}</Text>
+        </View>
+        <View style={styles.destinationBlock}>
+          <Text style={styles.labelText}>Current destination</Text>
+          <Text numberOfLines={4} style={styles.sheetTitle}>{destination}</Text>
           <Text style={styles.helperText}>{stepLabel}</Text>
+        </View>
+        <View style={styles.trackingMetrics}>
+          <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
+          <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
+          <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : 'Pending'} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
+        </View>
+        <View style={styles.buttonColumn}>
+          <PrimaryButton label="Open in Map" onPress={onOpenNavigation} />
+          <Text style={styles.helperText}>Opens this route in your default map app.</Text>
+          {isCompanyStep || stop === null ? null : <SecondaryButton label="View Stop" onPress={onViewStop} />}
+          <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
         </View>
       </View>
     </View>
@@ -1429,7 +1546,7 @@ function StopDetailsScreen({
       <Text style={styles.sectionTitle}>Location Tips</Text>
       <TextCard text={tip} />
       <View style={styles.buttonRow}>
-        <SecondaryButton label="Open Map" onPress={onOpenNavigation} />
+        <SecondaryButton label="Open Stop Map" onPress={onOpenNavigation} />
         <SecondaryButton label="Call" onPress={onCall} />
         <SecondaryButton label="Message" onPress={onMessage} />
       </View>
@@ -1611,12 +1728,10 @@ function CompletedDeliveriesScreen({
   );
 }
 
-function ScreenHeader({ onBack, rightLabel, title }: { onBack?(): void; rightLabel?: string; title: string }) {
+function ScreenHeader({ title }: { onBack?(): void; rightLabel?: string; title: string }) {
   return (
     <View style={styles.screenHeader}>
-      {onBack === undefined ? <Text style={styles.headerSideText} /> : <Pressable accessibilityRole="button" onPress={onBack}><Text style={styles.headerActionText}>Back</Text></Pressable>}
       <Text numberOfLines={1} style={styles.headerTitle}>{title}</Text>
-      <Text style={rightLabel === undefined ? styles.headerSideText : styles.headerActionText}>{rightLabel ?? 'Menu'}</Text>
     </View>
   );
 }
@@ -1834,9 +1949,25 @@ function StatusChip({ label, tone }: { label: string; tone: 'blue' | 'green' | '
   return <Text style={[styles.statusChip, toneStyle]}>{label}</Text>;
 }
 
-function TimelineRow({ marker, meta, state, subtitle, title }: { marker: string; meta: string; state: 'completed' | 'current' | 'upcoming'; subtitle: string; title: string }) {
-  return (
-    <View style={[styles.timelineRow, state === 'current' && styles.timelineRowCurrent]}>
+function TimelineRow({
+  marker,
+  meta,
+  metaTone,
+  onPress,
+  state,
+  subtitle,
+  title,
+}: {
+  marker: string;
+  meta: string;
+  metaTone: 'blue' | 'green' | 'neutral';
+  onPress?: () => void;
+  state: 'completed' | 'current' | 'upcoming';
+  subtitle: string;
+  title: string;
+}) {
+  const content = (
+    <>
       <View style={[styles.timelineMarker, state === 'completed' && styles.timelineMarkerCompleted, state === 'current' && styles.timelineMarkerCurrent]}>
         <Text style={[styles.timelineMarkerText, (state === 'completed' || state === 'current') && styles.timelineMarkerTextActive]}>{marker}</Text>
       </View>
@@ -1844,30 +1975,31 @@ function TimelineRow({ marker, meta, state, subtitle, title }: { marker: string;
         <Text style={styles.timelineTitle}>{title}</Text>
         <Text numberOfLines={2} style={styles.helperText}>{subtitle}</Text>
       </View>
-      <Text style={styles.timelineMeta}>{meta}</Text>
-    </View>
+      <StatusChip label={meta} tone={metaTone} />
+    </>
   );
-}
 
-function MapOverview({ currentStepIndex, route }: { currentStepIndex: number; route: AssignedRoute }) {
-  const geometryReady = hasAssignedRouteGeometry(route);
-  const routePointCount = route.routeGeometry?.coordinates.length ?? 0;
+  if (onPress !== undefined) {
+    return (
+      <Pressable
+        accessibilityLabel={`${title}. ${subtitle}. ${meta}.`}
+        accessibilityRole="button"
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.timelineRow,
+          styles.timelineRowInteractive,
+          state === 'current' && styles.timelineRowCurrent,
+          pressed && styles.timelineRowPressed,
+        ]}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+
   return (
-    <View style={styles.mapCanvas}>
-      <View style={[styles.mapBlock, styles.mapBlockOne]} />
-      <View style={[styles.mapBlock, styles.mapBlockTwo]} />
-      <View style={[styles.mapRoad, styles.mapRoadOne]} />
-      <View style={[styles.mapRoad, styles.mapRoadTwo]} />
-      <View style={[styles.mapRouteLine, styles.mapRouteLineOne]} />
-      <View style={[styles.mapRouteLine, styles.mapRouteLineTwo]} />
-      <View style={styles.currentLocationPulse}><View style={styles.currentLocationDot} /></View>
-      {route.stops.slice(0, 3).map((stop, index) => (
-        <View key={stop.deliveryStopId} style={[styles.mapMarker, getMapMarkerStyle(index)]}>
-          <Text style={styles.mapMarkerText}>{stop.sequence}</Text>
-        </View>
-      ))}
-      <View style={styles.mapLastMarker}><Text style={styles.mapLastMarkerText}>{currentStepIndex >= route.stops.length ? 'Last' : 'Next'}</Text></View>
-      <Text style={styles.mapRouteHint}>{geometryReady ? `OSRM route ready · ${routePointCount} points` : 'Route geometry pending'}</Text>
+    <View style={[styles.timelineRow, state === 'current' && styles.timelineRowCurrent]}>
+      {content}
     </View>
   );
 }
@@ -2192,18 +2324,6 @@ function formatStopProofResult(result: StopProofEventResult): string {
   return result.message;
 }
 
-function formatContinuousLocationResult(result: ContinuousLocationStreamStartResult | ContinuousLocationStopResult): string {
-  if (result.kind === 'streaming') {
-    return 'GPS tracking is active.';
-  }
-
-  if (result.kind === 'stopped') {
-    return 'GPS tracking stopped.';
-  }
-
-  return result.message;
-}
-
 function getChipTone(status: RouteStatus): 'blue' | 'green' | 'neutral' {
   switch (status) {
     case 'active':
@@ -2246,15 +2366,6 @@ function formatLocalCompletedTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function getMapMarkerStyle(index: number) {
-  const positions = [
-    { left: '18%', top: '26%' },
-    { left: '47%', top: '38%' },
-    { left: '64%', top: '52%' },
-  ] as const;
-
-  return positions[index] ?? positions[positions.length - 1];
-}
 
 function getFileNameFromUri(uri: string, deliveryStopId: string): string {
   const fileName = uri.split('/').pop()?.trim();
@@ -2807,10 +2918,17 @@ const styles = StyleSheet.create({
     gap: 12,
     padding: 10,
   },
+  timelineRowInteractive: {
+    borderColor: '#eef2f6',
+    borderWidth: 1,
+  },
   timelineRowCurrent: {
     backgroundColor: '#eef6ff',
     borderColor: '#bfdbfe',
     borderWidth: 1,
+  },
+  timelineRowPressed: {
+    opacity: 0.72,
   },
   timelineMarker: {
     alignItems: 'center',
@@ -2844,26 +2962,26 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
-  mapPanel: {
-    backgroundColor: '#eef5f8',
-    borderRadius: 22,
-    minHeight: 660,
-    overflow: 'hidden',
-  },
-  gpsPill: {
-    alignItems: 'center',
-    alignSelf: 'center',
+  trackingCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 14,
+    borderColor: '#e5e7eb',
+    borderRadius: 22,
+    borderWidth: 1,
+    gap: 16,
+    padding: 18,
+    ...shadow,
+  },
+  gpsStatusRow: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: '#ecfdf3',
+    borderColor: '#abefc6',
+    borderRadius: 999,
+    borderWidth: 1,
     flexDirection: 'row',
     gap: 9,
-    marginTop: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    position: 'absolute',
-    top: 0,
-    zIndex: 4,
-    ...shadow,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
   statusDot: {
     backgroundColor: '#12b76a',
@@ -2876,146 +2994,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
-  mapCanvas: {
-    backgroundColor: '#f3f8fb',
-    height: 430,
-    position: 'relative',
-  },
-  mapBlock: {
-    backgroundColor: '#dff3e8',
-    borderRadius: 10,
-    opacity: 0.78,
-    position: 'absolute',
-  },
-  mapBlockOne: {
-    height: 90,
-    left: 18,
-    top: 86,
-    transform: [{ rotate: '-8deg' }],
-    width: 86,
-  },
-  mapBlockTwo: {
-    height: 120,
-    right: 30,
-    top: 140,
-    transform: [{ rotate: '10deg' }],
-    width: 78,
-  },
-  mapRoad: {
-    backgroundColor: '#ffffff',
-    borderRadius: 999,
-    height: 8,
-    opacity: 0.95,
-    position: 'absolute',
-    width: 380,
-  },
-  mapRoadOne: {
-    left: -30,
-    top: 130,
-    transform: [{ rotate: '24deg' }],
-  },
-  mapRoadTwo: {
-    left: -10,
-    top: 250,
-    transform: [{ rotate: '-18deg' }],
-  },
-  mapRouteLine: {
-    backgroundColor: '#0b57d0',
-    borderRadius: 999,
-    height: 7,
-    position: 'absolute',
-  },
-  mapRouteLineOne: {
-    left: 76,
-    top: 144,
-    transform: [{ rotate: '28deg' }],
-    width: 154,
-  },
-  mapRouteLineTwo: {
-    left: 186,
-    top: 212,
-    transform: [{ rotate: '72deg' }],
-    width: 140,
-  },
-  currentLocationPulse: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(11, 87, 208, 0.16)',
-    borderColor: 'rgba(11, 87, 208, 0.18)',
-    borderRadius: 54,
-    borderWidth: 14,
-    height: 108,
-    justifyContent: 'center',
-    left: '40%',
-    position: 'absolute',
-    top: '42%',
-    width: 108,
-  },
-  currentLocationDot: {
-    backgroundColor: '#0b57d0',
-    borderColor: '#ffffff',
-    borderRadius: 14,
-    borderWidth: 4,
-    height: 28,
-    width: 28,
-  },
-  mapMarker: {
-    alignItems: 'center',
-    backgroundColor: '#0b57d0',
-    borderRadius: 17,
-    height: 34,
-    justifyContent: 'center',
-    position: 'absolute',
-    width: 34,
-  },
-  mapMarkerText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '900',
-  },
-  mapLastMarker: {
-    backgroundColor: '#475467',
-    borderRadius: 16,
-    bottom: 110,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    position: 'absolute',
-    right: 22,
-  },
-  mapLastMarkerText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  mapRouteHint: {
-    backgroundColor: 'rgba(255, 255, 255, 0.92)',
-    borderRadius: 999,
-    bottom: 66,
-    color: '#344054',
-    fontSize: 12,
-    fontWeight: '800',
-    left: 18,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    position: 'absolute',
-  },
-  trackingSheet: {
-    backgroundColor: '#ffffff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    bottom: 0,
-    gap: 13,
-    left: 0,
-    padding: 18,
-    position: 'absolute',
-    right: 0,
-    ...shadow,
-  },
-  sheetHandle: {
-    alignSelf: 'center',
-    backgroundColor: '#c7cdd8',
-    borderRadius: 999,
-    height: 4,
-    width: 48,
+  destinationBlock: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#e5e7eb',
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 8,
+    padding: 16,
   },
   labelText: {
     color: '#667085',
@@ -3024,9 +3009,9 @@ const styles = StyleSheet.create({
   },
   sheetTitle: {
     color: '#111827',
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '800',
-    lineHeight: 24,
+    lineHeight: 27,
   },
   trackingMetrics: {
     borderColor: '#eef2f6',

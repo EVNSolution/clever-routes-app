@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { sampleAssignedRoute, type AssignedRouteStop } from '../route/assignedRoute';
+import { sampleAssignedRoute, type AssignedRoute, type AssignedRouteStop } from '../route/assignedRoute';
 import {
+  buildRouteNavigationUrl,
   buildStopNavigationUrl,
+  openRouteNavigation,
   openStopNavigation,
 } from './stopNavigation';
 
@@ -77,5 +79,99 @@ describe('native stop map launch', () => {
       url: 'http://maps.apple.com/?ll=43.6487,-79.3817&q=Stop%201%20%231001',
     });
     assert.deepEqual(openedUrls, ['http://maps.apple.com/?ll=43.6487,-79.3817&q=Stop%201%20%231001']);
+  });
+});
+
+describe('route map launch', () => {
+  it('builds map-app directions from stop addresses in route sequence before using coordinates', () => {
+    assert.equal(
+      buildRouteNavigationUrl({ route: sampleAssignedRoute }),
+      'https://www.google.com/maps/dir/?api=1&travelmode=driving&dir_action=navigate&destination=200%20Queen%20St%20W%2C%20Unit%204%2C%20Toronto%2C%20ON%2C%20M5V%201Z2%2C%20CA&waypoints=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
+    );
+  });
+
+  it('falls back to stop coordinates when addresses are unavailable', () => {
+    const routeWithoutAddresses: AssignedRoute = {
+      ...sampleAssignedRoute,
+      routeStopPoints: [],
+      stops: sampleAssignedRoute.stops.map((stop) => ({
+        ...stop,
+        address: {
+          address1: '',
+          address2: null,
+          city: '',
+          countryCode: '',
+          postalCode: '',
+          province: '',
+        },
+      })),
+    };
+
+    assert.equal(
+      buildRouteNavigationUrl({ route: routeWithoutAddresses }),
+      'https://www.google.com/maps/dir/?api=1&travelmode=driving&dir_action=navigate&destination=43.6509%2C-79.3909&waypoints=43.6487%2C-79.3817',
+    );
+  });
+
+  it('uses OSRM stop point coordinates only when both addresses and stop coordinates are unavailable', () => {
+    const routeWithoutAddressesOrStopCoordinates: AssignedRoute = {
+      ...sampleAssignedRoute,
+      stops: sampleAssignedRoute.stops.map((stop) => ({
+        ...stop,
+        address: {
+          address1: '',
+          address2: null,
+          city: '',
+          countryCode: '',
+          postalCode: '',
+          province: '',
+        },
+        coordinates: null,
+      })),
+    };
+
+    assert.equal(
+      buildRouteNavigationUrl({ route: routeWithoutAddressesOrStopCoordinates }),
+      'https://www.google.com/maps/dir/?api=1&travelmode=driving&dir_action=navigate&destination=43.651%2C-79.391&waypoints=43.6488%2C-79.3818',
+    );
+  });
+
+  it('opens route directions through the native linking boundary', async () => {
+    const openedUrls: string[] = [];
+
+    const result = await openRouteNavigation({
+      linking: { openURL: async (url) => openedUrls.push(url) },
+      route: sampleAssignedRoute,
+    });
+
+    assert.deepEqual(result, {
+      kind: 'opened',
+      message: 'Opened 2 stops in the map app.',
+      url: 'https://www.google.com/maps/dir/?api=1&travelmode=driving&dir_action=navigate&destination=200%20Queen%20St%20W%2C%20Unit%204%2C%20Toronto%2C%20ON%2C%20M5V%201Z2%2C%20CA&waypoints=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
+    });
+    assert.deepEqual(openedUrls, [
+      'https://www.google.com/maps/dir/?api=1&travelmode=driving&dir_action=navigate&destination=200%20Queen%20St%20W%2C%20Unit%204%2C%20Toronto%2C%20ON%2C%20M5V%201Z2%2C%20CA&waypoints=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
+    ]);
+  });
+
+  it('skips launch when a route has no usable destination', async () => {
+    const emptyRoute: AssignedRoute = {
+      ...sampleAssignedRoute,
+      routeStopPoints: [],
+      stops: [],
+    };
+    const openedUrls: string[] = [];
+
+    const result = await openRouteNavigation({
+      linking: { openURL: async (url) => openedUrls.push(url) },
+      route: emptyRoute,
+    });
+
+    assert.deepEqual(result, {
+      kind: 'skipped',
+      message: 'Route has no destinations to open in maps.',
+      reason: 'missing_destination',
+    });
+    assert.deepEqual(openedUrls, []);
   });
 });
