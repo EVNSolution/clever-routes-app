@@ -101,8 +101,8 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
     },
     {
       id: 'routeList',
-      title: 'Today’s Route',
-      purpose: 'Show assigned routes grouped into Pending, In Progress, Unfinished, and Completed tabs.',
+      title: 'Upcoming Routes',
+      purpose: 'Show current, unfinished, and future assigned routes from nearest date to farthest, grouped into Pending, In Progress, Unfinished, and Completed tabs.',
       primaryAction: 'Start Route',
     },
     {
@@ -156,7 +156,7 @@ export function getMvpRouteTabs(): MvpRouteTab[] {
 export function getStopCompletionProofFields(): StopCompletionProofField[] {
   return [
     { id: 'photo', label: 'Photo Proof', required: true },
-    { id: 'todayNote', label: 'Today’s Delivery Notes', required: false },
+    { id: 'todayNote', label: 'Delivery Notes', required: false },
     { id: 'locationTip', label: 'Location Tip', required: false },
     { id: 'additionalNotes', label: 'Additional Notes', required: false },
   ];

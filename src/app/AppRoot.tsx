@@ -1,12 +1,14 @@
 import { StatusBar } from 'expo-status-bar';
 import * as Speech from 'expo-speech';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   BackHandler,
+  InputAccessoryView,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
-  PanResponder,
   Platform,
   Pressable,
   SafeAreaView,
@@ -53,13 +55,7 @@ import { createExpoForegroundLocationPermissionService } from '../platform/expo/
 import { createExpoOfflineSubmissionQueueStorage } from '../platform/expo/storage/expoOfflineSubmissionQueueStorage';
 import { createExpoProofPhotoCaptureService } from '../platform/expo/camera/expoProofPhotoCaptureService';
 import { createExpoSecureDriverAccessTokenStore } from '../platform/expo/secureStore/expoSecureDriverAccessTokenStore';
-import {
-  createInMemoryOfflineSubmissionQueue,
-  createPersistentOfflineSubmissionQueue,
-  retryOfflineSubmissions,
-  type OfflineSubmissionQueue,
-  type OfflineSubmissionRetryResult,
-} from '../domain/offline/offlineSubmissionQueue';
+import { createPersistentOfflineSubmissionQueue, type OfflineSubmissionQueue } from '../domain/offline/offlineSubmissionQueue';
 import { captureProofPhoto, type ProofPhotoCaptureResult, type ProofPhotoCaptureSource } from '../domain/proof/proofPhotoCapture';
 import {
   createMockProofMediaUploadService,
@@ -69,8 +65,16 @@ import {
   type ProofMediaUploadService,
 } from '../domain/proof/proofMediaUpload';
 import { createDriverRuntimeServices, readDriverRuntimeConfig } from './config/driverRuntimeConfig';
-import { createMockDriverConsentService, submitDriverConsent, type DriverConsentService, type DriverConsentSubmissionResult } from '../domain/consent/driverConsent';
+import { CONSENT_COPY_VERSIONS, createMockDriverConsentService, submitDriverConsent, type DriverConsentService, type DriverConsentSubmissionResult } from '../domain/consent/driverConsent';
 import { getMvpRouteTabs } from '../domain/driverFlow/driverFlow';
+import { resetDriverSession } from '../domain/driver/driverSessionReset';
+import {
+  getDriverMainTabs,
+  getDriverPlaceholderCopy,
+  getVisibleBottomTab,
+  shouldShowDriverBottomTabs,
+  type DriverMainTabId,
+} from './driverMainTabs';
 import {
   DEFAULT_DRIVER_PHONE_COUNTRY,
   findDriverPhoneCountry,
@@ -88,7 +92,6 @@ import {
   type RouteAccessRouteChoice,
   type RouteAccessSubmissionResult,
 } from '../domain/routeAccess/routeAccess';
-import { resetDriverSession } from '../domain/driver/driverSessionReset';
 import { recordStopProofEventAfterDeliveryStart, type StopProofEventResult } from '../domain/stop/stopProofEvents';
 import { openRouteNavigation, openStopNavigation } from '../domain/stop/stopNavigation';
 import {
@@ -96,20 +99,36 @@ import {
   getCountrySelectorRowText,
   getSelectedCountryCardText,
 } from '../ui/components/countrySelectorBehavior';
+import {
+  getConsentCheckboxVisualState,
+  getKeyboardInputNavigationState,
+  getKeyboardNavigationAccessoryControls,
+  type KeyboardInputNavigationState,
+  type KeyboardNavigationAccessoryIcon,
+} from '../ui/components/authFormUxBehavior';
 import { TransientToast } from '../ui/components/TransientToast';
 import { scheduleTransientToastDismiss } from '../ui/components/transientToastBehavior';
 import {
-  APP_CONTENT_BOTTOM_CLEARANCE,
-  BOTTOM_NAV_MIN_HEIGHT,
-} from './appLayoutMetrics';
+  buildAuthFailureMessage,
+  buildAuthSuccessMessage,
+  getRuntimeHostLabel,
+} from './authDiagnostics';
+import {
+  getInviteCodeFallbackMessage,
+  getVerifiedDriverNoAssignedRouteMessage,
+  shouldOpenRoutesForVerifiedNoRoute,
+  shouldRequestInviteCodeForRouteNotFound,
+  type VerifiedDriverNoAssignedRouteReason,
+} from './verifiedDriverNoAssignedRoutes';
 
 type AppScreen =
   | 'arrivalCheck'
   | 'completedDeliveries'
   | 'liveTracking'
-  | 'login'
+  | 'loginPhone'
+  | 'loginDetail'
+  | 'mainTabs'
   | 'routeDetail'
-  | 'routes'
   | 'stopCompleted'
   | 'stopDetails';
 type RouteTabId = ReturnType<typeof getMvpRouteTabs>[number]['id'];
@@ -126,30 +145,45 @@ type RouteSession = RouteAccessRouteChoice & {
   route: AssignedRoute;
 };
 
-const DEFAULT_DRIVER_NAME = '';
+type RouteLoadOptions = {
+  allowInviteCodeFallbackOnRouteNotFound?: boolean;
+  allowVerifiedDriverNoRoute?: boolean;
+  navigateOnSuccess?: boolean;
+  resetProgress?: boolean;
+  successMessagePrefix?: string;
+};
+
 const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
-const ADMIN_SESSION_ENABLED = __DEV__ || process.env.EXPO_PUBLIC_ENABLE_ADMIN_SESSION === '1';
-const SWIPE_BACK_DISTANCE = 90;
-const SWIPE_BACK_MAX_VERTICAL_DELTA = 90;
-const SWIPE_BACK_DIRECTIONALITY_RATIO = 1.45;
+const DRIVER_APP_VERSION = '0.1.0';
+const ANDROID_SYSTEM_NAV_CLEARANCE = 56;
+const LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID = 'login-detail-keyboard-navigation';
+const LOGIN_DETAIL_INPUT_ORDER = ['verificationCode', 'driverFirstName', 'driverLastName'] as const;
+
+type LoginDetailInputId = typeof LOGIN_DETAIL_INPUT_ORDER[number];
 
 export default function App() {
-  const [screen, setScreen] = useState<AppScreen>('login');
+  const [screen, setScreen] = useState<AppScreen>('loginPhone');
   const [selectedPhoneCountryIso2, setSelectedPhoneCountryIso2] = useState(DEFAULT_DRIVER_PHONE_COUNTRY.iso2);
   const [selectedDriverLocale, setSelectedDriverLocale] = useState(DEFAULT_DRIVER_PHONE_COUNTRY.defaultLocale);
   const [nationalPhoneInput, setNationalPhoneInput] = useState('');
   const [countrySearchQuery, setCountrySearchQuery] = useState('');
   const [isCountrySelectorOpen, setIsCountrySelectorOpen] = useState(false);
   const [verificationCode, setVerificationCode] = useState('');
-  const [driverName, setDriverName] = useState(DEFAULT_DRIVER_NAME);
+  const [driverFirstName, setDriverFirstName] = useState('');
+  const [driverLastName, setDriverLastName] = useState('');
+  const [isReturningDriver, setIsReturningDriver] = useState(false);
+  const [verifiedDriverPhoneE164, setVerifiedDriverPhoneE164] = useState<string | null>(null);
+  const driverName = `${driverFirstName} ${driverLastName}`.trim();
   const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
   const [acceptedLocation, setAcceptedLocation] = useState(false);
+  const [selectedMainTab, setSelectedMainTab] = useState<DriverMainTabId>('home');
   const [selectedTab, setSelectedTab] = useState<RouteTabId>('upcoming');
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [navigationStepIndex, setNavigationStepIndex] = useState(COMPANY_STEP_INDEX);
   const [selectedStopDetailsId, setSelectedStopDetailsId] = useState<string | null>(null);
   const [stopDetailsBackTarget, setStopDetailsBackTarget] = useState<StopDetailsBackTarget>('liveTracking');
   const [routeSessions, setRouteSessions] = useState<RouteSession[]>([]);
+  const [routeReviewNote, setRouteReviewNote] = useState('');
 
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
   const [, setConsentSubmission] = useState<DriverConsentSubmissionResult | null>(null);
@@ -169,13 +203,17 @@ export default function App() {
   const [message, setMessage] = useState<string | null>(null);
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isRefreshingRoutes, setIsRefreshingRoutes] = useState(false);
   const [isStartingRoute, setIsStartingRoute] = useState(false);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [isCompletingStop, setIsCompletingStop] = useState(false);
   const [isFinishingRoute, setIsFinishingRoute] = useState(false);
-  const [isSyncingOfflineQueue, setIsSyncingOfflineQueue] = useState(false);
-  const [isLoadingBackdoorSession, setIsLoadingBackdoorSession] = useState(false);
-  const [isAdminToolsVisible, setIsAdminToolsVisible] = useState(false);
+  const loginDetailInputRefs = useRef<Record<LoginDetailInputId, TextInput | null>>({
+    driverFirstName: null,
+    driverLastName: null,
+    verificationCode: null,
+  });
+  const [focusedLoginDetailInputId, setFocusedLoginDetailInputId] = useState<LoginDetailInputId | null>(null);
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
@@ -187,6 +225,7 @@ export default function App() {
   const mockAssignedRouteService = useMemo(() => createMockAssignedRouteService({ status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute }), []);
   const mockProofMediaUploadService = useMemo(() => createMockProofMediaUploadService({ mode: 'success' }), []);
   const routeTabs = useMemo(() => getMvpRouteTabs(), []);
+  const mainTabs = useMemo(() => getDriverMainTabs(), []);
   const selectedPhoneCountry = findDriverPhoneCountry(selectedPhoneCountryIso2) ?? DEFAULT_DRIVER_PHONE_COUNTRY;
   const visiblePhoneCountries = useMemo(
     () => searchDriverPhoneCountries(countrySearchQuery),
@@ -205,13 +244,13 @@ export default function App() {
     [],
   );
 
-  const routeAccessService = useMemo(() => {
-    if (runtimeConfig.mode === 'live') {
-      return createDriverRuntimeServices({ config: runtimeConfig }).routeAccessService;
-    }
-
-    return createMockRouteAccessService(sampleInvitedRouteAccess);
-  }, [runtimeConfig]);
+  const runtimeServices = useMemo(() => createDriverRuntimeServices({ config: runtimeConfig }), [runtimeConfig]);
+  const routeAccessService = useMemo(() => (
+    runtimeConfig.mode === 'live'
+      ? runtimeServices.routeAccessService
+      : createMockRouteAccessService(sampleInvitedRouteAccess)
+  ), [runtimeConfig.mode, runtimeServices.routeAccessService]);
+  const driverAuthService = runtimeServices.driverAuthService;
 
   const selectedRouteSession = routeSessions.find((session) => session.route.id === selectedRouteId) ?? routeSessions[0] ?? null;
   const selectedRoute = selectedRouteSession?.route ?? null;
@@ -230,6 +269,36 @@ export default function App() {
   const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => completedStopIds.includes(stop.deliveryStopId));
   const currentCompany = selectedRouteSession?.companyGuidance ?? null;
   const recentlyCompletedStop = selectedRoute?.stops.find((stop) => stop.deliveryStopId === recentlyCompletedStopId) ?? null;
+  const loginDetailKeyboardNavigation = useMemo(
+    () => getKeyboardInputNavigationState(LOGIN_DETAIL_INPUT_ORDER, focusedLoginDetailInputId),
+    [focusedLoginDetailInputId],
+  );
+  const setLoginDetailInputRef = useCallback((inputId: LoginDetailInputId) => (input: TextInput | null) => {
+    loginDetailInputRefs.current[inputId] = input;
+  }, []);
+  const loginDetailInputRefCallbacks = useMemo<Record<LoginDetailInputId, (input: TextInput | null) => void>>(() => ({
+    driverFirstName: setLoginDetailInputRef('driverFirstName'),
+    driverLastName: setLoginDetailInputRef('driverLastName'),
+    verificationCode: setLoginDetailInputRef('verificationCode'),
+  }), [setLoginDetailInputRef]);
+  const focusLoginDetailInput = useCallback((inputId: LoginDetailInputId | null) => {
+    if (inputId === null) {
+      return;
+    }
+
+    loginDetailInputRefs.current[inputId]?.focus();
+    setFocusedLoginDetailInputId(inputId);
+  }, []);
+  const focusPreviousLoginDetailInput = useCallback(() => {
+    focusLoginDetailInput(loginDetailKeyboardNavigation.previousInputId);
+  }, [focusLoginDetailInput, loginDetailKeyboardNavigation.previousInputId]);
+  const focusNextLoginDetailInput = useCallback(() => {
+    focusLoginDetailInput(loginDetailKeyboardNavigation.nextInputId);
+  }, [focusLoginDetailInput, loginDetailKeyboardNavigation.nextInputId]);
+  const dismissLoginDetailKeyboard = useCallback(() => {
+    Keyboard.dismiss();
+    setFocusedLoginDetailInputId(null);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -244,9 +313,6 @@ export default function App() {
       })
       .catch(() => {
         if (isMounted) {
-          const fallbackQueue = createInMemoryOfflineSubmissionQueue();
-          setOfflineSubmissionQueue(fallbackQueue);
-          setOfflineQueueCount(fallbackQueue.listPending().length);
           setMessage('Offline retry storage is unavailable. This session will retry in memory only.');
         }
       });
@@ -260,6 +326,12 @@ export default function App() {
     dismiss: () => setMessage(null),
     message,
   }), [message]);
+
+  useEffect(() => {
+    if (screen !== 'loginDetail') {
+      setFocusedLoginDetailInputId(null);
+    }
+  }, [screen]);
 
   useEffect(() => {
     if (deliveryStartResult?.kind !== 'delivery_active' || deliveryFinishResult?.flowState === 'delivery_finished') {
@@ -308,7 +380,7 @@ export default function App() {
     }));
   }
 
-  function handleSendVerificationCode() {
+  async function handlePhoneSubmit() {
     const phoneEntry = normalizeDriverPhoneEntry({
       countryIso2: selectedPhoneCountry.iso2,
       nationalPhoneInput,
@@ -319,12 +391,36 @@ export default function App() {
       return;
     }
 
-    setMessage(`Verification code request is ready for server integration for ${phoneEntry.phoneE164}.`);
+    if (isReturningDriver) {
+      await handleLoginAndLoadRoutes(
+        { phoneE164: phoneEntry.phoneE164 },
+        'Returning Driver',
+        { allowInviteCodeFallbackOnRouteNotFound: true },
+      );
+    } else {
+      setIsLoggingIn(true);
+      try {
+        setMessage(`Enter the invite code sent by dispatch. ${getRuntimeHostLabel(runtimeConfig)}.`);
+        setScreen('loginDetail');
+      } finally {
+        setIsLoggingIn(false);
+      }
+    }
   }
 
-  async function handleLoginAndLoadRoutes() {
+  async function handleDetailSubmit() {
+    const phoneEntry = normalizeDriverPhoneEntry({
+      countryIso2: selectedPhoneCountry.iso2,
+      nationalPhoneInput,
+    });
+
+    if (!phoneEntry.ok) {
+      setMessage(formatDriverPhoneEntryProblem(phoneEntry.reason));
+      return;
+    }
+
     if (driverName.trim().length === 0) {
-      setMessage('Enter the driver name before continuing.');
+      setMessage('Enter your first and last name before continuing.');
       return;
     }
 
@@ -333,36 +429,118 @@ export default function App() {
       return;
     }
 
+    const inviteCode = verificationCode.trim().toUpperCase();
+    if (!/^[0-9A-F]{6}$/u.test(inviteCode)) {
+      setMessage('Please enter the 6-character invite code.');
+      return;
+    }
+
+    setIsLoggingIn(true);
+    setMessage(`Verifying invite code... ${getRuntimeHostLabel(runtimeConfig)}.`);
+    try {
+      const verifyResult = await driverAuthService.verifyCode({
+        phoneE164: phoneEntry.phoneE164,
+        inviteCode,
+        displayName: driverName.trim(),
+      });
+      await driverAccessTokenStore.saveVerifiedDriver({
+        displayName: driverName.trim(),
+        driverAccess: verifyResult.driverAccess,
+        phoneE164: phoneEntry.phoneE164,
+      });
+      setMessage(buildAuthSuccessMessage({ runtimeConfig, phase: 'invite_verify' }));
+    } catch (error) {
+      const failure = buildAuthFailureMessage({
+        runtimeConfig,
+        phase: 'invite_verify',
+        error,
+      });
+      setMessage(failure.message);
+      setIsLoggingIn(false);
+      return;
+    }
+    setIsLoggingIn(false);
+
+    await handleLoginAndLoadRoutes(
+      { phoneE164: phoneEntry.phoneE164 },
+      driverName,
+      { allowVerifiedDriverNoRoute: true },
+    );
+  }
+
+  function handleLoginDetailInputSubmit(inputId: LoginDetailInputId) {
+    const navigationState = getKeyboardInputNavigationState(LOGIN_DETAIL_INPUT_ORDER, inputId);
+
+    if (navigationState.nextInputId !== null) {
+      focusLoginDetailInput(navigationState.nextInputId);
+      return;
+    }
+
+    void handleDetailSubmit();
+  }
+
+  function openMainTab(tab: DriverMainTabId) {
+    setSelectedMainTab(tab);
+    setScreen('mainTabs');
+  }
+
+  function openHomeRoot() {
+    openMainTab('home');
+  }
+
+  function openRoutesRoot() {
+    openMainTab('routes');
+  }
+
+  const openVerifiedNoAssignedRoute = useCallback((reason: VerifiedDriverNoAssignedRouteReason) => {
+    setRouteSessions([]);
+    setSelectedRouteId(null);
+    setSelectedTab('upcoming');
+    setSubmission(null);
+    setSelectedMainTab('routes');
+    setScreen('mainTabs');
+    setMessage(getVerifiedDriverNoAssignedRouteMessage(reason));
+  }, []);
+
+  const handleLoginAndLoadRoutes = useCallback(async (driverPhone: { phoneE164: string }, routeDriverName: string, options: RouteLoadOptions = {}) => {
+    const allowInviteCodeFallback = options.allowInviteCodeFallbackOnRouteNotFound ?? false;
+    const allowVerifiedDriverNoRoute = options.allowVerifiedDriverNoRoute ?? false;
+    const shouldResetProgress = options.resetProgress ?? true;
+    const shouldNavigateOnSuccess = options.navigateOnSuccess ?? true;
+    const successMessagePrefix = options.successMessagePrefix ?? 'assigned';
     setIsLoggingIn(true);
     setMessage(null);
-    resetRouteProgress();
+    setVerifiedDriverPhoneE164(driverPhone.phoneE164);
+    if (shouldResetProgress) {
+      resetRouteProgress();
+    }
 
     try {
-      const phoneEntry = normalizeDriverPhoneEntry({
-        countryIso2: selectedPhoneCountry.iso2,
-        nationalPhoneInput,
-      });
-
-      if (!phoneEntry.ok) {
-        setMessage(formatDriverPhoneEntryProblem(phoneEntry.reason));
-        return;
-      }
-
-      const lookupResult = await submitRouteAccess({ phoneE164: phoneEntry.phoneE164 }, routeAccessService);
+      const lookupResult = await submitRouteAccess({ phoneE164: driverPhone.phoneE164 }, routeAccessService);
       setSubmission(lookupResult);
 
       if (lookupResult.kind !== 'company_guidance' && lookupResult.kind !== 'route_choices') {
+        if (shouldOpenRoutesForVerifiedNoRoute({ allowVerifiedDriverNoRoute, lookupResult })) {
+          openVerifiedNoAssignedRoute('route_lookup_not_found');
+          return;
+        }
+
+        if (shouldRequestInviteCodeForRouteNotFound({ allowInviteCodeFallback, lookupResult })) {
+          setSubmission(null);
+          setVerificationCode('');
+          setIsReturningDriver(false);
+          setScreen('loginDetail');
+          setMessage(getInviteCodeFallbackMessage());
+          return;
+        }
+
         setMessage(formatRouteAccessProblem(lookupResult));
         return;
       }
 
       const choices = getRouteChoicesFromSubmission(lookupResult);
       if (choices.length === 0) {
-        setRouteSessions([]);
-        setSelectedRouteId(null);
-        setSelectedTab('upcoming');
-        setScreen('routes');
-        setMessage('Phone number verified. No active route is assigned right now.');
+        openVerifiedNoAssignedRoute('no_route_choices');
         return;
       }
 
@@ -370,11 +548,9 @@ export default function App() {
 
       for (const choice of choices) {
         const choiceSubmission = toCompanyGuidanceSubmission(choice);
-        await syncOfflineSubmissionsForSubmission(choiceSubmission);
-
         const consentResult = await submitDriverConsent(
           {
-            appContext: { appVersion: '0.1.0', driverName: driverName.trim() },
+            appContext: { appVersion: '0.1.0', driverName: routeDriverName.trim() },
             deviceContext: { platform: Platform.OS },
             routeContext: choice.routeAccess.routeContext,
           },
@@ -390,6 +566,8 @@ export default function App() {
           setMessage(consentResult.message);
           continue;
         }
+        setAcceptedPrivacy(true);
+        setAcceptedLocation(true);
 
         const assignedRouteResult = await loadAssignedRouteAfterConsent(
           {
@@ -413,27 +591,116 @@ export default function App() {
       }
 
       if (loadedSessions.length === 0) {
-        setRouteSessions([]);
-        setSubmission(null);
-        setMessage('No active assigned route could be loaded for this phone number.');
+        openVerifiedNoAssignedRoute('assigned_route_load_empty');
         return;
       }
 
       setRouteSessions(loadedSessions);
-      setSelectedRouteId(loadedSessions[0].route.id);
-      const firstSubmission = toCompanyGuidanceSubmission(loadedSessions[0]);
+      const nextSelectedRouteId = loadedSessions.some((session) => session.route.id === selectedRouteId)
+        ? selectedRouteId
+        : loadedSessions[0].route.id;
+      setSelectedRouteId(nextSelectedRouteId);
+      const selectedSession = loadedSessions.find((session) => session.route.id === nextSelectedRouteId) ?? loadedSessions[0];
+      const firstSubmission = toCompanyGuidanceSubmission(selectedSession);
       setSubmission(firstSubmission);
       await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(firstSubmission));
       setSelectedTab(getInitialAssignedRouteTab({
         now: new Date(),
-        route: loadedSessions[0].route,
+        route: selectedSession.route,
       }));
-      setScreen('routes');
-      setMessage(`${loadedSessions.length} route${loadedSessions.length === 1 ? '' : 's'} loaded.`);
+      setSelectedMainTab(shouldNavigateOnSuccess ? 'home' : 'routes');
+      setScreen('mainTabs');
+      setMessage(`${loadedSessions.length} ${successMessagePrefix} route${loadedSessions.length === 1 ? '' : 's'} loaded. ${buildAuthSuccessMessage({ runtimeConfig, phase: 'route_access' })}`);
+    } catch (error) {
+      const failure = buildAuthFailureMessage({
+        runtimeConfig,
+        phase: 'route_access',
+        error,
+      });
+      setMessage(failure.message);
     } finally {
       setIsLoggingIn(false);
     }
-  }
+  }, [
+    driverAccessTokenStore,
+    mockAssignedRouteService,
+    mockDriverConsentService,
+    openVerifiedNoAssignedRoute,
+    routeAccessService,
+    runtimeConfig,
+    selectedRouteId,
+  ]);
+
+  const handleRefreshRoutes = useCallback(async () => {
+    if (verifiedDriverPhoneE164 === null) {
+      setMessage('Saved driver phone is unavailable. Sign in again to refresh routes.');
+      return;
+    }
+    if (isRefreshingRoutes || isLoggingIn) {
+      return;
+    }
+
+    setIsRefreshingRoutes(true);
+    try {
+      await handleLoginAndLoadRoutes(
+        { phoneE164: verifiedDriverPhoneE164 },
+        driverName || driverFirstName.trim() || 'Returning Driver',
+        {
+          navigateOnSuccess: false,
+          resetProgress: false,
+          successMessagePrefix: 'refreshed assigned',
+        },
+      );
+    } finally {
+      setIsRefreshingRoutes(false);
+    }
+  }, [
+    driverFirstName,
+    driverName,
+    handleLoginAndLoadRoutes,
+    isLoggingIn,
+    isRefreshingRoutes,
+    verifiedDriverPhoneE164,
+  ]);
+
+  useEffect(() => {
+    let isMounted = true;
+    driverAccessTokenStore.loadActiveDriverAccess().then((result) => {
+      if (!isMounted) {
+        return;
+      }
+      if (result.kind === 'active' || result.kind === 'refresh_required' || (result.kind === 'expired' && result.isReturningDriver)) {
+        setIsReturningDriver(true);
+      }
+      if ((result.kind === 'active' || result.kind === 'refresh_required') && result.driverProfile !== undefined) {
+        setNationalPhoneInput(result.driverProfile.phoneE164);
+        setDriverFirstName(result.driverProfile.displayName);
+        setDriverLastName('');
+        setMessage('Restoring your driver session...');
+        void handleLoginAndLoadRoutes(
+          { phoneE164: result.driverProfile.phoneE164 },
+          result.driverProfile.displayName,
+          { allowInviteCodeFallbackOnRouteNotFound: true },
+        );
+      }
+    });
+    return () => { isMounted = false; };
+  }, [driverAccessTokenStore, handleLoginAndLoadRoutes]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (
+        state === 'active' &&
+        screen === 'mainTabs' &&
+        selectedMainTab === 'routes' &&
+        verifiedDriverPhoneE164 !== null
+      ) {
+        void handleRefreshRoutes();
+      }
+    });
+
+    return () => subscription.remove();
+  }, [handleRefreshRoutes, screen, selectedMainTab, verifiedDriverPhoneE164]);
 
   async function handleStartRoute(routeId?: string) {
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
@@ -483,6 +750,7 @@ export default function App() {
       setContinuousLocationResult(continuousResult);
 
       setSelectedTab('active');
+      setSelectedMainTab('home');
       setNavigationStepIndex(COMPANY_STEP_INDEX);
       setScreen('liveTracking');
       setMessage('Route started. Begin with the company pickup step, then continue in stop order.');
@@ -501,6 +769,7 @@ export default function App() {
 
     setSelectedRouteId(routeSession.route.id);
     setSubmission(toCompanyGuidanceSubmission(routeSession));
+    setSelectedMainTab('home');
     setScreen('routeDetail');
   }
 
@@ -561,8 +830,8 @@ export default function App() {
       return;
     }
 
-    setStopDetailsBackTarget('liveTracking');
     setSelectedStopDetailsId(currentStop.deliveryStopId);
+    setStopDetailsBackTarget('liveTracking');
     setScreen('stopDetails');
   }
 
@@ -576,51 +845,15 @@ export default function App() {
       return;
     }
 
-    const stopIndex = selectedRoute.stops.findIndex((candidate) => candidate.deliveryStopId === stop.deliveryStopId);
-    if (stopIndex === -1) {
+    const selectedStop = selectedRoute.stops.find((candidate) => candidate.deliveryStopId === stop.deliveryStopId);
+    if (selectedStop === undefined) {
       setMessage('This stop is no longer available on the selected route.');
       return;
     }
 
-    setSelectedStopDetailsId(selectedRoute.stops[stopIndex]?.deliveryStopId ?? stop.deliveryStopId);
+    setSelectedStopDetailsId(selectedStop.deliveryStopId);
     setStopDetailsBackTarget('routeDetail');
     setScreen('stopDetails');
-  }
-
-  async function handleLoadBackdoorSession() {
-    setIsLoadingBackdoorSession(true);
-    setMessage(null);
-    resetRouteProgress();
-    const now = new Date();
-
-    try {
-      const backdoorRouteChoice: RouteAccessRouteChoice = {
-        companyGuidance: sampleInvitedRouteAccess.companyGuidance,
-        driverAccess: sampleInvitedRouteAccess.driverAccess,
-        routeAccess: sampleInvitedRouteAccess.routeAccess,
-      };
-      const adminSession: RouteSession = {
-        ...backdoorRouteChoice,
-        route: sampleAssignedRoute,
-      };
-      const backdoorSubmission = toCompanyGuidanceSubmission(adminSession);
-
-      await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(backdoorSubmission));
-      setRouteSessions([adminSession]);
-      setSelectedRouteId(adminSession.route.id);
-      setSubmission(backdoorSubmission);
-      setSelectedTab(getInitialAssignedRouteTab({ now, route: adminSession.route }));
-      setNavigationStepIndex(COMPANY_STEP_INDEX);
-      setScreen('routes');
-      setMessage('Loaded admin backdoor session for route testing.');
-      if (driverName.trim().length === 0) {
-        setDriverName('Test Driver');
-      }
-    } catch {
-      setMessage('Unable to load backdoor session. Try again.');
-    } finally {
-      setIsLoadingBackdoorSession(false);
-    }
   }
 
   async function handleOpenRouteNavigation(route: AssignedRoute | null) {
@@ -636,7 +869,7 @@ export default function App() {
     setMessage(result.message);
   }
 
-  async function handleOpenNavigationForCurrentStop(stop: AssignedRouteStop | null) {
+  async function handleOpenNavigationForStop(stop: AssignedRouteStop | null) {
     if (stop === null || selectedRoute === null) {
       setMessage('No stop is available to open in map.');
       return;
@@ -650,30 +883,9 @@ export default function App() {
     setMessage(result.message);
   }
 
-  async function handleResetSessionForAdmin() {
-    if (offlineSubmissionQueue === null) {
-      setMessage('Offline queue is unavailable. Wait for app initialization and try again.');
-      return;
-    }
-
-    const queueToReset = offlineSubmissionQueue;
-    try {
-      const resetResult = await resetDriverSession({
-        driverAccessTokenStore,
-        offlineQueue: queueToReset,
-      });
-      resetRouteProgress();
-      setSubmission(null);
-      setScreen('login');
-      setMessage(`Session reset. Cleared ${resetResult.clearedOfflineSubmissions} queued item(s).`);
-    } catch {
-      setMessage('Session reset failed.');
-    }
-  }
-
   function handleContinueAfterStopCompleted() {
     if (selectedRoute === null) {
-      setScreen('routes');
+      openHomeRoot();
       return;
     }
 
@@ -769,10 +981,6 @@ export default function App() {
         setMessage(result.message);
         return;
       }
-      if (result.kind === 'queued') {
-        setMessage('Stop proof was queued for retry. Sync it before finishing this route.');
-        return;
-      }
 
       const nextCompletedStopIds = [...new Set([...completedStopIds, currentStop.deliveryStopId])];
       setCompletedStopIds(nextCompletedStopIds);
@@ -820,6 +1028,7 @@ export default function App() {
         setContinuousLocationResult({ kind: 'stopped', taskName: finishResult.stoppedTaskName });
       }
       setSelectedTab('completed');
+      setSelectedMainTab('home');
       setScreen('completedDeliveries');
       setMessage(finishResult.message);
     } finally {
@@ -871,159 +1080,174 @@ export default function App() {
     setSelectedRouteId(null);
   }
 
-  async function syncOfflineSubmissionsForSubmission(
-    activeSubmission: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>,
-  ): Promise<OfflineSubmissionRetryResult | null> {
-    const queue = offlineSubmissionQueue;
-    if (queue === null || queue.listPending().length === 0) {
-      return null;
-    }
-
-    setIsSyncingOfflineQueue(true);
-    try {
-      const retryResult = await retryOfflineSubmissions({
-        driverEventService: getDriverEventServiceForCurrentSubmission({
-          fallback: mockDriverEventService,
-          runtimeConfig,
-          submission: activeSubmission,
-        }),
-        proofMediaUploadService: getProofMediaUploadServiceForCurrentSubmission({
-          fallback: mockProofMediaUploadService,
-          runtimeConfig,
-          submission: activeSubmission,
-        }),
-        queue,
-      });
-      await queue.whenPersisted();
-      if (retryResult.succeeded > 0 || retryResult.discarded > 0) {
-        setMessage(formatOfflineRetryResult(retryResult));
-      }
-      if (retryResult.requiresRouteLookup) {
-        setMessage('Offline sync needs a fresh route lookup. Sign in again before continuing.');
-      }
-      return retryResult;
-    } finally {
-      setIsSyncingOfflineQueue(false);
-      refreshOfflineQueueCount();
-    }
-  }
-
   function refreshOfflineQueueCount() {
     setOfflineQueueCount(offlineSubmissionQueue?.listPending().length ?? 0);
   }
 
-  const handleAppBack = useCallback((): boolean => {
-    switch (screen) {
-      case 'arrivalCheck':
-        setScreen('stopDetails');
-        return true;
-      case 'completedDeliveries':
-        setScreen('routes');
-        return true;
-      case 'liveTracking':
-        setScreen('routeDetail');
-        return true;
-      case 'routeDetail':
-        setScreen('routes');
-        return true;
-      case 'stopCompleted':
-        setScreen('routeDetail');
-        return true;
-      case 'stopDetails':
-        setScreen(stopDetailsBackTarget);
-        return true;
-      case 'login':
-      case 'routes':
-        return false;
+  async function handleLogout() {
+    setMessage(null);
+    if (offlineSubmissionQueue !== null) {
+      const resetResult = await resetDriverSession({
+        driverAccessTokenStore,
+        offlineQueue: offlineSubmissionQueue,
+      });
+      setMessage(`Signed out. Cleared ${resetResult.clearedOfflineSubmissions} offline retry item${resetResult.clearedOfflineSubmissions === 1 ? '' : 's'}.`);
+    } else {
+      await driverAccessTokenStore.clear();
+      setMessage('Signed out. Offline retry storage was not ready.');
     }
-  }, [screen, stopDetailsBackTarget]);
+
+    resetRouteProgress();
+    setSelectedMainTab('home');
+    setSelectedTab('upcoming');
+    setVerifiedDriverPhoneE164(null);
+    setIsReturningDriver(false);
+    setVerificationCode('');
+    setDriverFirstName('');
+    setDriverLastName('');
+    setAcceptedPrivacy(false);
+    setAcceptedLocation(false);
+    setRouteReviewNote('');
+    setScreen('loginPhone');
+  }
+
+  function handleRequestAccountDeletionInfo() {
+    setMessage(getDriverPlaceholderCopy('accountDeletion'));
+  }
+
+  function handleContinueActiveRoute() {
+    if (selectedRoute === null) {
+      openRoutesRoot();
+      return;
+    }
+
+    if (routeStatus === 'active') {
+      setSelectedMainTab('home');
+      setScreen('liveTracking');
+      return;
+    }
+
+    setSelectedMainTab('home');
+    setScreen('routeDetail');
+  }
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
       return undefined;
     }
 
-    const subscription = BackHandler.addEventListener('hardwareBackPress', handleAppBack);
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      switch (screen) {
+        case 'loginPhone':
+        case 'mainTabs':
+          return false;
+        case 'loginDetail':
+          setScreen('loginPhone');
+          return true;
+        case 'routeDetail':
+          setSelectedMainTab('home');
+          setScreen('mainTabs');
+          return true;
+        case 'liveTracking':
+          setScreen('routeDetail');
+          return true;
+        case 'stopDetails':
+          setSelectedStopDetailsId(null);
+          setScreen(stopDetailsBackTarget);
+          return true;
+        case 'arrivalCheck':
+          setScreen('stopDetails');
+          return true;
+        case 'stopCompleted':
+          setScreen('routeDetail');
+          return true;
+        case 'completedDeliveries':
+          setSelectedMainTab('home');
+          setScreen('mainTabs');
+          return true;
+      }
+    });
+
     return () => subscription.remove();
-  }, [handleAppBack]);
-
-  const swipeBackResponder = useMemo(() => PanResponder.create({
-    onMoveShouldSetPanResponder: (_event, gestureState) => {
-      if (screen === 'login' || screen === 'routes') {
-        return false;
-      }
-
-      const horizontalDistance = Math.abs(gestureState.dx);
-      const verticalDistance = Math.abs(gestureState.dy);
-      return horizontalDistance > 35 && horizontalDistance > verticalDistance * SWIPE_BACK_DIRECTIONALITY_RATIO;
-    },
-    onPanResponderRelease: (_event, gestureState) => {
-      const horizontalDistance = Math.abs(gestureState.dx);
-      const verticalDistance = Math.abs(gestureState.dy);
-
-      if (horizontalDistance >= SWIPE_BACK_DISTANCE && verticalDistance <= SWIPE_BACK_MAX_VERTICAL_DELTA) {
-        handleAppBack();
-      }
-    },
-  }), [handleAppBack, screen]);
+  }, [screen, stopDetailsBackTarget]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
       <KeyboardAvoidingView
-        {...swipeBackResponder.panHandlers}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
         style={styles.keyboardArea}
       >
         <ScrollView
           contentContainerStyle={styles.container}
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {screen === 'login' ? (
-            <LoginScreen
-              acceptedLocation={acceptedLocation}
-              acceptedPrivacy={acceptedPrivacy}
-              adminToolsEnabled={ADMIN_SESSION_ENABLED}
-              isAdminToolsVisible={isAdminToolsVisible}
-              isBackdoorLoading={isLoadingBackdoorSession}
+          {screen === 'loginPhone' ? (
+            <LoginPhoneScreen
               countrySearchQuery={countrySearchQuery}
               driverPhoneCountries={visiblePhoneCountries}
-              driverName={driverName}
-              isLoggingIn={isLoggingIn || isSyncingOfflineQueue || offlineSubmissionQueue === null || isLoadingBackdoorSession}
               isCountrySelectorOpen={isCountrySelectorOpen}
+              isSendingCode={isLoggingIn}
               nationalPhoneInput={nationalPhoneInput}
-              onAdminToolsToggle={() => {
-                if (ADMIN_SESSION_ENABLED) {
-                  setIsAdminToolsVisible((value) => !value);
-                }
-              }}
-              onAcceptedLocationChange={setAcceptedLocation}
-              onAcceptedPrivacyChange={setAcceptedPrivacy}
               onCountrySearchChange={setCountrySearchQuery}
               onCountrySelect={handlePhoneCountrySelect}
               onCountrySelectorToggle={() => setIsCountrySelectorOpen((current) => !current)}
-              onLoadAdminSession={handleLoadBackdoorSession}
-              onResetSession={handleResetSessionForAdmin}
-              onDriverNameChange={setDriverName}
               onPhoneChange={handlePhoneInputChange}
-              onSendCode={handleSendVerificationCode}
-              onSubmit={handleLoginAndLoadRoutes}
-              onVerificationCodeChange={setVerificationCode}
+              onSendCode={handlePhoneSubmit}
               phoneE164Preview={phoneE164Preview}
               selectedDriverLocale={selectedDriverLocale}
               selectedPhoneCountry={selectedPhoneCountry}
+            />
+          ) : null}
+
+          {screen === 'loginDetail' ? (
+            <LoginDetailScreen
+              acceptedLocation={acceptedLocation}
+              acceptedPrivacy={acceptedPrivacy}
+              driverFirstName={driverFirstName}
+              driverLastName={driverLastName}
+              inputRefs={loginDetailInputRefCallbacks}
+              isLoggingIn={isLoggingIn}
+              onAcceptedLocationChange={setAcceptedLocation}
+              onAcceptedPrivacyChange={setAcceptedPrivacy}
+              onDriverFirstNameChange={setDriverFirstName}
+              onDriverLastNameChange={setDriverLastName}
+              onInputFocus={setFocusedLoginDetailInputId}
+              onInputSubmit={handleLoginDetailInputSubmit}
+              onSubmit={handleDetailSubmit}
+              onVerificationCodeChange={setVerificationCode}
               verificationCode={verificationCode}
             />
           ) : null}
 
-          {screen === 'routes' ? (
-            <RouteListScreen
+          {screen === 'mainTabs' && selectedMainTab === 'home' ? (
+            <HomePage
+              allStopsCompleted={allStopsCompleted}
+              company={currentCompany}
               completedStopIds={completedStopIds}
               driverName={driverName}
               isStartingRoute={isStartingRoute}
+              onBrowseRoutes={openRoutesRoot}
+              onContinueRoute={handleContinueActiveRoute}
+              onReviewNoteChange={setRouteReviewNote}
+              onStartRoute={() => selectedRoute !== null ? handleStartRoute(selectedRoute.id) : undefined}
+              route={selectedRoute}
+              routeReviewNote={routeReviewNote}
+              routeStatus={routeStatus}
+            />
+          ) : null}
+
+          {screen === 'mainTabs' && selectedMainTab === 'routes' ? (
+            <RoutesPage
+              driverName={driverName}
+              isRefreshingRoutes={isRefreshingRoutes || isLoggingIn}
+              isStartingRoute={isStartingRoute}
               onOpenCompletedDeliveries={() => setScreen('completedDeliveries')}
               onOpenRouteDetail={handleOpenRouteDetail}
+              onRefreshRoutes={handleRefreshRoutes}
               onSelectRoute={setSelectedRouteId}
               onSelectTab={setSelectedTab}
               onStartRoute={handleStartRoute}
@@ -1035,18 +1259,36 @@ export default function App() {
             />
           ) : null}
 
+          {screen === 'mainTabs' && selectedMainTab === 'earnings' ? (
+            <EarningsPage />
+          ) : null}
+
+          {screen === 'mainTabs' && selectedMainTab === 'profile' ? (
+            <ProfilePage
+              acceptedLocation={acceptedLocation}
+              acceptedPrivacy={acceptedPrivacy}
+              appVersion={DRIVER_APP_VERSION}
+              driverName={driverName || driverFirstName.trim()}
+              onLogout={handleLogout}
+              onRequestAccountDeletionInfo={handleRequestAccountDeletionInfo}
+              phoneE164={verifiedDriverPhoneE164 ?? phoneE164Preview}
+            />
+          ) : null}
+
           {screen === 'routeDetail' && selectedRoute !== null ? (
             <RouteDetailScreen
               allStopsCompleted={allStopsCompleted}
               company={currentCompany}
               completedStopIds={completedStopIds}
+              continuousLocationResult={continuousLocationResult}
               currentNavigationStepIndex={navigationStepIndex}
               deliveryFinishResult={deliveryFinishResult}
               isFinishingRoute={isFinishingRoute}
               isStartingRoute={isStartingRoute}
-              onBack={() => setScreen('routes')}
+              onBack={openHomeRoot}
               onContinueTracking={handleContinueTracking}
               onFinishRoute={handleManualFinishRoute}
+              onOpenNavigation={() => handleOpenRouteNavigation(selectedRoute)}
               onOpenStop={handleOpenStopFromRouteDetail}
               onStartRoute={() => handleStartRoute(selectedRoute.id)}
               route={selectedRoute}
@@ -1059,6 +1301,7 @@ export default function App() {
             <LiveTrackingScreen
               company={currentCompany}
               continuousLocationResult={continuousLocationResult}
+              currentStepIndex={navigationStepIndex}
               isCompanyStep={isCompanyStep}
               onArrived={handleArrivedAtStep}
               onBack={() => setScreen('routeDetail')}
@@ -1082,7 +1325,7 @@ export default function App() {
               }}
               onCall={() => handleCallStop(stopDetailsStop)}
               onMessage={() => handleMessageStop(stopDetailsStop)}
-              onOpenNavigation={() => handleOpenNavigationForCurrentStop(stopDetailsStop)}
+              onOpenNavigation={() => handleOpenNavigationForStop(stopDetailsStop)}
               stop={stopDetailsStop}
             />
           ) : null}
@@ -1119,12 +1362,39 @@ export default function App() {
             <CompletedDeliveriesScreen
               completedStopIds={completedStopIds}
               completedStopTimes={completedStopTimes}
-              onBack={() => setScreen('routes')}
+              onBack={openHomeRoot}
               proofMediaResults={proofMediaResults}
               route={selectedRoute}
             />
           ) : null}
         </ScrollView>
+        {screen === 'loginDetail' && Platform.OS === 'ios' ? (
+          <InputAccessoryView nativeID={LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID}>
+            <KeyboardNavigationBar
+              navigationState={loginDetailKeyboardNavigation}
+              onDone={dismissLoginDetailKeyboard}
+              onFocusNext={focusNextLoginDetailInput}
+              onFocusPrevious={focusPreviousLoginDetailInput}
+            />
+          </InputAccessoryView>
+        ) : null}
+        {screen === 'loginDetail' && focusedLoginDetailInputId !== null && Platform.OS !== 'ios' ? (
+          <KeyboardNavigationBar
+            navigationState={loginDetailKeyboardNavigation}
+            onDone={dismissLoginDetailKeyboard}
+            onFocusNext={focusNextLoginDetailInput}
+            onFocusPrevious={focusPreviousLoginDetailInput}
+          />
+        ) : null}
+        {shouldShowDriverBottomTabs(screen) ? (
+          <View style={styles.bottomNavArea}>
+            <BottomNavigation
+              items={mainTabs}
+              onSelect={openMainTab}
+              selected={getVisibleBottomTab({ screen, selectedMainTab })}
+            />
+          </View>
+        ) : null}
       </KeyboardAvoidingView>
       {message !== null ? <TransientToast text={message} /> : null}
     </SafeAreaView>
@@ -1132,97 +1402,41 @@ export default function App() {
 }
 
 
-function LoginScreen({
-  acceptedLocation,
-  acceptedPrivacy,
-  adminToolsEnabled,
+function LoginPhoneScreen({
   countrySearchQuery,
   driverPhoneCountries,
-  driverName,
   isCountrySelectorOpen,
-  isLoggingIn,
+  isSendingCode,
   nationalPhoneInput,
-  isAdminToolsVisible,
-  isBackdoorLoading,
-  onAdminToolsToggle,
-  onAcceptedLocationChange,
-  onAcceptedPrivacyChange,
   onCountrySearchChange,
   onCountrySelect,
   onCountrySelectorToggle,
-  onLoadAdminSession,
-  onDriverNameChange,
-  onResetSession,
   onPhoneChange,
   onSendCode,
-  onSubmit,
-  onVerificationCodeChange,
   phoneE164Preview,
   selectedDriverLocale,
   selectedPhoneCountry,
-  verificationCode,
 }: {
-  acceptedLocation: boolean;
-  acceptedPrivacy: boolean;
-  adminToolsEnabled: boolean;
   countrySearchQuery: string;
   driverPhoneCountries: DriverPhoneCountry[];
-  driverName: string;
   isCountrySelectorOpen: boolean;
-  isAdminToolsVisible: boolean;
-  isBackdoorLoading: boolean;
-  isLoggingIn: boolean;
+  isSendingCode: boolean;
   nationalPhoneInput: string;
-  onAdminToolsToggle(): void;
-  onAcceptedLocationChange(value: boolean): void;
-  onAcceptedPrivacyChange(value: boolean): void;
   onCountrySearchChange(value: string): void;
   onCountrySelect(country: DriverPhoneCountry): void;
   onCountrySelectorToggle(): void;
-  onLoadAdminSession(): void;
-  onDriverNameChange(value: string): void;
-  onResetSession(): void;
   onPhoneChange(value: string): void;
   onSendCode(): void;
-  onSubmit(): void;
-  onVerificationCodeChange(value: string): void;
   phoneE164Preview: string | null;
   selectedDriverLocale: string;
   selectedPhoneCountry: DriverPhoneCountry;
-  verificationCode: string;
 }) {
   return (
     <View style={styles.screenStack}>
-      <Pressable
-        accessibilityHint={adminToolsEnabled ? 'Long press to show admin tools.' : undefined}
-        accessibilityRole={adminToolsEnabled ? 'button' : undefined}
-        onLongPress={adminToolsEnabled ? onAdminToolsToggle : undefined}
-        delayLongPress={700}
-      >
-        <View style={styles.brandPanel}>
-          <Text style={styles.brandName}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Driver</Text></Text>
-          <Text style={styles.brandTagline}>Smarter routes for faster deliveries.</Text>
-        </View>
-      </Pressable>
-
-      {adminToolsEnabled && isAdminToolsVisible ? (
-        <View style={styles.adminPanel}>
-          <Text style={styles.adminPanelTitle}>Admin session tools</Text>
-          <Text style={styles.helperText}>Use these controls for QA and internal testing only.</Text>
-          <View style={styles.buttonColumn}>
-            <SecondaryButton
-              disabled={isBackdoorLoading || isLoggingIn}
-              label="Load admin backdoor session"
-              onPress={onLoadAdminSession}
-            />
-            <SecondaryButton
-              disabled={isBackdoorLoading || isLoggingIn}
-              label="Reset driver session"
-              onPress={onResetSession}
-            />
-          </View>
-        </View>
-      ) : null}
+      <View style={styles.brandPanel}>
+        <Text style={styles.brandName}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Driver</Text></Text>
+        <Text style={styles.brandTagline}>Smarter routes for faster deliveries.</Text>
+      </View>
 
       <View style={styles.formCard}>
         <CountrySelector
@@ -1241,39 +1455,203 @@ function LoginScreen({
           onChangeText={onPhoneChange}
           value={nationalPhoneInput}
         />
-        <LabeledInput
-          label="Verification Code"
-          onChangeText={onVerificationCodeChange}
-          placeholder="Verification code"
-          rightActionLabel="Send Code"
-          onRightAction={onSendCode}
-          value={verificationCode}
-        />
-        <LabeledInput label="Full Name" onChangeText={onDriverNameChange} placeholder="Enter your full name" value={driverName} />
-        <ConsentRow
-          label="I agree to the"
-          linkLabel="Privacy Policy"
-          onValueChange={onAcceptedPrivacyChange}
-          value={acceptedPrivacy}
-        />
-        <ConsentRow
-          label="I agree to"
-          linkLabel="Location-Based Services"
-          onValueChange={onAcceptedLocationChange}
-          value={acceptedLocation}
-        />
-        <PrimaryButton disabled={isLoggingIn} label="Continue" loading={isLoggingIn} onPress={onSubmit} />
+        <PrimaryButton disabled={isSendingCode} label="Continue" loading={isSendingCode} onPress={onSendCode} />
       </View>
     </View>
   );
 }
 
-function RouteListScreen({
+function LoginDetailScreen({
+  acceptedLocation,
+  acceptedPrivacy,
+  driverFirstName,
+  driverLastName,
+  inputRefs,
+  isLoggingIn,
+  onAcceptedLocationChange,
+  onAcceptedPrivacyChange,
+  onDriverFirstNameChange,
+  onDriverLastNameChange,
+  onInputFocus,
+  onInputSubmit,
+  onSubmit,
+  onVerificationCodeChange,
+  verificationCode,
+}: {
+  acceptedLocation: boolean;
+  acceptedPrivacy: boolean;
+  driverFirstName: string;
+  driverLastName: string;
+  inputRefs: Record<LoginDetailInputId, (input: TextInput | null) => void>;
+  isLoggingIn: boolean;
+  onAcceptedLocationChange(value: boolean): void;
+  onAcceptedPrivacyChange(value: boolean): void;
+  onDriverFirstNameChange(value: string): void;
+  onDriverLastNameChange(value: string): void;
+  onInputFocus(inputId: LoginDetailInputId): void;
+  onInputSubmit(inputId: LoginDetailInputId): void;
+  onSubmit(): void;
+  onVerificationCodeChange(value: string): void;
+  verificationCode: string;
+}) {
+  return (
+    <View style={styles.screenStack}>
+      <View style={styles.brandPanel}>
+        <Text style={styles.brandName}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Driver</Text></Text>
+        <Text style={styles.brandTagline}>Complete your profile</Text>
+      </View>
+
+      <View style={styles.formCard}>
+        <LabeledInput
+          blurOnSubmit={false}
+          inputAccessoryViewID={Platform.OS === 'ios' ? LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID : undefined}
+          inputRef={inputRefs.verificationCode}
+          label="Verification Code"
+          onChangeText={onVerificationCodeChange}
+          onFocus={() => onInputFocus('verificationCode')}
+          onSubmitEditing={() => onInputSubmit('verificationCode')}
+          placeholder="6-digit code"
+          returnKeyType="next"
+          value={verificationCode}
+        />
+        <LabeledInput
+          blurOnSubmit={false}
+          inputAccessoryViewID={Platform.OS === 'ios' ? LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID : undefined}
+          inputRef={inputRefs.driverFirstName}
+          label="First Name"
+          onChangeText={onDriverFirstNameChange}
+          onFocus={() => onInputFocus('driverFirstName')}
+          onSubmitEditing={() => onInputSubmit('driverFirstName')}
+          placeholder="First name"
+          returnKeyType="next"
+          value={driverFirstName}
+        />
+        <LabeledInput
+          inputAccessoryViewID={Platform.OS === 'ios' ? LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID : undefined}
+          inputRef={inputRefs.driverLastName}
+          label="Last Name"
+          onChangeText={onDriverLastNameChange}
+          onFocus={() => onInputFocus('driverLastName')}
+          onSubmitEditing={() => onInputSubmit('driverLastName')}
+          placeholder="Last name"
+          returnKeyType="done"
+          value={driverLastName}
+        />
+        <View style={styles.consentStack}>
+          <ConsentRow
+            label="I agree to the"
+            linkLabel="Privacy Policy"
+            onValueChange={onAcceptedPrivacyChange}
+            value={acceptedPrivacy}
+          />
+          <ConsentRow
+            label="I agree to"
+            linkLabel="Location-Based Services"
+            onValueChange={onAcceptedLocationChange}
+            value={acceptedLocation}
+          />
+        </View>
+        <PrimaryButton disabled={isLoggingIn} label="Start Driving" loading={isLoggingIn} onPress={onSubmit} />
+      </View>
+    </View>
+  );
+}
+
+function HomePage({
+  allStopsCompleted,
+  company,
   completedStopIds,
   driverName,
   isStartingRoute,
+  onBrowseRoutes,
+  onContinueRoute,
+  onReviewNoteChange,
+  onStartRoute,
+  route,
+  routeReviewNote,
+  routeStatus,
+}: {
+  allStopsCompleted: boolean;
+  company: RouteAccessCompanyGuidance | null;
+  completedStopIds: string[];
+  driverName: string;
+  isStartingRoute: boolean;
+  onBrowseRoutes(): void;
+  onContinueRoute(): void;
+  onReviewNoteChange(value: string): void;
+  onStartRoute(): void;
+  route: AssignedRoute | null;
+  routeReviewNote: string;
+  routeStatus: RouteStatus;
+}) {
+  if (route === null) {
+    return (
+      <View style={styles.screenStack}>
+        <View style={styles.pageHeader}>
+          <Text style={styles.pageTitle}>Home</Text>
+          <Text style={styles.helperText}>Your active route cockpit will appear here after you select an assigned route.</Text>
+        </View>
+        <EmptyState title="No active route selected" body="Open Routes to choose the nearest current or upcoming route." />
+        <PrimaryButton label="Browse Routes" onPress={onBrowseRoutes} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.screenStack}>
+      <View style={styles.pageHeader}>
+        <Text style={styles.pageTitle}>Home</Text>
+        <Text style={styles.helperText}>
+          {driverName.trim() ? `${driverName.trim()}, this is your current route cockpit.` : 'This is your current route cockpit.'}
+        </Text>
+      </View>
+
+      <View style={styles.selectedRouteCard}>
+        <View style={styles.routeCardHeader}>
+          <View style={styles.routeInitialBadge}>
+            <Text style={styles.routeInitialText}>{getInitials(company?.companyDisplayName ?? route.shopDomain)}</Text>
+          </View>
+          <View style={styles.routeHeaderText}>
+            <Text numberOfLines={1} style={styles.cardTitle}>{company?.companyDisplayName ?? route.shopDomain}</Text>
+            <Text numberOfLines={1} style={styles.helperText}>{route.name}</Text>
+          </View>
+          <StatusChip tone={getChipTone(routeStatus)} label={formatRouteStatus(routeStatus)} />
+        </View>
+
+        <DataRow label="Date" value={route.deliveryDate} />
+        <DataRow label="Region" value={getRouteRegion(route)} />
+        <DataRow label="Stops" value={`${completedStopIds.length}/${route.stops.length} completed`} />
+        <ProgressBar value={route.stops.length === 0 ? 0 : completedStopIds.length / route.stops.length} />
+
+        {routeStatus === 'completed' ? (
+          <View style={styles.buttonColumn}>
+            <StatusBanner tone="green" text={allStopsCompleted ? 'Route completed. Add a review or tip for your next run.' : 'Route marked completed for this session.'} />
+            <LabeledInput
+              label="Post-route review / tip"
+              multiline
+              onChangeText={onReviewNoteChange}
+              placeholder="Write a local note or tip for this route. Server sync is not connected yet."
+              value={routeReviewNote}
+            />
+          </View>
+        ) : (
+          <View style={styles.buttonColumn}>
+            <PrimaryButton disabled={isStartingRoute} label={routeStatus === 'active' ? 'Continue Route' : 'Start Route'} loading={isStartingRoute} onPress={routeStatus === 'active' ? onContinueRoute : onStartRoute} />
+            <SecondaryButton label="Route Details" onPress={onContinueRoute} />
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function RoutesPage({
+  driverName,
+  isRefreshingRoutes,
+  isStartingRoute,
   onOpenCompletedDeliveries,
   onOpenRouteDetail,
+  onRefreshRoutes,
   onSelectRoute,
   onSelectTab,
   onStartRoute,
@@ -1283,11 +1661,12 @@ function RouteListScreen({
   selectedTab,
   tabs,
 }: {
-  completedStopIds: string[];
   driverName: string;
+  isRefreshingRoutes: boolean;
   isStartingRoute: boolean;
   onOpenCompletedDeliveries(): void;
   onOpenRouteDetail(routeId: string): void;
+  onRefreshRoutes(): void;
   onSelectRoute(routeId: string): void;
   onSelectTab(tab: RouteTabId): void;
   onStartRoute(routeId: string): void;
@@ -1306,9 +1685,14 @@ function RouteListScreen({
   });
   const activeSession = visibleRouteSessions.find((session) => session.route.id === selectedRouteId) ?? visibleRouteSessions[0] ?? null;
   const activeIndex = activeSession === null ? -1 : visibleRouteSessions.findIndex((session) => session.route.id === activeSession.route.id);
-  const activeSessionStatus = activeSession === null
-    ? selectedTab
-    : getRouteSessionStatus(activeSession.route, selectedRouteId, routeStatus, classificationNow);
+  const activeRouteStatusForTabs = activeSession === null
+    ? null
+    : classifyAssignedRouteSession({
+      now: classificationNow,
+      route: activeSession.route,
+      selectedRouteId,
+      selectedRouteStatus: routeStatus,
+    });
 
   function selectRelativeRoute(offset: number) {
     if (visibleRouteSessions.length === 0 || activeIndex < 0) {
@@ -1322,10 +1706,14 @@ function RouteListScreen({
   return (
     <View style={styles.screenStack}>
       <View style={styles.pageHeader}>
-        <Text style={styles.pageTitle}>Assigned Routes</Text>
-        <Text style={styles.helperText}>{driverName.trim() ? `${driverName.trim()}, your assigned route is ready.` : 'Your assigned route is ready.'}</Text>
+        <Text style={styles.pageTitle}>Routes</Text>
+        <Text style={styles.helperText}>{driverName.trim() ? `${driverName.trim()}, view current and upcoming routes first.` : 'View current and upcoming routes first.'}</Text>
       </View>
+      <SecondaryButton disabled={isRefreshingRoutes} label="Refresh routes" loading={isRefreshingRoutes} onPress={onRefreshRoutes} />
       <SegmentedTabs onSelectTab={onSelectTab} selectedTab={selectedTab} tabs={tabs} />
+      {selectedTab === 'completed' ? (
+        <InfoPanel tone="green" title="Current-session completion only" body={getDriverPlaceholderCopy('routeHistory')} />
+      ) : null}
 
       {activeSession !== null ? (
         <View style={styles.selectedRouteCard}>
@@ -1337,7 +1725,10 @@ function RouteListScreen({
               <Text numberOfLines={1} style={styles.cardTitle}>{activeSession.companyGuidance.companyDisplayName}</Text>
               <Text numberOfLines={1} style={styles.helperText}>{activeSession.route.name}</Text>
             </View>
-            <StatusChip tone={getChipTone(activeSessionStatus)} label={formatRouteStatus(activeSessionStatus)} />
+            <StatusChip
+              tone={getChipTone(activeRouteStatusForTabs ?? 'upcoming')}
+              label={formatRouteStatus(activeRouteStatusForTabs ?? 'upcoming')}
+            />
           </View>
 
           <DataRow label="Company" value={activeSession.companyGuidance.companyDisplayName} />
@@ -1370,11 +1761,70 @@ function RouteListScreen({
       ) : (
         <EmptyState
           title="No assigned route"
-          body={formatRouteEmptyState(selectedTab, completedStopIds.length)}
+          body={selectedTab === 'completed' ? getDriverPlaceholderCopy('routeHistory') : 'No assigned route is available for this status.'}
         />
       )}
+    </View>
+  );
+}
 
-      <BottomNavigation selected="Home" />
+function EarningsPage() {
+  return (
+    <View style={styles.screenStack}>
+      <View style={styles.pageHeader}>
+        <Text style={styles.pageTitle}>Earnings</Text>
+        <Text style={styles.helperText}>Payouts and route earnings will appear here after the business rules and API are ready.</Text>
+      </View>
+      <EmptyState title="Coming soon" body={getDriverPlaceholderCopy('earnings')} />
+    </View>
+  );
+}
+
+function ProfilePage({
+  acceptedLocation,
+  acceptedPrivacy,
+  appVersion,
+  driverName,
+  onLogout,
+  onRequestAccountDeletionInfo,
+  phoneE164,
+}: {
+  acceptedLocation: boolean;
+  acceptedPrivacy: boolean;
+  appVersion: string;
+  driverName: string;
+  onLogout(): void;
+  onRequestAccountDeletionInfo(): void;
+  phoneE164: string | null;
+}) {
+  return (
+    <View style={styles.screenStack}>
+      <View style={styles.pageHeader}>
+        <Text style={styles.pageTitle}>Profile</Text>
+        <Text style={styles.helperText}>Local driver session, consent, and app information.</Text>
+      </View>
+
+      <View style={styles.summaryCard}>
+        <Text style={styles.cardTitle}>Driver information</Text>
+        <DataRow label="Display Name" value={driverName.trim() || 'Verified driver'} />
+        <DataRow label="Phone" value={phoneE164 ?? 'Saved phone unavailable'} />
+        <DataRow label="App Version" value={`${appVersion} (package/app config)`} />
+        <InfoPanel tone="green" title="Profile editing" body={getDriverPlaceholderCopy('profileUpdate')} />
+      </View>
+
+      <View style={styles.summaryCard}>
+        <Text style={styles.cardTitle}>Permissions & consent</Text>
+        <DataRow label="Privacy consent" value={acceptedPrivacy ? `Accepted · v${CONSENT_COPY_VERSIONS.personalInformation}` : `Needs review · v${CONSENT_COPY_VERSIONS.personalInformation}`} />
+        <DataRow label="Location consent" value={acceptedLocation ? `Accepted · v${CONSENT_COPY_VERSIONS.locationInformation}` : `Needs review · v${CONSENT_COPY_VERSIONS.locationInformation}`} />
+        <Text style={styles.helperText}>OS location permission is requested when delivery starts. This page reviews the app consent versions accepted during login.</Text>
+      </View>
+
+      <View style={styles.summaryCard}>
+        <Text style={styles.cardTitle}>Account</Text>
+        <SecondaryButton label="Logout and reset this device" onPress={onLogout} />
+        <SecondaryButton label="Account deletion information" onPress={onRequestAccountDeletionInfo} />
+        <Text style={styles.helperText}>{getDriverPlaceholderCopy('accountDeletion')}</Text>
+      </View>
     </View>
   );
 }
@@ -1383,6 +1833,7 @@ function RouteDetailScreen({
   allStopsCompleted,
   company,
   completedStopIds,
+  continuousLocationResult,
   currentNavigationStepIndex,
   deliveryFinishResult,
   isFinishingRoute,
@@ -1390,6 +1841,7 @@ function RouteDetailScreen({
   onBack,
   onContinueTracking,
   onFinishRoute,
+  onOpenNavigation,
   onOpenStop,
   onStartRoute,
   route,
@@ -1399,6 +1851,7 @@ function RouteDetailScreen({
   allStopsCompleted: boolean;
   company: RouteAccessCompanyGuidance | null;
   completedStopIds: string[];
+  continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
   currentNavigationStepIndex: number;
   deliveryFinishResult: DeliveryFinishResult | null;
   isFinishingRoute: boolean;
@@ -1406,6 +1859,7 @@ function RouteDetailScreen({
   onBack(): void;
   onContinueTracking(): void;
   onFinishRoute(): void;
+  onOpenNavigation(): void;
   onOpenStop(stop: AssignedRouteStop): void;
   onStartRoute(): void;
   route: AssignedRoute;
@@ -1467,6 +1921,7 @@ function RouteDetailScreen({
       </View>
 
       {routeStartedEventResult?.kind === 'recorded' ? <StatusBanner tone="green" text="Route start event recorded." /> : null}
+      {continuousLocationResult !== null ? <StatusBanner tone="green" text={formatContinuousLocationResult(continuousLocationResult)} /> : null}
       {deliveryFinishResult?.flowState === 'delivery_finished' ? <StatusBanner tone="green" text={deliveryFinishResult.message} /> : null}
 
       <View style={styles.buttonColumn}>
@@ -1477,7 +1932,8 @@ function RouteDetailScreen({
         ) : routeStatus === 'active' ? (
           <PrimaryButton label="Continue Tracking" onPress={onContinueTracking} />
         ) : null}
-        <SecondaryButton label="Back to Menu" onPress={onBack} />
+        <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
+        <SecondaryButton label="Back to Routes" onPress={onBack} />
       </View>
     </View>
   );
@@ -1486,6 +1942,7 @@ function RouteDetailScreen({
 function LiveTrackingScreen({
   company,
   continuousLocationResult,
+  currentStepIndex,
   isCompanyStep,
   onArrived,
   onBack,
@@ -1497,6 +1954,7 @@ function LiveTrackingScreen({
 }: {
   company: RouteAccessCompanyGuidance | null;
   continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
+  currentStepIndex: number;
   isCompanyStep: boolean;
   onArrived(): void;
   onBack(): void;
@@ -1507,32 +1965,30 @@ function LiveTrackingScreen({
   stop: AssignedRouteStop | null;
 }) {
   const stepLabel = isCompanyStep ? 'Company Pickup' : stop === null ? 'Next Stop' : `Stop ${stop.sequence}`;
-  const destination = isCompanyStep ? company?.pickupGuidance ?? 'Pickup guidance' : stop === null ? 'Stop address' : formatStopAddress(stop);
+  const address = isCompanyStep ? company?.pickupGuidance ?? 'Pickup guidance' : stop === null ? 'Stop address' : formatStopAddress(stop);
   const trackingLabel = continuousLocationResult?.kind === 'streaming' || routeStatus === 'active' ? 'GPS tracking active' : 'GPS tracking pending';
 
   return (
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Live Tracking" />
-      <View style={styles.trackingCard}>
-        <View style={styles.gpsStatusRow}>
-          <View style={styles.statusDot} />
-          <Text style={styles.gpsPillText}>{trackingLabel}</Text>
-        </View>
-        <View style={styles.destinationBlock}>
-          <Text style={styles.labelText}>Current destination</Text>
-          <Text numberOfLines={4} style={styles.sheetTitle}>{destination}</Text>
+      <View style={styles.mapPanel}>
+        <View style={styles.gpsPill}><View style={styles.statusDot} /><Text style={styles.gpsPillText}>{trackingLabel}</Text></View>
+        <MapOverview route={route} currentStepIndex={currentStepIndex} />
+        <View style={styles.trackingSheet}>
+          <View style={styles.sheetHandle} />
+          <Text style={styles.labelText}>Next Stop</Text>
+          <Text numberOfLines={2} style={styles.sheetTitle}>{address}</Text>
+          <View style={styles.trackingMetrics}>
+            <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
+            <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
+            <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : 'Pending'} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
+          </View>
+          <View style={styles.buttonRow}>
+            <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
+            <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
+            <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
+          </View>
           <Text style={styles.helperText}>{stepLabel}</Text>
-        </View>
-        <View style={styles.trackingMetrics}>
-          <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
-          <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
-          <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : 'Pending'} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
-        </View>
-        <View style={styles.buttonColumn}>
-          <PrimaryButton label="Open in Map" onPress={onOpenNavigation} />
-          <Text style={styles.helperText}>Opens this route in your default map app.</Text>
-          {isCompanyStep || stop === null ? null : <SecondaryButton label="View Stop" onPress={onViewStop} />}
-          <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
         </View>
       </View>
     </View>
@@ -1644,7 +2100,7 @@ function ArrivalCheckScreen({
       {mediaResult !== undefined ? <StatusBanner tone={mediaResult.kind === 'uploaded' ? 'green' : 'warning'} text={formatMediaUploadResult(mediaResult)} /> : null}
 
       <LabeledInput
-        label="Today’s Delivery Notes"
+        label="Delivery Notes"
         onChangeText={(value) => onDraftChange({ todayNote: value })}
         placeholder="Select an issue"
         value={draft.todayNote}
@@ -1728,7 +2184,7 @@ function CompletedDeliveriesScreen({
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Completed Deliveries" rightLabel="Filter" />
       <View>
-        <Text style={styles.pageTitleSmall}>Today</Text>
+        <Text style={styles.pageTitleSmall}>Current session</Text>
         <Text style={styles.helperText}>{route.deliveryDate}</Text>
       </View>
       <View style={styles.completionSummaryCard}>
@@ -1766,10 +2222,12 @@ function CompletedDeliveriesScreen({
   );
 }
 
-function ScreenHeader({ title }: { onBack?(): void; rightLabel?: string; title: string }) {
+function ScreenHeader({ onBack, rightLabel, title }: { onBack?(): void; rightLabel?: string; title: string }) {
   return (
     <View style={styles.screenHeader}>
+      {onBack === undefined ? <Text style={styles.headerSideText} /> : <Pressable accessibilityRole="button" onPress={onBack}><Text style={styles.headerActionText}>Back</Text></Pressable>}
       <Text numberOfLines={1} style={styles.headerTitle}>{title}</Text>
+      <Text style={rightLabel === undefined ? styles.headerSideText : styles.headerActionText}>{rightLabel ?? 'Menu'}</Text>
     </View>
   );
 }
@@ -1890,22 +2348,34 @@ function PhoneNumberInput({
 }
 
 function LabeledInput({
+  blurOnSubmit,
+  inputAccessoryViewID,
+  inputRef,
   keyboardType,
   label,
   multiline,
   onChangeText,
+  onFocus,
   onRightAction,
+  onSubmitEditing,
   placeholder,
   rightActionLabel,
+  returnKeyType,
   value,
 }: {
+  blurOnSubmit?: boolean;
+  inputAccessoryViewID?: string;
+  inputRef?: (input: TextInput | null) => void;
   keyboardType?: 'default' | 'phone-pad';
   label: string;
   multiline?: boolean;
   onChangeText(value: string): void;
+  onFocus?(): void;
   onRightAction?(): void;
+  onSubmitEditing?(): void;
   placeholder: string;
   rightActionLabel?: string;
+  returnKeyType?: 'done' | 'next';
   value: string;
 }) {
   return (
@@ -1915,11 +2385,17 @@ function LabeledInput({
         <TextInput
           autoCapitalize="none"
           autoCorrect={false}
+          blurOnSubmit={blurOnSubmit}
+          inputAccessoryViewID={inputAccessoryViewID}
           keyboardType={keyboardType ?? 'default'}
           multiline={multiline}
           onChangeText={onChangeText}
+          onFocus={onFocus}
+          onSubmitEditing={onSubmitEditing}
           placeholder={placeholder}
           placeholderTextColor="#8a94a6"
+          ref={inputRef}
+          returnKeyType={returnKeyType}
           style={[styles.input, multiline === true && styles.multilineTextInput]}
           value={value}
         />
@@ -1933,10 +2409,83 @@ function LabeledInput({
   );
 }
 
-function ConsentRow({ label, linkLabel, onValueChange, value }: { label: string; linkLabel: string; onValueChange(value: boolean): void; value: boolean }) {
+function KeyboardNavigationBar({
+  navigationState,
+  onDone,
+  onFocusNext,
+  onFocusPrevious,
+}: {
+  navigationState: KeyboardInputNavigationState<LoginDetailInputId>;
+  onDone(): void;
+  onFocusNext(): void;
+  onFocusPrevious(): void;
+}) {
+  const controls = getKeyboardNavigationAccessoryControls(navigationState);
+
   return (
-    <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: value }} onPress={() => onValueChange(!value)} style={styles.consentRow}>
-      <View style={[styles.checkboxBox, value && styles.checkboxBoxSelected]} />
+    <View style={styles.keyboardNavigationBar}>
+      <View style={styles.keyboardNavigationGroup}>
+        <Pressable
+          accessibilityLabel={controls.previous.accessibilityLabel}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: controls.previous.disabled }}
+          disabled={controls.previous.disabled}
+          onPress={onFocusPrevious}
+          style={[styles.keyboardNavigationIconButton, controls.previous.disabled && styles.keyboardNavigationButtonDisabled]}
+        >
+          <KeyboardNavigationArrowIcon disabled={controls.previous.disabled} icon={controls.previous.icon} />
+        </Pressable>
+      </View>
+      <View style={[styles.keyboardNavigationGroup, styles.keyboardNavigationGroupEnd]}>
+        <Pressable
+          accessibilityLabel={controls.next.accessibilityLabel}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: controls.next.disabled }}
+          disabled={controls.next.disabled}
+          onPress={onFocusNext}
+          style={[styles.keyboardNavigationIconButton, controls.next.disabled && styles.keyboardNavigationButtonDisabled]}
+        >
+          <KeyboardNavigationArrowIcon disabled={controls.next.disabled} icon={controls.next.icon} />
+        </Pressable>
+        <Pressable
+          accessibilityLabel={controls.done.accessibilityLabel}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: controls.done.disabled }}
+          disabled={controls.done.disabled}
+          onPress={onDone}
+          style={styles.keyboardNavigationDoneButton}
+        >
+          <Text style={styles.keyboardNavigationDoneText}>{controls.done.label}</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function KeyboardNavigationArrowIcon({ disabled, icon }: { disabled: boolean; icon: KeyboardNavigationAccessoryIcon }) {
+  const isUpIcon = icon === 'keyboard_arrow_up';
+
+  return (
+    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.keyboardNavigationIconBox}>
+      <View
+        style={[
+          styles.keyboardNavigationMaterialChevron,
+          isUpIcon ? styles.keyboardNavigationMaterialChevronUp : styles.keyboardNavigationMaterialChevronDown,
+          disabled && styles.keyboardNavigationMaterialChevronDisabled,
+        ]}
+      />
+    </View>
+  );
+}
+
+function ConsentRow({ label, linkLabel, onValueChange, value }: { label: string; linkLabel: string; onValueChange(value: boolean): void; value: boolean }) {
+  const checkboxVisualState = getConsentCheckboxVisualState(value);
+
+  return (
+    <Pressable accessibilityRole="checkbox" accessibilityState={checkboxVisualState.accessibilityState} onPress={() => onValueChange(!value)} style={styles.consentRow}>
+      <View style={[styles.checkboxBox, value && styles.checkboxBoxSelected]}>
+        {checkboxVisualState.checkmark !== null ? <Text style={styles.checkboxCheckmark}>{checkboxVisualState.checkmark}</Text> : null}
+      </View>
       <Text style={styles.consentText}>{label} <Text style={styles.linkText}>{linkLabel}</Text></Text>
     </Pressable>
   );
@@ -1990,7 +2539,7 @@ function StatusChip({ label, tone }: { label: string; tone: 'blue' | 'green' | '
 function TimelineRow({
   marker,
   meta,
-  metaTone,
+  metaTone = 'neutral',
   onPress,
   state,
   subtitle,
@@ -1998,7 +2547,7 @@ function TimelineRow({
 }: {
   marker: string;
   meta: string;
-  metaTone: 'blue' | 'green' | 'neutral';
+  metaTone?: 'blue' | 'green' | 'neutral';
   onPress?: () => void;
   state: 'completed' | 'current' | 'upcoming';
   subtitle: string;
@@ -2025,9 +2574,8 @@ function TimelineRow({
         onPress={onPress}
         style={({ pressed }) => [
           styles.timelineRow,
-          styles.timelineRowInteractive,
           state === 'current' && styles.timelineRowCurrent,
-          pressed && styles.timelineRowPressed,
+          pressed && { opacity: 0.88 },
         ]}
       >
         {content}
@@ -2035,9 +2583,25 @@ function TimelineRow({
     );
   }
 
+  return <View style={[styles.timelineRow, state === 'current' && styles.timelineRowCurrent]}>{content}</View>;
+}
+
+function MapOverview({ currentStepIndex, route }: { currentStepIndex: number; route: AssignedRoute }) {
   return (
-    <View style={[styles.timelineRow, state === 'current' && styles.timelineRowCurrent]}>
-      {content}
+    <View style={styles.mapCanvas}>
+      <View style={[styles.mapBlock, styles.mapBlockOne]} />
+      <View style={[styles.mapBlock, styles.mapBlockTwo]} />
+      <View style={[styles.mapRoad, styles.mapRoadOne]} />
+      <View style={[styles.mapRoad, styles.mapRoadTwo]} />
+      <View style={[styles.mapRouteLine, styles.mapRouteLineOne]} />
+      <View style={[styles.mapRouteLine, styles.mapRouteLineTwo]} />
+      <View style={styles.currentLocationPulse}><View style={styles.currentLocationDot} /></View>
+      {route.stops.slice(0, 3).map((stop, index) => (
+        <View key={stop.deliveryStopId} style={[styles.mapMarker, getMapMarkerStyle(index)]}>
+          <Text style={styles.mapMarkerText}>{stop.sequence}</Text>
+        </View>
+      ))}
+      <View style={styles.mapLastMarker}><Text style={styles.mapLastMarkerText}>{currentStepIndex >= route.stops.length ? 'Last' : 'Next'}</Text></View>
     </View>
   );
 }
@@ -2085,11 +2649,32 @@ function EmptyState({ body, title }: { body: string; title: string }) {
   );
 }
 
-function BottomNavigation({ selected }: { selected: 'Earnings' | 'Home' | 'Profile' | 'Routes' }) {
-  const items = ['Home', 'Routes', 'Earnings', 'Profile'] as const;
+function BottomNavigation({
+  items,
+  onSelect,
+  selected,
+}: {
+  items: ReturnType<typeof getDriverMainTabs>;
+  onSelect(tab: DriverMainTabId): void;
+  selected: DriverMainTabId;
+}) {
   return (
     <View style={styles.bottomNav}>
-      {items.map((item) => <Text key={item} style={[styles.bottomNavLabel, item === selected && styles.bottomNavLabelSelected]}>{item}</Text>)}
+      {items.map((item) => {
+        const isSelected = item.id === selected;
+        return (
+          <Pressable
+            accessibilityLabel={item.accessibilityLabel}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: isSelected }}
+            key={item.id}
+            onPress={() => onSelect(item.id)}
+            style={[styles.bottomNavItem, isSelected && styles.bottomNavItemSelected]}
+          >
+            <Text style={[styles.bottomNavLabel, isSelected && styles.bottomNavLabelSelected]}>{item.label}</Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -2196,15 +2781,6 @@ function getRouteSessionForAction(routeSessions: RouteSession[], routeId: string
   return routeSessions[0] ?? null;
 }
 
-function getRouteSessionStatus(route: AssignedRoute, selectedRouteId: string | null, selectedRouteStatus: RouteStatus, now: Date): RouteStatus {
-  return classifyAssignedRouteSession({
-    now,
-    route,
-    selectedRouteId,
-    selectedRouteStatus,
-  });
-}
-
 function formatRouteAccessProblem(result: RouteAccessSubmissionResult): string {
   if (result.kind === 'validation_error' || result.kind === 'denied' || result.kind === 'multiple_matches') {
     return result.message;
@@ -2247,29 +2823,6 @@ function formatRouteStatus(status: RouteStatus): string {
     case 'upcoming':
       return 'Pending';
   }
-}
-
-function formatRouteEmptyState(selectedTab: RouteTabId, completedStopCount: number): string {
-  if (selectedTab === 'completed' && completedStopCount > 0) {
-    return 'Completed stops are available after route completion.';
-  }
-  if (selectedTab === 'unfinished') {
-    return 'No unfinished route is available.';
-  }
-
-  return 'No route is available for this status.';
-}
-
-function formatOfflineRetryResult(result: OfflineSubmissionRetryResult): string {
-  const parts = [
-    result.succeeded > 0 ? `${result.succeeded} synced` : null,
-    result.discarded > 0 ? `${result.discarded} discarded` : null,
-    result.failed > 0 ? `${result.failed} still pending` : null,
-  ].filter((value): value is string => value !== null);
-
-  return parts.length === 0
-    ? 'Offline sync checked. No pending updates were sent.'
-    : `Offline sync complete: ${parts.join(', ')}.`;
 }
 
 function getRouteRegion(route: AssignedRoute): string {
@@ -2362,6 +2915,18 @@ function formatStopProofResult(result: StopProofEventResult): string {
   return result.message;
 }
 
+function formatContinuousLocationResult(result: ContinuousLocationStreamStartResult | ContinuousLocationStopResult): string {
+  if (result.kind === 'streaming') {
+    return 'GPS tracking is active.';
+  }
+
+  if (result.kind === 'stopped') {
+    return 'GPS tracking stopped.';
+  }
+
+  return result.message;
+}
+
 function getChipTone(status: RouteStatus): 'blue' | 'green' | 'neutral' {
   switch (status) {
     case 'active':
@@ -2404,6 +2969,15 @@ function formatLocalCompletedTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function getMapMarkerStyle(index: number) {
+  const positions = [
+    { left: '18%', top: '26%' },
+    { left: '47%', top: '38%' },
+    { left: '64%', top: '52%' },
+  ] as const;
+
+  return positions[index] ?? positions[positions.length - 1];
+}
 
 function getFileNameFromUri(uri: string, deliveryStopId: string): string {
   const fileName = uri.split('/').pop()?.trim();
@@ -2432,9 +3006,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   container: {
+    flexGrow: 1,
     gap: 22,
     padding: 22,
-    paddingBottom: APP_CONTENT_BOTTOM_CLEARANCE,
+    paddingBottom: 28,
   },
   screenStack: {
     gap: 22,
@@ -2471,19 +3046,6 @@ const styles = StyleSheet.create({
     minHeight: 240,
     justifyContent: 'center',
     paddingTop: 28,
-  },
-  adminPanel: {
-    backgroundColor: '#fff7ed',
-    borderColor: '#fdba74',
-    borderRadius: 16,
-    borderWidth: 1,
-    gap: 8,
-    padding: 14,
-  },
-  adminPanelTitle: {
-    color: '#8a4f09',
-    fontSize: 15,
-    fontWeight: '800',
   },
   brandName: {
     fontSize: 34,
@@ -2634,23 +3196,104 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     paddingLeft: 10,
   },
+  keyboardNavigationBar: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderTopColor: '#d1d5db',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 46,
+    paddingHorizontal: 8,
+  },
+  keyboardNavigationGroup: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+  },
+  keyboardNavigationGroupEnd: {
+    justifyContent: 'flex-end',
+  },
+  keyboardNavigationIconButton: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    height: 44,
+    justifyContent: 'center',
+    minWidth: 48,
+    paddingHorizontal: 12,
+  },
+  keyboardNavigationDoneButton: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    height: 44,
+    justifyContent: 'center',
+    minWidth: 64,
+    paddingHorizontal: 12,
+  },
+  keyboardNavigationButtonDisabled: {},
+  keyboardNavigationIconBox: {
+    alignItems: 'center',
+    height: 24,
+    justifyContent: 'center',
+    width: 24,
+  },
+  keyboardNavigationMaterialChevron: {
+    borderBottomWidth: 3,
+    borderColor: '#111111',
+    borderLeftWidth: 3,
+    height: 14,
+    width: 14,
+  },
+  keyboardNavigationMaterialChevronUp: {
+    transform: [{ translateY: 3 }, { rotate: '135deg' }],
+  },
+  keyboardNavigationMaterialChevronDown: {
+    transform: [{ translateY: -3 }, { rotate: '-45deg' }],
+  },
+  keyboardNavigationMaterialChevronDisabled: {
+    borderColor: '#6b7280',
+  },
+  keyboardNavigationDoneText: {
+    color: '#111111',
+    fontSize: 16,
+    fontWeight: '600',
+    height: 44,
+    includeFontPadding: false,
+    lineHeight: 44,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+  },
+  keyboardNavigationButtonTextDisabled: {
+    color: '#9ca3af',
+  },
+  consentStack: {
+    gap: 6,
+  },
   consentRow: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 12,
-    minHeight: 48,
+    gap: 8,
+    minHeight: 38,
   },
   checkboxBox: {
+    alignItems: 'center',
     backgroundColor: '#ffffff',
     borderColor: '#cfd6e4',
     borderRadius: 6,
     borderWidth: 1.5,
-    height: 24,
-    width: 24,
+    height: 22,
+    justifyContent: 'center',
+    width: 22,
   },
   checkboxBoxSelected: {
     backgroundColor: '#0b57d0',
     borderColor: '#0b57d0',
+  },
+  checkboxCheckmark: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 17,
   },
   consentText: {
     color: '#111827',
@@ -2726,7 +3369,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   tabActive: {
-    backgroundColor: '#0b57d0',
+    backgroundColor: '#eef6ff',
+    borderColor: '#bfdbfe',
+    borderWidth: 1,
   },
   tabText: {
     color: '#475467',
@@ -2735,7 +3380,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   tabTextActive: {
-    color: '#ffffff',
+    color: '#0b57d0',
+    fontWeight: '800',
   },
   selectedRouteCard: {
     backgroundColor: '#ffffff',
@@ -2838,24 +3484,44 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
   },
+  bottomNavArea: {
+    backgroundColor: '#f7f9fc',
+    paddingBottom: Platform.OS === 'android' ? ANDROID_SYSTEM_NAV_CLEARANCE : 8,
+    paddingHorizontal: 18,
+    paddingTop: 8,
+  },
   bottomNav: {
     alignItems: 'center',
     backgroundColor: '#ffffff',
-    borderColor: '#eef2f6',
-    borderRadius: 18,
-    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderRadius: 22,
+    borderWidth: 1.4,
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    minHeight: BOTTOM_NAV_MIN_HEIGHT,
-    paddingHorizontal: 10,
+    gap: 8,
+    justifyContent: 'space-between',
+    minHeight: 68,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    ...shadow,
+  },
+  bottomNavItem: {
+    alignItems: 'center',
+    borderRadius: 16,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 50,
+    paddingHorizontal: 8,
+  },
+  bottomNavItemSelected: {
+    backgroundColor: '#0b57d0',
   },
   bottomNavLabel: {
     color: '#667085',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   bottomNavLabelSelected: {
-    color: '#0b57d0',
+    color: '#ffffff',
     fontWeight: '900',
   },
   screenHeader: {
@@ -2956,17 +3622,10 @@ const styles = StyleSheet.create({
     gap: 12,
     padding: 10,
   },
-  timelineRowInteractive: {
-    borderColor: '#eef2f6',
-    borderWidth: 1,
-  },
   timelineRowCurrent: {
     backgroundColor: '#eef6ff',
     borderColor: '#bfdbfe',
     borderWidth: 1,
-  },
-  timelineRowPressed: {
-    opacity: 0.72,
   },
   timelineMarker: {
     alignItems: 'center',
@@ -3000,26 +3659,26 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
-  trackingCard: {
-    backgroundColor: '#ffffff',
-    borderColor: '#e5e7eb',
+  mapPanel: {
+    backgroundColor: '#eef5f8',
     borderRadius: 22,
-    borderWidth: 1,
-    gap: 16,
-    padding: 18,
-    ...shadow,
+    minHeight: 660,
+    overflow: 'hidden',
   },
-  gpsStatusRow: {
+  gpsPill: {
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    backgroundColor: '#ecfdf3',
-    borderColor: '#abefc6',
-    borderRadius: 999,
-    borderWidth: 1,
+    alignSelf: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
     flexDirection: 'row',
     gap: 9,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    marginTop: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    position: 'absolute',
+    top: 0,
+    zIndex: 4,
+    ...shadow,
   },
   statusDot: {
     backgroundColor: '#12b76a',
@@ -3032,13 +3691,134 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
-  destinationBlock: {
-    backgroundColor: '#f8fafc',
-    borderColor: '#e5e7eb',
-    borderRadius: 18,
-    borderWidth: 1,
-    gap: 8,
-    padding: 16,
+  mapCanvas: {
+    backgroundColor: '#f3f8fb',
+    height: 430,
+    position: 'relative',
+  },
+  mapBlock: {
+    backgroundColor: '#dff3e8',
+    borderRadius: 10,
+    opacity: 0.78,
+    position: 'absolute',
+  },
+  mapBlockOne: {
+    height: 90,
+    left: 18,
+    top: 86,
+    transform: [{ rotate: '-8deg' }],
+    width: 86,
+  },
+  mapBlockTwo: {
+    height: 120,
+    right: 30,
+    top: 140,
+    transform: [{ rotate: '10deg' }],
+    width: 78,
+  },
+  mapRoad: {
+    backgroundColor: '#ffffff',
+    borderRadius: 999,
+    height: 8,
+    opacity: 0.95,
+    position: 'absolute',
+    width: 380,
+  },
+  mapRoadOne: {
+    left: -30,
+    top: 130,
+    transform: [{ rotate: '24deg' }],
+  },
+  mapRoadTwo: {
+    left: -10,
+    top: 250,
+    transform: [{ rotate: '-18deg' }],
+  },
+  mapRouteLine: {
+    backgroundColor: '#0b57d0',
+    borderRadius: 999,
+    height: 7,
+    position: 'absolute',
+  },
+  mapRouteLineOne: {
+    left: 76,
+    top: 144,
+    transform: [{ rotate: '28deg' }],
+    width: 154,
+  },
+  mapRouteLineTwo: {
+    left: 186,
+    top: 212,
+    transform: [{ rotate: '72deg' }],
+    width: 140,
+  },
+  currentLocationPulse: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(11, 87, 208, 0.16)',
+    borderColor: 'rgba(11, 87, 208, 0.18)',
+    borderRadius: 54,
+    borderWidth: 14,
+    height: 108,
+    justifyContent: 'center',
+    left: '40%',
+    position: 'absolute',
+    top: '42%',
+    width: 108,
+  },
+  currentLocationDot: {
+    backgroundColor: '#0b57d0',
+    borderColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 4,
+    height: 28,
+    width: 28,
+  },
+  mapMarker: {
+    alignItems: 'center',
+    backgroundColor: '#0b57d0',
+    borderRadius: 17,
+    height: 34,
+    justifyContent: 'center',
+    position: 'absolute',
+    width: 34,
+  },
+  mapMarkerText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  mapLastMarker: {
+    backgroundColor: '#475467',
+    borderRadius: 16,
+    bottom: 110,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    position: 'absolute',
+    right: 22,
+  },
+  mapLastMarkerText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  trackingSheet: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    bottom: 0,
+    gap: 13,
+    left: 0,
+    padding: 18,
+    position: 'absolute',
+    right: 0,
+    ...shadow,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    backgroundColor: '#c7cdd8',
+    borderRadius: 999,
+    height: 4,
+    width: 48,
   },
   labelText: {
     color: '#667085',
@@ -3047,9 +3827,9 @@ const styles = StyleSheet.create({
   },
   sheetTitle: {
     color: '#111827',
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
-    lineHeight: 27,
+    lineHeight: 24,
   },
   trackingMetrics: {
     borderColor: '#eef2f6',

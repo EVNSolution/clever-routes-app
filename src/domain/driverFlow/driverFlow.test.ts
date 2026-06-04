@@ -75,7 +75,7 @@ describe('driver app MVP flow', () => {
       getMvpScenarioScreens().map((screen) => screen.title),
       [
         'Login / Driver Verification',
-        'Today’s Route',
+        'Upcoming Routes',
         'Route Details',
         'Live Tracking',
         'Stop Details',
@@ -98,7 +98,7 @@ describe('driver app MVP flow', () => {
   it('keeps proof and optional stop inputs aligned to the English arrival check design', () => {
     assert.deepEqual(getStopCompletionProofFields(), [
       { id: 'photo', label: 'Photo Proof', required: true },
-      { id: 'todayNote', label: 'Today’s Delivery Notes', required: false },
+      { id: 'todayNote', label: 'Delivery Notes', required: false },
       { id: 'locationTip', label: 'Location Tip', required: false },
       { id: 'additionalNotes', label: 'Additional Notes', required: false },
     ]);

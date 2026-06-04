@@ -3,6 +3,7 @@ export type NativeReleasePreflightCheckId =
   | 'eas.production'
   | 'expo.identity'
   | 'expo.permissions'
+  | 'ios.native'
   | 'runtime.env.example';
 
 export type NativeReleasePreflightCheck = {
@@ -54,6 +55,11 @@ export type NativeReleasePreflightInput = {
     submit?: Record<string, unknown>;
   };
   envExample: string;
+  iosNativeProject?: {
+    infoPlist?: string;
+    privacyManifest?: string;
+    projectPbxproj?: string;
+  };
 };
 
 const FORBIDDEN_CONTACTS_ANDROID_PERMISSIONS = new Set([
@@ -71,7 +77,8 @@ export function runNativeReleasePreflight(input: NativeReleasePreflightInput): N
     checkExpoPermissions(input.appConfig),
     checkEasPreview(input.easConfig),
     checkEasProduction(input.easConfig),
-    checkRuntimeEnvExample(input.envExample)
+    checkRuntimeEnvExample(input.envExample),
+    checkIosNativeProject(input.iosNativeProject, input.appConfig)
   ];
   const failures = checks
     .filter((check) => !check.ok)
@@ -180,6 +187,56 @@ function checkExpoPermissions(appConfig: NativeReleasePreflightInput['appConfig'
   }
 
   return pass('expo.permissions', 'Native location, camera, photo, scanner, and secure storage permissions are declared.');
+}
+
+
+function checkIosNativeProject(
+  iosNativeProject: NativeReleasePreflightInput['iosNativeProject'],
+  appConfig: NativeReleasePreflightInput['appConfig'],
+): NativeReleasePreflightCheck {
+  if (iosNativeProject === undefined) {
+    return pass('ios.native', 'No source-controlled iOS native project is present; Expo config remains the native source of truth.');
+  }
+
+  const pbxproj = iosNativeProject.projectPbxproj ?? '';
+  const infoPlist = iosNativeProject.infoPlist ?? '';
+  const privacyManifest = iosNativeProject.privacyManifest ?? '';
+  const expectedVersion = appConfig.expo?.version ?? '';
+  const expectedBuildNumber = appConfig.expo?.ios?.buildNumber ?? '';
+  const expectedBundleIdentifier = appConfig.expo?.ios?.bundleIdentifier ?? '';
+
+  if (pbxproj.includes('DEVELOPMENT_TEAM =')) {
+    return fail('ios.native', 'Source-controlled iOS project must not pin a local Apple DEVELOPMENT_TEAM.');
+  }
+  if (!pbxproj.includes(`MARKETING_VERSION = ${expectedVersion};`)) {
+    return fail('ios.native', 'iOS MARKETING_VERSION must match the Expo app version baseline.');
+  }
+  if (!pbxproj.includes(`CURRENT_PROJECT_VERSION = ${expectedBuildNumber};`)) {
+    return fail('ios.native', 'iOS CURRENT_PROJECT_VERSION must match the Expo iOS buildNumber baseline.');
+  }
+  if (!pbxproj.includes(`PRODUCT_BUNDLE_IDENTIFIER = ${expectedBundleIdentifier};`)) {
+    return fail('ios.native', 'iOS PRODUCT_BUNDLE_IDENTIFIER must match the Expo bundleIdentifier baseline.');
+  }
+  if (infoPlist.includes('NSContactsUsageDescription')) {
+    return fail('ios.native', 'Contacts usage description must stay absent from the source-controlled iOS project.');
+  }
+  if (infoPlist.includes('NSMicrophoneUsageDescription')) {
+    return fail('ios.native', 'Microphone usage description must stay absent until an approved audio feature exists.');
+  }
+  if (infoPlist.includes('NSFaceIDUsageDescription')) {
+    return fail('ios.native', 'Face ID usage description must stay absent until biometric auth is approved.');
+  }
+  if (!infoPlist.includes('NSLocationWhenInUseUsageDescription') || !infoPlist.includes('NSLocationAlwaysAndWhenInUseUsageDescription')) {
+    return fail('ios.native', 'Source-controlled iOS project must include active-delivery location permission copy.');
+  }
+  if (!infoPlist.includes('NSCameraUsageDescription') || !infoPlist.includes('NSPhotoLibraryUsageDescription')) {
+    return fail('ios.native', 'Source-controlled iOS project must include proof photo camera/photo permission copy.');
+  }
+  if (!privacyManifest.includes('NSPrivacyTracking') || !privacyManifest.includes('<false/>')) {
+    return fail('ios.native', 'iOS privacy manifest must explicitly keep tracking disabled.');
+  }
+
+  return pass('ios.native', 'Source-controlled iOS native project matches app identity, permission, and privacy guardrails.');
 }
 
 function hasForbiddenContactsAndroidPermission(permissions: string[] | undefined): boolean {
