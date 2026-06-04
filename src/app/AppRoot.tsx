@@ -17,6 +17,9 @@ import {
 
 import {
   createMockAssignedRouteService,
+  formatAssignedRouteDistance,
+  formatAssignedRouteDuration,
+  hasAssignedRouteGeometry,
   loadAssignedRouteAfterConsent,
   sampleAssignedRoute,
   type AssignedRoute,
@@ -1010,8 +1013,8 @@ function RouteListScreen({
           <DataRow label="Region" value={getRouteRegion(activeSession.route)} />
           <DataRow label="Route" value={formatRouteSequence(activeSession.route)} />
           <DataRow label="Stops" value={formatStopCount(activeSession.route.stops.length)} />
-          <DataRow label="Estimated Distance" value="Not available" />
-          <DataRow label="Estimated Time" value="Not available" />
+          <DataRow label="Estimated Distance" value={formatAssignedRouteDistance(activeSession.route.routeMetrics)} />
+          <DataRow label="Estimated Time" value={formatAssignedRouteDuration(activeSession.route.routeMetrics)} />
 
           {visibleRouteSessions.length > 1 ? (
             <View style={styles.routePagerRow}>
@@ -1081,8 +1084,8 @@ function RouteDetailScreen({
         <DataRow label="Date" value={route.deliveryDate} />
         <View style={styles.summaryGrid}>
           <MetricBlock label="Stops" value={formatStopCount(route.stops.length)} />
-          <MetricBlock label="Distance" value="Not available" />
-          <MetricBlock label="Duration" value="Not available" />
+          <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
+          <MetricBlock label="Duration" value={formatAssignedRouteDuration(route.routeMetrics)} />
         </View>
       </View>
 
@@ -1171,8 +1174,8 @@ function LiveTrackingScreen({
           <Text style={styles.labelText}>Next Stop</Text>
           <Text numberOfLines={2} style={styles.sheetTitle}>{address}</Text>
           <View style={styles.trackingMetrics}>
-            <MetricBlock label="Distance" value="Not available" />
-            <MetricBlock label="ETA" value="Not available" />
+            <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
+            <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
             <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : 'Pending'} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
           </View>
           <View style={styles.buttonRow}>
@@ -1640,6 +1643,8 @@ function TimelineRow({ marker, meta, state, subtitle, title }: { marker: string;
 }
 
 function MapOverview({ currentStepIndex, route }: { currentStepIndex: number; route: AssignedRoute }) {
+  const geometryReady = hasAssignedRouteGeometry(route);
+  const routePointCount = route.routeGeometry?.coordinates.length ?? 0;
   return (
     <View style={styles.mapCanvas}>
       <View style={[styles.mapBlock, styles.mapBlockOne]} />
@@ -1655,6 +1660,7 @@ function MapOverview({ currentStepIndex, route }: { currentStepIndex: number; ro
         </View>
       ))}
       <View style={styles.mapLastMarker}><Text style={styles.mapLastMarkerText}>{currentStepIndex >= route.stops.length ? 'Last' : 'Next'}</Text></View>
+      <Text style={styles.mapRouteHint}>{geometryReady ? `OSRM route ready · ${routePointCount} points` : 'Route geometry pending'}</Text>
     </View>
   );
 }
@@ -2727,6 +2733,18 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '900',
+  },
+  mapRouteHint: {
+    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    borderRadius: 999,
+    bottom: 66,
+    color: '#344054',
+    fontSize: 12,
+    fontWeight: '800',
+    left: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    position: 'absolute',
   },
   trackingSheet: {
     backgroundColor: '#ffffff',
