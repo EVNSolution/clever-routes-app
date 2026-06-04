@@ -10,12 +10,18 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.evns.cleverdriverapp",
-      "buildNumber": "1"
+      "buildNumber": "1",
+      "icon": "./assets/ios-icon.png"
     },
     "android": {
       "package": "com.evns.cleverdriverapp",
       "edgeToEdgeEnabled": true,
-      "versionCode": 1
+      "versionCode": 1,
+      "icon": "./assets/android-icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#C7D833"
+      }
     },
     "extra": {
       "projectStartIssue": "EVNSolution/clever-change-control#145",
@@ -46,6 +52,7 @@
           "cameraPermission": "Allow Clever Driver to scan proof barcodes for active deliveries."
         }
       ]
-    ]
+    ],
+    "icon": "./assets/icon.png"
   }
 }

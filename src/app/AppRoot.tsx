@@ -34,6 +34,11 @@ import {
   type RouteSessionStatus,
 } from '../domain/route/routeSessionClassification';
 import {
+  getCurrentRouteStop,
+  getStopDetailsProgressState,
+  ROUTE_COMPANY_STEP_INDEX,
+} from '../domain/route/routeStepProgress';
+import {
   recordContinuousLocationUpdateBatch,
   startContinuousLocationUpdatesAfterDeliveryStart,
   type ContinuousLocationStopResult,
@@ -122,7 +127,7 @@ type RouteSession = RouteAccessRouteChoice & {
 };
 
 const DEFAULT_DRIVER_NAME = '';
-const COMPANY_STEP_INDEX = 0;
+const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
 const ADMIN_SESSION_ENABLED = __DEV__ || process.env.EXPO_PUBLIC_ENABLE_ADMIN_SESSION === '1';
 const SWIPE_BACK_DISTANCE = 90;
 const SWIPE_BACK_MAX_VERTICAL_DELTA = 90;
@@ -142,6 +147,7 @@ export default function App() {
   const [selectedTab, setSelectedTab] = useState<RouteTabId>('upcoming');
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [navigationStepIndex, setNavigationStepIndex] = useState(COMPANY_STEP_INDEX);
+  const [selectedStopDetailsId, setSelectedStopDetailsId] = useState<string | null>(null);
   const [stopDetailsBackTarget, setStopDetailsBackTarget] = useState<StopDetailsBackTarget>('liveTracking');
   const [routeSessions, setRouteSessions] = useState<RouteSession[]>([]);
 
@@ -210,7 +216,16 @@ export default function App() {
   const selectedRouteSession = routeSessions.find((session) => session.route.id === selectedRouteId) ?? routeSessions[0] ?? null;
   const selectedRoute = selectedRouteSession?.route ?? null;
   const routeStatus = getRouteStatus(deliveryStartResult, deliveryFinishResult);
-  const currentStop = selectedRoute === null ? null : selectedRoute.stops[navigationStepIndex - 1] ?? null;
+  const currentStop = selectedRoute === null ? null : getCurrentRouteStop({ navigationStepIndex, route: selectedRoute });
+  const stopDetailsProgressState = selectedRoute === null
+    ? null
+    : getStopDetailsProgressState({
+      navigationStepIndex,
+      route: selectedRoute,
+      selectedStopDetailsId,
+    });
+  const stopDetailsStop = stopDetailsProgressState?.stop ?? null;
+  const stopDetailsCanMarkArrived = stopDetailsProgressState?.canMarkArrived === true;
   const isCompanyStep = navigationStepIndex === COMPANY_STEP_INDEX;
   const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => completedStopIds.includes(stop.deliveryStopId));
   const currentCompany = selectedRouteSession?.companyGuidance ?? null;
@@ -489,8 +504,8 @@ export default function App() {
     setScreen('routeDetail');
   }
 
-  async function handleCallCurrentStop() {
-    const phone = currentStop?.phone ?? currentCompany?.operatorSupportContact;
+  async function handleCallStop(stop: AssignedRouteStop | null) {
+    const phone = stop?.phone ?? currentCompany?.operatorSupportContact;
     if (phone === null || phone === undefined || phone.trim().length === 0) {
       setMessage('No contact number is available for this stop.');
       return;
@@ -499,8 +514,8 @@ export default function App() {
     await Linking.openURL(`tel:${phone}`);
   }
 
-  async function handleMessageCurrentStop() {
-    const phone = currentStop?.phone ?? currentCompany?.operatorSupportContact;
+  async function handleMessageStop(stop: AssignedRouteStop | null) {
+    const phone = stop?.phone ?? currentCompany?.operatorSupportContact;
     if (phone === null || phone === undefined || phone.trim().length === 0) {
       setMessage('No message contact is available for this stop.');
       return;
@@ -510,7 +525,15 @@ export default function App() {
   }
 
   function handleAnnounceCurrentTip() {
-    const text = getNavigationTip({ company: currentCompany, isCompanyStep, stop: currentStop });
+    handleAnnounceNavigationTip({ isCompanyStep, stop: currentStop });
+  }
+
+  function handleAnnounceStopTip(stop: AssignedRouteStop | null) {
+    handleAnnounceNavigationTip({ isCompanyStep: false, stop });
+  }
+
+  function handleAnnounceNavigationTip(input: { isCompanyStep: boolean; stop: AssignedRouteStop | null }) {
+    const text = getNavigationTip({ company: currentCompany, isCompanyStep: input.isCompanyStep, stop: input.stop });
     Speech.stop();
     Speech.speak(text, { language: 'en-CA', rate: 0.94 });
     setMessage(`Voice tip: ${text}`);
@@ -539,6 +562,7 @@ export default function App() {
     }
 
     setStopDetailsBackTarget('liveTracking');
+    setSelectedStopDetailsId(currentStop.deliveryStopId);
     setScreen('stopDetails');
   }
 
@@ -558,7 +582,7 @@ export default function App() {
       return;
     }
 
-    setNavigationStepIndex(stopIndex + 1);
+    setSelectedStopDetailsId(selectedRoute.stops[stopIndex]?.deliveryStopId ?? stop.deliveryStopId);
     setStopDetailsBackTarget('routeDetail');
     setScreen('stopDetails');
   }
@@ -842,6 +866,7 @@ export default function App() {
     setCompletedStopTimes({});
     setRecentlyCompletedStopId(null);
     setNavigationStepIndex(COMPANY_STEP_INDEX);
+    setSelectedStopDetailsId(null);
     setStopDetailsBackTarget('liveTracking');
     setSelectedRouteId(null);
   }
@@ -1045,16 +1070,20 @@ export default function App() {
             />
           ) : null}
 
-          {screen === 'stopDetails' && currentStop !== null ? (
+          {screen === 'stopDetails' && stopDetailsStop !== null ? (
             <StopDetailsScreen
+              canMarkArrived={stopDetailsCanMarkArrived}
               company={currentCompany}
-              onAnnounceTip={handleAnnounceCurrentTip}
+              onAnnounceTip={() => handleAnnounceStopTip(stopDetailsStop)}
               onArrived={handleArrivedAtStep}
-              onBack={() => setScreen(stopDetailsBackTarget)}
-              onCall={handleCallCurrentStop}
-              onMessage={handleMessageCurrentStop}
-              onOpenNavigation={() => handleOpenNavigationForCurrentStop(currentStop)}
-              stop={currentStop}
+              onBack={() => {
+                setSelectedStopDetailsId(null);
+                setScreen(stopDetailsBackTarget);
+              }}
+              onCall={() => handleCallStop(stopDetailsStop)}
+              onMessage={() => handleMessageStop(stopDetailsStop)}
+              onOpenNavigation={() => handleOpenNavigationForCurrentStop(stopDetailsStop)}
+              stop={stopDetailsStop}
             />
           ) : null}
 
@@ -1511,6 +1540,7 @@ function LiveTrackingScreen({
 }
 
 function StopDetailsScreen({
+  canMarkArrived,
   company,
   onAnnounceTip,
   onArrived,
@@ -1520,6 +1550,7 @@ function StopDetailsScreen({
   onOpenNavigation,
   stop,
 }: {
+  canMarkArrived: boolean;
   company: RouteAccessCompanyGuidance | null;
   onAnnounceTip(): void;
   onArrived(): void;
@@ -1551,7 +1582,14 @@ function StopDetailsScreen({
         <SecondaryButton label="Message" onPress={onMessage} />
       </View>
       <View style={styles.buttonColumn}>
-        <PrimaryButton label="Arrived" onPress={onArrived} />
+        {canMarkArrived ? (
+          <PrimaryButton label="Arrived" onPress={onArrived} />
+        ) : (
+          <StatusBanner
+            tone="warning"
+            text="Preview only. Use Live Tracking and the current-step button to advance route progress."
+          />
+        )}
         <SecondaryButton label="I’m Nearby" onPress={onAnnounceTip} />
       </View>
     </View>
