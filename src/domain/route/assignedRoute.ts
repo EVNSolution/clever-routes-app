@@ -32,10 +32,28 @@ export type AssignedRouteMetrics = {
   durationSeconds: number | null;
 };
 
+export const NORMALIZED_PAYMENT_STATUSES = [
+  'PAID_CONFIRMED',
+  'CASH_COLLECT_REQUIRED',
+  'TRANSFER_CHECK_PENDING',
+  'ONLINE_PAYMENT_PENDING_OR_FAILED',
+  'NOT_DELIVERABLE_OR_EXCEPTION',
+  'UNKNOWN_REVIEW',
+] as const;
+
+export type NormalizedPaymentStatus = (typeof NORMALIZED_PAYMENT_STATUSES)[number];
+
+export type AssignedRoutePaymentCopy = {
+  detail: string;
+  label: string;
+  tone: 'green' | 'neutral' | 'warning';
+};
+
 export type AssignedRouteStop = {
   address: AssignedRouteAddress;
   coordinates: AssignedRouteCoordinates | null;
   deliveryStopId: string;
+  normalizedPaymentStatus: NormalizedPaymentStatus | null;
   orderName: string;
   phone: string | null;
   recipientName: string | null;
@@ -173,6 +191,7 @@ export const sampleAssignedRoute: AssignedRoute = {
         longitude: -79.3817,
       },
       deliveryStopId: '22222222-2222-4222-8222-222222222222',
+      normalizedPaymentStatus: 'CASH_COLLECT_REQUIRED',
       orderName: '#1001',
       phone: '+14165550123',
       recipientName: 'Recipient One',
@@ -193,6 +212,7 @@ export const sampleAssignedRoute: AssignedRoute = {
         longitude: -79.3909,
       },
       deliveryStopId: '33333333-3333-4333-8333-333333333333',
+      normalizedPaymentStatus: 'TRANSFER_CHECK_PENDING',
       orderName: '#1002',
       phone: '+14165550124',
       recipientName: 'Recipient Two',
@@ -433,12 +453,17 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
     isAssignedRouteAddress(stop.address) &&
     (stop.coordinates === null || isAssignedRouteCoordinates(stop.coordinates)) &&
     typeof stop.deliveryStopId === 'string' &&
+    isNormalizedPaymentStatus(stop.normalizedPaymentStatus) &&
     typeof stop.orderName === 'string' &&
     nullableString(stop.phone) &&
     nullableString(stop.recipientName) &&
     typeof stop.sequence === 'number' &&
     typeof stop.status === 'string'
   );
+}
+
+function isNormalizedPaymentStatus(value: unknown): value is NormalizedPaymentStatus | null {
+  return value === null || NORMALIZED_PAYMENT_STATUSES.some((status) => status === value);
 }
 
 function isAssignedRouteAddress(value: unknown): value is AssignedRouteAddress {
@@ -491,4 +516,53 @@ function nullableFiniteNumber(value: unknown): value is number | null {
 
 function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
+}
+
+export function formatAssignedRoutePaymentStatus(
+  status: NormalizedPaymentStatus | null,
+): AssignedRoutePaymentCopy {
+  switch (status) {
+    case 'PAID_CONFIRMED':
+      return {
+        detail: 'Payment is confirmed in WooCommerce. Do not request payment at delivery.',
+        label: 'Paid confirmed',
+        tone: 'green',
+      };
+    case 'CASH_COLLECT_REQUIRED':
+      return {
+        detail: 'Cash was selected. Collect payment directly at delivery.',
+        label: 'Collect cash',
+        tone: 'warning',
+      };
+    case 'TRANSFER_CHECK_PENDING':
+      return {
+        detail: 'E-mail/bank transfer still needs WooCommerce/admin confirmation. Do not ask again until confirmed by dispatch.',
+        label: 'Transfer pending',
+        tone: 'warning',
+      };
+    case 'ONLINE_PAYMENT_PENDING_OR_FAILED':
+      return {
+        detail: 'Online/card payment is not confirmed. Check with dispatch before requesting anything from the customer.',
+        label: 'Online pending',
+        tone: 'warning',
+      };
+    case 'NOT_DELIVERABLE_OR_EXCEPTION':
+      return {
+        detail: 'WooCommerce reports a cancelled, refunded, failed, or otherwise exceptional order status.',
+        label: 'Payment exception',
+        tone: 'warning',
+      };
+    case 'UNKNOWN_REVIEW':
+      return {
+        detail: 'Payment method/status is unknown to CLEVER Route. Ask dispatch/admin to review.',
+        label: 'Review payment',
+        tone: 'warning',
+      };
+    case null:
+      return {
+        detail: 'No normalized payment state was provided for this stop.',
+        label: 'Payment unavailable',
+        tone: 'neutral',
+      };
+  }
 }

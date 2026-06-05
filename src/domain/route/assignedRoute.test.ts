@@ -7,6 +7,7 @@ import {
   formatAssignedRouteDistance,
   formatAssignedRouteDuration,
   hasAssignedRouteGeometry,
+  formatAssignedRoutePaymentStatus,
   loadAssignedRouteAfterConsent,
   sampleAssignedRoute,
 } from './assignedRoute';
@@ -55,6 +56,10 @@ describe('driver assigned route UX flow', () => {
     assert.deepEqual(
       result.route.stops.map((stop) => stop.sequence),
       [1, 2],
+    );
+    assert.deepEqual(
+      result.route.stops.map((stop) => stop.normalizedPaymentStatus),
+      ['CASH_COLLECT_REQUIRED', 'TRANSFER_CHECK_PENDING'],
     );
     assert.equal(JSON.stringify(result).includes('tomatono.myshopify.com'), true);
   });
@@ -169,6 +174,7 @@ describe('driver assigned route UX flow', () => {
     ]);
   });
 
+
   it('accepts additive OSRM route geometry, metrics, and stop snap points from assigned-route responses', async () => {
     const firstStop = sampleAssignedRoute.stops[0];
     assert.ok(firstStop);
@@ -266,5 +272,74 @@ describe('driver assigned route UX flow', () => {
     assert.deepEqual(result.route.routeStopPoints, []);
     assert.equal(formatAssignedRouteDistance(result.route.routeMetrics), 'Not available');
     assert.equal(formatAssignedRouteDuration(result.route.routeMetrics), 'Not available');
+  });
+
+  it('preserves canonical normalizedPaymentStatus even when legacy payment fields conflict', async () => {
+    const routePayload = {
+      ...sampleAssignedRoute,
+      stops: [
+        {
+          ...sampleAssignedRoute.stops[0],
+          financialStatus: 'Cash',
+          normalizedPaymentStatus: 'PAID_CONFIRMED',
+          paymentStatus: 'CASH_COLLECT_REQUIRED',
+        },
+      ],
+    };
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: { status: 'ASSIGNED_ROUTE', route: routePayload },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: 'route-id' });
+
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.equal(result.route.stops[0]?.normalizedPaymentStatus, 'PAID_CONFIRMED');
+  });
+
+  it('rejects malformed normalized payment statuses from the assigned-route contract', async () => {
+    const routePayload = {
+      ...sampleAssignedRoute,
+      stops: [
+        {
+          ...sampleAssignedRoute.stops[0],
+          normalizedPaymentStatus: 'cash',
+        },
+      ],
+    };
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: { status: 'ASSIGNED_ROUTE', route: routePayload },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.getAssignedRoute({ routeContext: 'route-id' }),
+      /Invalid assigned route response/u,
+    );
+  });
+
+  it('formats all normalized payment states into visible driver copy', () => {
+    assert.deepEqual(formatAssignedRoutePaymentStatus('PAID_CONFIRMED'), {
+      detail: 'Payment is confirmed in WooCommerce. Do not request payment at delivery.',
+      label: 'Paid confirmed',
+      tone: 'green',
+    });
+    assert.equal(formatAssignedRoutePaymentStatus('UNKNOWN_REVIEW').label, 'Review payment');
+    assert.equal(formatAssignedRoutePaymentStatus('NOT_DELIVERABLE_OR_EXCEPTION').label, 'Payment exception');
+    assert.equal(formatAssignedRoutePaymentStatus(null).label, 'Payment unavailable');
   });
 });
