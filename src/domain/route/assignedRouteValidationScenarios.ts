@@ -176,6 +176,7 @@ function validationStop(input: {
   deliveryStopId: string;
   latitude: number;
   longitude: number;
+  normalizedPaymentStatus?: AssignedRoute['stops'][number]['normalizedPaymentStatus'];
   orderName: string;
   postalCode: string;
   recipientName: string;
@@ -196,6 +197,7 @@ function validationStop(input: {
       longitude: input.longitude,
     },
     deliveryStopId: input.deliveryStopId,
+    normalizedPaymentStatus: input.normalizedPaymentStatus ?? 'PAID_CONFIRMED',
     orderName: input.orderName,
     phone: '+14165550100',
     recipientName: input.recipientName,

@@ -23,6 +23,7 @@ import {
   createMockAssignedRouteService,
   formatAssignedRouteDistance,
   formatAssignedRouteDuration,
+  formatAssignedRoutePaymentStatus,
   loadAssignedRouteAfterConsent,
   sampleAssignedRoute,
   type AssignedRoute,
@@ -1903,8 +1904,9 @@ function RouteDetailScreen({
           const completed = completedStopIds.includes(stop.deliveryStopId);
           const isProcessing = routeStatus === 'active' && currentNavigationStepIndex === index + 1 && !completed;
           const state = completed ? 'completed' : isProcessing ? 'current' : 'upcoming';
-          const meta = completed ? 'Done' : isProcessing ? 'Processing' : 'Pending';
+          const progressMeta = completed ? 'Done' : isProcessing ? 'Processing' : 'Pending';
           const metaTone = completed ? 'green' : isProcessing ? 'blue' : 'neutral';
+          const payment = formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
           return (
             <TimelineRow
               key={stop.deliveryStopId}
@@ -1912,7 +1914,7 @@ function RouteDetailScreen({
               title={`Stop ${stop.sequence}`}
               subtitle={formatStopAddress(stop)}
               state={state}
-              meta={meta}
+              meta={`${progressMeta} · ${payment.label}`}
               metaTone={metaTone}
               onPress={() => onOpenStop(stop)}
             />
@@ -1967,6 +1969,7 @@ function LiveTrackingScreen({
   const stepLabel = isCompanyStep ? 'Company Pickup' : stop === null ? 'Next Stop' : `Stop ${stop.sequence}`;
   const address = isCompanyStep ? company?.pickupGuidance ?? 'Pickup guidance' : stop === null ? 'Stop address' : formatStopAddress(stop);
   const trackingLabel = continuousLocationResult?.kind === 'streaming' || routeStatus === 'active' ? 'GPS tracking active' : 'GPS tracking pending';
+  const payment = stop === null ? null : formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
 
   return (
     <View style={styles.screenStack}>
@@ -1983,6 +1986,12 @@ function LiveTrackingScreen({
             <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
             <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : 'Pending'} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
           </View>
+          {payment !== null ? (
+            <View style={styles.paymentInlineRow}>
+              <Text style={styles.labelText}>Payment</Text>
+              <StatusChip label={payment.label} tone={payment.tone} />
+            </View>
+          ) : null}
           <View style={styles.buttonRow}>
             <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
             <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
@@ -2017,6 +2026,7 @@ function StopDetailsScreen({
   stop: AssignedRouteStop;
 }) {
   const tip = getNavigationTip({ company, isCompanyStep: false, stop });
+  const payment = formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
   return (
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Stop Details" />
@@ -2026,6 +2036,15 @@ function StopDetailsScreen({
           <Text numberOfLines={2} style={styles.cardTitle}>{formatStopAddress(stop)}</Text>
           <Text numberOfLines={1} style={styles.helperText}>{stop.recipientName ?? 'Recipient / Location'}</Text>
         </View>
+      </View>
+
+      <Text style={styles.sectionTitle}>Payment</Text>
+      <View style={styles.paymentPanel}>
+        <View style={styles.paymentHeaderRow}>
+          <Text style={styles.paymentTitle}>{payment.label}</Text>
+          <StatusChip label={payment.label} tone={payment.tone} />
+        </View>
+        <Text style={styles.bodyText}>{payment.detail}</Text>
       </View>
 
       <Text style={styles.sectionTitle}>Delivery Instructions</Text>
@@ -3604,6 +3623,33 @@ const styles = StyleSheet.create({
   },
   infoPanelTitle: {
     color: '#087443',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  paymentHeaderRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  paymentInlineRow: {
+    alignItems: 'center',
+    borderColor: '#eef2f6',
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 12,
+  },
+  paymentPanel: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e5e7eb',
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 8,
+    padding: 14,
+  },
+  paymentTitle: {
+    color: '#111827',
     fontSize: 15,
     fontWeight: '800',
   },
