@@ -1899,6 +1899,14 @@ function RouteDetailScreen({
         </View>
       ) : null}
 
+      <View style={styles.routePreviewCard}>
+        <Text style={styles.sectionTitle}>Route Preview</Text>
+        <View style={styles.routePreviewCanvas}>
+          <MapOverview route={route} currentStepIndex={currentNavigationStepIndex} />
+        </View>
+        <Text style={styles.helperText}>Static preview from dispatch. Use Open in Map for turn-by-turn navigation.</Text>
+      </View>
+
       <View style={styles.timelineCard}>
         <Text style={styles.sectionTitle}>Route Sequence</Text>
         <TimelineRow marker="D" title="Depot" subtitle="Pickup point" state={depotState} meta={depotMeta} metaTone={depotMetaTone} />
@@ -3695,6 +3703,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: 8,
     padding: 16,
+  },
+  routePreviewCard: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e5e7eb',
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 10,
+    padding: 16,
+  },
+  routePreviewCanvas: {
+    borderRadius: 16,
+    overflow: 'hidden',
   },
   timelineRow: {
     alignItems: 'center',
