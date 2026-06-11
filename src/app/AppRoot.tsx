@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   AppState,
   BackHandler,
+  Image,
   InputAccessoryView,
   Keyboard,
   KeyboardAvoidingView,
@@ -25,6 +26,7 @@ import {
   formatAssignedRouteDuration,
   formatAssignedRoutePaymentStatus,
   loadAssignedRouteAfterConsent,
+  resolveRouteMapPreviewState,
   sampleAssignedRoute,
   type AssignedRoute,
   type AssignedRouteService,
@@ -2606,6 +2608,35 @@ function TimelineRow({
 }
 
 function MapOverview({ currentStepIndex, route }: { currentStepIndex: number; route: AssignedRoute }) {
+  const [previewLoadStatus, setPreviewLoadStatus] = useState<'idle' | 'failed'>('idle');
+  const previewState = resolveRouteMapPreviewState({
+    loadStatus: previewLoadStatus,
+    now: new Date(),
+    preview: route.routeMapPreview,
+  });
+
+  useEffect(() => {
+    setPreviewLoadStatus('idle');
+  }, [route.routeMapPreview?.imageUrl]);
+
+  if (previewState.kind === 'available') {
+    return (
+      <View style={styles.mapCanvas}>
+        <Image
+          accessibilityIgnoresInvertColors
+          accessibilityLabel={previewState.accessibilityLabel}
+          onError={() => setPreviewLoadStatus('failed')}
+          resizeMode="cover"
+          source={{ uri: previewState.imageUrl }}
+          style={styles.mapPreviewImage}
+        />
+        <View style={styles.mapPreviewBadge}>
+          <Text style={styles.mapPreviewBadgeText}>Route preview</Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.mapCanvas}>
       <View style={[styles.mapBlock, styles.mapBlockOne]} />
@@ -2621,6 +2652,10 @@ function MapOverview({ currentStepIndex, route }: { currentStepIndex: number; ro
         </View>
       ))}
       <View style={styles.mapLastMarker}><Text style={styles.mapLastMarkerText}>{currentStepIndex >= route.stops.length ? 'Last' : 'Next'}</Text></View>
+      <View style={styles.mapPreviewFallback}>
+        <Text style={styles.mapPreviewFallbackTitle}>Route preview</Text>
+        <Text style={styles.mapPreviewFallbackText}>{previewState.message}</Text>
+      </View>
     </View>
   );
 }
@@ -3740,7 +3775,52 @@ const styles = StyleSheet.create({
   mapCanvas: {
     backgroundColor: '#f3f8fb',
     height: 430,
+    overflow: 'hidden',
     position: 'relative',
+  },
+  mapPreviewImage: {
+    height: '100%',
+    width: '100%',
+  },
+  mapPreviewBadge: {
+    backgroundColor: 'rgba(12, 18, 32, 0.76)',
+    borderRadius: 999,
+    left: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    position: 'absolute',
+    top: 16,
+  },
+  mapPreviewBadgeText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
+  },
+  mapPreviewFallback: {
+    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    borderColor: '#d0d5dd',
+    borderRadius: 18,
+    borderWidth: 1,
+    bottom: 24,
+    left: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    position: 'absolute',
+    right: 18,
+  },
+  mapPreviewFallbackTitle: {
+    color: '#101828',
+    fontSize: 15,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+  mapPreviewFallbackText: {
+    color: '#475467',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
   },
   mapBlock: {
     backgroundColor: '#dff3e8',

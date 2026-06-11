@@ -9,6 +9,7 @@ import {
   hasAssignedRouteGeometry,
   formatAssignedRoutePaymentStatus,
   loadAssignedRouteAfterConsent,
+  resolveRouteMapPreviewState,
   sampleAssignedRoute,
 } from './assignedRoute';
 import { assignedRouteValidationScenarios } from './assignedRouteValidationScenarios';
@@ -226,6 +227,54 @@ describe('driver assigned route UX flow', () => {
     assert.equal(result.route.routeStopPoints[0]?.name, 'King Street West');
   });
 
+  it('accepts static route map preview metadata from assigned-route responses', async () => {
+    const preview = {
+      altText: 'Static route preview for 2 stops.',
+      contentType: 'image/png',
+      expiresAt: '2026-05-12T07:00:00.000Z',
+      generatedAt: '2026-05-12T06:50:00.000Z',
+      height: 430,
+      imageUrl: 'https://delivery.example.com/driver/route-map-preview/opaque?expires=1781142000000&signature=preview',
+      kind: 'static_route_map',
+      routeSequenceChecksum: 'sample-route-checksum',
+      width: 720,
+    };
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              routeMapPreview: preview,
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: sampleAssignedRoute.id });
+
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.deepEqual(result.route.routeMapPreview, preview);
+    assert.deepEqual(
+      resolveRouteMapPreviewState({
+        loadStatus: 'idle',
+        now: new Date('2026-05-12T06:55:00.000Z'),
+        preview: result.route.routeMapPreview,
+      }),
+      {
+        accessibilityLabel: preview.altText,
+        imageUrl: preview.imageUrl,
+        kind: 'available',
+      },
+    );
+  });
+
   it('defines tab-level synthetic validation scenarios with safe coordinates and OSRM evidence expectations', () => {
     assert.deepEqual(
       assignedRouteValidationScenarios.map((scenario) => scenario.tab),
@@ -250,6 +299,7 @@ describe('driver assigned route UX flow', () => {
       routeGeometry: _routeGeometry,
       routeMetrics: _routeMetrics,
       routeStopPoints: _routeStopPoints,
+      routeMapPreview: _routeMapPreview,
       ...legacyRoute
     } = sampleAssignedRoute;
     const client = createAssignedRouteApiClient({
@@ -268,10 +318,77 @@ describe('driver assigned route UX flow', () => {
 
     assert.equal(result.status, 'ASSIGNED_ROUTE');
     assert.equal(result.route.routeGeometry, null);
+    assert.equal(result.route.routeMapPreview, null);
     assert.equal(result.route.routeMetrics, null);
     assert.deepEqual(result.route.routeStopPoints, []);
     assert.equal(formatAssignedRouteDistance(result.route.routeMetrics), 'Not available');
     assert.equal(formatAssignedRouteDuration(result.route.routeMetrics), 'Not available');
+  });
+
+  it('maps route map preview helper states for missing, expired, and failed images', () => {
+    assert.deepEqual(
+      resolveRouteMapPreviewState({
+        loadStatus: 'idle',
+        now: new Date('2026-05-12T06:55:00.000Z'),
+        preview: null,
+      }),
+      {
+        kind: 'missing',
+        message: 'Route preview unavailable. You can still open navigation for each stop.',
+      },
+    );
+
+    assert.deepEqual(
+      resolveRouteMapPreviewState({
+        loadStatus: 'idle',
+        now: new Date('2026-05-12T07:01:00.000Z'),
+        preview: sampleAssignedRoute.routeMapPreview,
+      }),
+      {
+        kind: 'expired',
+        message: 'Map preview couldn’t load. Route details are still available.',
+      },
+    );
+
+    assert.deepEqual(
+      resolveRouteMapPreviewState({
+        loadStatus: 'failed',
+        now: new Date('2026-05-12T06:55:00.000Z'),
+        preview: sampleAssignedRoute.routeMapPreview,
+      }),
+      {
+        kind: 'failed',
+        message: 'Map preview couldn’t load. Route details are still available.',
+      },
+    );
+  });
+
+  it('rejects malformed route map preview metadata from the assigned-route contract', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              routeMapPreview: {
+                ...sampleAssignedRoute.routeMapPreview,
+                contentType: 'image/svg+xml',
+              },
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.getAssignedRoute({ routeContext: 'route-id' }),
+      /Invalid assigned route response/u,
+    );
   });
 
   it('preserves canonical normalizedPaymentStatus even when legacy payment fields conflict', async () => {

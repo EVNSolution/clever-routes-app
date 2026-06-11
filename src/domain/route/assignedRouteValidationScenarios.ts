@@ -155,6 +155,7 @@ function buildValidationRoute(input: {
     id: input.id,
     name: input.name,
     routeGeometry: geometryCoordinates.length >= 2 ? { coordinates: geometryCoordinates, type: 'LineString' } : null,
+    routeMapPreview: null,
     routeMetrics: input.metrics,
     routeStopPoints: input.stops.map((stop) => ({
       deliveryStopId: stop.deliveryStopId,

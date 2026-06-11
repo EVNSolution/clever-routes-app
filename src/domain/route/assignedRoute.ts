@@ -32,6 +32,31 @@ export type AssignedRouteMetrics = {
   durationSeconds: number | null;
 };
 
+export type AssignedRouteMapPreview = {
+  altText: string;
+  contentType: 'image/png';
+  expiresAt: string;
+  generatedAt: string;
+  height: number;
+  imageUrl: string;
+  kind: 'static_route_map';
+  routeSequenceChecksum: string;
+  width: number;
+};
+
+export type RouteMapPreviewLoadStatus = 'idle' | 'failed';
+
+export type RouteMapPreviewState =
+  | {
+      accessibilityLabel: string;
+      imageUrl: string;
+      kind: 'available';
+    }
+  | {
+      kind: 'expired' | 'failed' | 'missing';
+      message: string;
+    };
+
 export const NORMALIZED_PAYMENT_STATUSES = [
   'PAID_CONFIRMED',
   'CASH_COLLECT_REQUIRED',
@@ -75,6 +100,7 @@ export type AssignedRoute = {
   id: string;
   name: string;
   routeGeometry: AssignedRouteGeometry | null;
+  routeMapPreview: AssignedRouteMapPreview | null;
   routeMetrics: AssignedRouteMetrics | null;
   routeStopPoints: AssignedRouteStopPoint[];
   shopDomain: string;
@@ -152,6 +178,17 @@ export const sampleAssignedRoute: AssignedRoute = {
       [-79.3909, 43.6509],
     ],
     type: 'LineString',
+  },
+  routeMapPreview: {
+    altText: 'Static route preview for 2 stops.',
+    contentType: 'image/png',
+    expiresAt: '2026-05-12T07:00:00.000Z',
+    generatedAt: '2026-05-12T06:50:00.000Z',
+    height: 430,
+    imageUrl: 'https://delivery.example.com/driver/route-map-preview/opaque?expires=1781142000000&signature=preview',
+    kind: 'static_route_map',
+    routeSequenceChecksum: 'sample-route-checksum',
+    width: 720,
   },
   routeMetrics: {
     distanceMeters: 3250,
@@ -344,6 +381,40 @@ export function hasAssignedRouteGeometry(route: AssignedRoute): boolean {
   return route.routeGeometry !== null && route.routeGeometry.coordinates.length >= 2;
 }
 
+export function resolveRouteMapPreviewState(input: {
+  loadStatus: RouteMapPreviewLoadStatus;
+  now: Date;
+  preview: AssignedRouteMapPreview | null;
+}): RouteMapPreviewState {
+  if (input.preview === null) {
+    return {
+      kind: 'missing',
+      message: 'Route preview unavailable. You can still open navigation for each stop.',
+    };
+  }
+
+  if (input.loadStatus === 'failed') {
+    return {
+      kind: 'failed',
+      message: 'Map preview couldn’t load. Route details are still available.',
+    };
+  }
+
+  const expiresAt = Date.parse(input.preview.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= input.now.getTime()) {
+    return {
+      kind: 'expired',
+      message: 'Map preview couldn’t load. Route details are still available.',
+    };
+  }
+
+  return {
+    accessibilityLabel: input.preview.altText,
+    imageUrl: input.preview.imageUrl,
+    kind: 'available',
+  };
+}
+
 function readAssignedRouteEnvelope(payload: unknown): AssignedRouteLookupResult {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
     throw new Error('Invalid assigned route response');
@@ -386,6 +457,7 @@ function isAssignedRoute(value: unknown): value is AssignedRoute {
     typeof route.id === 'string' &&
     typeof route.name === 'string' &&
     (route.routeGeometry === undefined || route.routeGeometry === null || isAssignedRouteGeometry(route.routeGeometry)) &&
+    (route.routeMapPreview === undefined || route.routeMapPreview === null || isAssignedRouteMapPreview(route.routeMapPreview)) &&
     (route.routeMetrics === undefined || route.routeMetrics === null || isAssignedRouteMetrics(route.routeMetrics)) &&
     (route.routeStopPoints === undefined || (Array.isArray(route.routeStopPoints) && route.routeStopPoints.every(isAssignedRouteStopPoint))) &&
     typeof route.shopDomain === 'string' &&
@@ -399,9 +471,35 @@ function normalizeAssignedRoute(route: AssignedRoute): AssignedRoute {
   return {
     ...route,
     routeGeometry: route.routeGeometry ?? null,
+    routeMapPreview: route.routeMapPreview ?? null,
     routeMetrics: route.routeMetrics ?? null,
     routeStopPoints: route.routeStopPoints ?? [],
   };
+}
+
+function isAssignedRouteMapPreview(value: unknown): value is AssignedRouteMapPreview {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const preview = value as Record<string, unknown>;
+  return (
+    preview.kind === 'static_route_map' &&
+    typeof preview.imageUrl === 'string' &&
+    preview.imageUrl.trim().length > 0 &&
+    typeof preview.width === 'number' &&
+    Number.isFinite(preview.width) &&
+    preview.width > 0 &&
+    typeof preview.height === 'number' &&
+    Number.isFinite(preview.height) &&
+    preview.height > 0 &&
+    preview.contentType === 'image/png' &&
+    typeof preview.generatedAt === 'string' &&
+    typeof preview.expiresAt === 'string' &&
+    typeof preview.routeSequenceChecksum === 'string' &&
+    typeof preview.altText === 'string' &&
+    preview.altText.trim().length > 0
+  );
 }
 
 function isAssignedRouteGeometry(value: unknown): value is AssignedRouteGeometry {
