@@ -2042,7 +2042,11 @@ function LiveTrackingScreen({
       <ScreenHeader onBack={onBack} title="Live Tracking" />
       <View style={styles.trackingDetailsPage}>
         <Pressable accessibilityRole="button" onPress={onOpenMapPreview} style={styles.mapPreviewInlineButton}>
-          <Text style={styles.mapPreviewInlineButtonText}>Map Preview</Text>
+          <View style={styles.mapPreviewInlineButtonTextBlock}>
+            <Text style={styles.mapPreviewInlineButtonText}>Map Preview</Text>
+            <Text style={styles.mapPreviewInlineButtonSubtext}>View route on map</Text>
+          </View>
+          <Text style={styles.mapPreviewInlineButtonChevron}>›</Text>
         </Pressable>
         <View style={styles.trackingCardHeader}>
           <View style={styles.routeHeaderText}>
@@ -4079,18 +4083,35 @@ const styles = StyleSheet.create({
   },
   mapPreviewInlineButton: {
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    backgroundColor: '#eef6ff',
-    borderColor: '#bfdbfe',
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    backgroundColor: '#0b57d0',
+    borderRadius: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 58,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    ...shadow,
+  },
+  mapPreviewInlineButtonTextBlock: {
+    flex: 1,
+    gap: 2,
   },
   mapPreviewInlineButtonText: {
-    color: '#0b57d0',
-    fontSize: 14,
+    color: '#ffffff',
+    fontSize: 16,
     fontWeight: '900',
+  },
+  mapPreviewInlineButtonSubtext: {
+    color: '#dbeafe',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  mapPreviewInlineButtonChevron: {
+    color: '#ffffff',
+    fontSize: 26,
+    fontWeight: '700',
+    lineHeight: 28,
+    marginLeft: 12,
   },
   sheetHandle: {
     alignSelf: 'center',
