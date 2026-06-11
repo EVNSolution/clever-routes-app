@@ -4092,7 +4092,6 @@ const styles = StyleSheet.create({
     minHeight: 58,
     paddingHorizontal: 18,
     paddingVertical: 12,
-    ...shadow,
   },
   mapPreviewInlineButtonTextBlock: {
     flex: 1,
