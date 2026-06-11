@@ -2046,7 +2046,9 @@ function LiveTrackingScreen({
             <Text style={styles.mapPreviewInlineButtonText}>Map Preview</Text>
             <Text style={styles.mapPreviewInlineButtonSubtext}>View route on map</Text>
           </View>
-          <Text style={styles.mapPreviewInlineButtonChevron}>›</Text>
+          <View style={styles.mapPreviewInlineButtonAction}>
+            <Text style={styles.mapPreviewInlineButtonActionText}>Open</Text>
+          </View>
         </Pressable>
         <View style={styles.trackingCardHeader}>
           <View style={styles.routeHeaderText}>
@@ -4106,12 +4108,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  mapPreviewInlineButtonChevron: {
-    color: '#ffffff',
-    fontSize: 26,
-    fontWeight: '700',
-    lineHeight: 28,
+  mapPreviewInlineButtonAction: {
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    borderRadius: 999,
     marginLeft: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  mapPreviewInlineButtonActionText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '900',
   },
   sheetHandle: {
     alignSelf: 'center',
