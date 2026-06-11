@@ -4,15 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   AppState,
   BackHandler,
   Image,
   InputAccessoryView,
   InteractionManager,
   Keyboard,
+  Easing,
   KeyboardAvoidingView,
   Linking,
   Platform,
+  PanResponder,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -2031,24 +2034,80 @@ function LiveTrackingScreen({
   const trackingLabel = continuousLocationResult?.kind === 'streaming' || routeStatus === 'active' ? 'GPS tracking active' : 'GPS tracking pending';
   const payment = stop === null ? null : formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
 
+  const [focusedTrackingCard, setFocusedTrackingCard] = useState<'details' | 'map'>('details');
+  const trackingCardProgress = useRef(new Animated.Value(0)).current;
+  const focusTrackingCard = useCallback((nextCard: 'details' | 'map') => {
+    setFocusedTrackingCard(nextCard);
+    Animated.timing(trackingCardProgress, {
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      toValue: nextCard === 'map' ? 1 : 0,
+      useNativeDriver: true,
+    }).start();
+  }, [trackingCardProgress]);
+  const trackingDeckPanResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_event, gestureState) => (
+      gestureState.numberActiveTouches === 1 &&
+      Math.abs(gestureState.dy) > 18 &&
+      Math.abs(gestureState.dy) > Math.abs(gestureState.dx)
+    ),
+    onPanResponderRelease: (_event, gestureState) => {
+      if (gestureState.dy < -36) {
+        focusTrackingCard('map');
+        return;
+      }
+      if (gestureState.dy > 36) {
+        focusTrackingCard('details');
+      }
+    },
+  }), [focusTrackingCard]);
+  const isMapCardFocused = focusedTrackingCard === 'map';
+  const mapCardAnimatedStyle = {
+    opacity: trackingCardProgress.interpolate({ inputRange: [0, 1], outputRange: [0.86, 1] }),
+    transform: [
+      { translateY: trackingCardProgress.interpolate({ inputRange: [0, 1], outputRange: [28, 0] }) },
+      { scale: trackingCardProgress.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1] }) },
+    ],
+    zIndex: isMapCardFocused ? 3 : 1,
+  };
+  const detailsCardAnimatedStyle = {
+    opacity: trackingCardProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.88] }),
+    transform: [
+      { translateY: trackingCardProgress.interpolate({ inputRange: [0, 1], outputRange: [0, 28] }) },
+      { scale: trackingCardProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.95] }) },
+    ],
+    zIndex: isMapCardFocused ? 1 : 3,
+  };
+
   return (
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Live Tracking" />
-      <View style={styles.mapPanel}>
-        <View style={styles.liveMapCard}>
-          <View style={styles.gpsPill}><View style={styles.statusDot} /><Text style={styles.gpsPillText}>{trackingLabel}</Text></View>
+      <View style={styles.trackingDeck} {...trackingDeckPanResponder.panHandlers}>
+        <Animated.View style={[styles.trackingStackCard, styles.trackingMapCard, mapCardAnimatedStyle]}>
           <MapOverview
             allowMapDragPan={false}
-            mapSize="live"
+            mapSize="deck"
             route={route}
             currentStepIndex={currentStepIndex}
             mapStyleUrl={mapStyleUrl}
           />
-        </View>
-        <View style={styles.trackingSheet}>
+          <View style={styles.gpsPill}><View style={styles.statusDot} /><Text style={styles.gpsPillText}>{trackingLabel}</Text></View>
+          <Pressable accessibilityRole="button" onPress={() => focusTrackingCard('details')} style={styles.trackingCardSwitch}>
+            <Text style={styles.trackingCardSwitchText}>Swipe down for details</Text>
+          </Pressable>
+        </Animated.View>
+
+        <Animated.View style={[styles.trackingStackCard, styles.trackingDetailsCard, detailsCardAnimatedStyle]}>
           <View style={styles.sheetHandle} />
-          <Text style={styles.labelText}>Next Stop</Text>
-          <Text numberOfLines={2} style={styles.sheetTitle}>{address}</Text>
+          <View style={styles.trackingCardHeader}>
+            <View>
+              <Text style={styles.labelText}>Delivery details</Text>
+              <Text style={styles.sheetTitle}>{address}</Text>
+            </View>
+            <Pressable accessibilityRole="button" onPress={() => focusTrackingCard('map')} style={styles.trackingCardMiniAction}>
+              <Text style={styles.trackingCardMiniActionText}>Map</Text>
+            </Pressable>
+          </View>
           <View style={styles.trackingMetrics}>
             <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
             <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
@@ -2065,8 +2124,8 @@ function LiveTrackingScreen({
             <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
             <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
           </View>
-          <Text style={styles.helperText}>{stepLabel}</Text>
-        </View>
+          <Text style={styles.helperText}>{stepLabel} · Swipe up for route map</Text>
+        </Animated.View>
       </View>
     </View>
   );
@@ -2682,7 +2741,7 @@ function MapOverview({
 }: {
   allowMapDragPan?: boolean;
   currentStepIndex: number;
-  mapSize?: 'live' | 'preview';
+  mapSize?: 'deck' | 'live' | 'preview';
   mapStyleUrl: string;
   route: AssignedRoute;
 }) {
@@ -2708,7 +2767,7 @@ function MapOverview({
 
   if (interactiveMapStatus === 'idle' && route.routeGeometry !== null && route.routeGeometry.coordinates.length >= 2) {
     return (
-      <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas]}>
+      <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas, mapSize === 'deck' && styles.deckMapCanvas]}>
         <NativeRouteMapPreview
           allowDragPan={allowMapDragPan}
           mapStyleUrl={mapStyleUrl}
@@ -2721,7 +2780,7 @@ function MapOverview({
 
   if (previewState.kind === 'available') {
     return (
-      <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas]}>
+      <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas, mapSize === 'deck' && styles.deckMapCanvas]}>
         <Image
           accessibilityIgnoresInvertColors
           accessibilityLabel={previewState.accessibilityLabel}
@@ -2738,7 +2797,7 @@ function MapOverview({
   }
 
   return (
-    <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas]}>
+    <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas, mapSize === 'deck' && styles.deckMapCanvas]}>
       <View style={[styles.mapBlock, styles.mapBlockOne]} />
       <View style={[styles.mapBlock, styles.mapBlockTwo]} />
       <View style={[styles.mapRoad, styles.mapRoadOne]} />
@@ -3856,19 +3915,29 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
-  mapPanel: {
-    backgroundColor: '#eef5f8',
-    borderRadius: 28,
-    overflow: 'visible',
-    padding: 8,
+  trackingDeck: {
+    height: 680,
+    position: 'relative',
   },
-  liveMapCard: {
+  trackingStackCard: {
     backgroundColor: '#ffffff',
     borderColor: '#dbeafe',
-    borderRadius: 24,
+    borderRadius: 28,
     borderWidth: 1,
+    bottom: 0,
+    left: 0,
     overflow: 'hidden',
+    position: 'absolute',
+    right: 0,
+    top: 0,
     ...shadow,
+  },
+  trackingMapCard: {
+    backgroundColor: '#eaf2f7',
+  },
+  trackingDetailsCard: {
+    gap: 14,
+    padding: 20,
   },
   gpsPill: {
     alignItems: 'center',
@@ -3904,6 +3973,9 @@ const styles = StyleSheet.create({
   },
   liveMapCanvas: {
     height: 540,
+  },
+  deckMapCanvas: {
+    height: '100%',
   },
   mapPreviewImage: {
     height: '100%',
@@ -4054,17 +4126,40 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
   },
-  trackingSheet: {
-    backgroundColor: '#ffffff',
-    borderColor: '#dbeafe',
-    borderRadius: 24,
+  trackingCardHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 14,
+    justifyContent: 'space-between',
+  },
+  trackingCardMiniAction: {
+    backgroundColor: '#eef6ff',
+    borderColor: '#bfdbfe',
+    borderRadius: 999,
     borderWidth: 1,
-    gap: 13,
-    marginHorizontal: 10,
-    marginTop: -26,
-    padding: 18,
-    zIndex: 3,
-    ...shadow,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  trackingCardMiniActionText: {
+    color: '#0b57d0',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  trackingCardSwitch: {
+    alignSelf: 'center',
+    backgroundColor: 'rgba(12, 18, 32, 0.76)',
+    borderRadius: 999,
+    bottom: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    position: 'absolute',
+  },
+  trackingCardSwitchText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
   },
   sheetHandle: {
     alignSelf: 'center',
