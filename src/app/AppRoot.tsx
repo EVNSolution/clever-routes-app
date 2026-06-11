@@ -3,6 +3,7 @@ import * as Speech from 'expo-speech';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   AppState,
   BackHandler,
   Image,
@@ -126,6 +127,7 @@ import {
 } from './verifiedDriverNoAssignedRoutes';
 import { NativeRouteMapPreview } from './NativeRouteMapPreview';
 import { readDriverMapStyleUrl } from './routeMapGeoJson';
+import { requestRouteStartPickupConfirmation } from './routeStartConfirmation';
 
 type AppScreen =
   | 'arrivalCheck'
@@ -730,7 +732,24 @@ export default function App() {
     return () => subscription.remove();
   }, [handleRefreshRoutes, screen, selectedMainTab, verifiedDriverPhoneE164]);
 
-  async function handleStartRoute(routeId?: string) {
+  function handleStartRoute(routeId?: string) {
+    const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
+    if (routeSession === null) {
+      setMessage('No route is available to start.');
+      return;
+    }
+
+    requestRouteStartPickupConfirmation({
+      alertApi: {
+        alert: (title, message, buttons, options) => Alert.alert(title, message, buttons, options),
+      },
+      onConfirm: () => {
+        void startRouteAfterPickupConfirmed(routeSession.route.id);
+      },
+    });
+  }
+
+  async function startRouteAfterPickupConfirmed(routeId?: string) {
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
     if (routeSession === null) {
       setMessage('No route is available to start.');
