@@ -2634,7 +2634,7 @@ function MapOverview({ currentStepIndex, route }: { currentStepIndex: number; ro
           accessibilityIgnoresInvertColors
           accessibilityLabel={previewState.accessibilityLabel}
           onError={() => setPreviewLoadStatus('failed')}
-          resizeMode="cover"
+          resizeMode="contain"
           source={{ uri: previewState.imageUrl }}
           style={styles.mapPreviewImage}
         />
