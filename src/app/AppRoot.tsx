@@ -2046,22 +2046,43 @@ function LiveTrackingScreen({
       useNativeDriver: true,
     }).start();
   }, [trackingCardProgress]);
+  const shouldStartTrackingDeckPan = useCallback((gestureState: { dx: number; dy: number; numberActiveTouches: number }) => (
+    gestureState.numberActiveTouches === 1 &&
+    Math.abs(gestureState.dy) > 10 &&
+    Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 1.15
+  ), []);
   const trackingDeckPanResponder = useMemo(() => PanResponder.create({
-    onMoveShouldSetPanResponder: (_event, gestureState) => (
-      gestureState.numberActiveTouches === 1 &&
-      Math.abs(gestureState.dy) > 18 &&
-      Math.abs(gestureState.dy) > Math.abs(gestureState.dx)
-    ),
+    onMoveShouldSetPanResponder: (_event, gestureState) => shouldStartTrackingDeckPan(gestureState),
+    onMoveShouldSetPanResponderCapture: (_event, gestureState) => shouldStartTrackingDeckPan(gestureState),
+    onPanResponderGrant: () => {
+      trackingCardProgress.stopAnimation();
+    },
+    onPanResponderMove: (_event, gestureState) => {
+      const dragDistance = 260;
+      const dragProgress = Math.max(0, Math.min(1, Math.abs(gestureState.dy) / dragDistance));
+      if (focusedTrackingCard === 'map') {
+        trackingCardProgress.setValue(gestureState.dy > 0 ? 1 - dragProgress : 1);
+        return;
+      }
+      trackingCardProgress.setValue(gestureState.dy < 0 ? dragProgress : 0);
+    },
     onPanResponderRelease: (_event, gestureState) => {
-      if (gestureState.dy < -36) {
+      if (gestureState.vy < -0.35 || gestureState.dy < -80) {
         focusTrackingCard('map');
         return;
       }
-      if (gestureState.dy > 36) {
+      if (gestureState.vy > 0.35 || gestureState.dy > 80) {
         focusTrackingCard('details');
+        return;
       }
+      focusTrackingCard(focusedTrackingCard);
     },
-  }), [focusTrackingCard]);
+    onPanResponderTerminate: () => {
+      focusTrackingCard(focusedTrackingCard);
+    },
+    onPanResponderTerminationRequest: () => false,
+    onShouldBlockNativeResponder: () => true,
+  }), [focusTrackingCard, focusedTrackingCard, shouldStartTrackingDeckPan, trackingCardProgress]);
   const isMapCardFocused = focusedTrackingCard === 'map';
   const detailsCardAnimatedStyle = {
     transform: [
