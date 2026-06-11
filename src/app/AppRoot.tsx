@@ -1352,7 +1352,6 @@ export default function App() {
           {screen === 'liveTracking' && selectedRoute !== null ? (
             <LiveTrackingScreen
               company={currentCompany}
-              continuousLocationResult={continuousLocationResult}
               isCompanyStep={isCompanyStep}
               onArrived={handleArrivedAtStep}
               onBack={() => setScreen('routeDetail')}
@@ -2013,7 +2012,6 @@ function RouteDetailScreen({
 
 function LiveTrackingScreen({
   company,
-  continuousLocationResult,
   isCompanyStep,
   onArrived,
   onBack,
@@ -2025,7 +2023,6 @@ function LiveTrackingScreen({
   stop,
 }: {
   company: RouteAccessCompanyGuidance | null;
-  continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
   isCompanyStep: boolean;
   onArrived(): void;
   onBack(): void;
@@ -2038,14 +2035,15 @@ function LiveTrackingScreen({
 }) {
   const stepLabel = isCompanyStep ? 'Company Pickup' : stop === null ? 'Next Stop' : `Stop ${stop.sequence}`;
   const address = isCompanyStep ? company?.pickupGuidance ?? 'Pickup guidance' : stop === null ? 'Stop address' : formatStopAddress(stop);
-  const trackingLabel = continuousLocationResult?.kind === 'streaming' || routeStatus === 'active' ? 'GPS tracking active' : 'GPS tracking pending';
   const payment = stop === null ? null : formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
 
   return (
     <View style={styles.screenStack}>
-      <ScreenHeader onBack={onBack} onRightPress={onOpenMapPreview} rightLabel="Map Preview" title="Live Tracking" />
+      <ScreenHeader onBack={onBack} title="Live Tracking" />
       <View style={styles.trackingDetailsPage}>
-        <View style={styles.gpsInlinePill}><View style={styles.statusDot} /><Text style={styles.gpsPillText}>{trackingLabel}</Text></View>
+        <Pressable accessibilityRole="button" onPress={onOpenMapPreview} style={styles.mapPreviewInlineButton}>
+          <Text style={styles.mapPreviewInlineButtonText}>Map Preview</Text>
+        </Pressable>
         <View style={styles.trackingCardHeader}>
           <View style={styles.routeHeaderText}>
             <Text style={styles.labelText}>Delivery details</Text>
@@ -3906,31 +3904,11 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...shadow,
   },
-  gpsPill: {
-    alignItems: 'center',
-    alignSelf: 'center',
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    flexDirection: 'row',
-    gap: 9,
-    marginTop: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    position: 'absolute',
-    top: 0,
-    zIndex: 4,
-    ...shadow,
-  },
   statusDot: {
     backgroundColor: '#12b76a',
     borderRadius: 6,
     height: 12,
     width: 12,
-  },
-  gpsPillText: {
-    color: '#087443',
-    fontSize: 14,
-    fontWeight: '800',
   },
   mapCanvas: {
     backgroundColor: '#f3f8fb',
@@ -4099,17 +4077,20 @@ const styles = StyleSheet.create({
     gap: 14,
     justifyContent: 'space-between',
   },
-  gpsInlinePill: {
+  mapPreviewInlineButton: {
     alignItems: 'center',
     alignSelf: 'flex-start',
-    backgroundColor: '#ffffff',
-    borderColor: '#dcfce7',
+    backgroundColor: '#eef6ff',
+    borderColor: '#bfdbfe',
     borderRadius: 999,
     borderWidth: 1,
-    flexDirection: 'row',
-    gap: 9,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  mapPreviewInlineButtonText: {
+    color: '#0b57d0',
+    fontSize: 14,
+    fontWeight: '900',
   },
   sheetHandle: {
     alignSelf: 'center',
