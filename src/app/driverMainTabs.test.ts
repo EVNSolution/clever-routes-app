@@ -23,9 +23,10 @@ describe('driver main tab IA', () => {
     );
   });
 
-  it('excludes auth screens from the bottom tab shell', () => {
+  it('excludes auth and dedicated preview screens from the bottom tab shell', () => {
     assert.equal(shouldShowDriverBottomTabs('loginPhone'), false);
     assert.equal(shouldShowDriverBottomTabs('loginDetail'), false);
+    assert.equal(shouldShowDriverBottomTabs('liveMapPreview'), false);
     assert.equal(shouldShowDriverBottomTabs('mainTabs'), true);
     assert.equal(shouldShowDriverBottomTabs('routeDetail'), true);
     assert.equal(shouldShowDriverBottomTabs('liveTracking'), true);

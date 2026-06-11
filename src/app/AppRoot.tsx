@@ -4,18 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Animated,
   AppState,
   BackHandler,
   Image,
   InputAccessoryView,
   InteractionManager,
   Keyboard,
-  Easing,
   KeyboardAvoidingView,
   Linking,
   Platform,
-  PanResponder,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -136,6 +133,7 @@ type AppScreen =
   | 'arrivalCheck'
   | 'completedDeliveries'
   | 'liveTracking'
+  | 'liveMapPreview'
   | 'loginPhone'
   | 'loginDetail'
   | 'mainTabs'
@@ -145,7 +143,6 @@ type AppScreen =
 type RouteTabId = ReturnType<typeof getMvpRouteTabs>[number]['id'];
 type RouteStatus = RouteSessionStatus;
 type StopDetailsBackTarget = 'liveTracking' | 'routeDetail';
-const LIVE_TRACKING_DETAILS_CARD_MAP_REVEAL_TRANSLATE_Y = 590;
 
 type StopProofDraft = {
   additionalNotes: string;
@@ -1202,6 +1199,9 @@ export default function App() {
         case 'liveTracking':
           setScreen('routeDetail');
           return true;
+        case 'liveMapPreview':
+          setScreen('liveTracking');
+          return true;
         case 'stopDetails':
           setSelectedStopDetailsId(null);
           setScreen(stopDetailsBackTarget);
@@ -1353,16 +1353,24 @@ export default function App() {
             <LiveTrackingScreen
               company={currentCompany}
               continuousLocationResult={continuousLocationResult}
-              currentStepIndex={navigationStepIndex}
               isCompanyStep={isCompanyStep}
-              mapStyleUrl={driverMapStyleUrl}
               onArrived={handleArrivedAtStep}
               onBack={() => setScreen('routeDetail')}
+              onOpenMapPreview={() => setScreen('liveMapPreview')}
               onOpenNavigation={() => handleOpenRouteNavigation(selectedRoute)}
               onViewStop={handleViewCurrentStop}
               route={selectedRoute}
               routeStatus={routeStatus}
               stop={currentStop}
+            />
+          ) : null}
+
+          {screen === 'liveMapPreview' && selectedRoute !== null ? (
+            <LiveMapPreviewScreen
+              currentStepIndex={navigationStepIndex}
+              mapStyleUrl={driverMapStyleUrl}
+              onBack={() => setScreen('liveTracking')}
+              route={selectedRoute}
             />
           ) : null}
 
@@ -2006,11 +2014,10 @@ function RouteDetailScreen({
 function LiveTrackingScreen({
   company,
   continuousLocationResult,
-  currentStepIndex,
   isCompanyStep,
-  mapStyleUrl,
   onArrived,
   onBack,
+  onOpenMapPreview,
   onOpenNavigation,
   onViewStop,
   route,
@@ -2019,11 +2026,10 @@ function LiveTrackingScreen({
 }: {
   company: RouteAccessCompanyGuidance | null;
   continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
-  currentStepIndex: number;
   isCompanyStep: boolean;
-  mapStyleUrl: string;
   onArrived(): void;
   onBack(): void;
+  onOpenMapPreview(): void;
   onOpenNavigation(): void;
   onViewStop(): void;
   route: AssignedRoute;
@@ -2035,116 +2041,60 @@ function LiveTrackingScreen({
   const trackingLabel = continuousLocationResult?.kind === 'streaming' || routeStatus === 'active' ? 'GPS tracking active' : 'GPS tracking pending';
   const payment = stop === null ? null : formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
 
-  const [focusedTrackingCard, setFocusedTrackingCard] = useState<'details' | 'map'>('details');
-  const trackingCardProgress = useRef(new Animated.Value(0)).current;
-  const focusTrackingCard = useCallback((nextCard: 'details' | 'map') => {
-    setFocusedTrackingCard(nextCard);
-    Animated.timing(trackingCardProgress, {
-      duration: 260,
-      easing: Easing.out(Easing.cubic),
-      toValue: nextCard === 'map' ? 1 : 0,
-      useNativeDriver: true,
-    }).start();
-  }, [trackingCardProgress]);
-  const shouldStartTrackingDeckPan = useCallback((gestureState: { dx: number; dy: number; numberActiveTouches: number }) => (
-    gestureState.numberActiveTouches === 1 &&
-    Math.abs(gestureState.dy) > 10 &&
-    Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 1.15
-  ), []);
-  const trackingDeckPanResponder = useMemo(() => PanResponder.create({
-    onMoveShouldSetPanResponder: (_event, gestureState) => shouldStartTrackingDeckPan(gestureState),
-    onMoveShouldSetPanResponderCapture: (_event, gestureState) => shouldStartTrackingDeckPan(gestureState),
-    onPanResponderGrant: () => {
-      trackingCardProgress.stopAnimation();
-    },
-    onPanResponderMove: (_event, gestureState) => {
-      const dragDistance = 260;
-      const dragProgress = Math.max(0, Math.min(1, Math.abs(gestureState.dy) / dragDistance));
-      if (focusedTrackingCard === 'map') {
-        trackingCardProgress.setValue(gestureState.dy > 0 ? 1 - dragProgress : 1);
-        return;
-      }
-      trackingCardProgress.setValue(gestureState.dy < 0 ? dragProgress : 0);
-    },
-    onPanResponderRelease: (_event, gestureState) => {
-      if (gestureState.vy < -0.35 || gestureState.dy < -80) {
-        focusTrackingCard('map');
-        return;
-      }
-      if (gestureState.vy > 0.35 || gestureState.dy > 80) {
-        focusTrackingCard('details');
-        return;
-      }
-      focusTrackingCard(focusedTrackingCard);
-    },
-    onPanResponderTerminate: () => {
-      focusTrackingCard(focusedTrackingCard);
-    },
-    onPanResponderTerminationRequest: () => false,
-    onShouldBlockNativeResponder: () => true,
-  }), [focusTrackingCard, focusedTrackingCard, shouldStartTrackingDeckPan, trackingCardProgress]);
-  const isMapCardFocused = focusedTrackingCard === 'map';
-  const detailsCardAnimatedStyle = {
-    transform: [
-      {
-        translateY: trackingCardProgress.interpolate({
-          inputRange: [0, 1],
-          outputRange: [0, LIVE_TRACKING_DETAILS_CARD_MAP_REVEAL_TRANSLATE_Y],
-        }),
-      },
-    ],
-  };
-
   return (
     <View style={styles.screenStack}>
-      <ScreenHeader onBack={onBack} title="Live Tracking" />
-      <View style={styles.trackingDeck} {...trackingDeckPanResponder.panHandlers}>
-        <View collapsable={false} style={[styles.trackingStackCard, styles.trackingMapCard]}>
-          <MapOverview
-            allowMapDragPan={false}
-            mapSize="deck"
-            route={route}
-            currentStepIndex={currentStepIndex}
-            mapStyleUrl={mapStyleUrl}
-          />
-          <View style={styles.gpsPill}><View style={styles.statusDot} /><Text style={styles.gpsPillText}>{trackingLabel}</Text></View>
-          <Pressable accessibilityRole="button" onPress={() => focusTrackingCard('details')} style={styles.trackingCardSwitch}>
-            <Text style={styles.trackingCardSwitchText}>Swipe down for details</Text>
-          </Pressable>
+      <ScreenHeader onBack={onBack} onRightPress={onOpenMapPreview} rightLabel="Map Preview" title="Live Tracking" />
+      <View style={styles.trackingDetailsPage}>
+        <View style={styles.gpsInlinePill}><View style={styles.statusDot} /><Text style={styles.gpsPillText}>{trackingLabel}</Text></View>
+        <View style={styles.trackingCardHeader}>
+          <View style={styles.routeHeaderText}>
+            <Text style={styles.labelText}>Delivery details</Text>
+            <Text style={styles.sheetTitle}>{address}</Text>
+          </View>
         </View>
+        <View style={styles.trackingMetrics}>
+          <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
+          <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
+          <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : 'Pending'} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
+        </View>
+        {payment !== null ? (
+          <View style={styles.paymentInlineRow}>
+            <Text style={styles.labelText}>Payment</Text>
+            <StatusChip label={payment.label} tone={payment.tone} />
+          </View>
+        ) : null}
+        <View style={styles.trackingButtonColumn}>
+          <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
+          <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
+          <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
+        </View>
+        <Text style={styles.helperText}>{stepLabel}</Text>
+      </View>
+    </View>
+  );
+}
 
-        <Animated.View
-          pointerEvents={isMapCardFocused ? 'box-none' : 'auto'}
-          style={[styles.trackingStackCard, styles.trackingDetailsCard, detailsCardAnimatedStyle]}
-        >
-          <View style={styles.sheetHandle} />
-          <View style={styles.trackingCardHeader}>
-            <View>
-              <Text style={styles.labelText}>Delivery details</Text>
-              <Text style={styles.sheetTitle}>{address}</Text>
-            </View>
-            <Pressable accessibilityRole="button" onPress={() => focusTrackingCard('map')} style={styles.trackingCardMiniAction}>
-              <Text style={styles.trackingCardMiniActionText}>Map</Text>
-            </Pressable>
-          </View>
-          <View style={styles.trackingMetrics}>
-            <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
-            <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
-            <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : 'Pending'} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
-          </View>
-          {payment !== null ? (
-            <View style={styles.paymentInlineRow}>
-              <Text style={styles.labelText}>Payment</Text>
-              <StatusChip label={payment.label} tone={payment.tone} />
-            </View>
-          ) : null}
-          <View style={styles.trackingButtonColumn}>
-            <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
-            <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
-            <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
-          </View>
-          <Text style={styles.helperText}>{stepLabel} · Swipe up for route map</Text>
-        </Animated.View>
+function LiveMapPreviewScreen({
+  currentStepIndex,
+  mapStyleUrl,
+  onBack,
+  route,
+}: {
+  currentStepIndex: number;
+  mapStyleUrl: string;
+  onBack(): void;
+  route: AssignedRoute;
+}) {
+  return (
+    <View style={styles.screenStack}>
+      <ScreenHeader onBack={onBack} title="Map Preview" />
+      <View style={styles.liveMapPreviewCard}>
+        <MapOverview
+          mapSize="full"
+          route={route}
+          currentStepIndex={currentStepIndex}
+          mapStyleUrl={mapStyleUrl}
+        />
       </View>
     </View>
   );
@@ -2387,12 +2337,19 @@ function CompletedDeliveriesScreen({
   );
 }
 
-function ScreenHeader({ onBack, rightLabel, title }: { onBack?(): void; rightLabel?: string; title: string }) {
+function ScreenHeader({ onBack, onRightPress, rightLabel, title }: { onBack?(): void; onRightPress?(): void; rightLabel?: string; title: string }) {
+  const rightContent = rightLabel ?? 'Menu';
   return (
     <View style={styles.screenHeader}>
       {onBack === undefined ? <Text style={styles.headerSideText} /> : <Pressable accessibilityRole="button" onPress={onBack}><Text style={styles.headerActionText}>Back</Text></Pressable>}
       <Text numberOfLines={1} style={styles.headerTitle}>{title}</Text>
-      <Text style={rightLabel === undefined ? styles.headerSideText : styles.headerActionText}>{rightLabel ?? 'Menu'}</Text>
+      {onRightPress === undefined ? (
+        <Text style={rightLabel === undefined ? styles.headerSideText : styles.headerActionText}>{rightContent}</Text>
+      ) : (
+        <Pressable accessibilityRole="button" onPress={onRightPress}>
+          <Text style={styles.headerActionText}>{rightContent}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -2760,7 +2717,7 @@ function MapOverview({
 }: {
   allowMapDragPan?: boolean;
   currentStepIndex: number;
-  mapSize?: 'deck' | 'live' | 'preview';
+  mapSize?: 'full' | 'live' | 'preview';
   mapStyleUrl: string;
   route: AssignedRoute;
 }) {
@@ -2786,7 +2743,7 @@ function MapOverview({
 
   if (interactiveMapStatus === 'idle' && route.routeGeometry !== null && route.routeGeometry.coordinates.length >= 2) {
     return (
-      <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas, mapSize === 'deck' && styles.deckMapCanvas]}>
+      <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas, mapSize === 'full' && styles.fullMapCanvas]}>
         <NativeRouteMapPreview
           allowDragPan={allowMapDragPan}
           mapStyleUrl={mapStyleUrl}
@@ -2799,7 +2756,7 @@ function MapOverview({
 
   if (previewState.kind === 'available') {
     return (
-      <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas, mapSize === 'deck' && styles.deckMapCanvas]}>
+      <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas, mapSize === 'full' && styles.fullMapCanvas]}>
         <Image
           accessibilityIgnoresInvertColors
           accessibilityLabel={previewState.accessibilityLabel}
@@ -2816,7 +2773,7 @@ function MapOverview({
   }
 
   return (
-    <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas, mapSize === 'deck' && styles.deckMapCanvas]}>
+    <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas, mapSize === 'full' && styles.fullMapCanvas]}>
       <View style={[styles.mapBlock, styles.mapBlockOne]} />
       <View style={[styles.mapBlock, styles.mapBlockTwo]} />
       <View style={[styles.mapRoad, styles.mapRoadOne]} />
@@ -3934,33 +3891,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
-  trackingDeck: {
-    height: 680,
-    position: 'relative',
-  },
-  trackingStackCard: {
+  trackingDetailsPage: {
     backgroundColor: '#ffffff',
     borderColor: '#dbeafe',
-    borderRadius: 28,
+    borderRadius: 24,
     borderWidth: 1,
-    bottom: 0,
-    left: 0,
-    overflow: 'hidden',
-    position: 'absolute',
-    right: 0,
-    top: 0,
+    gap: 16,
+    padding: 20,
     ...shadow,
   },
-  trackingMapCard: {
-    backgroundColor: '#eaf2f7',
-    elevation: 2,
-    zIndex: 1,
-  },
-  trackingDetailsCard: {
-    elevation: 18,
-    gap: 14,
-    padding: 20,
-    zIndex: 20,
+  liveMapPreviewCard: {
+    borderRadius: 24,
+    minHeight: 680,
+    overflow: 'hidden',
+    ...shadow,
   },
   gpsPill: {
     alignItems: 'center',
@@ -3997,8 +3941,8 @@ const styles = StyleSheet.create({
   liveMapCanvas: {
     height: 540,
   },
-  deckMapCanvas: {
-    height: '100%',
+  fullMapCanvas: {
+    height: 680,
   },
   mapPreviewImage: {
     height: '100%',
@@ -4155,34 +4099,17 @@ const styles = StyleSheet.create({
     gap: 14,
     justifyContent: 'space-between',
   },
-  trackingCardMiniAction: {
-    backgroundColor: '#eef6ff',
-    borderColor: '#bfdbfe',
+  gpsInlinePill: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: '#ffffff',
+    borderColor: '#dcfce7',
     borderRadius: 999,
     borderWidth: 1,
+    flexDirection: 'row',
+    gap: 9,
     paddingHorizontal: 14,
     paddingVertical: 9,
-  },
-  trackingCardMiniActionText: {
-    color: '#0b57d0',
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  trackingCardSwitch: {
-    alignSelf: 'center',
-    backgroundColor: 'rgba(12, 18, 32, 0.76)',
-    borderRadius: 999,
-    bottom: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    position: 'absolute',
-  },
-  trackingCardSwitchText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '900',
-    letterSpacing: 0.2,
-    textTransform: 'uppercase',
   },
   sheetHandle: {
     alignSelf: 'center',
