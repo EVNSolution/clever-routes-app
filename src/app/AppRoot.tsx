@@ -3204,6 +3204,7 @@ const styles = StyleSheet.create({
     gap: 22,
     padding: 22,
     paddingBottom: 28,
+    paddingTop: 34,
   },
   screenStack: {
     gap: 22,
@@ -3901,9 +3902,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 1,
     gap: 16,
-    paddingBottom: 20,
-    paddingHorizontal: 20,
-    paddingTop: 30,
+    padding: 20,
     ...shadow,
   },
   liveMapPreviewCard: {
