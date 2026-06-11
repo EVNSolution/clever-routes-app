@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { scheduleTransientToastDismiss, TRANSIENT_TOAST_ANDROID_TOP_OFFSET, TRANSIENT_TOAST_BORDER_ALPHA, TRANSIENT_TOAST_DISMISS_DELAY_MS, TRANSIENT_TOAST_SURFACE_ALPHA } from './transientToastBehavior';
+import {
+  scheduleTransientToastDismiss,
+  TRANSIENT_TOAST_ANDROID_ELEVATION,
+  TRANSIENT_TOAST_ANDROID_TOP_OFFSET,
+  TRANSIENT_TOAST_BORDER_ALPHA,
+  TRANSIENT_TOAST_DISMISS_DELAY_MS,
+  TRANSIENT_TOAST_SURFACE_ALPHA,
+  TRANSIENT_TOAST_Z_INDEX,
+} from './transientToastBehavior';
 
 describe('transient toast dismissal', () => {
   it('dismisses a visible toast after two seconds', () => {
@@ -71,6 +79,8 @@ describe('transient toast dismissal', () => {
 
   it('uses an Android-safe lower offset and a softer transparent surface', () => {
     assert.equal(TRANSIENT_TOAST_ANDROID_TOP_OFFSET, 54);
+    assert.equal(TRANSIENT_TOAST_ANDROID_ELEVATION, 24);
+    assert.equal(TRANSIENT_TOAST_Z_INDEX, 10_000);
     assert.equal(TRANSIENT_TOAST_SURFACE_ALPHA, 0.58);
     assert.equal(TRANSIENT_TOAST_BORDER_ALPHA, 0.42);
   });

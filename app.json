@@ -52,7 +52,8 @@
         {
           "cameraPermission": "Allow Clever Driver to scan proof barcodes for active deliveries."
         }
-      ]
+      ],
+      "@maplibre/maplibre-react-native"
     ],
     "icon": "./assets/icon.png"
   }

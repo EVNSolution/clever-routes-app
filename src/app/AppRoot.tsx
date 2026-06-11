@@ -124,6 +124,8 @@ import {
   shouldRequestInviteCodeForRouteNotFound,
   type VerifiedDriverNoAssignedRouteReason,
 } from './verifiedDriverNoAssignedRoutes';
+import { NativeRouteMapPreview } from './NativeRouteMapPreview';
+import { readDriverMapStyleUrl } from './routeMapGeoJson';
 
 type AppScreen =
   | 'arrivalCheck'
@@ -257,6 +259,7 @@ export default function App() {
     }),
     [],
   );
+  const driverMapStyleUrl = useMemo(() => readDriverMapStyleUrl(process.env.EXPO_PUBLIC_DRIVER_MAP_STYLE_URL), []);
 
   const runtimeServices = useMemo(() => createDriverRuntimeServices({ config: runtimeConfig }), [runtimeConfig]);
   const routeAccessService = useMemo(() => (
@@ -1310,6 +1313,7 @@ export default function App() {
               deliveryFinishResult={deliveryFinishResult}
               isFinishingRoute={isFinishingRoute}
               isStartingRoute={isStartingRoute}
+              mapStyleUrl={driverMapStyleUrl}
               onBack={openHomeRoot}
               onContinueTracking={handleContinueTracking}
               onFinishRoute={handleManualFinishRoute}
@@ -1328,6 +1332,7 @@ export default function App() {
               continuousLocationResult={continuousLocationResult}
               currentStepIndex={navigationStepIndex}
               isCompanyStep={isCompanyStep}
+              mapStyleUrl={driverMapStyleUrl}
               onArrived={handleArrivedAtStep}
               onBack={() => setScreen('routeDetail')}
               onOpenNavigation={() => handleOpenRouteNavigation(selectedRoute)}
@@ -1863,6 +1868,7 @@ function RouteDetailScreen({
   deliveryFinishResult,
   isFinishingRoute,
   isStartingRoute,
+  mapStyleUrl,
   onBack,
   onContinueTracking,
   onFinishRoute,
@@ -1881,6 +1887,7 @@ function RouteDetailScreen({
   deliveryFinishResult: DeliveryFinishResult | null;
   isFinishingRoute: boolean;
   isStartingRoute: boolean;
+  mapStyleUrl: string;
   onBack(): void;
   onContinueTracking(): void;
   onFinishRoute(): void;
@@ -1924,9 +1931,9 @@ function RouteDetailScreen({
       <View style={styles.routePreviewCard}>
         <Text style={styles.sectionTitle}>Route Preview</Text>
         <View style={styles.routePreviewCanvas}>
-          <MapOverview route={route} currentStepIndex={currentNavigationStepIndex} />
+          <MapOverview route={route} currentStepIndex={currentNavigationStepIndex} mapStyleUrl={mapStyleUrl} />
         </View>
-        <Text style={styles.helperText}>Static preview from dispatch. Use Open in Map for turn-by-turn navigation.</Text>
+        <Text style={styles.helperText}>Interactive route map from dispatch when available. Pinch to zoom or drag to inspect the route; use Open in Map for turn-by-turn navigation.</Text>
       </View>
 
       <View style={styles.timelineCard}>
@@ -1978,6 +1985,7 @@ function LiveTrackingScreen({
   continuousLocationResult,
   currentStepIndex,
   isCompanyStep,
+  mapStyleUrl,
   onArrived,
   onBack,
   onOpenNavigation,
@@ -1990,6 +1998,7 @@ function LiveTrackingScreen({
   continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
   currentStepIndex: number;
   isCompanyStep: boolean;
+  mapStyleUrl: string;
   onArrived(): void;
   onBack(): void;
   onOpenNavigation(): void;
@@ -2008,7 +2017,7 @@ function LiveTrackingScreen({
       <ScreenHeader onBack={onBack} title="Live Tracking" />
       <View style={styles.mapPanel}>
         <View style={styles.gpsPill}><View style={styles.statusDot} /><Text style={styles.gpsPillText}>{trackingLabel}</Text></View>
-        <MapOverview route={route} currentStepIndex={currentStepIndex} />
+        <MapOverview route={route} currentStepIndex={currentStepIndex} mapStyleUrl={mapStyleUrl} />
         <View style={styles.trackingSheet}>
           <View style={styles.sheetHandle} />
           <Text style={styles.labelText}>Next Stop</Text>
@@ -2024,7 +2033,7 @@ function LiveTrackingScreen({
               <StatusChip label={payment.label} tone={payment.tone} />
             </View>
           ) : null}
-          <View style={styles.buttonRow}>
+          <View style={styles.trackingButtonColumn}>
             <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
             <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
             <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
@@ -2637,8 +2646,9 @@ function TimelineRow({
   return <View style={[styles.timelineRow, state === 'current' && styles.timelineRowCurrent]}>{content}</View>;
 }
 
-function MapOverview({ currentStepIndex, route }: { currentStepIndex: number; route: AssignedRoute }) {
+function MapOverview({ currentStepIndex, mapStyleUrl, route }: { currentStepIndex: number; mapStyleUrl: string; route: AssignedRoute }) {
   const [previewLoadStatus, setPreviewLoadStatus] = useState<'idle' | 'failed'>('idle');
+  const [interactiveMapStatus, setInteractiveMapStatus] = useState<'idle' | 'failed'>('idle');
   const previewState = resolveRouteMapPreviewState({
     loadStatus: previewLoadStatus,
     now: new Date(),
@@ -2648,6 +2658,26 @@ function MapOverview({ currentStepIndex, route }: { currentStepIndex: number; ro
   useEffect(() => {
     setPreviewLoadStatus('idle');
   }, [route.routeMapPreview?.imageUrl]);
+
+  useEffect(() => {
+    setInteractiveMapStatus('idle');
+  }, [mapStyleUrl, route.id, route.routeGeometry?.coordinates.length]);
+
+  const handleInteractiveMapUnavailable = useCallback(() => {
+    setInteractiveMapStatus('failed');
+  }, []);
+
+  if (interactiveMapStatus === 'idle' && route.routeGeometry !== null && route.routeGeometry.coordinates.length >= 2) {
+    return (
+      <View style={styles.mapCanvas}>
+        <NativeRouteMapPreview
+          mapStyleUrl={mapStyleUrl}
+          onUnavailable={handleInteractiveMapUnavailable}
+          route={route}
+        />
+      </View>
+    );
+  }
 
   if (previewState.kind === 'available') {
     return (
@@ -3085,6 +3115,7 @@ const styles = StyleSheet.create({
   safeArea: {
     backgroundColor: '#f7f9fc',
     flex: 1,
+    position: 'relative',
   },
   keyboardArea: {
     flex: 1,
@@ -3434,6 +3465,9 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   buttonColumn: {
+    gap: 12,
+  },
+  trackingButtonColumn: {
     gap: 12,
   },
   tabs: {
