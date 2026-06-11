@@ -127,6 +127,11 @@ import {
 } from './verifiedDriverNoAssignedRoutes';
 import { NativeRouteMapPreview } from './NativeRouteMapPreview';
 import { readDriverMapStyleUrl } from './routeMapGeoJson';
+import {
+  getStopArrivalNotificationCandidate,
+  type StopArrivalNotificationData,
+} from '../domain/notifications/stopArrivalNotifications';
+import { createExpoStopArrivalNotificationService } from '../platform/expo/notifications/expoStopArrivalNotificationService';
 import { requestRouteStartPickupConfirmation } from './routeStartConfirmation';
 
 type AppScreen =
@@ -197,6 +202,7 @@ export default function App() {
   const [stopDetailsBackTarget, setStopDetailsBackTarget] = useState<StopDetailsBackTarget>('liveTracking');
   const [routeSessions, setRouteSessions] = useState<RouteSession[]>([]);
   const [routeReviewNote, setRouteReviewNote] = useState('');
+  const [pendingStopArrivalNotification, setPendingStopArrivalNotification] = useState<StopArrivalNotificationData | null>(null);
 
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
   const [, setConsentSubmission] = useState<DriverConsentSubmissionResult | null>(null);
@@ -228,6 +234,8 @@ export default function App() {
   });
   const [focusedLoginDetailInputId, setFocusedLoginDetailInputId] = useState<LoginDetailInputId | null>(null);
   const selectedRouteIdRef = useRef<string | null>(null);
+  const notifiedStopArrivalIdsRef = useRef<Set<string>>(new Set());
+  const hasCheckedInitialStopArrivalNotificationRef = useRef(false);
   const hasAttemptedDriverRestoreRef = useRef(false);
 
   useEffect(() => {
@@ -237,6 +245,7 @@ export default function App() {
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
   const continuousLocationStreamService = useMemo(() => createExpoContinuousLocationStreamService(), []);
+  const stopArrivalNotificationService = useMemo(() => createExpoStopArrivalNotificationService(), []);
   const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
   const offlineSubmissionQueueStorage = useMemo(() => createExpoOfflineSubmissionQueueStorage(), []);
   const mockDriverEventService = useMemo(() => createMockDriverEventService(), []);
@@ -320,6 +329,52 @@ export default function App() {
     setFocusedLoginDetailInputId(null);
   }, []);
 
+
+  const handleStopArrivalNotificationPress = useCallback((data: StopArrivalNotificationData) => {
+    const routeSession = routeSessions.find((session) => session.route.id === data.routePlanId) ?? null;
+    if (routeSession === null) {
+      setPendingStopArrivalNotification(data);
+      setMessage('Arrival alert opened. Loading assigned route before opening proof.');
+      return;
+    }
+
+    const stopIndex = routeSession.route.stops.findIndex((candidate) => candidate.deliveryStopId === data.deliveryStopId);
+    setPendingStopArrivalNotification(null);
+
+    if (stopIndex < 0) {
+      setMessage('Arrival alert opened, but the stop is no longer available on this route.');
+      return;
+    }
+
+    if (completedStopIds.includes(data.deliveryStopId)) {
+      setSelectedRouteId(routeSession.route.id);
+      setSubmission(toCompanyGuidanceSubmission(routeSession));
+      setNavigationStepIndex(stopIndex + 1);
+      setSelectedMainTab('home');
+      setScreen('routeDetail');
+      setMessage('This stop is already completed.');
+      return;
+    }
+
+    if (deliveryStartResult?.kind !== 'delivery_active') {
+      setSelectedRouteId(routeSession.route.id);
+      setSubmission(toCompanyGuidanceSubmission(routeSession));
+      setNavigationStepIndex(stopIndex + 1);
+      setSelectedMainTab('home');
+      setScreen('routeDetail');
+      setMessage('Arrival alert opened, but the route is not active yet. Start pickup first.');
+      return;
+    }
+
+    setSelectedRouteId(routeSession.route.id);
+    setSubmission(toCompanyGuidanceSubmission(routeSession));
+    setSelectedStopDetailsId(null);
+    setNavigationStepIndex(stopIndex + 1);
+    setSelectedMainTab('home');
+    setScreen('arrivalCheck');
+    setMessage('Arrival alert opened. Add proof photo and delivery notes.');
+  }, [completedStopIds, deliveryStartResult?.kind, routeSessions]);
+
   useEffect(() => {
     let isMounted = true;
     createPersistentOfflineSubmissionQueue({ storage: offlineSubmissionQueueStorage })
@@ -354,6 +409,38 @@ export default function App() {
   }, [screen]);
 
   useEffect(() => {
+    const removeStopArrivalListener = stopArrivalNotificationService.addStopArrivalResponseListener(handleStopArrivalNotificationPress);
+    if (!hasCheckedInitialStopArrivalNotificationRef.current) {
+      hasCheckedInitialStopArrivalNotificationRef.current = true;
+      void stopArrivalNotificationService.getLastStopArrivalResponse().then((data) => {
+        if (data !== null) {
+          handleStopArrivalNotificationPress(data);
+        }
+      });
+    }
+
+    return removeStopArrivalListener;
+  }, [stopArrivalNotificationService, handleStopArrivalNotificationPress]);
+
+  useEffect(() => {
+    if (pendingStopArrivalNotification !== null && routeSessions.length > 0) {
+      handleStopArrivalNotificationPress(pendingStopArrivalNotification);
+    }
+  }, [handleStopArrivalNotificationPress, pendingStopArrivalNotification, routeSessions.length]);
+
+  useEffect(() => {
+    if (deliveryStartResult?.kind !== 'delivery_active' || deliveryFinishResult?.flowState === 'delivery_finished') {
+      return;
+    }
+
+    void stopArrivalNotificationService.registerForStopArrivalNotifications().then((result) => {
+      if (result.kind !== 'registered') {
+        setMessage(result.message);
+      }
+    });
+  }, [deliveryFinishResult?.flowState, deliveryStartResult?.kind, stopArrivalNotificationService]);
+
+  useEffect(() => {
     if (deliveryStartResult?.kind !== 'delivery_active' || deliveryFinishResult?.flowState === 'delivery_finished') {
       registerContinuousLocationTaskHandler(null);
       return;
@@ -377,10 +464,38 @@ export default function App() {
         routePlanId,
       });
       setOfflineQueueCount(queue.listPending().length);
+
+      const lastLocation = locations[locations.length - 1] ?? null;
+      const candidate = getStopArrivalNotificationCandidate({
+        completedStopIds,
+        currentStepIndex: navigationStepIndex,
+        isActiveRoute: routeStatus === 'active',
+        lastLocation,
+        notifiedStopIds: [...notifiedStopArrivalIdsRef.current],
+        route: selectedRoute,
+      });
+
+      if (candidate !== null) {
+        notifiedStopArrivalIdsRef.current.add(candidate.stop.deliveryStopId);
+        await stopArrivalNotificationService.scheduleStopArrivalNotification(candidate);
+      }
     });
 
     return () => registerContinuousLocationTaskHandler(null);
-  }, [deliveryFinishResult, deliveryStartResult, mockDriverEventService, offlineSubmissionQueue, runtimeConfig, selectedRoute?.id, submission]);
+  }, [
+    completedStopIds,
+    deliveryFinishResult,
+    deliveryStartResult,
+    mockDriverEventService,
+    navigationStepIndex,
+    offlineSubmissionQueue,
+    routeStatus,
+    runtimeConfig,
+    selectedRoute,
+    selectedRoute?.id,
+    stopArrivalNotificationService,
+    submission,
+  ]);
 
   function handlePhoneInputChange(value: string) {
     setNationalPhoneInput(formatDriverNationalPhoneInput({
@@ -1111,6 +1226,9 @@ export default function App() {
     setDeliveryFinishResult(null);
     setRouteStartedEventResult(null);
     setContinuousLocationResult(null);
+    notifiedStopArrivalIdsRef.current.clear();
+    hasCheckedInitialStopArrivalNotificationRef.current = false;
+    setPendingStopArrivalNotification(null);
     setStopProofResults({});
     setProofDrafts({});
     setProofPhotoResults({});

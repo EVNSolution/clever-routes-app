@@ -29,6 +29,7 @@
       "frameworkBootstrapIssue": "EVNSolution/clever-change-control#146"
     },
     "plugins": [
+      "expo-notifications",
       "expo-secure-store",
       [
         "expo-location",
