@@ -132,7 +132,7 @@ export function NativeRouteMapPreview({ allowDragPan = true, mapStyleUrl, onUnav
         <Text style={styles.badgeText}>Interactive map</Text>
       </View>
       <View pointerEvents="none" style={styles.hint}>
-        <Text style={styles.hintText}>{allowDragPan ? 'Pinch to zoom · Drag to pan' : 'Pinch to zoom · Swipe for details'}</Text>
+        <Text style={styles.hintText}>{allowDragPan ? 'Pinch to zoom · Drag to pan' : 'Tap for full map'}</Text>
       </View>
     </View>
   );
