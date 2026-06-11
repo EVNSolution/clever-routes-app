@@ -145,6 +145,7 @@ type AppScreen =
 type RouteTabId = ReturnType<typeof getMvpRouteTabs>[number]['id'];
 type RouteStatus = RouteSessionStatus;
 type StopDetailsBackTarget = 'liveTracking' | 'routeDetail';
+const LIVE_TRACKING_DETAILS_CARD_MAP_REVEAL_TRANSLATE_Y = 590;
 
 type StopProofDraft = {
   additionalNotes: string;
@@ -2062,28 +2063,22 @@ function LiveTrackingScreen({
     },
   }), [focusTrackingCard]);
   const isMapCardFocused = focusedTrackingCard === 'map';
-  const mapCardAnimatedStyle = {
-    opacity: trackingCardProgress.interpolate({ inputRange: [0, 1], outputRange: [0.86, 1] }),
-    transform: [
-      { translateY: trackingCardProgress.interpolate({ inputRange: [0, 1], outputRange: [28, 0] }) },
-      { scale: trackingCardProgress.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1] }) },
-    ],
-    zIndex: isMapCardFocused ? 3 : 1,
-  };
   const detailsCardAnimatedStyle = {
-    opacity: trackingCardProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.88] }),
     transform: [
-      { translateY: trackingCardProgress.interpolate({ inputRange: [0, 1], outputRange: [0, 28] }) },
-      { scale: trackingCardProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.95] }) },
+      {
+        translateY: trackingCardProgress.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, LIVE_TRACKING_DETAILS_CARD_MAP_REVEAL_TRANSLATE_Y],
+        }),
+      },
     ],
-    zIndex: isMapCardFocused ? 1 : 3,
   };
 
   return (
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Live Tracking" />
       <View style={styles.trackingDeck} {...trackingDeckPanResponder.panHandlers}>
-        <Animated.View style={[styles.trackingStackCard, styles.trackingMapCard, mapCardAnimatedStyle]}>
+        <View collapsable={false} style={[styles.trackingStackCard, styles.trackingMapCard]}>
           <MapOverview
             allowMapDragPan={false}
             mapSize="deck"
@@ -2095,9 +2090,12 @@ function LiveTrackingScreen({
           <Pressable accessibilityRole="button" onPress={() => focusTrackingCard('details')} style={styles.trackingCardSwitch}>
             <Text style={styles.trackingCardSwitchText}>Swipe down for details</Text>
           </Pressable>
-        </Animated.View>
+        </View>
 
-        <Animated.View style={[styles.trackingStackCard, styles.trackingDetailsCard, detailsCardAnimatedStyle]}>
+        <Animated.View
+          pointerEvents={isMapCardFocused ? 'box-none' : 'auto'}
+          style={[styles.trackingStackCard, styles.trackingDetailsCard, detailsCardAnimatedStyle]}
+        >
           <View style={styles.sheetHandle} />
           <View style={styles.trackingCardHeader}>
             <View>
@@ -3934,10 +3932,14 @@ const styles = StyleSheet.create({
   },
   trackingMapCard: {
     backgroundColor: '#eaf2f7',
+    elevation: 2,
+    zIndex: 1,
   },
   trackingDetailsCard: {
+    elevation: 18,
     gap: 14,
     padding: 20,
+    zIndex: 20,
   },
   gpsPill: {
     alignItems: 'center',
