@@ -2036,7 +2036,13 @@ function LiveTrackingScreen({
       <ScreenHeader onBack={onBack} title="Live Tracking" />
       <View style={styles.mapPanel}>
         <View style={styles.gpsPill}><View style={styles.statusDot} /><Text style={styles.gpsPillText}>{trackingLabel}</Text></View>
-        <MapOverview route={route} currentStepIndex={currentStepIndex} mapStyleUrl={mapStyleUrl} />
+        <MapOverview
+          allowMapDragPan={false}
+          mapSize="live"
+          route={route}
+          currentStepIndex={currentStepIndex}
+          mapStyleUrl={mapStyleUrl}
+        />
         <View style={styles.trackingSheet}>
           <View style={styles.sheetHandle} />
           <Text style={styles.labelText}>Next Stop</Text>
@@ -2665,7 +2671,19 @@ function TimelineRow({
   return <View style={[styles.timelineRow, state === 'current' && styles.timelineRowCurrent]}>{content}</View>;
 }
 
-function MapOverview({ currentStepIndex, mapStyleUrl, route }: { currentStepIndex: number; mapStyleUrl: string; route: AssignedRoute }) {
+function MapOverview({
+  allowMapDragPan = true,
+  currentStepIndex,
+  mapSize = 'preview',
+  mapStyleUrl,
+  route,
+}: {
+  allowMapDragPan?: boolean;
+  currentStepIndex: number;
+  mapSize?: 'live' | 'preview';
+  mapStyleUrl: string;
+  route: AssignedRoute;
+}) {
   const [previewLoadStatus, setPreviewLoadStatus] = useState<'idle' | 'failed'>('idle');
   const [interactiveMapStatus, setInteractiveMapStatus] = useState<'idle' | 'failed'>('idle');
   const previewState = resolveRouteMapPreviewState({
@@ -2688,8 +2706,9 @@ function MapOverview({ currentStepIndex, mapStyleUrl, route }: { currentStepInde
 
   if (interactiveMapStatus === 'idle' && route.routeGeometry !== null && route.routeGeometry.coordinates.length >= 2) {
     return (
-      <View style={styles.mapCanvas}>
+      <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas]}>
         <NativeRouteMapPreview
+          allowDragPan={allowMapDragPan}
           mapStyleUrl={mapStyleUrl}
           onUnavailable={handleInteractiveMapUnavailable}
           route={route}
@@ -2700,7 +2719,7 @@ function MapOverview({ currentStepIndex, mapStyleUrl, route }: { currentStepInde
 
   if (previewState.kind === 'available') {
     return (
-      <View style={styles.mapCanvas}>
+      <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas]}>
         <Image
           accessibilityIgnoresInvertColors
           accessibilityLabel={previewState.accessibilityLabel}
@@ -2717,7 +2736,7 @@ function MapOverview({ currentStepIndex, mapStyleUrl, route }: { currentStepInde
   }
 
   return (
-    <View style={styles.mapCanvas}>
+    <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas]}>
       <View style={[styles.mapBlock, styles.mapBlockOne]} />
       <View style={[styles.mapBlock, styles.mapBlockTwo]} />
       <View style={[styles.mapRoad, styles.mapRoadOne]} />
@@ -3838,7 +3857,6 @@ const styles = StyleSheet.create({
   mapPanel: {
     backgroundColor: '#eef5f8',
     borderRadius: 22,
-    minHeight: 660,
     overflow: 'hidden',
   },
   gpsPill: {
@@ -3872,6 +3890,9 @@ const styles = StyleSheet.create({
     height: 430,
     overflow: 'hidden',
     position: 'relative',
+  },
+  liveMapCanvas: {
+    height: 560,
   },
   mapPreviewImage: {
     height: '100%',
@@ -4026,12 +4047,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    bottom: 0,
     gap: 13,
-    left: 0,
     padding: 18,
-    position: 'absolute',
-    right: 0,
     ...shadow,
   },
   sheetHandle: {

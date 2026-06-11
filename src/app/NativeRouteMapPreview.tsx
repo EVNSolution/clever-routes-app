@@ -8,12 +8,13 @@ import { buildRouteMapGeoJson } from './routeMapGeoJson';
 const CAMERA_PADDING = { bottom: 58, left: 42, right: 42, top: 58 } as const;
 
 type NativeRouteMapPreviewProps = {
+  allowDragPan?: boolean;
   mapStyleUrl: string;
   onUnavailable(): void;
   route: AssignedRoute;
 };
 
-export function NativeRouteMapPreview({ mapStyleUrl, onUnavailable, route }: NativeRouteMapPreviewProps) {
+export function NativeRouteMapPreview({ allowDragPan = true, mapStyleUrl, onUnavailable, route }: NativeRouteMapPreviewProps) {
   const cameraRef = useRef<CameraRef>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const model = useMemo(() => buildRouteMapGeoJson(route), [route]);
@@ -52,7 +53,7 @@ export function NativeRouteMapPreview({ mapStyleUrl, onUnavailable, route }: Nat
         compassPosition={{ right: 10, top: 10 }}
         doubleTapHoldZoom
         doubleTapZoom
-        dragPan
+        dragPan={allowDragPan}
         logo={false}
         mapStyle={mapStyleUrl}
         onDidFailLoadingMap={onUnavailable}
@@ -120,7 +121,7 @@ export function NativeRouteMapPreview({ mapStyleUrl, onUnavailable, route }: Nat
         <Text style={styles.badgeText}>Interactive map</Text>
       </View>
       <View pointerEvents="none" style={styles.hint}>
-        <Text style={styles.hintText}>Pinch to zoom · Drag to pan</Text>
+        <Text style={styles.hintText}>{allowDragPan ? 'Pinch to zoom · Drag to pan' : 'Pinch to zoom · Swipe for details'}</Text>
       </View>
     </View>
   );
