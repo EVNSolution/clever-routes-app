@@ -7,6 +7,7 @@ import {
   BackHandler,
   Image,
   InputAccessoryView,
+  InteractionManager,
   Keyboard,
   KeyboardAvoidingView,
   Linking,
@@ -162,6 +163,10 @@ const ANDROID_SYSTEM_NAV_CLEARANCE = 56;
 const LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID = 'login-detail-keyboard-navigation';
 const LOGIN_DETAIL_INPUT_ORDER = ['verificationCode', 'driverFirstName', 'driverLastName'] as const;
 
+function runAfterUiInteractions(callback: () => void): void {
+  InteractionManager.runAfterInteractions(callback);
+}
+
 type LoginDetailInputId = typeof LOGIN_DETAIL_INPUT_ORDER[number];
 
 export default function App() {
@@ -217,6 +222,12 @@ export default function App() {
     verificationCode: null,
   });
   const [focusedLoginDetailInputId, setFocusedLoginDetailInputId] = useState<LoginDetailInputId | null>(null);
+  const selectedRouteIdRef = useRef<string | null>(null);
+  const hasAttemptedDriverRestoreRef = useRef(false);
+
+  useEffect(() => {
+    selectedRouteIdRef.current = selectedRouteId;
+  }, [selectedRouteId]);
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
@@ -599,21 +610,29 @@ export default function App() {
       }
 
       setRouteSessions(loadedSessions);
-      const nextSelectedRouteId = loadedSessions.some((session) => session.route.id === selectedRouteId)
-        ? selectedRouteId
+      const currentSelectedRouteId = selectedRouteIdRef.current;
+      const nextSelectedRouteId = currentSelectedRouteId !== null && loadedSessions.some((session) => session.route.id === currentSelectedRouteId)
+        ? currentSelectedRouteId
         : loadedSessions[0].route.id;
       setSelectedRouteId(nextSelectedRouteId);
       const selectedSession = loadedSessions.find((session) => session.route.id === nextSelectedRouteId) ?? loadedSessions[0];
       const firstSubmission = toCompanyGuidanceSubmission(selectedSession);
       setSubmission(firstSubmission);
-      await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(firstSubmission));
+      void driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(firstSubmission)).catch(() => {
+        runAfterUiInteractions(() => {
+          setMessage('Route loaded, but session persistence failed. Sign in again if the app does not restore this route next launch.');
+        });
+      });
       setSelectedTab(getInitialAssignedRouteTab({
         now: new Date(),
         route: selectedSession.route,
       }));
       setSelectedMainTab(shouldNavigateOnSuccess ? 'home' : 'routes');
       setScreen('mainTabs');
-      setMessage(`${loadedSessions.length} ${successMessagePrefix} route${loadedSessions.length === 1 ? '' : 's'} loaded. ${buildAuthSuccessMessage({ runtimeConfig, phase: 'route_access' })}`);
+      const routeLoadSuccessMessage = `${loadedSessions.length} ${successMessagePrefix} route${loadedSessions.length === 1 ? '' : 's'} loaded. ${buildAuthSuccessMessage({ runtimeConfig, phase: 'route_access' })}`;
+      runAfterUiInteractions(() => {
+        setMessage(routeLoadSuccessMessage);
+      });
     } catch (error) {
       const failure = buildAuthFailureMessage({
         runtimeConfig,
@@ -631,7 +650,6 @@ export default function App() {
     openVerifiedNoAssignedRoute,
     routeAccessService,
     runtimeConfig,
-    selectedRouteId,
   ]);
 
   const handleRefreshRoutes = useCallback(async () => {
@@ -667,6 +685,11 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    if (hasAttemptedDriverRestoreRef.current) {
+      return undefined;
+    }
+
+    hasAttemptedDriverRestoreRef.current = true;
     let isMounted = true;
     driverAccessTokenStore.loadActiveDriverAccess().then((result) => {
       if (!isMounted) {
@@ -679,7 +702,6 @@ export default function App() {
         setNationalPhoneInput(result.driverProfile.phoneE164);
         setDriverFirstName(result.driverProfile.displayName);
         setDriverLastName('');
-        setMessage('Restoring your driver session...');
         void handleLoginAndLoadRoutes(
           { phoneE164: result.driverProfile.phoneE164 },
           result.driverProfile.displayName,
