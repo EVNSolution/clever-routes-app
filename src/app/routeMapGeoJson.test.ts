@@ -9,6 +9,8 @@ describe('route map geojson model', () => {
     const model = buildRouteMapGeoJson(sampleAssignedRoute);
 
     assert.notEqual(model, null);
+    assert.deepEqual(model?.depotFeature.geometry.coordinates, sampleAssignedRoute.routeGeometry?.coordinates[0]);
+    assert.equal(model?.depotFeature.properties.label, 'D');
     assert.equal(model?.routeFeature.geometry.type, 'LineString');
     assert.deepEqual(model?.stopCollection.features.map((feature) => feature.properties.label), ['1', '2']);
     assert.equal(model?.bounds.length, 4);

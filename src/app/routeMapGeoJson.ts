@@ -4,12 +4,14 @@ import type { AssignedRoute, AssignedRouteLngLat } from '../domain/route/assigne
 
 export const DEFAULT_DRIVER_MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 
+export type RouteDepotFeature = Feature<Point, { kind: 'depot'; label: 'D'; sequence: 0 }>;
 export type RouteLineFeature = Feature<LineString, { kind: 'route' }>;
 export type RouteStopFeature = Feature<Point, { kind: 'stop'; label: string; sequence: number }>;
 export type RouteStopFeatureCollection = FeatureCollection<Point, RouteStopFeature['properties']>;
 
 export type RouteMapGeoJsonModel = {
   bounds: [west: number, south: number, east: number, north: number];
+  depotFeature: RouteDepotFeature;
   routeFeature: RouteLineFeature;
   stopCollection: RouteStopFeatureCollection;
 };
@@ -60,13 +62,32 @@ export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel
     .filter((feature): feature is RouteStopFeature => feature !== null)
     .sort((left, right) => left.properties.sequence - right.properties.sequence);
 
-  const bounds = calculateBounds([...routeCoordinates, ...stopFeatures.map((feature) => feature.geometry.coordinates as AssignedRouteLngLat)]);
+  const depotCoordinates = routeCoordinates[0];
+  const depotFeature: RouteDepotFeature = {
+    type: 'Feature',
+    geometry: {
+      type: 'Point',
+      coordinates: depotCoordinates,
+    },
+    properties: {
+      kind: 'depot',
+      label: 'D',
+      sequence: 0,
+    },
+  };
+
+  const bounds = calculateBounds([
+    ...routeCoordinates,
+    depotCoordinates,
+    ...stopFeatures.map((feature) => feature.geometry.coordinates as AssignedRouteLngLat),
+  ]);
   if (bounds === null) {
     return null;
   }
 
   return {
     bounds,
+    depotFeature,
     routeFeature: {
       type: 'Feature',
       geometry: {

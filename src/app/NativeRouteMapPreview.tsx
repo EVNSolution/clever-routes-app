@@ -102,6 +102,17 @@ export function NativeRouteMapPreview({ allowDragPan = true, mapStyleUrl, onUnav
             }}
           />
         </GeoJSONSource>
+        <Marker
+          anchor="center"
+          id="route-preview-depot"
+          lngLat={model.depotFeature.geometry.coordinates as [number, number]}
+        >
+          <View style={[styles.markerHalo, styles.depotMarkerHalo]}>
+            <View style={[styles.markerDot, styles.depotMarkerDot]}>
+              <Text style={styles.markerText}>{model.depotFeature.properties.label}</Text>
+            </View>
+          </View>
+        </Marker>
         {model.stopCollection.features.map((feature) => (
           <Marker
             anchor="center"
@@ -149,6 +160,12 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 430,
     overflow: 'hidden',
+  },
+  depotMarkerDot: {
+    backgroundColor: '#12b76a',
+  },
+  depotMarkerHalo: {
+    backgroundColor: '#ecfdf3',
   },
   hint: {
     backgroundColor: 'rgba(255, 255, 255, 0.92)',
