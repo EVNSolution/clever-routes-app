@@ -133,7 +133,7 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
       id: 'stopCompleted',
       title: 'Stop Completed',
       purpose: 'Confirm stop completion and guide the driver to the next stop or route summary.',
-      primaryAction: 'Continue to Next Stop',
+      primaryAction: 'Find Next Stop',
     },
     {
       id: 'completedDeliveries',

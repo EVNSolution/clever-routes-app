@@ -801,7 +801,7 @@ export default function App() {
       setSelectedMainTab('home');
       setNavigationStepIndex(COMPANY_STEP_INDEX);
       setScreen('routeDetail');
-      setMessage('Route started. Begin with the company pickup step, then continue in stop order.');
+      setMessage('Route started. Use Find Next Stop to continue from pickup to the first delivery.');
     } finally {
       setIsStartingRoute(false);
       refreshOfflineQueueCount();
@@ -1943,6 +1943,15 @@ function RouteDetailScreen({
   const currentTaskTitle = isCompanyStep ? 'Company Pickup' : stop === null ? 'Next Stop' : `Stop ${stop.sequence}`;
   const currentTaskAddress = isCompanyStep ? company?.pickupGuidance ?? 'Pickup point' : stop === null ? 'Stop address' : formatStopAddress(stop);
   const currentTaskPayment = stop === null ? null : formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
+  const primaryProgressAction = routeStatus === 'upcoming'
+    ? { disabled: isStartingRoute, label: 'Start Pickup', loading: isStartingRoute, onPress: onStartRoute }
+    : routeStatus === 'active' && allStopsCompleted
+      ? { disabled: isFinishingRoute, label: 'Finish Route', loading: isFinishingRoute, onPress: onFinishRoute }
+      : routeStatus === 'active' && isCompanyStep
+        ? { disabled: false, label: 'Find Next Stop', loading: false, onPress: onArrived }
+        : routeStatus === 'active'
+          ? { disabled: false, label: 'Arrived', loading: false, onPress: onArrived }
+          : null;
 
   return (
     <View style={styles.screenStack}>
@@ -1979,16 +1988,6 @@ function RouteDetailScreen({
             </View>
             {currentTaskPayment !== null && currentTaskPayment.tone !== 'green' ? (
               <StatusChip compact label={currentTaskPayment.label} tone={currentTaskPayment.tone} />
-            ) : null}
-          </View>
-          <View style={styles.buttonColumn}>
-            <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
-            <View style={styles.buttonRow}>
-              <SecondaryButton compact label="Map Preview" onPress={onOpenMapPreview} />
-              <SecondaryButton compact label="Open in Map" onPress={onOpenNavigation} />
-            </View>
-            {!isCompanyStep && stop !== null ? (
-              <SecondaryButton label="View Stop Details" onPress={onViewCurrentStop} />
             ) : null}
           </View>
         </View>
@@ -2033,10 +2032,16 @@ function RouteDetailScreen({
       {deliveryFinishResult?.flowState === 'delivery_finished' ? <StatusBanner tone="green" text={deliveryFinishResult.message} /> : null}
 
       <View style={styles.buttonColumn}>
-        {routeStatus === 'upcoming' ? (
-          <PrimaryButton disabled={isStartingRoute} label="Start Pickup" loading={isStartingRoute} onPress={onStartRoute} />
-        ) : routeStatus === 'active' && allStopsCompleted ? (
-          <PrimaryButton disabled={isFinishingRoute} label="Finish Route" loading={isFinishingRoute} onPress={onFinishRoute} />
+        {primaryProgressAction !== null ? (
+          <PrimaryButton
+            disabled={primaryProgressAction.disabled}
+            label={primaryProgressAction.label}
+            loading={primaryProgressAction.loading}
+            onPress={primaryProgressAction.onPress}
+          />
+        ) : null}
+        {routeStatus === 'active' && !isCompanyStep && stop !== null ? (
+          <SecondaryButton label="View Stop Details" onPress={onViewCurrentStop} />
         ) : null}
         {routeStatus === 'active' ? <SecondaryButton label="Map Preview" onPress={onOpenMapPreview} /> : null}
         <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
@@ -2106,7 +2111,7 @@ function LiveTrackingScreen({
         <View style={styles.trackingButtonColumn}>
           <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
           <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
-          <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
+          <PrimaryButton label={isCompanyStep ? 'Find Next Stop' : 'Arrived'} onPress={onArrived} />
         </View>
         <Text style={styles.helperText}>{stepLabel}</Text>
       </View>
@@ -2314,7 +2319,7 @@ function StopCompletedScreen({
         <ProgressBar value={route.stops.length === 0 ? 0 : completedStopIds.length / route.stops.length} />
         <Text style={styles.helperText}>Route progress</Text>
       </View>
-      <PrimaryButton label={nextStop === null ? 'View Completed Deliveries' : 'Continue to Next Stop'} onPress={onContinue} />
+      <PrimaryButton label={nextStop === null ? 'View Completed Deliveries' : 'Find Next Stop'} onPress={onContinue} />
       <SecondaryButton label="Back to Route" onPress={onBackToRoute} />
     </View>
   );
