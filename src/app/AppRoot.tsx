@@ -2034,7 +2034,7 @@ function RouteDetailScreen({
 
       <View style={styles.buttonColumn}>
         {routeStatus === 'upcoming' ? (
-          <PrimaryButton disabled={isStartingRoute} label="Begin Tracking" loading={isStartingRoute} onPress={onStartRoute} />
+          <PrimaryButton disabled={isStartingRoute} label="Start Pickup" loading={isStartingRoute} onPress={onStartRoute} />
         ) : routeStatus === 'active' && allStopsCompleted ? (
           <PrimaryButton disabled={isFinishingRoute} label="Finish Route" loading={isFinishingRoute} onPress={onFinishRoute} />
         ) : null}

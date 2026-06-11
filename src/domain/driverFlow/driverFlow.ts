@@ -109,7 +109,7 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
       id: 'routeDetail',
       title: 'Route Details',
       purpose: 'Show company information, route date, region, and ordered stops before delivery starts.',
-      primaryAction: 'Begin Tracking',
+      primaryAction: 'Start Pickup',
     },
     {
       id: 'liveTracking',
