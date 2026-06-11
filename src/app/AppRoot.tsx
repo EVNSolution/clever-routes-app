@@ -2035,14 +2035,16 @@ function LiveTrackingScreen({
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Live Tracking" />
       <View style={styles.mapPanel}>
-        <View style={styles.gpsPill}><View style={styles.statusDot} /><Text style={styles.gpsPillText}>{trackingLabel}</Text></View>
-        <MapOverview
-          allowMapDragPan={false}
-          mapSize="live"
-          route={route}
-          currentStepIndex={currentStepIndex}
-          mapStyleUrl={mapStyleUrl}
-        />
+        <View style={styles.liveMapCard}>
+          <View style={styles.gpsPill}><View style={styles.statusDot} /><Text style={styles.gpsPillText}>{trackingLabel}</Text></View>
+          <MapOverview
+            allowMapDragPan={false}
+            mapSize="live"
+            route={route}
+            currentStepIndex={currentStepIndex}
+            mapStyleUrl={mapStyleUrl}
+          />
+        </View>
         <View style={styles.trackingSheet}>
           <View style={styles.sheetHandle} />
           <Text style={styles.labelText}>Next Stop</Text>
@@ -3856,8 +3858,17 @@ const styles = StyleSheet.create({
   },
   mapPanel: {
     backgroundColor: '#eef5f8',
-    borderRadius: 22,
+    borderRadius: 28,
+    overflow: 'visible',
+    padding: 8,
+  },
+  liveMapCard: {
+    backgroundColor: '#ffffff',
+    borderColor: '#dbeafe',
+    borderRadius: 24,
+    borderWidth: 1,
     overflow: 'hidden',
+    ...shadow,
   },
   gpsPill: {
     alignItems: 'center',
@@ -3892,7 +3903,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   liveMapCanvas: {
-    height: 560,
+    height: 540,
   },
   mapPreviewImage: {
     height: '100%',
@@ -4045,10 +4056,14 @@ const styles = StyleSheet.create({
   },
   trackingSheet: {
     backgroundColor: '#ffffff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderColor: '#dbeafe',
+    borderRadius: 24,
+    borderWidth: 1,
     gap: 13,
+    marginHorizontal: 10,
+    marginTop: -26,
     padding: 18,
+    zIndex: 3,
     ...shadow,
   },
   sheetHandle: {
