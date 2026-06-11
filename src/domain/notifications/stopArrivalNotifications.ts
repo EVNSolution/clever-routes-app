@@ -1,7 +1,7 @@
 import type { AssignedRoute, AssignedRouteCoordinates, AssignedRouteStop } from '../route/assignedRoute';
 
 export const STOP_ARRIVAL_NOTIFICATION_TYPE = 'stop_arrival';
-export const DEFAULT_STOP_ARRIVAL_RADIUS_METERS = 120;
+export const DEFAULT_STOP_ARRIVAL_RADIUS_METERS = 50;
 
 export type StopArrivalNotificationData = {
   deliveryStopId: string;

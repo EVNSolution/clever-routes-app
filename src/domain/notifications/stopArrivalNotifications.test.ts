@@ -19,7 +19,7 @@ describe('stop arrival notifications', () => {
       isActiveRoute: true,
       lastLocation: firstStop.coordinates,
       notifiedStopIds: [],
-      radiusMeters: 120,
+      radiusMeters: 50,
       route: sampleAssignedRoute,
     });
 
@@ -39,7 +39,7 @@ describe('stop arrival notifications', () => {
       isActiveRoute: true,
       lastLocation: firstStop.coordinates,
       notifiedStopIds: [],
-      radiusMeters: 120,
+      radiusMeters: 50,
       route: sampleAssignedRoute,
     };
 

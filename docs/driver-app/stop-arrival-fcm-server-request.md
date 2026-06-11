@@ -41,7 +41,7 @@ The manual `Arrived` button remains available as a fallback.
 
 Use the same default client radius unless dispatch config overrides it:
 
-- Default radius: `120 meters`
+- Default radius: `50 meters`
 - Evaluate only the current active stop, not future stops.
 - Deduplicate by `(driverId, routePlanId, deliveryStopId)` so one stop does not spam multiple arrival alerts.
 - Do not send for completed stops.
@@ -61,4 +61,4 @@ Server/API work needed later:
 
 ## Current no-server validation path
 
-Until server dispatch exists, the app also schedules an immediate local notification from the active location stream when the current stop enters the same 120m radius. This lets us test the UX path on a real device without deploying server FCM work.
+Until server dispatch exists, the app also schedules an immediate local notification from the active location stream when the current stop enters the same 50m radius. This lets us test the UX path on a real device without deploying server FCM work.
