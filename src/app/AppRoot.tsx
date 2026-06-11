@@ -3901,7 +3901,9 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 1,
     gap: 16,
-    padding: 20,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
+    paddingTop: 30,
     ...shadow,
   },
   liveMapPreviewCard: {
