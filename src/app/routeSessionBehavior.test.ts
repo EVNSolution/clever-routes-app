@@ -26,7 +26,9 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /label: 'Add Proof & Tip'/u);
     assert.match(componentSource, /showPrimaryActionInCurrentTask/u);
     assert.match(componentSource, /styles\.currentTaskActions/u);
-    assert.match(componentSource, /label="View Stop Details"/u);
+    assert.match(componentSource, /styles\.currentTaskAddressText/u);
+    assert.match(componentSource, /<PrimaryButton[\s\S]*compact[\s\S]*label=\{primaryProgressAction\.label\}/u);
+    assert.match(componentSource, /<SecondaryButton compact label="View Stop Details"/u);
   });
 
   it('passes current step context into map previews for current destination highlighting', () => {
@@ -44,5 +46,16 @@ describe('route session current task behavior', () => {
 
     assert.match(nativeMapSource, /markerHalo:[\s\S]*height: 28,[\s\S]*width: 28,/u);
     assert.match(nativeMapSource, /markerDot:[\s\S]*height: 24,[\s\S]*width: 24,/u);
+  });
+});
+
+
+describe('current task density', () => {
+  it('keeps Current Task buttons compact with normal-weight text and matching heights', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+
+    assert.match(appSource, /compactButton:[\s\S]*minHeight: 42,[\s\S]*paddingVertical: 8,/u);
+    assert.match(appSource, /compactButtonText:[\s\S]*fontSize: 14,[\s\S]*fontWeight: '600'/u);
+    assert.match(appSource, /currentTaskAddressText:[\s\S]*fontSize: 14,[\s\S]*fontWeight: '400'/u);
   });
 });

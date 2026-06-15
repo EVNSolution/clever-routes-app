@@ -2283,7 +2283,7 @@ function RouteSessionScreen({
           <View style={styles.trackingCardHeader}>
             <View style={styles.routeHeaderText}>
               <Text style={styles.labelText}>{currentTaskTitle}</Text>
-              <Text style={styles.sheetTitle}>{currentTaskAddress}</Text>
+              <Text style={styles.currentTaskAddressText}>{currentTaskAddress}</Text>
             </View>
             {currentTaskPayment !== null && currentTaskPayment.tone !== 'green' ? (
               <StatusChip compact label={currentTaskPayment.label} tone={currentTaskPayment.tone} />
@@ -2292,6 +2292,7 @@ function RouteSessionScreen({
           <View style={styles.currentTaskActions}>
             {showPrimaryActionInCurrentTask ? (
               <PrimaryButton
+                compact
                 disabled={primaryProgressAction.disabled}
                 label={primaryProgressAction.label}
                 loading={primaryProgressAction.loading}
@@ -2958,10 +2959,10 @@ function ConsentRow({ label, linkLabel, onValueChange, value }: { label: string;
   );
 }
 
-function PrimaryButton({ disabled, label, loading, onPress }: { disabled?: boolean; label: string; loading?: boolean; onPress(): void }) {
+function PrimaryButton({ compact, disabled, label, loading, onPress }: { compact?: boolean; disabled?: boolean; label: string; loading?: boolean; onPress(): void }) {
   return (
-    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.primaryButton, disabled === true && styles.buttonDisabled]}>
-      {loading === true ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>{label}</Text>}
+    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.primaryButton, compact === true && styles.compactButton, disabled === true && styles.buttonDisabled]}>
+      {loading === true ? <ActivityIndicator color="#ffffff" /> : <Text style={[styles.primaryButtonText, compact === true && styles.compactButtonText]}>{label}</Text>}
     </Pressable>
   );
 }
@@ -2969,7 +2970,7 @@ function PrimaryButton({ disabled, label, loading, onPress }: { disabled?: boole
 function SecondaryButton({ compact, disabled, label, loading, onPress }: { compact?: boolean; disabled?: boolean; label: string; loading?: boolean; onPress(): void }) {
   return (
     <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.secondaryButton, compact === true && styles.compactButton, disabled === true && styles.buttonDisabled]}>
-      {loading === true ? <ActivityIndicator color="#0b57d0" /> : <Text style={styles.secondaryButtonText}>{label}</Text>}
+      {loading === true ? <ActivityIndicator color="#0b57d0" /> : <Text style={[styles.secondaryButtonText, compact === true && styles.compactButtonText]}>{label}</Text>}
     </Pressable>
   );
 }
@@ -3903,6 +3904,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
+  compactButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
   secondaryButtonText: {
     color: '#0b57d0',
     fontSize: 16,
@@ -4273,6 +4278,12 @@ const styles = StyleSheet.create({
   },
   currentTaskActions: {
     gap: 8,
+  },
+  currentTaskAddressText: {
+    color: '#374151',
+    fontSize: 14,
+    fontWeight: '400',
+    lineHeight: 20,
   },
   timelineRow: {
     alignItems: 'center',
