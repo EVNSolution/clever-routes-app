@@ -16,12 +16,10 @@ type NativeRouteMapPreviewProps = {
 
 export function NativeRouteMapPreview({ allowDragPan = true, mapStyleUrl, onUnavailable, route }: NativeRouteMapPreviewProps) {
   const cameraRef = useRef<CameraRef>(null);
-  const [mapLoaded, setMapLoaded] = useState(false);
+  const mapLoadKey = `${mapStyleUrl}:${route.id}`;
+  const [mapLoadedState, setMapLoadedState] = useState<{ key: string; loaded: true } | null>(null);
+  const mapLoaded = mapLoadedState?.key === mapLoadKey;
   const model = useMemo(() => buildRouteMapGeoJson(route), [route]);
-
-  useEffect(() => {
-    setMapLoaded(false);
-  }, [mapStyleUrl, route.id]);
 
   useEffect(() => {
     if (model !== null) {
@@ -57,7 +55,7 @@ export function NativeRouteMapPreview({ allowDragPan = true, mapStyleUrl, onUnav
         logo={false}
         mapStyle={mapStyleUrl}
         onDidFailLoadingMap={onUnavailable}
-        onDidFinishLoadingStyle={() => setMapLoaded(true)}
+        onDidFinishLoadingStyle={() => setMapLoadedState({ key: mapLoadKey, loaded: true })}
         preferredFramesPerSecond={30}
         scaleBar
         style={styles.map}

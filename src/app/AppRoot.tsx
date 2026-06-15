@@ -298,9 +298,10 @@ export default function App() {
   const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => completedStopIds.includes(stop.deliveryStopId));
   const currentCompany = selectedRouteSession?.companyGuidance ?? null;
   const recentlyCompletedStop = selectedRoute?.stops.find((stop) => stop.deliveryStopId === recentlyCompletedStopId) ?? null;
+  const activeLoginDetailInputId = screen === 'loginDetail' ? focusedLoginDetailInputId : null;
   const loginDetailKeyboardNavigation = useMemo(
-    () => getKeyboardInputNavigationState(LOGIN_DETAIL_INPUT_ORDER, focusedLoginDetailInputId),
-    [focusedLoginDetailInputId],
+    () => getKeyboardInputNavigationState(LOGIN_DETAIL_INPUT_ORDER, activeLoginDetailInputId),
+    [activeLoginDetailInputId],
   );
   const setLoginDetailInputRef = useCallback((inputId: LoginDetailInputId) => (input: TextInput | null) => {
     loginDetailInputRefs.current[inputId] = input;
@@ -403,12 +404,6 @@ export default function App() {
   }), [message]);
 
   useEffect(() => {
-    if (screen !== 'loginDetail') {
-      setFocusedLoginDetailInputId(null);
-    }
-  }, [screen]);
-
-  useEffect(() => {
     const removeStopArrivalListener = stopArrivalNotificationService.addStopArrivalResponseListener(handleStopArrivalNotificationPress);
     if (!hasCheckedInitialStopArrivalNotificationRef.current) {
       hasCheckedInitialStopArrivalNotificationRef.current = true;
@@ -424,8 +419,14 @@ export default function App() {
 
   useEffect(() => {
     if (pendingStopArrivalNotification !== null && routeSessions.length > 0) {
-      handleStopArrivalNotificationPress(pendingStopArrivalNotification);
+      const timeout = setTimeout(() => {
+        handleStopArrivalNotificationPress(pendingStopArrivalNotification);
+      }, 0);
+
+      return () => clearTimeout(timeout);
     }
+
+    return undefined;
   }, [handleStopArrivalNotificationPress, pendingStopArrivalNotification, routeSessions.length]);
 
   useEffect(() => {
@@ -1556,7 +1557,7 @@ export default function App() {
             />
           </InputAccessoryView>
         ) : null}
-        {screen === 'loginDetail' && focusedLoginDetailInputId !== null && Platform.OS !== 'ios' ? (
+        {screen === 'loginDetail' && activeLoginDetailInputId !== null && Platform.OS !== 'ios' ? (
           <KeyboardNavigationBar
             navigationState={loginDetailKeyboardNavigation}
             onDone={dismissLoginDetailKeyboard}
@@ -2884,25 +2885,21 @@ function MapOverview({
   mapStyleUrl: string;
   route: AssignedRoute;
 }) {
-  const [previewLoadStatus, setPreviewLoadStatus] = useState<'idle' | 'failed'>('idle');
-  const [interactiveMapStatus, setInteractiveMapStatus] = useState<'idle' | 'failed'>('idle');
+  const previewKey = route.routeMapPreview?.imageUrl ?? null;
+  const interactiveMapKey = `${mapStyleUrl}:${route.id}:${route.routeGeometry?.coordinates.length ?? 0}`;
+  const [previewLoadState, setPreviewLoadState] = useState<{ key: string | null; status: 'failed' } | null>(null);
+  const [interactiveMapState, setInteractiveMapState] = useState<{ key: string; status: 'failed' } | null>(null);
+  const previewLoadStatus = previewLoadState?.key === previewKey ? previewLoadState.status : 'idle';
+  const interactiveMapStatus = interactiveMapState?.key === interactiveMapKey ? interactiveMapState.status : 'idle';
   const previewState = resolveRouteMapPreviewState({
     loadStatus: previewLoadStatus,
     now: new Date(),
     preview: route.routeMapPreview,
   });
 
-  useEffect(() => {
-    setPreviewLoadStatus('idle');
-  }, [route.routeMapPreview?.imageUrl]);
-
-  useEffect(() => {
-    setInteractiveMapStatus('idle');
-  }, [mapStyleUrl, route.id, route.routeGeometry?.coordinates.length]);
-
   const handleInteractiveMapUnavailable = useCallback(() => {
-    setInteractiveMapStatus('failed');
-  }, []);
+    setInteractiveMapState({ key: interactiveMapKey, status: 'failed' });
+  }, [interactiveMapKey]);
 
   if (interactiveMapStatus === 'idle' && route.routeGeometry !== null && route.routeGeometry.coordinates.length >= 2) {
     return (
@@ -2923,7 +2920,7 @@ function MapOverview({
         <Image
           accessibilityIgnoresInvertColors
           accessibilityLabel={previewState.accessibilityLabel}
-          onError={() => setPreviewLoadStatus('failed')}
+          onError={() => setPreviewLoadState({ key: previewKey, status: 'failed' })}
           resizeMode="contain"
           source={{ uri: previewState.imageUrl }}
           style={styles.mapPreviewImage}

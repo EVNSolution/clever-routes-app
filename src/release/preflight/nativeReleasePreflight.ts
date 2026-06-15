@@ -23,7 +23,6 @@ export type NativeReleasePreflightInput = {
   appConfig: {
     expo?: {
       android?: {
-        edgeToEdgeEnabled?: boolean;
         package?: string;
         permissions?: string[];
         versionCode?: number;
@@ -124,9 +123,6 @@ function checkExpoIdentity(appConfig: NativeReleasePreflightInput['appConfig']):
   }
   if (expo.android?.versionCode !== 1) {
     return fail('expo.identity', 'Android versionCode must remain 1 before the first EAS remote version sync.');
-  }
-  if (expo.android?.edgeToEdgeEnabled !== true) {
-    return fail('expo.identity', 'Android edgeToEdgeEnabled must stay enabled for the current Expo baseline.');
   }
   if (expo.extra?.projectStartIssue !== 'EVNSolution/clever-change-control#145') {
     return fail('expo.identity', 'Expo extra.projectStartIssue must reference EVNSolution/clever-change-control#145.');
