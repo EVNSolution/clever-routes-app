@@ -1172,6 +1172,14 @@ export default function App() {
     }
   }
 
+  function handleAddDeliveryPhoto() {
+    Alert.alert('Add Photo', undefined, [
+      { text: 'Take Photo', onPress: () => { void handleCapturePhoto('camera'); } },
+      { text: 'Choose from Album', onPress: () => { void handleCapturePhoto('library'); } },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }
+
   async function handleCompleteCurrentStop() {
     if (currentStop === null || selectedRoute === null || deliveryStartResult === null) {
       return;
@@ -1622,7 +1630,7 @@ export default function App() {
               isCompletingStop={isCompletingStop || isFinishingRoute}
               onAnnounceTip={handleAnnounceCurrentTip}
               onBack={() => setScreen('stopDetails')}
-              onCapturePhoto={handleCapturePhoto}
+              onAddPhoto={handleAddDeliveryPhoto}
               onCompleteStop={handleCompleteCurrentStop}
               onDraftChange={updateCurrentStopDraft}
               proofResult={stopProofResults[currentStop.deliveryStopId]}
@@ -2503,7 +2511,7 @@ function ArrivalCheckScreen({
   isCompletingStop,
   onAnnounceTip,
   onBack,
-  onCapturePhoto,
+  onAddPhoto,
   onCompleteStop,
   onDraftChange,
   proofResult,
@@ -2514,7 +2522,7 @@ function ArrivalCheckScreen({
   isCompletingStop: boolean;
   onAnnounceTip(): void;
   onBack(): void;
-  onCapturePhoto(source: ProofPhotoCaptureSource): void;
+  onAddPhoto(): void;
   onCompleteStop(): void;
   onDraftChange(patch: Partial<StopProofDraft>): void;
   proofResult?: StopProofEventResult;
@@ -2532,10 +2540,7 @@ function ArrivalCheckScreen({
       </Pressable>
 
       <Text style={styles.sectionTitle}>Delivery Photo</Text>
-      <View style={styles.proofTileRow}>
-        <ProofTile disabled={isCapturingPhoto} label="Take Photo" loading={isCapturingPhoto} onPress={() => onCapturePhoto('camera')} />
-        <ProofTile disabled={isCapturingPhoto} label="Choose Photo" loading={isCapturingPhoto} onPress={() => onCapturePhoto('library')} />
-      </View>
+      <SecondaryButton compact disabled={isCapturingPhoto} label="Add Photo" loading={isCapturingPhoto} onPress={onAddPhoto} />
 
       <LabeledInput
         label="Delivery Notes"
@@ -3131,14 +3136,6 @@ function MapOverview({
         <Text style={styles.mapPreviewFallbackText}>{previewState.message}</Text>
       </View>
     </View>
-  );
-}
-
-function ProofTile({ disabled, label, loading, onPress }: { disabled?: boolean; label: string; loading?: boolean; onPress(): void }) {
-  return (
-    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.proofTile, disabled === true && styles.buttonDisabled]}>
-      {loading === true ? <ActivityIndicator color="#0b57d0" /> : <Text style={styles.proofTileText}>{label}</Text>}
-    </Pressable>
   );
 }
 
@@ -4614,29 +4611,6 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 16,
     fontWeight: '800',
-  },
-  proofTileRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  proofTile: {
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderColor: '#cbd5e1',
-    borderRadius: 14,
-    borderStyle: 'dashed',
-    borderWidth: 1.4,
-    flex: 1,
-    height: 112,
-    justifyContent: 'center',
-    padding: 10,
-  },
-  proofTileText: {
-    color: '#475467',
-    fontSize: 13,
-    fontWeight: '800',
-    lineHeight: 18,
-    textAlign: 'center',
   },
   statusBanner: {
     borderRadius: 14,
