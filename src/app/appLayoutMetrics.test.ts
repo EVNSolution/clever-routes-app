@@ -22,6 +22,6 @@ describe('app layout metrics', () => {
   it('keeps app-owned bottom sheets above the Android system navigation area', () => {
     const appSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx'), 'utf8');
 
-    assert.match(appSource, /photoActionSheetCard:[\s\S]*paddingBottom: Platform\.OS === 'android' \? APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE \+ 16 : 16/u);
+    assert.match(appSource, /photoActionSheetCard:[\s\S]*paddingBottom: Platform\.OS === 'android' \? APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE \+ 8 : 12/u);
   });
 });
