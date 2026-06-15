@@ -95,7 +95,7 @@ describe('proof media upload', () => {
 
     assert.deepEqual(result, {
       kind: 'skipped',
-      message: 'Proof photo was not captured, so no media upload was attempted.',
+      message: 'No photo selected.',
       reason: 'photo_not_captured',
     });
   });
@@ -117,7 +117,7 @@ describe('proof media upload', () => {
 
     assert.deepEqual(result, {
       kind: 'upload_failed',
-      message: 'Proof media upload failed: network down',
+      message: 'Photo upload failed. Try again.',
     });
   });
 
@@ -147,7 +147,7 @@ describe('proof media upload', () => {
 
     assert.deepEqual(result, {
       kind: 'upload_failed',
-      message: 'Proof media upload failed: Driver session expired. Look up the route with route context and phone again. (HTTP 401)',
+      message: 'Session expired. Sign in again to sync this photo.',
       reason: 'driver_access_expired',
     });
   });
@@ -178,7 +178,7 @@ describe('proof media upload', () => {
 
     assert.deepEqual(result, {
       kind: 'upload_failed',
-      message: 'Proof photo was rejected by the safety scan. Capture another proof photo.',
+      message: 'Photo could not be used. Take another photo.',
       reason: 'proof_media_rejected',
     });
     assert.equal(shouldQueueFailedProofMediaUpload(result), false);
@@ -188,14 +188,14 @@ describe('proof media upload', () => {
     assert.equal(
       shouldQueueFailedProofMediaUpload({
         kind: 'upload_failed',
-        message: 'Proof media upload failed: network down',
+        message: 'Photo upload failed. Try again.',
       }),
       true,
     );
     assert.equal(
       shouldQueueFailedProofMediaUpload({
         kind: 'upload_failed',
-        message: 'Proof media upload failed: Driver session expired. Look up the route with route context and phone again. (HTTP 401)',
+        message: 'Session expired. Sign in again to sync this photo.',
         reason: 'driver_access_expired',
       }),
       true,
@@ -203,7 +203,7 @@ describe('proof media upload', () => {
     assert.equal(
       shouldQueueFailedProofMediaUpload({
         kind: 'upload_failed',
-        message: 'Proof photo was rejected by the safety scan. Capture another proof photo.',
+        message: 'Photo could not be used. Take another photo.',
         reason: 'proof_media_rejected',
       }),
       false,
@@ -211,7 +211,7 @@ describe('proof media upload', () => {
     assert.equal(
       shouldQueueFailedProofMediaUpload({
         kind: 'skipped',
-        message: 'Proof photo was not captured, so no media upload was attempted.',
+        message: 'No photo selected.',
         reason: 'photo_not_captured',
       }),
       false,
@@ -219,7 +219,7 @@ describe('proof media upload', () => {
   });
 
   it('can create a scanner rejection error for offline retry discard paths', () => {
-    assert.equal(createProofMediaRejectedError().message, 'Proof photo was rejected by the safety scan. Capture another proof photo.');
+    assert.equal(createProofMediaRejectedError().message, 'Photo could not be used. Take another photo.');
   });
 
   it('can simulate scanner rejection through the local proof media mock mode', async () => {
@@ -235,7 +235,7 @@ describe('proof media upload', () => {
 
     assert.deepEqual(result, {
       kind: 'upload_failed',
-      message: 'Proof photo was rejected by the safety scan. Capture another proof photo.',
+      message: 'Photo could not be used. Take another photo.',
       reason: 'proof_media_rejected',
     });
     assert.equal(shouldQueueFailedProofMediaUpload(result), false);
@@ -254,7 +254,7 @@ describe('proof media upload', () => {
 
     assert.deepEqual(result, {
       kind: 'upload_failed',
-      message: 'Proof media upload failed: Proof media mock upload failed',
+      message: 'Photo upload failed. Try again.',
     });
     assert.equal(shouldQueueFailedProofMediaUpload(result), true);
   });

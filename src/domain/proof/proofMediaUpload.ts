@@ -1,7 +1,6 @@
 import type { ProofPhotoCaptureResult, ProofPhotoCaptureSource } from './proofPhotoCapture';
 import {
   createDriverApiHttpError,
-  formatDriverApiErrorForDriver,
   getDriverApiRecoveryReason,
 } from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
@@ -39,7 +38,7 @@ export type ProofMediaUploadResult =
   | { kind: 'uploaded'; media: ProofMediaReference };
 
 export const PROOF_MEDIA_REJECTED_MESSAGE =
-  'Proof photo was rejected by the safety scan. Capture another proof photo.';
+  'Photo could not be used. Take another photo.';
 
 export class ProofMediaRejectedError extends Error {
   constructor() {
@@ -144,7 +143,7 @@ export async function uploadCapturedProofPhoto(input: {
   if (input.captureResult.kind !== 'captured') {
     return {
       kind: 'skipped',
-      message: 'Proof photo was not captured, so no media upload was attempted.',
+      message: 'No photo selected.',
       reason: 'photo_not_captured',
     };
   }
@@ -169,10 +168,19 @@ export async function uploadCapturedProofPhoto(input: {
 
     return {
       kind: 'upload_failed',
-      message: `Proof media upload failed: ${formatDriverApiErrorForDriver(error)}`,
+      message: formatProofMediaUploadFailure(error),
       ...(recoveryReason === undefined ? {} : { reason: recoveryReason }),
     };
   }
+}
+
+function formatProofMediaUploadFailure(error: unknown): string {
+  const recoveryReason = getDriverApiRecoveryReason(error);
+  if (recoveryReason === 'driver_access_expired') {
+    return 'Session expired. Sign in again to sync this photo.';
+  }
+
+  return 'Photo upload failed. Try again.';
 }
 
 export function shouldQueueFailedProofMediaUpload(result: ProofMediaUploadResult): boolean {

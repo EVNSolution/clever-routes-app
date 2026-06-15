@@ -75,3 +75,18 @@ describe('current task density', () => {
     assert.match(appSource, /currentTaskAddressText:[\s\S]*fontSize: 14,[\s\S]*fontWeight: '400'/u);
   });
 });
+
+describe('stop completion proof copy', () => {
+  it('uses driver-facing photo labels instead of proof jargon', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+
+    assert.match(appSource, /title="Complete Delivery"/u);
+    assert.match(appSource, />Delivery Photo</u);
+    assert.match(appSource, /label="Take Photo"/u);
+    assert.match(appSource, /label="Choose Photo"/u);
+    assert.match(appSource, /'Photo Ready' : 'No Photo Yet'/u);
+    assert.match(appSource, /setMessage\('Add a delivery photo first\.'\)/u);
+    assert.doesNotMatch(appSource, /Proof Item/u);
+    assert.doesNotMatch(appSource, /Proof uploaded: \$\{result\.media\.mediaId\}/u);
+  });
+});

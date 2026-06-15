@@ -1176,7 +1176,7 @@ export default function App() {
 
     const photoResult = proofPhotoResults[currentStop.deliveryStopId];
     if (photoResult?.kind !== 'captured') {
-      setMessage('Photo proof is required. Capture or select a proof photo first.');
+      setMessage('Add a delivery photo first.');
       return;
     }
 
@@ -2525,7 +2525,7 @@ function ArrivalCheckScreen({
 }) {
   return (
     <View style={styles.screenStack}>
-      <ScreenHeader onBack={onBack} title="Arrival Check" />
+      <ScreenHeader onBack={onBack} title="Complete Delivery" />
       <Pressable accessibilityRole="button" onPress={onAnnounceTip} style={styles.nearbyBanner}>
         <View style={styles.statusDot} />
         <View style={styles.routeHeaderText}>
@@ -2534,11 +2534,11 @@ function ArrivalCheckScreen({
         </View>
       </Pressable>
 
-      <Text style={styles.sectionTitle}>Photo Proof</Text>
+      <Text style={styles.sectionTitle}>Delivery Photo</Text>
       <View style={styles.proofTileRow}>
-        <ProofTile disabled={isCapturingPhoto} label="Camera Proof" loading={isCapturingPhoto} onPress={() => onCapturePhoto('camera')} />
-        <ProofTile disabled={isCapturingPhoto} label="Library Proof" loading={isCapturingPhoto} onPress={() => onCapturePhoto('library')} />
-        <View style={styles.proofTile}><Text style={styles.proofTileText}>{photoResult?.kind === 'captured' ? 'Proof Ready' : 'Proof Item'}</Text></View>
+        <ProofTile disabled={isCapturingPhoto} label="Take Photo" loading={isCapturingPhoto} onPress={() => onCapturePhoto('camera')} />
+        <ProofTile disabled={isCapturingPhoto} label="Choose Photo" loading={isCapturingPhoto} onPress={() => onCapturePhoto('library')} />
+        <View style={styles.proofTile}><Text style={styles.proofTileText}>{photoResult?.kind === 'captured' ? 'Photo Ready' : 'No Photo Yet'}</Text></View>
       </View>
       {photoResult !== undefined ? <StatusBanner tone={photoResult.kind === 'captured' ? 'green' : 'warning'} text={formatPhotoCaptureResult(photoResult)} /> : null}
       {mediaResult !== undefined ? <StatusBanner tone={mediaResult.kind === 'uploaded' ? 'green' : 'warning'} text={formatMediaUploadResult(mediaResult)} /> : null}
@@ -3445,11 +3445,11 @@ function formatPhotoResult(captureResult: ProofPhotoCaptureResult, uploadResult:
 
 function formatPhotoCaptureResult(result: ProofPhotoCaptureResult): string {
   if (result.kind === 'captured') {
-    return `Photo proof attached from ${result.source}.`;
+    return result.source === 'camera' ? 'Photo taken.' : 'Photo selected.';
   }
 
   if (result.kind === 'cancelled') {
-    return 'Photo selection was cancelled.';
+    return 'Photo cancelled.';
   }
 
   return result.message;
@@ -3457,7 +3457,7 @@ function formatPhotoCaptureResult(result: ProofPhotoCaptureResult): string {
 
 function formatMediaUploadResult(result: ProofMediaUploadResult): string {
   if (result.kind === 'uploaded') {
-    return `Proof uploaded: ${result.media.mediaId}`;
+    return 'Photo uploaded.';
   }
 
   return result.message;
@@ -3465,11 +3465,11 @@ function formatMediaUploadResult(result: ProofMediaUploadResult): string {
 
 function formatStopProofResult(result: StopProofEventResult): string {
   if (result.kind === 'recorded') {
-    return `Stop completion recorded: ${result.eventId}`;
+    return 'Stop completed.';
   }
 
   if (result.kind === 'queued') {
-    return `Saved to offline queue: ${result.queueItemId}`;
+    return 'Saved offline. It will sync when connected.';
   }
 
   return result.message;
