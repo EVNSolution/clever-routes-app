@@ -7,6 +7,7 @@ import {
   AppState,
   BackHandler,
   Image,
+  PanResponder,
   InputAccessoryView,
   InteractionManager,
   Keyboard,
@@ -182,6 +183,10 @@ const DRIVER_APP_VERSION = '0.1.0';
 const ANDROID_SYSTEM_NAV_CLEARANCE = 56;
 const LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID = 'login-detail-keyboard-navigation';
 const LOGIN_DETAIL_INPUT_ORDER = ['verificationCode', 'driverFirstName', 'driverLastName'] as const;
+const SWIPE_BACK_DISTANCE = 90;
+const SWIPE_BACK_EDGE_WIDTH = 36;
+const SWIPE_BACK_MAX_VERTICAL_DELTA = 90;
+const SWIPE_BACK_DIRECTIONALITY_RATIO = 1.45;
 
 function runAfterUiInteractions(callback: () => void): void {
   InteractionManager.runAfterInteractions(callback);
@@ -304,7 +309,6 @@ export default function App() {
       selectedStopDetailsId,
     });
   const stopDetailsStop = stopDetailsProgressState?.stop ?? null;
-  const stopDetailsCanMarkArrived = stopDetailsProgressState?.canMarkArrived === true;
   const isCompanyStep = navigationStepIndex === COMPANY_STEP_INDEX;
   const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => completedStopIds.includes(stop.deliveryStopId));
   const currentCompany = selectedRouteSession?.companyGuidance ?? null;
@@ -1025,10 +1029,6 @@ export default function App() {
     handleAnnounceNavigationTip({ isCompanyStep, stop: currentStop });
   }
 
-  function handleAnnounceStopTip(stop: AssignedRouteStop | null) {
-    handleAnnounceNavigationTip({ isCompanyStep: false, stop });
-  }
-
   function handleAnnounceNavigationTip(input: { isCompanyStep: boolean; stop: AssignedRouteStop | null }) {
     const text = getNavigationTip({ company: currentCompany, isCompanyStep: input.isCompanyStep, stop: input.stop });
     Speech.stop();
@@ -1368,54 +1368,76 @@ export default function App() {
     setScreen('routeSession');
   }
 
+  const handleAppBack = useCallback((): boolean => {
+    switch (screen) {
+      case 'loginPhone':
+      case 'mainTabs':
+        return false;
+      case 'loginDetail':
+        setScreen('loginPhone');
+        return true;
+      case 'routePreview':
+      case 'routeSession':
+        setSelectedMainTab('home');
+        setScreen('mainTabs');
+        return true;
+      case 'liveTracking':
+        setScreen('routeSession');
+        return true;
+      case 'liveMapPreview':
+        setScreen(mapPreviewBackTarget);
+        return true;
+      case 'stopDetails':
+        setSelectedStopDetailsId(null);
+        setScreen(stopDetailsBackTarget);
+        return true;
+      case 'arrivalCheck':
+        setScreen('stopDetails');
+        return true;
+      case 'stopCompleted':
+        setScreen('routeSession');
+        return true;
+      case 'completedDeliveries':
+        setSelectedMainTab('home');
+        setScreen('mainTabs');
+        return true;
+    }
+  }, [mapPreviewBackTarget, screen, stopDetailsBackTarget]);
+
   useEffect(() => {
     if (Platform.OS !== 'android') {
       return undefined;
     }
 
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      switch (screen) {
-        case 'loginPhone':
-        case 'mainTabs':
-          return false;
-        case 'loginDetail':
-          setScreen('loginPhone');
-          return true;
-        case 'routePreview':
-        case 'routeSession':
-          setSelectedMainTab('home');
-          setScreen('mainTabs');
-          return true;
-        case 'liveTracking':
-          setScreen('routeSession');
-          return true;
-        case 'liveMapPreview':
-          setScreen(mapPreviewBackTarget);
-          return true;
-        case 'stopDetails':
-          setSelectedStopDetailsId(null);
-          setScreen(stopDetailsBackTarget);
-          return true;
-        case 'arrivalCheck':
-          setScreen('stopDetails');
-          return true;
-        case 'stopCompleted':
-          setScreen('routeSession');
-          return true;
-        case 'completedDeliveries':
-          setSelectedMainTab('home');
-          setScreen('mainTabs');
-          return true;
-      }
-    });
-
+    const subscription = BackHandler.addEventListener('hardwareBackPress', handleAppBack);
     return () => subscription.remove();
-  }, [mapPreviewBackTarget, screen, stopDetailsBackTarget]);
+  }, [handleAppBack]);
+
+  const swipeBackResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_event, gestureState) => {
+      if (screen === 'loginPhone' || screen === 'mainTabs' || screen === 'liveMapPreview' || gestureState.x0 > SWIPE_BACK_EDGE_WIDTH) {
+        return false;
+      }
+
+      const horizontalDistance = Math.abs(gestureState.dx);
+      const verticalDistance = Math.abs(gestureState.dy);
+      return horizontalDistance > 35 && horizontalDistance > verticalDistance * SWIPE_BACK_DIRECTIONALITY_RATIO;
+    },
+    onPanResponderRelease: (_event, gestureState) => {
+      const horizontalDistance = Math.abs(gestureState.dx);
+      const verticalDistance = Math.abs(gestureState.dy);
+
+      if (horizontalDistance >= SWIPE_BACK_DISTANCE && verticalDistance <= SWIPE_BACK_MAX_VERTICAL_DELTA) {
+        handleAppBack();
+      }
+    },
+  }), [handleAppBack, screen]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
       <KeyboardAvoidingView
+        {...swipeBackResponder.panHandlers}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
         style={styles.keyboardArea}
@@ -1580,13 +1602,8 @@ export default function App() {
 
           {screen === 'stopDetails' && stopDetailsStop !== null ? (
             <StopDetailsScreen
-              canMarkArrived={stopDetailsCanMarkArrived}
-              company={currentCompany}
-              onAnnounceTip={() => handleAnnounceStopTip(stopDetailsStop)}
-              onArrived={handleArrivedAtStep}
               onBack={() => {
-                setSelectedStopDetailsId(null);
-                setScreen(stopDetailsBackTarget);
+                handleAppBack();
               }}
               onCall={() => handleCallStop(stopDetailsStop)}
               onMessage={() => handleMessageStop(stopDetailsStop)}
@@ -2438,27 +2455,18 @@ function LiveMapPreviewScreen({
 }
 
 function StopDetailsScreen({
-  canMarkArrived,
-  company,
-  onAnnounceTip,
-  onArrived,
   onBack,
   onCall,
   onMessage,
   onOpenNavigation,
   stop,
 }: {
-  canMarkArrived: boolean;
-  company: RouteAccessCompanyGuidance | null;
-  onAnnounceTip(): void;
-  onArrived(): void;
   onBack(): void;
   onCall(): void;
   onMessage(): void;
   onOpenNavigation(): void;
   stop: AssignedRouteStop;
 }) {
-  const tip = getNavigationTip({ company, isCompanyStep: false, stop });
   const payment = formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
   return (
     <View style={styles.screenStack}>
@@ -2466,39 +2474,23 @@ function StopDetailsScreen({
       <View style={styles.stopSummaryCard}>
         <View style={styles.stopBadge}><Text style={styles.stopBadgeText}>Stop {stop.sequence}</Text></View>
         <View style={styles.routeHeaderText}>
-          <Text numberOfLines={2} style={styles.cardTitle}>{formatStopAddress(stop)}</Text>
-          <Text numberOfLines={1} style={styles.helperText}>{stop.recipientName ?? 'Recipient / Location'}</Text>
+          <Text numberOfLines={2} style={styles.cardTitle}>{formatStopStreetAddress(stop)}</Text>
         </View>
       </View>
 
       <Text style={styles.sectionTitle}>Payment</Text>
-      <View style={styles.paymentPanel}>
-        <View style={styles.paymentHeaderRow}>
-          <Text style={styles.paymentTitle}>{payment.label}</Text>
-          <StatusChip label={payment.label} tone={payment.tone} />
-        </View>
-        <Text style={styles.bodyText}>{payment.detail}</Text>
+      <View style={styles.paymentBadgeOnlyPanel}>
+        <StatusChip label={payment.label} tone={payment.tone} />
       </View>
 
       <Text style={styles.sectionTitle}>Delivery Instructions</Text>
-      <TextCard text="Delivery instructions are provided by dispatch when available." />
+      <TextCard text="No delivery instructions provided." />
       <Text style={styles.sectionTitle}>Location Tips</Text>
-      <TextCard text={tip} />
+      <TextCard text="No location tips provided." />
       <View style={styles.buttonRow}>
         <SecondaryButton label="Open Stop Map" onPress={onOpenNavigation} />
         <SecondaryButton label="Call" onPress={onCall} />
         <SecondaryButton label="Message" onPress={onMessage} />
-      </View>
-      <View style={styles.buttonColumn}>
-        {canMarkArrived ? (
-          <PrimaryButton label="Arrived" onPress={onArrived} />
-        ) : (
-          <StatusBanner
-            tone="warning"
-            text="Preview only. Use Live Tracking and the current-step button to advance route progress."
-          />
-        )}
-        <SecondaryButton label="I’m Nearby" onPress={onAnnounceTip} />
       </View>
     </View>
   );
@@ -3403,6 +3395,15 @@ function formatStopAddress(stop: AssignedRouteStop): string {
     .join(', ');
 }
 
+function formatStopStreetAddress(stop: AssignedRouteStop): string {
+  const streetAddress = [stop.address.address1, stop.address.address2]
+    .map((part) => part?.trim() ?? '')
+    .filter(Boolean)
+    .join(', ');
+
+  return streetAddress.length === 0 ? formatStopAddress(stop) : streetAddress;
+}
+
 function formatRouteSequenceStopSubtitle(stop: AssignedRouteStop): string {
   const recipientName = stop.recipientName?.trim();
   return recipientName === undefined || recipientName === '' ? 'Delivery stop' : recipientName;
@@ -4181,11 +4182,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
   },
-  paymentHeaderRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
   paymentInlineRow: {
     alignItems: 'center',
     borderColor: '#eef2f6',
@@ -4195,18 +4191,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 12,
   },
-  paymentPanel: {
+  paymentBadgeOnlyPanel: {
+    alignItems: 'flex-start',
     backgroundColor: '#ffffff',
     borderColor: '#e5e7eb',
     borderRadius: 16,
     borderWidth: 1,
-    gap: 8,
     padding: 14,
-  },
-  paymentTitle: {
-    color: '#111827',
-    fontSize: 15,
-    fontWeight: '800',
   },
   timelineCard: {
     backgroundColor: '#ffffff',
