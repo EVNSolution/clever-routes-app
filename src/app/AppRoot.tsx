@@ -241,6 +241,7 @@ export default function App() {
   const [isRefreshingRoutes, setIsRefreshingRoutes] = useState(false);
   const [isStartingRoute, setIsStartingRoute] = useState(false);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
+  const [isPhotoActionSheetVisible, setIsPhotoActionSheetVisible] = useState(false);
   const [isCompletingStop, setIsCompletingStop] = useState(false);
   const [isFinishingRoute, setIsFinishingRoute] = useState(false);
   const loginDetailInputRefs = useRef<Record<LoginDetailInputId, TextInput | null>>({
@@ -1173,11 +1174,16 @@ export default function App() {
   }
 
   function handleAddDeliveryPhoto() {
-    Alert.alert('Add Photo', undefined, [
-      { text: 'Take Photo', onPress: () => { void handleCapturePhoto('camera'); } },
-      { text: 'Choose from Album', onPress: () => { void handleCapturePhoto('library'); } },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    setIsPhotoActionSheetVisible(true);
+  }
+
+  function handleDismissPhotoActionSheet() {
+    setIsPhotoActionSheetVisible(false);
+  }
+
+  function handleSelectPhotoSource(source: ProofPhotoCaptureSource) {
+    setIsPhotoActionSheetVisible(false);
+    void handleCapturePhoto(source);
   }
 
   async function handleCompleteCurrentStop() {
@@ -1687,6 +1693,12 @@ export default function App() {
           </View>
         ) : null}
       </KeyboardAvoidingView>
+      <DeliveryPhotoActionSheet
+        disabled={isCapturingPhoto}
+        onCancel={handleDismissPhotoActionSheet}
+        onSelectSource={handleSelectPhotoSource}
+        visible={isPhotoActionSheetVisible}
+      />
       {message !== null ? <TransientToast text={message} /> : null}
     </SafeAreaView>
   );
@@ -3139,6 +3151,52 @@ function MapOverview({
   );
 }
 
+function DeliveryPhotoActionSheet({
+  disabled,
+  onCancel,
+  onSelectSource,
+  visible,
+}: {
+  disabled?: boolean;
+  onCancel(): void;
+  onSelectSource(source: ProofPhotoCaptureSource): void;
+  visible: boolean;
+}) {
+  if (!visible) {
+    return null;
+  }
+
+  return (
+    <View accessibilityViewIsModal style={styles.photoActionSheetOverlay}>
+      <Pressable accessibilityLabel="Close Add Photo" accessibilityRole="button" onPress={onCancel} style={styles.photoActionSheetBackdrop} />
+      <View style={styles.photoActionSheetCard}>
+        <View style={styles.sheetHandle} />
+        <Text style={styles.photoActionSheetTitle}>Add Photo</Text>
+        <View style={styles.photoActionSheetActions}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={disabled}
+            onPress={() => onSelectSource('camera')}
+            style={[styles.photoActionSheetAction, disabled === true && styles.buttonDisabled]}
+          >
+            <Text style={styles.photoActionSheetActionText}>Take Photo</Text>
+          </Pressable>
+          <View style={styles.photoActionSheetDivider} />
+          <Pressable
+            accessibilityRole="button"
+            disabled={disabled}
+            onPress={() => onSelectSource('library')}
+            style={[styles.photoActionSheetAction, disabled === true && styles.buttonDisabled]}
+          >
+            <Text style={styles.photoActionSheetActionText}>Choose from Album</Text>
+          </Pressable>
+        </View>
+        <SecondaryButton compact disabled={disabled} label="Cancel" onPress={onCancel} />
+      </View>
+    </View>
+  );
+}
+
 function InfoPanel({ body, title, tone }: { body: string; title: string; tone: 'green' }) {
   return (
     <View style={[styles.infoPanel, tone === 'green' && styles.infoPanelGreen]}>
@@ -4534,6 +4592,64 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '900',
+  },
+  photoActionSheetOverlay: {
+    bottom: 0,
+    justifyContent: 'flex-end',
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 50,
+  },
+  photoActionSheetBackdrop: {
+    backgroundColor: 'rgba(15, 23, 42, 0.32)',
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  photoActionSheetCard: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e5e7eb',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderWidth: 1,
+    gap: 14,
+    paddingBottom: 22,
+    paddingHorizontal: 22,
+    paddingTop: 12,
+    ...shadow,
+  },
+  photoActionSheetTitle: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  photoActionSheetActions: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e5e7eb',
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  photoActionSheetAction: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 54,
+    paddingHorizontal: 18,
+    paddingVertical: 15,
+  },
+  photoActionSheetActionText: {
+    color: '#0b57d0',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  photoActionSheetDivider: {
+    backgroundColor: '#eef2f6',
+    height: 1,
   },
   sheetHandle: {
     alignSelf: 'center',

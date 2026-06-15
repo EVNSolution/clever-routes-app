@@ -83,8 +83,11 @@ describe('stop completion proof copy', () => {
     assert.match(appSource, /title="Complete Delivery"/u);
     assert.match(appSource, />Delivery Photo</u);
     assert.match(appSource, /label="Add Photo"/u);
-    assert.match(appSource, /text: 'Take Photo'/u);
-    assert.match(appSource, /text: 'Choose from Album'/u);
+    assert.match(appSource, /function DeliveryPhotoActionSheet/u);
+    assert.match(appSource, /photoActionSheetCard/u);
+    assert.match(appSource, />Take Photo</u);
+    assert.match(appSource, />Choose from Album</u);
+    assert.doesNotMatch(appSource, /Alert\.alert\('Add Photo'/u);
     assert.doesNotMatch(appSource, /label="Take Photo"/u);
     assert.doesNotMatch(appSource, /label="Choose Photo"/u);
     assert.match(appSource, /setMessage\('Add a delivery photo first\.'\)/u);
