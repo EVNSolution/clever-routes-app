@@ -88,10 +88,14 @@ describe('stop completion proof copy', () => {
     assert.match(appSource, /photoActionSheetAction:[\s\S]*borderColor: '#0b57d0'/u);
     assert.match(appSource, /photoActionSheetCancel:[\s\S]*borderColor: '#dc2626'/u);
     assert.match(appSource, /photoActionSheetCancelText:[\s\S]*color: '#dc2626'/u);
-    assert.match(appSource, /photoActionSheetAction:[\s\S]*minHeight: 44/u);
+    assert.match(appSource, /photoActionSheetAction:[\s\S]*height: 44/u);
+    assert.match(appSource, /photoActionSheetAction:[\s\S]*paddingVertical: 0/u);
     assert.match(appSource, /photoActionSheetActionText:[\s\S]*fontSize: 14/u);
-    assert.match(appSource, /photoActionSheetCancel:[\s\S]*minHeight: 44/u);
+    assert.match(appSource, /photoActionSheetActionText:[\s\S]*lineHeight: 18/u);
+    assert.match(appSource, /photoActionSheetCancel:[\s\S]*height: 44/u);
+    assert.match(appSource, /photoActionSheetCancel:[\s\S]*paddingVertical: 0/u);
     assert.match(appSource, /photoActionSheetCancelText:[\s\S]*fontSize: 14/u);
+    assert.match(appSource, /photoActionSheetCancelText:[\s\S]*lineHeight: 18/u);
     assert.match(appSource, />Take Photo</u);
     assert.match(appSource, />Choose from Album</u);
     assert.doesNotMatch(appSource, /Alert\.alert\('Add Photo'/u);
