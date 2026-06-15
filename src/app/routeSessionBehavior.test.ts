@@ -31,6 +31,13 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /<SecondaryButton compact label="View Stop Details"/u);
   });
 
+  it('bolds only the current Route Sequence item title', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+
+    assert.match(appSource, /style=\{\[styles\.timelineTitle, state === 'current' && styles\.timelineTitleCurrent\]\}/u);
+    assert.match(appSource, /timelineTitle:[\s\S]*fontWeight: '400'/u);
+    assert.match(appSource, /timelineTitleCurrent:[\s\S]*fontWeight: '700'/u);
+  });
 
   it('shows only basic stop addresses in Route Sequence stop rows', () => {
     const componentSource = getRouteSessionComponentSource();

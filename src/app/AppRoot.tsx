@@ -3026,7 +3026,7 @@ function TimelineRow({
         <Text style={[styles.timelineMarkerText, (state === 'completed' || state === 'current') && styles.timelineMarkerTextActive]}>{marker}</Text>
       </View>
       <View style={styles.routeHeaderText}>
-        <Text style={styles.timelineTitle}>{title}</Text>
+        <Text style={[styles.timelineTitle, state === 'current' && styles.timelineTitleCurrent]}>{title}</Text>
         {subtitle !== undefined ? <Text numberOfLines={2} style={styles.helperText}>{subtitle}</Text> : null}
       </View>
       {meta !== undefined ? <StatusChip compact label={meta} tone={metaTone} /> : null}
@@ -4318,6 +4318,10 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '400',
     lineHeight: 20,
+  },
+  timelineTitleCurrent: {
+    color: '#111827',
+    fontWeight: '700',
   },
   timelineMeta: {
     color: '#475467',
