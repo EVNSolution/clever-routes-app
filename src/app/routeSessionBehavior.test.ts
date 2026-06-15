@@ -31,6 +31,15 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /<SecondaryButton compact label="View Stop Details"/u);
   });
 
+
+  it('shows only basic stop addresses in Route Sequence stop rows', () => {
+    const componentSource = getRouteSessionComponentSource();
+
+    assert.match(componentSource, /title=\{formatStopStreetAddress\(stop\)\}/u);
+    assert.doesNotMatch(componentSource, /formatRouteSequenceStopSubtitle/u);
+    assert.doesNotMatch(componentSource, /subtitle=\{formatRouteSequenceStopSubtitle\(stop\)\}/u);
+  });
+
   it('passes current step context into map previews for current destination highlighting', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const nativeMapSource = readFileSync(nativeMapPath, 'utf8');

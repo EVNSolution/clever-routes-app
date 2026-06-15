@@ -2329,8 +2329,7 @@ function RouteSessionScreen({
             <TimelineRow
               key={stop.deliveryStopId}
               marker={String(stop.sequence)}
-              title={formatStopAddress(stop)}
-              subtitle={formatRouteSequenceStopSubtitle(stop)}
+              title={formatStopStreetAddress(stop)}
               state={state}
               meta={progressMeta}
               metaTone={metaTone}
@@ -3018,7 +3017,7 @@ function TimelineRow({
   metaTone?: 'blue' | 'green' | 'neutral';
   onPress?: () => void;
   state: 'completed' | 'current' | 'upcoming';
-  subtitle: string;
+  subtitle?: string;
   title: string;
 }) {
   const content = (
@@ -3028,7 +3027,7 @@ function TimelineRow({
       </View>
       <View style={styles.routeHeaderText}>
         <Text style={styles.timelineTitle}>{title}</Text>
-        <Text numberOfLines={2} style={styles.helperText}>{subtitle}</Text>
+        {subtitle !== undefined ? <Text numberOfLines={2} style={styles.helperText}>{subtitle}</Text> : null}
       </View>
       {meta !== undefined ? <StatusChip compact label={meta} tone={metaTone} /> : null}
     </>
@@ -3403,11 +3402,6 @@ function formatStopStreetAddress(stop: AssignedRouteStop): string {
     .join(', ');
 
   return streetAddress.length === 0 ? formatStopAddress(stop) : streetAddress;
-}
-
-function formatRouteSequenceStopSubtitle(stop: AssignedRouteStop): string {
-  const recipientName = stop.recipientName?.trim();
-  return recipientName === undefined || recipientName === '' ? 'Delivery stop' : recipientName;
 }
 
 function getNavigationTip(input: {
