@@ -134,6 +134,7 @@ import {
 } from '../domain/notifications/stopArrivalNotifications';
 import { createExpoStopArrivalNotificationService } from '../platform/expo/notifications/expoStopArrivalNotificationService';
 import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
+import { ROUTE_PREVIEW_COPY, ROUTE_PREVIEW_LABELS } from './routePreviewBehavior';
 
 type AppScreen =
   | 'arrivalCheck'
@@ -143,12 +144,14 @@ type AppScreen =
   | 'loginPhone'
   | 'loginDetail'
   | 'mainTabs'
-  | 'routeDetail'
+  | 'routePreview'
+  | 'routeSession'
   | 'stopCompleted'
   | 'stopDetails';
 type RouteTabId = ReturnType<typeof getMvpRouteTabs>[number]['id'];
 type RouteStatus = RouteSessionStatus;
-type StopDetailsBackTarget = 'liveTracking' | 'routeDetail';
+type StopDetailsBackTarget = 'liveTracking' | 'routeSession';
+type MapPreviewBackTarget = 'liveTracking' | 'routePreview' | 'routeSession';
 
 type StopProofDraft = {
   additionalNotes: string;
@@ -202,6 +205,7 @@ export default function App() {
   const [navigationStepIndex, setNavigationStepIndex] = useState(COMPANY_STEP_INDEX);
   const [selectedStopDetailsId, setSelectedStopDetailsId] = useState<string | null>(null);
   const [stopDetailsBackTarget, setStopDetailsBackTarget] = useState<StopDetailsBackTarget>('liveTracking');
+  const [mapPreviewBackTarget, setMapPreviewBackTarget] = useState<MapPreviewBackTarget>('routeSession');
   const [routeSessions, setRouteSessions] = useState<RouteSession[]>([]);
   const [routeReviewNote, setRouteReviewNote] = useState('');
   const [pendingStopArrivalNotification, setPendingStopArrivalNotification] = useState<StopArrivalNotificationData | null>(null);
@@ -354,7 +358,7 @@ export default function App() {
       setSubmission(toCompanyGuidanceSubmission(routeSession));
       setNavigationStepIndex(stopIndex + 1);
       setSelectedMainTab('home');
-      setScreen('routeDetail');
+      setScreen('routeSession');
       setMessage('This stop is already completed.');
       return;
     }
@@ -364,7 +368,7 @@ export default function App() {
       setSubmission(toCompanyGuidanceSubmission(routeSession));
       setNavigationStepIndex(stopIndex + 1);
       setSelectedMainTab('home');
-      setScreen('routeDetail');
+      setScreen('routeSession');
       setMessage('Arrival alert opened, but the route is not active yet. Start the session first.');
       return;
     }
@@ -767,7 +771,7 @@ export default function App() {
         setSelectedTab('active');
         setSelectedMainTab('home');
         setNavigationStepIndex(restoredStepIndex);
-        setScreen('routeDetail');
+        setScreen('routeSession');
         runAfterUiInteractions(() => {
           setMessage('Active route session restored. Continue from the current pickup or stop step.');
         });
@@ -953,15 +957,15 @@ export default function App() {
         navigationStepIndex: COMPANY_STEP_INDEX,
         routePlanId: routeSession.route.id,
       });
-      setScreen('routeDetail');
-      setMessage('Route session started. Continue the pickup and stop workflow in Route Details.');
+      setScreen('routeSession');
+      setMessage('Route session started. Continue the pickup and stop workflow in the session.');
     } finally {
       setIsStartingRoute(false);
       refreshOfflineQueueCount();
     }
   }
 
-  function handleOpenRouteDetail(routeId?: string) {
+  function handleOpenRoutePreview(routeId?: string) {
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
     if (routeSession === null) {
       setMessage('No route is available to review.');
@@ -971,7 +975,25 @@ export default function App() {
     setSelectedRouteId(routeSession.route.id);
     setSubmission(toCompanyGuidanceSubmission(routeSession));
     setSelectedMainTab('home');
-    setScreen('routeDetail');
+    setScreen('routePreview');
+  }
+
+  function handleOpenRouteSession(routeId?: string) {
+    const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
+    if (routeSession === null) {
+      setMessage('No route session is available to continue.');
+      return;
+    }
+
+    setSelectedRouteId(routeSession.route.id);
+    setSubmission(toCompanyGuidanceSubmission(routeSession));
+    setSelectedMainTab('home');
+    setScreen('routeSession');
+  }
+
+  function openMapPreviewFrom(backTarget: MapPreviewBackTarget) {
+    setMapPreviewBackTarget(backTarget);
+    setScreen('liveMapPreview');
   }
 
   async function handleCallStop(stop: AssignedRouteStop | null) {
@@ -1020,7 +1042,7 @@ export default function App() {
         navigationStepIndex: 1,
         routePlanId: selectedRoute.id,
       });
-      setScreen('routeDetail');
+      setScreen('routeSession');
       setMessage('Company pickup confirmed. Continue to the first stop.');
       return;
     }
@@ -1036,11 +1058,11 @@ export default function App() {
     }
 
     setSelectedStopDetailsId(currentStop.deliveryStopId);
-    setStopDetailsBackTarget('routeDetail');
+    setStopDetailsBackTarget('routeSession');
     setScreen('stopDetails');
   }
 
-  function handleOpenStopFromRouteDetail(stop: AssignedRouteStop) {
+  function handleOpenStopFromRouteSession(stop: AssignedRouteStop) {
     if (selectedRoute === null) {
       setMessage('No route is available to review.');
       return;
@@ -1053,7 +1075,7 @@ export default function App() {
     }
 
     setSelectedStopDetailsId(selectedStop.deliveryStopId);
-    setStopDetailsBackTarget('routeDetail');
+    setStopDetailsBackTarget('routeSession');
     setScreen('stopDetails');
   }
 
@@ -1095,7 +1117,7 @@ export default function App() {
       return;
     }
 
-    setScreen('routeDetail');
+    setScreen('routeSession');
   }
 
   async function handleCapturePhoto(source: ProofPhotoCaptureSource) {
@@ -1333,12 +1355,12 @@ export default function App() {
 
     if (routeStatus === 'active') {
       setSelectedMainTab('home');
-      setScreen('routeDetail');
+      setScreen('routeSession');
       return;
     }
 
     setSelectedMainTab('home');
-    setScreen('routeDetail');
+    setScreen('routeSession');
   }
 
   useEffect(() => {
@@ -1354,15 +1376,16 @@ export default function App() {
         case 'loginDetail':
           setScreen('loginPhone');
           return true;
-        case 'routeDetail':
+        case 'routePreview':
+        case 'routeSession':
           setSelectedMainTab('home');
           setScreen('mainTabs');
           return true;
         case 'liveTracking':
-          setScreen('routeDetail');
+          setScreen('routeSession');
           return true;
         case 'liveMapPreview':
-          setScreen('routeDetail');
+          setScreen(mapPreviewBackTarget);
           return true;
         case 'stopDetails':
           setSelectedStopDetailsId(null);
@@ -1372,7 +1395,7 @@ export default function App() {
           setScreen('stopDetails');
           return true;
         case 'stopCompleted':
-          setScreen('routeDetail');
+          setScreen('routeSession');
           return true;
         case 'completedDeliveries':
           setSelectedMainTab('home');
@@ -1382,7 +1405,7 @@ export default function App() {
     });
 
     return () => subscription.remove();
-  }, [screen, stopDetailsBackTarget]);
+  }, [mapPreviewBackTarget, screen, stopDetailsBackTarget]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -1445,6 +1468,7 @@ export default function App() {
               isStartingRoute={isStartingRoute}
               onBrowseRoutes={openRoutesRoot}
               onContinueRoute={handleContinueActiveRoute}
+              onOpenRoutePreview={() => selectedRoute !== null ? handleOpenRoutePreview(selectedRoute.id) : undefined}
               onReviewNoteChange={setRouteReviewNote}
               onStartRoute={() => selectedRoute !== null ? handleStartRoute(selectedRoute.id) : undefined}
               route={selectedRoute}
@@ -1459,7 +1483,8 @@ export default function App() {
               isRefreshingRoutes={isRefreshingRoutes || isLoggingIn}
               isStartingRoute={isStartingRoute}
               onOpenCompletedDeliveries={() => setScreen('completedDeliveries')}
-              onOpenRouteDetail={handleOpenRouteDetail}
+              onOpenRoutePreview={handleOpenRoutePreview}
+              onContinueRoute={handleOpenRouteSession}
               onRefreshRoutes={handleRefreshRoutes}
               onSelectRoute={setSelectedRouteId}
               onSelectTab={setSelectedTab}
@@ -1488,8 +1513,8 @@ export default function App() {
             />
           ) : null}
 
-          {screen === 'routeDetail' && selectedRoute !== null ? (
-            <RouteDetailScreen
+          {screen === 'routeSession' && selectedRoute !== null ? (
+            <RouteSessionScreen
               allStopsCompleted={allStopsCompleted}
               company={currentCompany}
               completedStopIds={completedStopIds}
@@ -1503,9 +1528,9 @@ export default function App() {
               onArrived={handleArrivedAtStep}
               onBack={openHomeRoot}
               onFinishRoute={handleManualFinishRoute}
-              onOpenMapPreview={() => setScreen('liveMapPreview')}
+              onOpenMapPreview={() => openMapPreviewFrom('routeSession')}
               onOpenNavigation={() => handleOpenRouteNavigation(selectedRoute)}
-              onOpenStop={handleOpenStopFromRouteDetail}
+              onOpenStop={handleOpenStopFromRouteSession}
               onStartRoute={() => handleStartRoute(selectedRoute.id)}
               onViewCurrentStop={handleViewCurrentStop}
               route={selectedRoute}
@@ -1520,8 +1545,8 @@ export default function App() {
               company={currentCompany}
               isCompanyStep={isCompanyStep}
               onArrived={handleArrivedAtStep}
-              onBack={() => setScreen('routeDetail')}
-              onOpenMapPreview={() => setScreen('liveMapPreview')}
+              onBack={() => setScreen('routeSession')}
+              onOpenMapPreview={() => openMapPreviewFrom('liveTracking')}
               onOpenNavigation={() => handleOpenRouteNavigation(selectedRoute)}
               onViewStop={handleViewCurrentStop}
               route={selectedRoute}
@@ -1530,11 +1555,20 @@ export default function App() {
             />
           ) : null}
 
+          {screen === 'routePreview' && selectedRoute !== null ? (
+            <RoutePreviewScreen
+              mapStyleUrl={driverMapStyleUrl}
+              onBack={openHomeRoot}
+              onOpenMapPreview={() => openMapPreviewFrom('routePreview')}
+              route={selectedRoute}
+            />
+          ) : null}
+
           {screen === 'liveMapPreview' && selectedRoute !== null ? (
             <LiveMapPreviewScreen
               currentStepIndex={navigationStepIndex}
               mapStyleUrl={driverMapStyleUrl}
-              onBack={() => setScreen('routeDetail')}
+              onBack={() => setScreen(mapPreviewBackTarget)}
               route={selectedRoute}
             />
           ) : null}
@@ -1578,7 +1612,7 @@ export default function App() {
               completedStop={recentlyCompletedStop}
               completedStopIds={completedStopIds}
               completedStopTimes={completedStopTimes}
-              onBackToRoute={() => setScreen('routeDetail')}
+              onBackToRoute={() => setScreen('routeSession')}
               onContinue={handleContinueAfterStopCompleted}
               route={selectedRoute}
             />
@@ -1791,6 +1825,7 @@ function HomePage({
   isStartingRoute,
   onBrowseRoutes,
   onContinueRoute,
+  onOpenRoutePreview,
   onReviewNoteChange,
   onStartRoute,
   route,
@@ -1804,6 +1839,7 @@ function HomePage({
   isStartingRoute: boolean;
   onBrowseRoutes(): void;
   onContinueRoute(): void;
+  onOpenRoutePreview(): void;
   onReviewNoteChange(value: string): void;
   onStartRoute(): void;
   route: AssignedRoute | null;
@@ -1863,7 +1899,7 @@ function HomePage({
         ) : (
           <View style={styles.buttonColumn}>
             <PrimaryButton disabled={isStartingRoute} label={routeStatus === 'active' ? 'Continue Session' : 'Start Session'} loading={isStartingRoute} onPress={routeStatus === 'active' ? onContinueRoute : onStartRoute} />
-            <SecondaryButton label="Route Details" onPress={onContinueRoute} />
+            <SecondaryButton label="Route Details" onPress={onOpenRoutePreview} />
           </View>
         )}
       </View>
@@ -1876,7 +1912,8 @@ function RoutesPage({
   isRefreshingRoutes,
   isStartingRoute,
   onOpenCompletedDeliveries,
-  onOpenRouteDetail,
+  onOpenRoutePreview,
+  onContinueRoute,
   onRefreshRoutes,
   onSelectRoute,
   onSelectTab,
@@ -1891,7 +1928,8 @@ function RoutesPage({
   isRefreshingRoutes: boolean;
   isStartingRoute: boolean;
   onOpenCompletedDeliveries(): void;
-  onOpenRouteDetail(routeId: string): void;
+  onOpenRoutePreview(routeId: string): void;
+  onContinueRoute(routeId: string): void;
   onRefreshRoutes(): void;
   onSelectRoute(routeId: string): void;
   onSelectTab(tab: RouteTabId): void;
@@ -1976,11 +2014,11 @@ function RoutesPage({
           {selectedTab === 'completed' ? (
             <PrimaryButton label="View Completed Deliveries" onPress={onOpenCompletedDeliveries} />
           ) : selectedTab === 'active' ? (
-            <PrimaryButton label="Continue Session" onPress={() => onOpenRouteDetail(activeSession.route.id)} />
+            <PrimaryButton label="Continue Session" onPress={() => onContinueRoute(activeSession.route.id)} />
           ) : (
             <View style={styles.buttonColumn}>
               <PrimaryButton disabled={isStartingRoute} label="Start Session" loading={isStartingRoute} onPress={() => onStartRoute(activeSession.route.id)} />
-              <SecondaryButton label="Route Details" onPress={() => onOpenRouteDetail(activeSession.route.id)} />
+              <SecondaryButton label="Route Details" onPress={() => onOpenRoutePreview(activeSession.route.id)} />
             </View>
           )}
         </View>
@@ -2055,7 +2093,54 @@ function ProfilePage({
   );
 }
 
-function RouteDetailScreen({
+
+function RoutePreviewScreen({
+  mapStyleUrl,
+  onBack,
+  onOpenMapPreview,
+  route,
+}: {
+  mapStyleUrl: string;
+  onBack(): void;
+  onOpenMapPreview(): void;
+  route: AssignedRoute;
+}) {
+  return (
+    <View style={styles.screenStack}>
+      <ScreenHeader hideRightAction onBack={onBack} title={ROUTE_PREVIEW_COPY.title} />
+
+      <View style={styles.summaryCard}>
+        <DataRow label={ROUTE_PREVIEW_LABELS.date} value={route.deliveryDate} />
+        <DataRow label={ROUTE_PREVIEW_LABELS.region} value={getRouteRegion(route)} />
+        <View style={styles.summaryGrid}>
+          <MetricBlock label={ROUTE_PREVIEW_LABELS.stops} value={formatStopCount(route.stops.length)} />
+          <MetricBlock label={ROUTE_PREVIEW_LABELS.distance} value={formatAssignedRouteDistance(route.routeMetrics)} />
+          <MetricBlock label={ROUTE_PREVIEW_LABELS.time} value={formatAssignedRouteDuration(route.routeMetrics)} />
+        </View>
+      </View>
+
+      <View style={styles.routePreviewCard}>
+        <Text style={styles.sectionTitle}>{ROUTE_PREVIEW_LABELS.map}</Text>
+        <Pressable
+          accessibilityLabel={ROUTE_PREVIEW_COPY.mapAccessibilityLabel}
+          accessibilityRole="button"
+          onPress={onOpenMapPreview}
+          style={styles.routePreviewCanvas}
+        >
+          <View pointerEvents="none">
+            <MapOverview allowMapDragPan={false} route={route} currentStepIndex={COMPANY_STEP_INDEX} mapStyleUrl={mapStyleUrl} />
+          </View>
+        </Pressable>
+      </View>
+
+      <View style={styles.summaryCard}>
+        <DataRow label={ROUTE_PREVIEW_LABELS.sequence} value={formatRouteSequence(route)} />
+      </View>
+    </View>
+  );
+}
+
+function RouteSessionScreen({
   allStopsCompleted,
   company,
   completedStopIds,
@@ -2121,7 +2206,7 @@ function RouteDetailScreen({
 
   return (
     <View style={styles.screenStack}>
-      <ScreenHeader onBack={onBack} title="Route Details" />
+      <ScreenHeader onBack={onBack} title="Route Session" />
       <View style={styles.summaryCard}>
         <Text numberOfLines={1} style={styles.cardTitle}>{company?.companyDisplayName ?? route.shopDomain}</Text>
         <DataRow label="Date" value={route.deliveryDate} />
@@ -2548,19 +2633,35 @@ function CompletedDeliveriesScreen({
   );
 }
 
-function ScreenHeader({ onBack, onRightPress, rightLabel, title }: { onBack?(): void; onRightPress?(): void; rightLabel?: string; title: string }) {
+function ScreenHeader({
+  hideRightAction = false,
+  onBack,
+  onRightPress,
+  rightLabel,
+  title,
+}: {
+  hideRightAction?: boolean;
+  onBack?(): void;
+  onRightPress?(): void;
+  rightLabel?: string;
+  title: string;
+}) {
   const rightContent = rightLabel ?? 'Menu';
+  const rightSlot = hideRightAction ? (
+    <Text style={styles.headerSideText} />
+  ) : onRightPress === undefined ? (
+    <Text style={rightLabel === undefined ? styles.headerSideText : styles.headerActionText}>{rightContent}</Text>
+  ) : (
+    <Pressable accessibilityRole="button" onPress={onRightPress}>
+      <Text style={styles.headerActionText}>{rightContent}</Text>
+    </Pressable>
+  );
+
   return (
     <View style={styles.screenHeader}>
       {onBack === undefined ? <Text style={styles.headerSideText} /> : <Pressable accessibilityRole="button" onPress={onBack}><Text style={styles.headerActionText}>Back</Text></Pressable>}
       <Text numberOfLines={1} style={styles.headerTitle}>{title}</Text>
-      {onRightPress === undefined ? (
-        <Text style={rightLabel === undefined ? styles.headerSideText : styles.headerActionText}>{rightContent}</Text>
-      ) : (
-        <Pressable accessibilityRole="button" onPress={onRightPress}>
-          <Text style={styles.headerActionText}>{rightContent}</Text>
-        </Pressable>
-      )}
+      {rightSlot}
     </View>
   );
 }

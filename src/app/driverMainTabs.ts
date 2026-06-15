@@ -30,7 +30,8 @@ export type DriverAppScreenId =
   | 'loginDetail'
   | 'loginPhone'
   | 'mainTabs'
-  | 'routeDetail'
+  | 'routePreview'
+  | 'routeSession'
   | 'stopCompleted'
   | 'stopDetails';
 
@@ -41,7 +42,7 @@ export function getDriverMainTabs(): DriverMainTab[] {
 }
 
 export function shouldShowDriverBottomTabs(screen: DriverAppScreenId): boolean {
-  return screen !== 'loginPhone' && screen !== 'loginDetail' && screen !== 'liveMapPreview';
+  return screen !== 'loginPhone' && screen !== 'loginDetail' && screen !== 'liveMapPreview' && screen !== 'routePreview';
 }
 
 export function getVisibleBottomTab(input: {

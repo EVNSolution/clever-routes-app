@@ -1,7 +1,7 @@
 export const ROUTE_START_SESSION_CONFIRMATION = {
   title: 'Start this session?',
   baseMessage:
-    'This opens the route session for the selected delivery. Pickup completion stays inside Route Details.',
+    'This opens the route session for the selected delivery. Pickup completion stays inside the session workflow.',
   cancelLabel: 'Cancel',
   confirmLabel: 'Start Session',
 } as const;

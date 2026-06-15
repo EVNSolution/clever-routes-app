@@ -33,6 +33,7 @@ export type MvpScenarioScreenId =
   | 'login'
   | 'routeList'
   | 'routeDetail'
+  | 'routeSession'
   | 'liveTracking'
   | 'stopDetails'
   | 'arrivalCheck'
@@ -107,12 +108,20 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
         'Show current, unfinished, and future assigned routes from nearest date to farthest, grouped into Pending, In Progress, Unfinished, and Completed tabs.',
       primaryAction: 'Start Session',
     },
+    // routeDetail is metadata for the read-only preview entry; the live operational screen is routeSession.
     {
       id: 'routeDetail',
       title: 'Route Details',
       purpose:
-        'Show company information, route date, region, and ordered stops before delivery starts.',
-      primaryAction: 'Start Session',
+        'Show a compact read-only preview with date, map, region, stop count, distance, time, and sequence.',
+      primaryAction: 'Review Route',
+    },
+    {
+      id: 'routeSession',
+      title: 'Route Session',
+      purpose:
+        'Run the operational pickup, navigation, stop, proof, and completion workflow after Start or Continue Session.',
+      primaryAction: 'Continue Session',
     },
     {
       id: 'liveTracking',

@@ -35,7 +35,8 @@ describe('route start session confirmation', () => {
     const [title, message, buttons, options] = alertPayload!;
     assert.equal(title, ROUTE_START_SESSION_CONFIRMATION.title);
     assert.match(message, /opens the route session/i);
-    assert.match(message, /Pickup completion stays inside Route Details/i);
+    assert.match(message, /Pickup completion stays inside the session workflow/i);
+    assert.doesNotMatch(message, /inside Route Details/i);
     assert.doesNotMatch(message, /Start pickup/i);
     assert.doesNotMatch(message, /Warning:/i);
     assert.deepEqual(options, { cancelable: true });

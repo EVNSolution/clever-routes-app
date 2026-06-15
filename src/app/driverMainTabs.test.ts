@@ -27,14 +27,16 @@ describe('driver main tab IA', () => {
     assert.equal(shouldShowDriverBottomTabs('loginPhone'), false);
     assert.equal(shouldShowDriverBottomTabs('loginDetail'), false);
     assert.equal(shouldShowDriverBottomTabs('liveMapPreview'), false);
+    assert.equal(shouldShowDriverBottomTabs('routePreview'), false);
     assert.equal(shouldShowDriverBottomTabs('mainTabs'), true);
-    assert.equal(shouldShowDriverBottomTabs('routeDetail'), true);
+    assert.equal(shouldShowDriverBottomTabs('routeSession'), true);
     assert.equal(shouldShowDriverBottomTabs('liveTracking'), true);
   });
 
   it('keeps active route subflow visually owned by Home', () => {
     assert.equal(getVisibleBottomTab({ screen: 'mainTabs', selectedMainTab: 'routes' }), 'routes');
-    assert.equal(getVisibleBottomTab({ screen: 'routeDetail', selectedMainTab: 'routes' }), 'home');
+    assert.equal(getVisibleBottomTab({ screen: 'routeSession', selectedMainTab: 'routes' }), 'home');
+    assert.equal(getVisibleBottomTab({ screen: 'routePreview', selectedMainTab: 'routes' }), 'home');
     assert.equal(getVisibleBottomTab({ screen: 'completedDeliveries', selectedMainTab: 'profile' }), 'home');
   });
 
