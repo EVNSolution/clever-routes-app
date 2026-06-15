@@ -2229,10 +2229,11 @@ function RouteSessionScreen({
     : routeStatus === 'active' && allStopsCompleted
       ? { disabled: isFinishingRoute, label: 'Finish Route', loading: isFinishingRoute, onPress: onFinishRoute }
       : routeStatus === 'active' && isCompanyStep
-        ? { disabled: false, label: 'Find Next Stop', loading: false, onPress: onArrived }
+        ? { disabled: false, label: 'Complete Pickup', loading: false, onPress: onArrived }
         : routeStatus === 'active'
-          ? { disabled: false, label: 'Arrived', loading: false, onPress: onArrived }
+          ? { disabled: false, label: 'Add Proof & Tip', loading: false, onPress: onArrived }
           : null;
+  const showPrimaryActionInCurrentTask = routeStatus === 'active' && !allStopsCompleted && primaryProgressAction !== null;
 
   return (
     <View style={styles.screenStack}>
@@ -2269,6 +2270,19 @@ function RouteSessionScreen({
             </View>
             {currentTaskPayment !== null && currentTaskPayment.tone !== 'green' ? (
               <StatusChip compact label={currentTaskPayment.label} tone={currentTaskPayment.tone} />
+            ) : null}
+          </View>
+          <View style={styles.currentTaskActions}>
+            {showPrimaryActionInCurrentTask ? (
+              <PrimaryButton
+                disabled={primaryProgressAction.disabled}
+                label={primaryProgressAction.label}
+                loading={primaryProgressAction.loading}
+                onPress={primaryProgressAction.onPress}
+              />
+            ) : null}
+            {routeStatus === 'active' && !isCompanyStep && stop !== null ? (
+              <SecondaryButton compact label="View Stop Details" onPress={onViewCurrentStop} />
             ) : null}
           </View>
         </View>
@@ -2313,16 +2327,13 @@ function RouteSessionScreen({
       {deliveryFinishResult?.flowState === 'delivery_finished' ? <StatusBanner tone="green" text={deliveryFinishResult.message} /> : null}
 
       <View style={styles.buttonColumn}>
-        {primaryProgressAction !== null ? (
+        {primaryProgressAction !== null && !showPrimaryActionInCurrentTask ? (
           <PrimaryButton
             disabled={primaryProgressAction.disabled}
             label={primaryProgressAction.label}
             loading={primaryProgressAction.loading}
             onPress={primaryProgressAction.onPress}
           />
-        ) : null}
-        {routeStatus === 'active' && !isCompanyStep && stop !== null ? (
-          <SecondaryButton label="View Stop Details" onPress={onViewCurrentStop} />
         ) : null}
         {routeStatus === 'active' ? <SecondaryButton label="Map Preview" onPress={onOpenMapPreview} /> : null}
         <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
@@ -3084,6 +3095,7 @@ function MapOverview({
       <View style={[styles.mapCanvas, mapSize === 'live' && styles.liveMapCanvas, mapSize === 'full' && styles.fullMapCanvas]}>
         <NativeRouteMapPreview
           allowDragPan={allowMapDragPan}
+          currentStepIndex={currentStepIndex}
           mapStyleUrl={mapStyleUrl}
           onUnavailable={handleInteractiveMapUnavailable}
           route={route}
@@ -3118,13 +3130,16 @@ function MapOverview({
       <View style={[styles.mapRoad, styles.mapRoadTwo]} />
       <View style={[styles.mapRouteLine, styles.mapRouteLineOne]} />
       <View style={[styles.mapRouteLine, styles.mapRouteLineTwo]} />
-      <View style={styles.currentLocationPulse}><View style={styles.currentLocationDot} /></View>
-      {route.stops.slice(0, 3).map((stop, index) => (
-        <View key={stop.deliveryStopId} style={[styles.mapMarker, getMapMarkerStyle(index)]}>
-          <Text style={styles.mapMarkerText}>{stop.sequence}</Text>
-        </View>
-      ))}
-      <View style={styles.mapLastMarker}><Text style={styles.mapLastMarkerText}>{currentStepIndex >= route.stops.length ? 'Last' : 'Next'}</Text></View>
+      {route.stops.slice(0, 3).map((stop, index) => {
+        const isCurrentStop = currentStepIndex === index + 1;
+
+        return (
+          <View key={stop.deliveryStopId} style={[styles.mapMarker, getMapMarkerStyle(index), isCurrentStop && styles.mapMarkerCurrent]}>
+            <Text style={styles.mapMarkerText}>{stop.sequence}</Text>
+          </View>
+        );
+      })}
+      <View style={styles.mapLastMarker}><Text style={styles.mapLastMarkerText}>{currentStepIndex >= route.stops.length ? 'Last' : currentStepIndex === COMPANY_STEP_INDEX ? 'Pickup' : `Stop ${currentStepIndex}`}</Text></View>
       <View style={styles.mapPreviewFallback}>
         <Text style={styles.mapPreviewFallbackTitle}>Route preview</Text>
         <Text style={styles.mapPreviewFallbackText}>{previewState.message}</Text>
@@ -4265,6 +4280,9 @@ const styles = StyleSheet.create({
     gap: 14,
     padding: 16,
   },
+  currentTaskActions: {
+    gap: 8,
+  },
   timelineRow: {
     alignItems: 'center',
     borderRadius: 14,
@@ -4467,11 +4485,19 @@ const styles = StyleSheet.create({
   mapMarker: {
     alignItems: 'center',
     backgroundColor: '#0b57d0',
-    borderRadius: 17,
-    height: 34,
+    borderRadius: 15,
+    height: 30,
     justifyContent: 'center',
     position: 'absolute',
-    width: 34,
+    width: 30,
+  },
+  mapMarkerCurrent: {
+    backgroundColor: '#f97316',
+    borderColor: '#fed7aa',
+    borderRadius: 19,
+    borderWidth: 3,
+    height: 38,
+    width: 38,
   },
   mapMarkerText: {
     color: '#ffffff',

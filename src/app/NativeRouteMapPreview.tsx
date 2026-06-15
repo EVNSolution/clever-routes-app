@@ -9,17 +9,20 @@ const CAMERA_PADDING = { bottom: 58, left: 42, right: 42, top: 58 } as const;
 
 type NativeRouteMapPreviewProps = {
   allowDragPan?: boolean;
+  currentStepIndex: number;
   mapStyleUrl: string;
   onUnavailable(): void;
   route: AssignedRoute;
 };
 
-export function NativeRouteMapPreview({ allowDragPan = true, mapStyleUrl, onUnavailable, route }: NativeRouteMapPreviewProps) {
+export function NativeRouteMapPreview({ allowDragPan = true, currentStepIndex, mapStyleUrl, onUnavailable, route }: NativeRouteMapPreviewProps) {
   const cameraRef = useRef<CameraRef>(null);
   const mapLoadKey = `${mapStyleUrl}:${route.id}`;
   const [mapLoadedState, setMapLoadedState] = useState<{ key: string; loaded: true } | null>(null);
   const mapLoaded = mapLoadedState?.key === mapLoadKey;
   const model = useMemo(() => buildRouteMapGeoJson(route), [route]);
+  const currentStopSequence = currentStepIndex <= 0 ? null : route.stops[currentStepIndex - 1]?.sequence ?? null;
+  const currentDestinationLabel = currentStepIndex <= 0 ? 'Depot pickup' : currentStopSequence === null ? null : `Current: Stop ${currentStopSequence}`;
 
   useEffect(() => {
     if (model !== null) {
@@ -105,30 +108,39 @@ export function NativeRouteMapPreview({ allowDragPan = true, mapStyleUrl, onUnav
           id="route-preview-depot"
           lngLat={model.depotFeature.geometry.coordinates as [number, number]}
         >
-          <View style={[styles.markerHalo, styles.depotMarkerHalo]}>
-            <View style={[styles.markerDot, styles.depotMarkerDot]}>
+          <View style={[styles.markerHalo, styles.depotMarkerHalo, currentStepIndex <= 0 && styles.currentMarkerHalo]}>
+            <View style={[styles.markerDot, styles.depotMarkerDot, currentStepIndex <= 0 && styles.currentMarkerDot]}>
               <Text style={styles.markerText}>{model.depotFeature.properties.label}</Text>
             </View>
           </View>
         </Marker>
-        {model.stopCollection.features.map((feature) => (
-          <Marker
-            anchor="center"
-            id={`route-preview-stop-${feature.properties.sequence}`}
-            key={feature.properties.sequence}
-            lngLat={feature.geometry.coordinates as [number, number]}
-          >
-            <View style={styles.markerHalo}>
-              <View style={styles.markerDot}>
-                <Text style={styles.markerText}>{feature.properties.label}</Text>
+        {model.stopCollection.features.map((feature) => {
+          const isCurrentStop = feature.properties.sequence === currentStopSequence;
+
+          return (
+            <Marker
+              anchor="center"
+              id={`route-preview-stop-${feature.properties.sequence}`}
+              key={feature.properties.sequence}
+              lngLat={feature.geometry.coordinates as [number, number]}
+            >
+              <View style={[styles.markerHalo, isCurrentStop && styles.currentMarkerHalo]}>
+                <View style={[styles.markerDot, isCurrentStop && styles.currentMarkerDot]}>
+                  <Text style={styles.markerText}>{feature.properties.label}</Text>
+                </View>
               </View>
-            </View>
-          </Marker>
-        ))}
+            </Marker>
+          );
+        })}
       </Map>
       <View pointerEvents="none" style={styles.badge}>
         <Text style={styles.badgeText}>Interactive map</Text>
       </View>
+      {currentDestinationLabel !== null ? (
+        <View pointerEvents="none" style={styles.currentDestinationBadge}>
+          <Text style={styles.currentDestinationBadgeText}>{currentDestinationLabel}</Text>
+        </View>
+      ) : null}
       <View pointerEvents="none" style={styles.hint}>
         <Text style={styles.hintText}>{allowDragPan ? 'Pinch to zoom · Drag to pan' : 'Tap for full map'}</Text>
       </View>
@@ -165,6 +177,29 @@ const styles = StyleSheet.create({
   depotMarkerHalo: {
     backgroundColor: '#ecfdf3',
   },
+  currentDestinationBadge: {
+    backgroundColor: 'rgba(249, 115, 22, 0.92)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    position: 'absolute',
+    right: 14,
+    top: 16,
+  },
+  currentDestinationBadgeText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  currentMarkerDot: {
+    backgroundColor: '#f97316',
+  },
+  currentMarkerHalo: {
+    backgroundColor: '#fed7aa',
+    borderRadius: 17,
+    height: 34,
+    width: 34,
+  },
   hint: {
     backgroundColor: 'rgba(255, 255, 255, 0.92)',
     borderRadius: 999,
@@ -193,10 +228,10 @@ const styles = StyleSheet.create({
   markerHalo: {
     alignItems: 'center',
     backgroundColor: '#ffffff',
-    borderRadius: 16,
-    height: 32,
+    borderRadius: 14,
+    height: 28,
     justifyContent: 'center',
-    width: 32,
+    width: 28,
   },
   markerText: {
     color: '#ffffff',
