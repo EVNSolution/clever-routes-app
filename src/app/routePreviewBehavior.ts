@@ -57,12 +57,12 @@ export type RoutePreviewSequence = {
   overflowCount: number;
 };
 
-export function formatRoutePreviewRegion(route: Pick<AssignedRoute, 'stops' | 'timezone'>): string {
+export function buildRoutePreviewRegionItems(route: Pick<AssignedRoute, 'stops' | 'timezone'>): string[] {
   const areas = uniqueNonEmpty(
     route.stops.map((stop) => formatRoutePreviewArea(stop)),
   );
 
-  return areas.length === 0 ? route.timezone : areas.join(', ');
+  return areas.length === 0 ? [route.timezone] : areas;
 }
 
 export function buildRoutePreviewSequence(

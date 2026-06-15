@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 
 import {
   buildRoutePreviewSequence,
-  formatRoutePreviewRegion,
+  buildRoutePreviewRegionItems,
   ROUTE_PREVIEW_ALLOWED_ACTIONS,
   ROUTE_PREVIEW_COPY,
   ROUTE_PREVIEW_PROHIBITED_ACTION_LABELS,
@@ -45,8 +45,8 @@ describe('route preview behavior', () => {
   });
 
 
-  it('formats Region as full delivery areas instead of hiding it behind timezone-only fallback', () => {
-    assert.equal(formatRoutePreviewRegion(sampleAssignedRoute), 'Toronto, ON');
+  it('formats Region as compact list items instead of one long string', () => {
+    assert.deepEqual(buildRoutePreviewRegionItems(sampleAssignedRoute), ['Toronto, ON']);
 
     const mixedAreaRoute = {
       ...sampleAssignedRoute,
@@ -60,7 +60,7 @@ describe('route preview behavior', () => {
       })),
     };
 
-    assert.equal(formatRoutePreviewRegion(mixedAreaRoute), 'Toronto, ON, Mississauga, ON');
+    assert.deepEqual(buildRoutePreviewRegionItems(mixedAreaRoute), ['Toronto, ON', 'Mississauga, ON']);
   });
 
   it('formats Sequence as a compact ordered address list, not numeric path markers only', () => {
@@ -85,7 +85,8 @@ describe('route preview behavior', () => {
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.date/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.map/u);
     assert.match(componentSource, /RoutePreviewRegionBlock/u);
-    assert.match(readFileSync(appRootPath, 'utf8'), /function RoutePreviewRegionBlock[\s\S]*ROUTE_PREVIEW_LABELS\.region/u);
+    assert.match(componentSource, /buildRoutePreviewRegionItems/u);
+    assert.match(readFileSync(appRootPath, 'utf8'), /function RoutePreviewRegionBlock[\s\S]*ROUTE_PREVIEW_LABELS\.region[\s\S]*items\.map/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.stops/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.distance/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.time/u);

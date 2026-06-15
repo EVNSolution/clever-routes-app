@@ -136,7 +136,7 @@ import { createExpoStopArrivalNotificationService } from '../platform/expo/notif
 import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
 import {
   buildRoutePreviewSequence,
-  formatRoutePreviewRegion,
+  buildRoutePreviewRegionItems,
   ROUTE_PREVIEW_COPY,
   ROUTE_PREVIEW_LABELS,
 } from './routePreviewBehavior';
@@ -2100,11 +2100,15 @@ function ProfilePage({
 
 
 
-function RoutePreviewRegionBlock({ value }: { value: string }) {
+function RoutePreviewRegionBlock({ items }: { items: string[] }) {
   return (
     <View style={styles.routePreviewRegionBlock}>
       <Text style={styles.routePreviewRegionLabel}>{ROUTE_PREVIEW_LABELS.region}</Text>
-      <Text style={styles.routePreviewRegionValue}>{value}</Text>
+      <View style={styles.routePreviewRegionList}>
+        {items.map((item) => (
+          <Text key={item} style={styles.routePreviewRegionItem}>{item}</Text>
+        ))}
+      </View>
     </View>
   );
 }
@@ -2128,7 +2132,7 @@ function RoutePreviewScreen({
 
       <View style={styles.summaryCard}>
         <DataRow label={ROUTE_PREVIEW_LABELS.date} value={route.deliveryDate} />
-        <RoutePreviewRegionBlock value={formatRoutePreviewRegion(route)} />
+        <RoutePreviewRegionBlock items={buildRoutePreviewRegionItems(route)} />
         <View style={styles.summaryGrid}>
           <MetricBlock label={ROUTE_PREVIEW_LABELS.stops} value={formatStopCount(route.stops.length)} />
           <MetricBlock label={ROUTE_PREVIEW_LABELS.distance} value={formatAssignedRouteDistance(route.routeMetrics)} />
@@ -4208,19 +4212,22 @@ const styles = StyleSheet.create({
   routePreviewRegionBlock: {
     borderBottomColor: '#eef2f6',
     borderBottomWidth: 1,
-    gap: 6,
-    paddingBottom: 12,
+    gap: 4,
+    paddingBottom: 8,
   },
   routePreviewRegionLabel: {
     color: '#667085',
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 12,
+    fontWeight: '400',
   },
-  routePreviewRegionValue: {
-    color: '#111827',
-    fontSize: 15,
-    fontWeight: '700',
-    lineHeight: 22,
+  routePreviewRegionList: {
+    gap: 2,
+  },
+  routePreviewRegionItem: {
+    color: '#475467',
+    fontSize: 13,
+    fontWeight: '400',
+    lineHeight: 18,
   },
   routePreviewCanvas: {
     borderRadius: 16,
