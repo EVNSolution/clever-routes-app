@@ -1162,7 +1162,10 @@ export default function App() {
         });
       }
 
-      setMessage(formatPhotoResult(captureResult, uploadResult));
+      const photoMessage = formatPhotoResult(captureResult, uploadResult);
+      if (photoMessage !== null) {
+        setMessage(photoMessage);
+      }
     } finally {
       setIsCapturingPhoto(false);
       refreshOfflineQueueCount();
@@ -1617,13 +1620,11 @@ export default function App() {
               draft={getProofDraft(proofDrafts[currentStop.deliveryStopId])}
               isCapturingPhoto={isCapturingPhoto}
               isCompletingStop={isCompletingStop || isFinishingRoute}
-              mediaResult={proofMediaResults[currentStop.deliveryStopId]}
               onAnnounceTip={handleAnnounceCurrentTip}
               onBack={() => setScreen('stopDetails')}
               onCapturePhoto={handleCapturePhoto}
               onCompleteStop={handleCompleteCurrentStop}
               onDraftChange={updateCurrentStopDraft}
-              photoResult={proofPhotoResults[currentStop.deliveryStopId]}
               proofResult={stopProofResults[currentStop.deliveryStopId]}
               stop={currentStop}
             />
@@ -2500,26 +2501,22 @@ function ArrivalCheckScreen({
   draft,
   isCapturingPhoto,
   isCompletingStop,
-  mediaResult,
   onAnnounceTip,
   onBack,
   onCapturePhoto,
   onCompleteStop,
   onDraftChange,
-  photoResult,
   proofResult,
   stop,
 }: {
   draft: StopProofDraft;
   isCapturingPhoto: boolean;
   isCompletingStop: boolean;
-  mediaResult?: ProofMediaUploadResult;
   onAnnounceTip(): void;
   onBack(): void;
   onCapturePhoto(source: ProofPhotoCaptureSource): void;
   onCompleteStop(): void;
   onDraftChange(patch: Partial<StopProofDraft>): void;
-  photoResult?: ProofPhotoCaptureResult;
   proofResult?: StopProofEventResult;
   stop: AssignedRouteStop;
 }) {
@@ -2538,10 +2535,7 @@ function ArrivalCheckScreen({
       <View style={styles.proofTileRow}>
         <ProofTile disabled={isCapturingPhoto} label="Take Photo" loading={isCapturingPhoto} onPress={() => onCapturePhoto('camera')} />
         <ProofTile disabled={isCapturingPhoto} label="Choose Photo" loading={isCapturingPhoto} onPress={() => onCapturePhoto('library')} />
-        <View style={styles.proofTile}><Text style={styles.proofTileText}>{photoResult?.kind === 'captured' ? 'Photo Ready' : 'No Photo Yet'}</Text></View>
       </View>
-      {photoResult !== undefined ? <StatusBanner tone={photoResult.kind === 'captured' ? 'green' : 'warning'} text={formatPhotoCaptureResult(photoResult)} /> : null}
-      {mediaResult !== undefined ? <StatusBanner tone={mediaResult.kind === 'uploaded' ? 'green' : 'warning'} text={formatMediaUploadResult(mediaResult)} /> : null}
 
       <LabeledInput
         label="Delivery Notes"
@@ -3439,28 +3433,12 @@ function formatStopProofNote(draft: StopProofDraft): string {
     .join('\n') || 'Photo proof submitted.';
 }
 
-function formatPhotoResult(captureResult: ProofPhotoCaptureResult, uploadResult: ProofMediaUploadResult): string {
-  return `${formatPhotoCaptureResult(captureResult)} ${formatMediaUploadResult(uploadResult)}`.trim();
-}
-
-function formatPhotoCaptureResult(result: ProofPhotoCaptureResult): string {
-  if (result.kind === 'captured') {
-    return result.source === 'camera' ? 'Photo taken.' : 'Photo selected.';
+function formatPhotoResult(captureResult: ProofPhotoCaptureResult, uploadResult: ProofMediaUploadResult): string | null {
+  if (captureResult.kind !== 'captured') {
+    return captureResult.kind === 'cancelled' ? null : captureResult.message;
   }
 
-  if (result.kind === 'cancelled') {
-    return 'Photo cancelled.';
-  }
-
-  return result.message;
-}
-
-function formatMediaUploadResult(result: ProofMediaUploadResult): string {
-  if (result.kind === 'uploaded') {
-    return 'Photo uploaded.';
-  }
-
-  return result.message;
+  return uploadResult.kind === 'uploaded' ? null : uploadResult.message;
 }
 
 function formatStopProofResult(result: StopProofEventResult): string {

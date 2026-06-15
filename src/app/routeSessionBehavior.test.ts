@@ -84,8 +84,11 @@ describe('stop completion proof copy', () => {
     assert.match(appSource, />Delivery Photo</u);
     assert.match(appSource, /label="Take Photo"/u);
     assert.match(appSource, /label="Choose Photo"/u);
-    assert.match(appSource, /'Photo Ready' : 'No Photo Yet'/u);
     assert.match(appSource, /setMessage\('Add a delivery photo first\.'\)/u);
+    assert.doesNotMatch(appSource, /Photo Ready/u);
+    assert.doesNotMatch(appSource, /No Photo Yet/u);
+    assert.doesNotMatch(appSource, /Photo taken/u);
+    assert.doesNotMatch(appSource, /Photo uploaded/u);
     assert.doesNotMatch(appSource, /Proof Item/u);
     assert.doesNotMatch(appSource, /Proof uploaded: \$\{result\.media\.mediaId\}/u);
   });
