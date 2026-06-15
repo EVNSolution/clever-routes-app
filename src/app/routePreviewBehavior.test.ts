@@ -69,7 +69,7 @@ describe('route preview behavior', () => {
     assert.deepEqual(previewSequence, {
       items: [
         {
-          address: '100 King St W · Toronto, ON',
+          address: '100 King St W',
           deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
           marker: '1',
         },

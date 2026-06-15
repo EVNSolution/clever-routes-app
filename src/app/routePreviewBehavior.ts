@@ -94,9 +94,8 @@ function formatRoutePreviewStopAddress(stop: AssignedRouteStop): string {
     .map((part) => part?.trim() ?? '')
     .filter(Boolean)
     .join(', ');
-  const area = formatRoutePreviewArea(stop);
 
-  return [street, area].filter(Boolean).join(' · ') || `Stop ${stop.sequence}`;
+  return street || `Stop ${stop.sequence}`;
 }
 
 function uniqueNonEmpty(values: string[]): string[] {
