@@ -2099,6 +2099,16 @@ function ProfilePage({
 }
 
 
+
+function RoutePreviewRegionBlock({ value }: { value: string }) {
+  return (
+    <View style={styles.routePreviewRegionBlock}>
+      <Text style={styles.routePreviewRegionLabel}>{ROUTE_PREVIEW_LABELS.region}</Text>
+      <Text style={styles.routePreviewRegionValue}>{value}</Text>
+    </View>
+  );
+}
+
 function RoutePreviewScreen({
   mapStyleUrl,
   onBack,
@@ -2118,7 +2128,7 @@ function RoutePreviewScreen({
 
       <View style={styles.summaryCard}>
         <DataRow label={ROUTE_PREVIEW_LABELS.date} value={route.deliveryDate} />
-        <DataRow label={ROUTE_PREVIEW_LABELS.region} value={formatRoutePreviewRegion(route)} valueNumberOfLines={undefined} />
+        <RoutePreviewRegionBlock value={formatRoutePreviewRegion(route)} />
         <View style={styles.summaryGrid}>
           <MetricBlock label={ROUTE_PREVIEW_LABELS.stops} value={formatStopCount(route.stops.length)} />
           <MetricBlock label={ROUTE_PREVIEW_LABELS.distance} value={formatAssignedRouteDistance(route.routeMetrics)} />
@@ -2957,13 +2967,11 @@ function SecondaryButton({ compact, disabled, label, loading, onPress }: { compa
   );
 }
 
-function DataRow({ label, value, valueNumberOfLines = 2 }: { label: string; value: string; valueNumberOfLines?: number }) {
-  const valueLineProps = valueNumberOfLines === undefined ? {} : { numberOfLines: valueNumberOfLines };
-
+function DataRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.dataRow}>
       <Text style={styles.dataLabel}>{label}</Text>
-      <Text {...valueLineProps} style={styles.dataValue}>{value}</Text>
+      <Text numberOfLines={2} style={styles.dataValue}>{value}</Text>
     </View>
   );
 }
@@ -4196,6 +4204,23 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: 10,
     padding: 16,
+  },
+  routePreviewRegionBlock: {
+    borderBottomColor: '#eef2f6',
+    borderBottomWidth: 1,
+    gap: 6,
+    paddingBottom: 12,
+  },
+  routePreviewRegionLabel: {
+    color: '#667085',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  routePreviewRegionValue: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '700',
+    lineHeight: 22,
   },
   routePreviewCanvas: {
     borderRadius: 16,

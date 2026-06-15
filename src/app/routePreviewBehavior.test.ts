@@ -84,11 +84,13 @@ describe('route preview behavior', () => {
     assert.match(componentSource, /ROUTE_PREVIEW_COPY\.title/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.date/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.map/u);
-    assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.region/u);
+    assert.match(componentSource, /RoutePreviewRegionBlock/u);
+    assert.match(readFileSync(appRootPath, 'utf8'), /function RoutePreviewRegionBlock[\s\S]*ROUTE_PREVIEW_LABELS\.region/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.stops/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.distance/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.time/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.sequence/u);
+    assert.doesNotMatch(componentSource, /DataRow label=\{ROUTE_PREVIEW_LABELS\.region\}/u);
 
     assert.match(componentSource, /hideRightAction/u);
     assert.doesNotMatch(componentSource, /Menu/u);
