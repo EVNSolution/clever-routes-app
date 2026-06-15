@@ -134,7 +134,12 @@ import {
 } from '../domain/notifications/stopArrivalNotifications';
 import { createExpoStopArrivalNotificationService } from '../platform/expo/notifications/expoStopArrivalNotificationService';
 import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
-import { ROUTE_PREVIEW_COPY, ROUTE_PREVIEW_LABELS } from './routePreviewBehavior';
+import {
+  buildRoutePreviewSequence,
+  formatRoutePreviewRegion,
+  ROUTE_PREVIEW_COPY,
+  ROUTE_PREVIEW_LABELS,
+} from './routePreviewBehavior';
 
 type AppScreen =
   | 'arrivalCheck'
@@ -2105,13 +2110,15 @@ function RoutePreviewScreen({
   onOpenMapPreview(): void;
   route: AssignedRoute;
 }) {
+  const previewSequence = buildRoutePreviewSequence(route);
+
   return (
     <View style={styles.screenStack}>
       <ScreenHeader hideRightAction onBack={onBack} title={ROUTE_PREVIEW_COPY.title} />
 
       <View style={styles.summaryCard}>
         <DataRow label={ROUTE_PREVIEW_LABELS.date} value={route.deliveryDate} />
-        <DataRow label={ROUTE_PREVIEW_LABELS.region} value={getRouteRegion(route)} />
+        <DataRow label={ROUTE_PREVIEW_LABELS.region} value={formatRoutePreviewRegion(route)} valueNumberOfLines={undefined} />
         <View style={styles.summaryGrid}>
           <MetricBlock label={ROUTE_PREVIEW_LABELS.stops} value={formatStopCount(route.stops.length)} />
           <MetricBlock label={ROUTE_PREVIEW_LABELS.distance} value={formatAssignedRouteDistance(route.routeMetrics)} />
@@ -2134,7 +2141,16 @@ function RoutePreviewScreen({
       </View>
 
       <View style={styles.summaryCard}>
-        <DataRow label={ROUTE_PREVIEW_LABELS.sequence} value={formatRouteSequence(route)} />
+        <Text style={styles.sectionTitle}>{ROUTE_PREVIEW_LABELS.sequence}</Text>
+        {previewSequence.items.length > 0 ? previewSequence.items.map((item) => (
+          <View key={item.deliveryStopId} style={styles.routePreviewSequenceRow}>
+            <Text style={styles.routePreviewSequenceMarker}>{item.marker}</Text>
+            <Text numberOfLines={2} style={styles.routePreviewSequenceAddress}>{item.address}</Text>
+          </View>
+        )) : <Text style={styles.helperText}>No stops assigned.</Text>}
+        {previewSequence.overflowCount > 0 ? (
+          <Text style={styles.helperText}>+ {previewSequence.overflowCount} more stops</Text>
+        ) : null}
       </View>
     </View>
   );
@@ -2941,11 +2957,13 @@ function SecondaryButton({ compact, disabled, label, loading, onPress }: { compa
   );
 }
 
-function DataRow({ label, value }: { label: string; value: string }) {
+function DataRow({ label, value, valueNumberOfLines = 2 }: { label: string; value: string; valueNumberOfLines?: number }) {
+  const valueLineProps = valueNumberOfLines === undefined ? {} : { numberOfLines: valueNumberOfLines };
+
   return (
     <View style={styles.dataRow}>
       <Text style={styles.dataLabel}>{label}</Text>
-      <Text numberOfLines={2} style={styles.dataValue}>{value}</Text>
+      <Text {...valueLineProps} style={styles.dataValue}>{value}</Text>
     </View>
   );
 }
@@ -4182,6 +4200,30 @@ const styles = StyleSheet.create({
   routePreviewCanvas: {
     borderRadius: 16,
     overflow: 'hidden',
+  },
+  routePreviewSequenceRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  routePreviewSequenceMarker: {
+    backgroundColor: '#eef2f6',
+    borderRadius: 999,
+    color: '#475467',
+    fontSize: 12,
+    fontWeight: '800',
+    minWidth: 28,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    textAlign: 'center',
+  },
+  routePreviewSequenceAddress: {
+    color: '#111827',
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
   },
   currentTaskCard: {
     backgroundColor: '#ffffff',
