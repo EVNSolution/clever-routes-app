@@ -128,6 +128,7 @@ import {
   type VerifiedDriverNoAssignedRouteReason,
 } from './verifiedDriverNoAssignedRoutes';
 import { NativeRouteMapPreview } from './NativeRouteMapPreview';
+import { APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE } from './appLayoutMetrics';
 import { readDriverMapStyleUrl } from './routeMapGeoJson';
 import {
   getStopArrivalNotificationCandidate,
@@ -180,7 +181,6 @@ type RouteLoadOptions = {
 
 const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
 const DRIVER_APP_VERSION = '0.1.0';
-const ANDROID_SYSTEM_NAV_CLEARANCE = 56;
 const LOGIN_DETAIL_KEYBOARD_ACCESSORY_ID = 'login-detail-keyboard-navigation';
 const LOGIN_DETAIL_INPUT_ORDER = ['verificationCode', 'driverFirstName', 'driverLastName'] as const;
 const SWIPE_BACK_DISTANCE = 90;
@@ -4093,7 +4093,7 @@ const styles = StyleSheet.create({
   },
   bottomNavArea: {
     backgroundColor: '#f7f9fc',
-    paddingBottom: Platform.OS === 'android' ? ANDROID_SYSTEM_NAV_CLEARANCE : 8,
+    paddingBottom: Platform.OS === 'android' ? APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE : 8,
     paddingHorizontal: 18,
     paddingTop: 8,
   },
@@ -4617,7 +4617,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     borderWidth: 1,
     gap: 14,
-    paddingBottom: 22,
+    paddingBottom: Platform.OS === 'android' ? APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE + 22 : 22,
     paddingHorizontal: 22,
     paddingTop: 12,
     ...shadow,

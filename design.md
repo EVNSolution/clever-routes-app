@@ -182,6 +182,12 @@ Gap between grouped sections:
 The design should feel airy but not sparse.
 Every screen should be optimized for one-handed mobile use.
 
+Android system navigation clearance:
+
+- App-owned bottom chrome, bottom sheets, and floating bottom panels must not be hidden behind Android 3-button/system navigation.
+- Bottom-attached surfaces should reserve explicit Android bottom clearance in addition to their visual padding.
+- This applies to custom sheets and app navigation; native camera/library pickers remain OS-owned.
+
 ---
 
 ### 1.5 Corners, Borders, and Shadows
