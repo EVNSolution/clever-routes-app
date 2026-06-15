@@ -3181,7 +3181,6 @@ function DeliveryPhotoActionSheet({
           >
             <Text style={styles.photoActionSheetActionText}>Take Photo</Text>
           </Pressable>
-          <View style={styles.photoActionSheetDivider} />
           <Pressable
             accessibilityRole="button"
             disabled={disabled}
@@ -3191,7 +3190,14 @@ function DeliveryPhotoActionSheet({
             <Text style={styles.photoActionSheetActionText}>Choose from Album</Text>
           </Pressable>
         </View>
-        <SecondaryButton compact disabled={disabled} label="Cancel" onPress={onCancel} />
+        <Pressable
+          accessibilityRole="button"
+          disabled={disabled}
+          onPress={onCancel}
+          style={[styles.photoActionSheetCancel, disabled === true && styles.buttonDisabled]}
+        >
+          <Text style={styles.photoActionSheetCancelText}>Cancel</Text>
+        </Pressable>
       </View>
     </View>
   );
@@ -4616,10 +4622,10 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     borderWidth: 1,
-    gap: 14,
-    paddingBottom: Platform.OS === 'android' ? APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE + 22 : 22,
+    gap: 10,
+    paddingBottom: Platform.OS === 'android' ? APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE + 16 : 16,
     paddingHorizontal: 22,
-    paddingTop: 12,
+    paddingTop: 10,
     ...shadow,
   },
   photoActionSheetTitle: {
@@ -4629,27 +4635,38 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   photoActionSheetActions: {
-    backgroundColor: '#ffffff',
-    borderColor: '#e5e7eb',
-    borderRadius: 18,
-    borderWidth: 1,
-    overflow: 'hidden',
+    gap: 8,
   },
   photoActionSheetAction: {
     alignItems: 'center',
+    borderColor: '#0b57d0',
+    borderRadius: 14,
+    borderWidth: 1.2,
     justifyContent: 'center',
-    minHeight: 54,
-    paddingHorizontal: 18,
-    paddingVertical: 15,
+    minHeight: 44,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
   photoActionSheetActionText: {
     color: '#0b57d0',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '800',
   },
-  photoActionSheetDivider: {
-    backgroundColor: '#eef2f6',
-    height: 1,
+  photoActionSheetCancel: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderColor: '#dc2626',
+    borderRadius: 14,
+    borderWidth: 1.2,
+    justifyContent: 'center',
+    minHeight: 40,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+  },
+  photoActionSheetCancelText: {
+    color: '#dc2626',
+    fontSize: 14,
+    fontWeight: '800',
   },
   sheetHandle: {
     alignSelf: 'center',
