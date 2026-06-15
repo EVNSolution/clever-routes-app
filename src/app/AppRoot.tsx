@@ -73,6 +73,7 @@ import { createDriverRuntimeServices, readDriverRuntimeConfig } from './config/d
 import { CONSENT_COPY_VERSIONS, createMockDriverConsentService, submitDriverConsent, type DriverConsentService, type DriverConsentSubmissionResult } from '../domain/consent/driverConsent';
 import { getMvpRouteTabs } from '../domain/driverFlow/driverFlow';
 import { resetDriverSession } from '../domain/driver/driverSessionReset';
+import type { PersistedActiveRouteSession } from '../domain/driver/driverAccessTokenStore';
 import {
   getDriverMainTabs,
   getDriverPlaceholderCopy,
@@ -132,7 +133,7 @@ import {
   type StopArrivalNotificationData,
 } from '../domain/notifications/stopArrivalNotifications';
 import { createExpoStopArrivalNotificationService } from '../platform/expo/notifications/expoStopArrivalNotificationService';
-import { requestRouteStartPickupConfirmation } from './routeStartConfirmation';
+import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
 
 type AppScreen =
   | 'arrivalCheck'
@@ -162,6 +163,7 @@ type RouteSession = RouteAccessRouteChoice & {
 type RouteLoadOptions = {
   allowInviteCodeFallbackOnRouteNotFound?: boolean;
   allowVerifiedDriverNoRoute?: boolean;
+  activeRouteSession?: PersistedActiveRouteSession | null;
   navigateOnSuccess?: boolean;
   resetProgress?: boolean;
   successMessagePrefix?: string;
@@ -363,7 +365,7 @@ export default function App() {
       setNavigationStepIndex(stopIndex + 1);
       setSelectedMainTab('home');
       setScreen('routeDetail');
-      setMessage('Arrival alert opened, but the route is not active yet. Start pickup first.');
+      setMessage('Arrival alert opened, but the route is not active yet. Start the session first.');
       return;
     }
 
@@ -528,10 +530,17 @@ export default function App() {
     }
 
     if (isReturningDriver) {
+      const restoreResult = await driverAccessTokenStore.loadActiveDriverAccess();
+      const activeRouteSession = restoreResult.kind === 'active' || restoreResult.kind === 'refresh_required'
+        ? restoreResult.activeRouteSession ?? null
+        : null;
+      const restoredDisplayName = (restoreResult.kind === 'active' || restoreResult.kind === 'refresh_required') && restoreResult.driverProfile !== undefined
+        ? restoreResult.driverProfile.displayName
+        : 'Returning Driver';
       await handleLoginAndLoadRoutes(
         { phoneE164: phoneEntry.phoneE164 },
-        'Returning Driver',
-        { allowInviteCodeFallbackOnRouteNotFound: true },
+        restoredDisplayName,
+        { activeRouteSession, allowInviteCodeFallbackOnRouteNotFound: true },
       );
     } else {
       setIsLoggingIn(true);
@@ -732,10 +741,16 @@ export default function App() {
       }
 
       setRouteSessions(loadedSessions);
+      const activeRouteSession = options.activeRouteSession ?? null;
+      const restoredActiveSession = activeRouteSession === null
+        ? null
+        : loadedSessions.find((session) => session.route.id === activeRouteSession.routePlanId) ?? null;
       const currentSelectedRouteId = selectedRouteIdRef.current;
-      const nextSelectedRouteId = currentSelectedRouteId !== null && loadedSessions.some((session) => session.route.id === currentSelectedRouteId)
-        ? currentSelectedRouteId
-        : loadedSessions[0].route.id;
+      const nextSelectedRouteId = restoredActiveSession !== null
+        ? restoredActiveSession.route.id
+        : currentSelectedRouteId !== null && loadedSessions.some((session) => session.route.id === currentSelectedRouteId)
+          ? currentSelectedRouteId
+          : loadedSessions[0].route.id;
       setSelectedRouteId(nextSelectedRouteId);
       const selectedSession = loadedSessions.find((session) => session.route.id === nextSelectedRouteId) ?? loadedSessions[0];
       const firstSubmission = toCompanyGuidanceSubmission(selectedSession);
@@ -745,6 +760,20 @@ export default function App() {
           setMessage('Route loaded, but session persistence failed. Sign in again if the app does not restore this route next launch.');
         });
       });
+      if (restoredActiveSession !== null) {
+        const restoredStepIndex = clampRouteNavigationStepIndex(activeRouteSession?.navigationStepIndex ?? COMPANY_STEP_INDEX, restoredActiveSession.route);
+        setDeliveryStartResult(getRestoredActiveDeliveryStartResult());
+        setDeliveryFinishResult(null);
+        setSelectedTab('active');
+        setSelectedMainTab('home');
+        setNavigationStepIndex(restoredStepIndex);
+        setScreen('routeDetail');
+        runAfterUiInteractions(() => {
+          setMessage('Active route session restored. Continue from the current pickup or stop step.');
+        });
+        return;
+      }
+
       setSelectedTab(getInitialAssignedRouteTab({
         now: new Date(),
         route: selectedSession.route,
@@ -827,7 +856,7 @@ export default function App() {
         void handleLoginAndLoadRoutes(
           { phoneE164: result.driverProfile.phoneE164 },
           result.driverProfile.displayName,
-          { allowInviteCodeFallbackOnRouteNotFound: true },
+          { activeRouteSession: result.activeRouteSession ?? null, allowInviteCodeFallbackOnRouteNotFound: true },
         );
       }
     });
@@ -856,17 +885,21 @@ export default function App() {
       return;
     }
 
-    requestRouteStartPickupConfirmation({
+    requestRouteStartSessionConfirmation({
       alertApi: {
         alert: (title, message, buttons, options) => Alert.alert(title, message, buttons, options),
       },
+      route: {
+        deliveryDate: routeSession.route.deliveryDate,
+        timezone: routeSession.route.timezone,
+      },
       onConfirm: () => {
-        void startRouteAfterPickupConfirmed(routeSession.route.id);
+        void startRouteSessionAfterConfirmed(routeSession.route.id);
       },
     });
   }
 
-  async function startRouteAfterPickupConfirmed(routeId?: string) {
+  async function startRouteSessionAfterConfirmed(routeId?: string) {
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
     if (routeSession === null) {
       setMessage('No route is available to start.');
@@ -916,8 +949,12 @@ export default function App() {
       setSelectedTab('active');
       setSelectedMainTab('home');
       setNavigationStepIndex(COMPANY_STEP_INDEX);
+      await driverAccessTokenStore.saveActiveRouteSession({
+        navigationStepIndex: COMPANY_STEP_INDEX,
+        routePlanId: routeSession.route.id,
+      });
       setScreen('routeDetail');
-      setMessage('Route started. Use Find Next Stop to continue from pickup to the first delivery.');
+      setMessage('Route session started. Continue the pickup and stop workflow in Route Details.');
     } finally {
       setIsStartingRoute(false);
       refreshOfflineQueueCount();
@@ -979,6 +1016,10 @@ export default function App() {
 
     if (isCompanyStep) {
       setNavigationStepIndex(1);
+      void driverAccessTokenStore.saveActiveRouteSession({
+        navigationStepIndex: 1,
+        routePlanId: selectedRoute.id,
+      });
       setScreen('routeDetail');
       setMessage('Company pickup confirmed. Continue to the first stop.');
       return;
@@ -1156,7 +1197,12 @@ export default function App() {
         return;
       }
 
-      setNavigationStepIndex((index) => index + 1);
+      const nextNavigationStepIndex = navigationStepIndex + 1;
+      setNavigationStepIndex(nextNavigationStepIndex);
+      await driverAccessTokenStore.saveActiveRouteSession({
+        navigationStepIndex: nextNavigationStepIndex,
+        routePlanId: selectedRoute.id,
+      });
       setScreen('stopCompleted');
       setMessage('Stop completed. Continue to the next stop when ready.');
     } finally {
@@ -1186,6 +1232,7 @@ export default function App() {
       setDeliveryFinishResult(finishResult);
       if (finishResult.kind !== 'blocked') {
         setContinuousLocationResult({ kind: 'stopped', taskName: finishResult.stoppedTaskName });
+        await driverAccessTokenStore.clearActiveRouteSession();
       }
       setSelectedTab('completed');
       setSelectedMainTab('home');
@@ -1815,7 +1862,7 @@ function HomePage({
           </View>
         ) : (
           <View style={styles.buttonColumn}>
-            <PrimaryButton disabled={isStartingRoute} label={routeStatus === 'active' ? 'Continue Route' : 'Start Route'} loading={isStartingRoute} onPress={routeStatus === 'active' ? onContinueRoute : onStartRoute} />
+            <PrimaryButton disabled={isStartingRoute} label={routeStatus === 'active' ? 'Continue Session' : 'Start Session'} loading={isStartingRoute} onPress={routeStatus === 'active' ? onContinueRoute : onStartRoute} />
             <SecondaryButton label="Route Details" onPress={onContinueRoute} />
           </View>
         )}
@@ -1929,10 +1976,10 @@ function RoutesPage({
           {selectedTab === 'completed' ? (
             <PrimaryButton label="View Completed Deliveries" onPress={onOpenCompletedDeliveries} />
           ) : selectedTab === 'active' ? (
-            <PrimaryButton label="Continue Route" onPress={() => onOpenRouteDetail(activeSession.route.id)} />
+            <PrimaryButton label="Continue Session" onPress={() => onOpenRouteDetail(activeSession.route.id)} />
           ) : (
             <View style={styles.buttonColumn}>
-              <PrimaryButton disabled={isStartingRoute} label="Start Route" loading={isStartingRoute} onPress={() => onStartRoute(activeSession.route.id)} />
+              <PrimaryButton disabled={isStartingRoute} label="Start Session" loading={isStartingRoute} onPress={() => onStartRoute(activeSession.route.id)} />
               <SecondaryButton label="Route Details" onPress={() => onOpenRouteDetail(activeSession.route.id)} />
             </View>
           )}
@@ -2063,7 +2110,7 @@ function RouteDetailScreen({
   const currentTaskAddress = isCompanyStep ? company?.pickupGuidance ?? 'Pickup point' : stop === null ? 'Stop address' : formatStopAddress(stop);
   const currentTaskPayment = stop === null ? null : formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
   const primaryProgressAction = routeStatus === 'upcoming'
-    ? { disabled: isStartingRoute, label: 'Start Pickup', loading: isStartingRoute, onPress: onStartRoute }
+    ? { disabled: isStartingRoute, label: 'Start Session', loading: isStartingRoute, onPress: onStartRoute }
     : routeStatus === 'active' && allStopsCompleted
       ? { disabled: isFinishingRoute, label: 'Finish Route', loading: isFinishingRoute, onPress: onFinishRoute }
       : routeStatus === 'active' && isCompanyStep
@@ -3147,6 +3194,23 @@ function formatDriverPhoneEntryProblem(reason: 'country_required' | 'phone_inval
     case 'phone_required':
       return 'Enter the phone number registered with dispatch.';
   }
+}
+
+function getRestoredActiveDeliveryStartResult(): DeliveryStartResult {
+  return {
+    flowState: 'delivery_active',
+    kind: 'delivery_active',
+    locationPermission: 'foreground',
+    message: 'Active route session restored on this device.',
+  };
+}
+
+function clampRouteNavigationStepIndex(stepIndex: number, route: AssignedRoute): number {
+  if (!Number.isInteger(stepIndex)) {
+    return COMPANY_STEP_INDEX;
+  }
+
+  return Math.min(Math.max(stepIndex, COMPANY_STEP_INDEX), route.stops.length);
 }
 
 function getRouteStatus(deliveryStartResult: DeliveryStartResult | null, deliveryFinishResult: DeliveryFinishResult | null): RouteStatus {
