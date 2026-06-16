@@ -65,7 +65,7 @@ Examples:
 ## Smoke sequence
 
 Run the full sequence once on a real iPhone and once on a real Android phone.
-Use synthetic route, stop, proof, barcode, and signature data unless production validation is explicitly approved.
+Use synthetic route, stop, proof, and signature data unless production validation is explicitly approved.
 
 | Step | Expected evidence | Stop condition |
 | --- | --- | --- |
@@ -77,7 +77,7 @@ Use synthetic route, stop, proof, barcode, and signature data unless production 
 | Stop-card OS map handoff | `Open map` launches the native map handler from coordinates; address fallback works for a stop without coordinates. | Map opens the wrong destination or no fallback exists. |
 | Delivery start foreground location | OS foreground location prompt appears only after explicit delivery start; denial keeps delivery out of `delivery_active`. | Location prompt appears before delivery start or denial still activates delivery. |
 | Continuous/background-capable tracking | Background permission prompt and foreground service/background indicator behavior match the platform; `LOCATION_UPDATED` events record or queue. | Tracking starts before active delivery or cannot be stopped. |
-| Proof capture | Camera/library photo, signature drawing, and barcode scan success/denial/unavailable states are visible. | Proof controls are available before active delivery or failed capture becomes durable proof. |
+| Proof capture | Camera/library photo and signature drawing success/denial/unavailable states are visible. | Proof controls are available before active delivery or failed capture becomes durable proof. |
 | Proof media scan rejection | In local mock mode, set `Local proof media upload mock` to `scan_rejected`; in live mode, use a server `PROOF_MEDIA_REJECTED` upload response. The app shows recapture guidance without queuing that photo as retryable proof. | Rejected proof media becomes durable evidence or remains in the retry queue. |
 | Offline retry/discard | Network loss queues driver events/proof media; retry syncs or discards according to policy; app restart hydrates queue count. | Queue loses pending evidence unexpectedly or stores driver access tokens. |
 | Delivery finish cleanup | Finish stops continuous tracking, records or queues `ROUTE_COMPLETED`, and only clears route-scoped queue items after recorded completion. | Tracking continues after finish or queued completion evidence is discarded after failed record. |

@@ -96,7 +96,7 @@ describe('stop proof event flow', () => {
     });
   });
 
-  it('records uploaded media, signature, and barcode proof references after delivery_active', async () => {
+  it('records uploaded media and signature proof references after delivery_active', async () => {
     const driverEventService = createMockDriverEventService();
 
     await recordStopProofEventAfterDeliveryStart({
@@ -104,16 +104,6 @@ describe('stop proof event flow', () => {
       driverEventService,
       input: {
         action: 'delivered',
-        barcodes: [
-          {
-            barcodeId: 'barcode-1',
-            capturedAt: '2026-05-12T10:10:00.000Z',
-            data: 'ORDER-1001',
-            kind: 'barcode',
-            source: 'native-scanner',
-            symbology: 'code128',
-          },
-        ],
         deliveryStopId: 'stop-1',
         media: [
           {
@@ -144,16 +134,6 @@ describe('stop proof event flow', () => {
 
     assert.deepEqual(driverEventService.recordedEvents[0]?.payload, {
       proof: {
-        barcodes: [
-          {
-            barcodeId: 'barcode-1',
-            capturedAt: '2026-05-12T10:10:00.000Z',
-            data: 'ORDER-1001',
-            kind: 'barcode',
-            source: 'native-scanner',
-            symbology: 'code128',
-          },
-        ],
         media: [
           {
             contentType: 'image/jpeg',
