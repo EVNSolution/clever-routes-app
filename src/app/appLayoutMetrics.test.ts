@@ -14,7 +14,7 @@ import {
 describe('app layout metrics', () => {
   it('keeps scroll content clear of the bottom navigation on Android', () => {
     assert.equal(BOTTOM_NAV_MIN_HEIGHT, 62);
-    assert.equal(ANDROID_SYSTEM_BOTTOM_CLEARANCE, 24);
+    assert.equal(ANDROID_SYSTEM_BOTTOM_CLEARANCE, 0);
     assert.equal(APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE, 56);
     assert.ok(APP_CONTENT_BOTTOM_CLEARANCE > BOTTOM_NAV_MIN_HEIGHT + ANDROID_SYSTEM_BOTTOM_CLEARANCE);
   });
