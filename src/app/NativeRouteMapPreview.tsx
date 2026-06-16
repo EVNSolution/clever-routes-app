@@ -73,36 +73,38 @@ export function NativeRouteMapPreview({ allowDragPan = true, currentStepIndex, m
           ref={cameraRef}
           initialViewState={{ bounds: model.bounds, padding: CAMERA_PADDING }}
         />
-        <GeoJSONSource data={model.routeFeature} id="route-preview-line-source">
-          <Layer
-            id="route-preview-line-shadow"
-            source="route-preview-line-source"
-            type="line"
-            paint={{
-              'line-color': '#ffffff',
-              'line-opacity': 0.94,
-              'line-width': 8,
-            }}
-            layout={{
-              'line-cap': 'round',
-              'line-join': 'round',
-            }}
-          />
-          <Layer
-            id="route-preview-line"
-            source="route-preview-line-source"
-            type="line"
-            paint={{
-              'line-color': '#0b57d0',
-              'line-opacity': 0.96,
-              'line-width': 5,
-            }}
-            layout={{
-              'line-cap': 'round',
-              'line-join': 'round',
-            }}
-          />
-        </GeoJSONSource>
+        {model.routeFeature !== null ? (
+          <GeoJSONSource data={model.routeFeature} id="route-preview-line-source">
+            <Layer
+              id="route-preview-line-shadow"
+              source="route-preview-line-source"
+              type="line"
+              paint={{
+                'line-color': '#ffffff',
+                'line-opacity': 0.82,
+                'line-width': 6,
+              }}
+              layout={{
+                'line-cap': 'round',
+                'line-join': 'round',
+              }}
+            />
+            <Layer
+              id="route-preview-line"
+              source="route-preview-line-source"
+              type="line"
+              paint={{
+                'line-color': '#0b57d0',
+                'line-opacity': 0.94,
+                'line-width': 4,
+              }}
+              layout={{
+                'line-cap': 'round',
+                'line-join': 'round',
+              }}
+            />
+          </GeoJSONSource>
+        ) : null}
         <Marker
           anchor="center"
           id="route-preview-depot"
@@ -171,12 +173,6 @@ const styles = StyleSheet.create({
     minHeight: 430,
     overflow: 'hidden',
   },
-  depotMarkerDot: {
-    backgroundColor: '#12b76a',
-  },
-  depotMarkerHalo: {
-    backgroundColor: '#ecfdf3',
-  },
   currentDestinationBadge: {
     backgroundColor: 'rgba(249, 115, 22, 0.92)',
     borderRadius: 999,
@@ -199,6 +195,12 @@ const styles = StyleSheet.create({
     borderRadius: 17,
     height: 34,
     width: 34,
+  },
+  depotMarkerDot: {
+    backgroundColor: '#12b76a',
+  },
+  depotMarkerHalo: {
+    backgroundColor: '#ecfdf3',
   },
   hint: {
     backgroundColor: 'rgba(255, 255, 255, 0.92)',
