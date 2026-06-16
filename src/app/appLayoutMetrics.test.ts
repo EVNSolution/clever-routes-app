@@ -19,6 +19,12 @@ describe('app layout metrics', () => {
     assert.ok(APP_CONTENT_BOTTOM_CLEARANCE > BOTTOM_NAV_MIN_HEIGHT + ANDROID_SYSTEM_BOTTOM_CLEARANCE);
   });
 
+  it('keeps Android bottom tabs close to the system navigation bar', () => {
+    const appSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx'), 'utf8');
+
+    assert.match(appSource, /bottomNavArea:[\s\S]*paddingBottom: Platform\.OS === 'android' \? ANDROID_SYSTEM_BOTTOM_CLEARANCE : 8/u);
+  });
+
   it('keeps app-owned bottom sheets above the Android system navigation area', () => {
     const appSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx'), 'utf8');
 

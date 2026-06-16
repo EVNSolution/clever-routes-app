@@ -128,7 +128,7 @@ import {
   type VerifiedDriverNoAssignedRouteReason,
 } from './verifiedDriverNoAssignedRoutes';
 import { NativeRouteMapPreview } from './NativeRouteMapPreview';
-import { APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE } from './appLayoutMetrics';
+import { ANDROID_SYSTEM_BOTTOM_CLEARANCE, APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE } from './appLayoutMetrics';
 import { readDriverMapStyleUrl } from './routeMapGeoJson';
 import {
   getStopArrivalNotificationCandidate,
@@ -4099,7 +4099,7 @@ const styles = StyleSheet.create({
   },
   bottomNavArea: {
     backgroundColor: '#f7f9fc',
-    paddingBottom: Platform.OS === 'android' ? APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE : 8,
+    paddingBottom: Platform.OS === 'android' ? ANDROID_SYSTEM_BOTTOM_CLEARANCE : 8,
     paddingHorizontal: 18,
     paddingTop: 8,
   },
