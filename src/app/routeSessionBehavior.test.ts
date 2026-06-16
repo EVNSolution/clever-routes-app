@@ -57,11 +57,13 @@ describe('route session current task behavior', () => {
     assert.match(nativeMapSource, /Current: Stop/u);
   });
 
-  it('reduces the regular native stop marker halo so the white border is less dominant', () => {
+  it('uses numbered marker overlays while keeping the route line server-geometry-only', () => {
     const nativeMapSource = readFileSync(nativeMapPath, 'utf8');
 
-    assert.match(nativeMapSource, /markerHalo:[\s\S]*height: 28,[\s\S]*width: 28,/u);
-    assert.match(nativeMapSource, /markerDot:[\s\S]*height: 24,[\s\S]*width: 24,/u);
+    assert.match(nativeMapSource, /<Marker/u);
+    assert.match(nativeMapSource, /<Text style=\{styles\.markerText\}>/u);
+    assert.match(nativeMapSource, /model\.routeFeature !== null/u);
+    assert.doesNotMatch(nativeMapSource, /route-preview-stop-label/u);
   });
 });
 

@@ -12,7 +12,7 @@ export type RouteStopFeatureCollection = FeatureCollection<Point, RouteStopFeatu
 export type RouteMapGeoJsonModel = {
   bounds: [west: number, south: number, east: number, north: number];
   depotFeature: RouteDepotFeature;
-  routeFeature: RouteLineFeature;
+  routeFeature: RouteLineFeature | null;
   stopCollection: RouteStopFeatureCollection;
 };
 
@@ -88,21 +88,27 @@ export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel
   return {
     bounds,
     depotFeature,
-    routeFeature: {
-      type: 'Feature',
-      geometry: {
-        type: 'LineString',
-        coordinates: routeCoordinates,
-      },
-      properties: {
-        kind: 'route',
-      },
-    },
+    routeFeature: hasRoadFollowingGeometry(routeCoordinates, stopFeatures.length)
+      ? {
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: routeCoordinates,
+          },
+          properties: {
+            kind: 'route',
+          },
+        }
+      : null,
     stopCollection: {
       type: 'FeatureCollection',
       features: stopFeatures,
     },
   };
+}
+
+function hasRoadFollowingGeometry(routeCoordinates: AssignedRouteLngLat[], stopCount: number): boolean {
+  return routeCoordinates.length > stopCount + 1;
 }
 
 function readStopLngLat(coordinates: AssignedRoute['stops'][number]['coordinates']): AssignedRouteLngLat | null {
