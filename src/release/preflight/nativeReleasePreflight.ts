@@ -167,11 +167,6 @@ function checkExpoPermissions(appConfig: NativeReleasePreflightInput['appConfig'
     return fail('expo.permissions', 'expo-image-picker camera/photos permission copy is required.');
   }
 
-  const cameraPlugin = tuplePluginConfig(plugins, 'expo-camera');
-  if (cameraPlugin === null || typeof cameraPlugin.cameraPermission !== 'string' || cameraPlugin.cameraPermission.trim() === '') {
-    return fail('expo.permissions', 'expo-camera barcode scanner permission copy is required.');
-  }
-
   if (!plugins.includes('expo-secure-store')) {
     return fail('expo.permissions', 'expo-secure-store plugin is required for native driver token storage.');
   }
@@ -182,7 +177,7 @@ function checkExpoPermissions(appConfig: NativeReleasePreflightInput['appConfig'
     return fail('expo.permissions', 'Contacts/address-book permissions must stay absent from the driver app native config.');
   }
 
-  return pass('expo.permissions', 'Native location, camera, photo, scanner, and secure storage permissions are declared.');
+  return pass('expo.permissions', 'Native location, proof photo, and secure storage permissions are declared.');
 }
 
 

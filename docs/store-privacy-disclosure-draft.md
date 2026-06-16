@@ -40,7 +40,7 @@ Runtime source anchors for this worksheet:
 - `docs/route-access-flow.md`: app-side API, event, proof, and offline queue boundaries
 - `src/domain/location/continuousLocationStream.ts`: continuous/background-capable location task guard
 - `src/domain/proof/proofPhotoCapture.ts`, `src/domain/proof/proofMediaUpload.ts`: proof photo capture/upload
-- `src/domain/proof/proofSignatureCapture.ts`, `src/domain/proof/proofBarcodeCapture.ts`: signature/barcode proof metadata
+- `src/domain/proof/proofSignatureCapture.ts`: signature proof metadata
 - `src/domain/offline/offlineSubmissionQueue.ts`: local retry retention/discard policy
 
 ## Data disclosure worksheet
@@ -55,7 +55,6 @@ Runtime source anchors for this worksheet:
 | Background-capable location | App can start a named continuous location task after `delivery_active`; native config enables iOS/Android background support. | Location / Precise Location, linked to driver, purpose: App Functionality; disclose background use in review notes. | Location / Precise location and background location declaration; core purpose is active delivery tracking. | Confirm store review justification, in-app prominent disclosure, and production wording. |
 | Camera proof photo | App can launch camera through Expo ImagePicker and upload proof photo media. | User Content / Photos or Videos, linked to driver/stop/route, purpose: App Functionality. | Photos and videos, collected for App functionality. | Confirm if production build uses scoped picker/camera only and avoids broad media library permissions. |
 | Photo library proof attachment | App can attach proof photos from library through Expo ImagePicker. | User Content / Photos or Videos, linked to driver/stop/route, purpose: App Functionality. | Photos and videos, collected for App functionality. | Confirm Android permission manifest after native build and whether Play photo/video declaration is needed. |
-| Barcode scanning | App can scan proof barcodes using camera and include barcode data/symbology in proof events. | User Content or Other Data depending on barcode contents; linked to stop/route, purpose: App Functionality. | App activity / Other user-generated content or Other data depending on barcode contents. | Define allowed barcode contents and prohibit customer PII unless approved. |
 | Signature proof | App stores signer name plus signature stroke/point counts as metadata, not raw signature image data. | User Content / Other User Content or Other Data; linked to proof event, purpose: App Functionality. | Personal info / Name if signer name is personal data; also app content/proof metadata. | Confirm whether signer name is driver, recipient, or other person and update privacy policy. |
 | Proof media references | Server returns media id, storage key, content type, upload time, optional hash/size; server-side scan rejection hook support exists before accepted media persistence, and rejected proof media is not queued as durable proof. | Identifiers / Other Data linked to proof media and route, purpose: App Functionality. | Files and docs or Other data, collected for App functionality depending on final Play form taxonomy. | Confirm production object storage, signed access, retention, deletion, deployed scanner backend, and monitoring evidence. |
 | Driver events | App sends route/stop events such as route started, location updated, stop delivered/failed, route completed. | Other Data / App Activity depending on final taxonomy; linked to driver, purpose: App Functionality. | App activity and/or Other data, collected for App functionality. | Confirm event retention and support/audit use. |
@@ -69,7 +68,7 @@ Runtime source anchors for this worksheet:
 - Tracking / advertising: no tracking, advertising, data broker, or cross-app
   analytics use is evident in the current repository.
 - Third-party SDKs: current runtime uses Expo/React Native libraries for
-  location, task manager, camera/image picker, secure storage, and status bar.
+  location, task manager, image picker/camera proof photos, secure storage, and status bar.
   Owner must verify SDK privacy manifests / Play SDK disclosures before
   submission.
 - Sharing: current code sends driver data to EVNSolution-owned delivery server
@@ -105,17 +104,16 @@ Required evidence before submission:
   including the October 28, 2026 location-button recommendation if submission
   timing or target SDK policy makes it applicable
 
-### Photo and barcode proof justification
+### Photo proof justification
 
 Draft review rationale: Camera/photo library access is limited to proof of
-delivery during an active delivery flow. Barcode scanning is limited to proof
-barcode capture. Failed, denied, unavailable, or cancelled capture flows do not
-become durable proof evidence.
+delivery during an active delivery flow. Failed, denied, unavailable, or
+cancelled capture flows do not become durable proof evidence.
 
 Required evidence before submission:
 
 - native build manifest/permission audit for photo/video/media permissions
-- physical-device camera/library/scanner success and denial evidence
+- physical-device camera/library success and denial evidence
 - confirmation that broad photo/video library access is not requested unless an
   approved core use case requires it
 

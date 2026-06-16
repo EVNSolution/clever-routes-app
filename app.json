@@ -10,14 +10,14 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.evns.cleverdriverapp",
       "buildNumber": "1",
-      "icon": "./assets/ios-icon.png"
+      "icon": "./assets/icon.png"
     },
     "android": {
       "package": "com.evns.cleverdriverapp",
       "versionCode": 1,
-      "icon": "./assets/android-icon.png",
+      "icon": "./assets/icon.png",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#C7D833"
       },
       "softwareKeyboardLayoutMode": "resize"
@@ -44,12 +44,6 @@
         {
           "cameraPermission": "Allow Clever Driver to take proof photos for active deliveries.",
           "photosPermission": "Allow Clever Driver to attach proof photos for active deliveries."
-        }
-      ],
-      [
-        "expo-camera",
-        {
-          "cameraPermission": "Allow Clever Driver to scan proof barcodes for active deliveries."
         }
       ],
       "@maplibre/maplibre-react-native",

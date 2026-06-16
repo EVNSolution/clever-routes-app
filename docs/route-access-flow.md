@@ -126,7 +126,7 @@ The expected response shape matches `clever-delivery-server/docs/api/driver-assi
 - `NO_ASSIGNED_ROUTE` returns a safe empty state.
 - HTTP/API failures stay in `consent_recorded` with a retry message.
 
-The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. Stop cards expose `Open map`, which hands off to the OS map handler with coordinates first and formatted address fallback without committing to a provider SDK. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/domain/events/driverEvents.ts` records `ROUTE_STARTED`, foreground one-shot `LOCATION_UPDATED`, continuous/background-capable `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, and `ROUTE_COMPLETED` events to `POST /driver/events` with the active driver bearer token. Stop proof now stores metadata (`proof` payload with note/reason/source, uploaded photo media references, signature drawing evidence, and barcode scan evidence). The durable app-side offline queue can retain failed `ROUTE_STARTED`, `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, `ROUTE_COMPLETED`, and retryable proof media upload attempts for retry or discard across app restarts. Scanner-rejected proof media is not treated as retryable; delivery-server has a proof-media scan rejection hook, while production object storage/signed access/deployed scanner evidence and physical-device background smoke evidence remain later slices. Duplicate event responses are treated idempotently as recorded.
+The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. Stop cards expose `Open map`, which hands off to the OS map handler with coordinates first and formatted address fallback without committing to a provider SDK. From there, the driver can explicitly start delivery; the app requests foreground location permission at that point and enters `delivery_active` only when the OS grants permission. After `delivery_active`, `src/domain/events/driverEvents.ts` records `ROUTE_STARTED`, foreground one-shot `LOCATION_UPDATED`, continuous/background-capable `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, and `ROUTE_COMPLETED` events to `POST /driver/events` with the active driver bearer token. Stop proof now stores metadata (`proof` payload with note/reason/source, uploaded photo media references and signature drawing evidence). The durable app-side offline queue can retain failed `ROUTE_STARTED`, `LOCATION_UPDATED`, `STOP_DELIVERED`, `STOP_FAILED`, `ROUTE_COMPLETED`, and retryable proof media upload attempts for retry or discard across app restarts. Scanner-rejected proof media is not treated as retryable; delivery-server has a proof-media scan rejection hook, while production object storage/signed access/deployed scanner evidence and physical-device background smoke evidence remain later slices. Duplicate event responses are treated idempotently as recorded.
 
 ## Durable offline queue boundary
 
@@ -189,11 +189,9 @@ If the live server returns `422` with the Driver API error code `PROOF_MEDIA_REJ
 
 For physical-device smoke runs without a deployed scanner backend, local mock mode exposes a `Local proof media upload mock` selector with `success`, `failure`, and `scan_rejected`. This selector is only used when `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` is unset and the app is running on local mock services; live delivery-server mode ignores it.
 
-## Signature and barcode proof boundary
+## Signature proof boundary
 
-`src/domain/proof/proofSignatureCapture.ts` records signature drawing evidence as vector metadata (`signatureId`, signer name, stroke count, point count) instead of storing raw image data in the driver event payload.
-
-`src/domain/proof/proofBarcodeCapture.ts` records barcode evidence (`barcodeId`, symbology, data, capturedAt) from the native scanner boundary. The Expo implementation uses `expo-camera`'s modern scanner when available on the device; unavailable or permission-denied paths stay visible and do not create proof evidence.
+`src/domain/proof/proofSignatureCapture.ts` records signature drawing evidence as vector metadata (`signatureId`, signer name, stroke count, point count) instead of storing raw image data in the driver event payload. Barcode proof capture is not shipped in the current app scope.
 
 ## Runtime API mode
 
