@@ -182,6 +182,12 @@ Gap between grouped sections:
 The design should feel airy but not sparse.
 Every screen should be optimized for one-handed mobile use.
 
+Android system navigation clearance:
+
+- App-owned bottom chrome, bottom sheets, and floating bottom panels must not be hidden behind Android 3-button/system navigation.
+- Bottom-attached surfaces should reserve explicit Android bottom clearance in addition to their visual padding.
+- This applies to custom sheets and app navigation; native camera/library pickers remain OS-owned.
+
 ---
 
 ### 1.5 Corners, Borders, and Shadows
@@ -386,7 +392,7 @@ Screens:
 
 ```md
 1. Login / Driver Verification
-2. Today’s Route
+2. Current / Upcoming Routes
 3. Route Details
 4. Live Tracking
 ```
@@ -569,11 +575,11 @@ Visual:
 
 ---
 
-## Screen 2: Today’s Route
+## Screen 2: Current / Upcoming Routes
 
 ### Purpose
 
-Show the driver one assigned route for the day and allow them to start it.
+Show the driver current and upcoming assigned route sessions, nearest first, and allow them to select the active route to start.
 
 ---
 
@@ -594,9 +600,9 @@ Status Tabs:
 
 Main Content:
 
-- Single assigned route card only
+- Current/upcoming assigned route card list
 - Route summary fields
-- Main start action
+- Main start action for the selected route
 
 Bottom Navigation:
 
@@ -654,12 +660,12 @@ Visual:
 - Clear selected state
 ```
 
-#### Assigned Route Card
+#### Assigned Route List / Card
 
 ```md
 Component:
 
-- Large route summary card
+- Route summary card list focused on current/upcoming sessions
 
 Content Areas:
 
@@ -673,8 +679,10 @@ Content Areas:
 
 Behavior:
 
-- Only one route should be displayed
-- All field values come from server
+- Current and upcoming routes may be displayed when multiple assignments are returned
+- Past route history is not shown in this list
+- Routes are ordered nearest first by route date/timezone semantics
+- All field values come from server or the app mock boundary
 - Long values should truncate or wrap safely
 
 Visual:
@@ -739,9 +747,9 @@ Visual:
 ### Design Notes
 
 ```md
-- This screen must show exactly one assigned route.
-- Do not use multiple route cards.
-- The route card should be the visual focus.
+- This screen must not imply that only one route or only today routes exist.
+- Multiple current/upcoming route cards are allowed when the phone lookup returns multiple assignments.
+- The nearest current/upcoming route should be the visual focus.
 - Keep the primary action obvious.
 - Avoid adding unnecessary dashboard widgets.
 ```
@@ -1390,7 +1398,7 @@ Visual:
 - No icons
 ```
 
-#### Today’s Delivery Notes Select
+#### Delivery Notes Select
 
 ```md
 Component:
@@ -1931,7 +1939,7 @@ Create two separate mockup images.
 Image 1:
 
 - Login / Driver Verification
-- Today’s Route
+- Current / Upcoming Routes
 - Route Details
 - Live Tracking
 

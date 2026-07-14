@@ -20,10 +20,80 @@ export type AssignedRouteCoordinates = {
   longitude: number;
 };
 
+export type AssignedRouteLngLat = [number, number];
+
+export type AssignedRouteGeometry = {
+  coordinates: AssignedRouteLngLat[];
+  type: 'LineString';
+};
+
+export type AssignedRouteMetrics = {
+  distanceMeters: number | null;
+  durationSeconds: number | null;
+};
+
+export type AssignedRouteMapPreview = {
+  altText: string;
+  contentType: 'image/png';
+  expiresAt: string;
+  generatedAt: string;
+  height: number;
+  imageUrl: string;
+  kind: 'static_route_map';
+  routeSequenceChecksum: string;
+  width: number;
+};
+
+export type RouteMapPreviewLoadStatus = 'idle' | 'failed';
+
+export type RouteMapPreviewState =
+  | {
+      accessibilityLabel: string;
+      imageUrl: string;
+      kind: 'available';
+    }
+  | {
+      kind: 'expired' | 'failed' | 'missing';
+      message: string;
+    };
+
+export const NORMALIZED_PAYMENT_STATUSES = [
+  'PAID_CONFIRMED',
+  'CASH_COLLECT_REQUIRED',
+  'TRANSFER_CHECK_PENDING',
+  'ONLINE_PAYMENT_PENDING_OR_FAILED',
+  'NOT_DELIVERABLE_OR_EXCEPTION',
+  'UNKNOWN_REVIEW',
+] as const;
+
+export type NormalizedPaymentStatus = (typeof NORMALIZED_PAYMENT_STATUSES)[number];
+
+export type AssignedRouteOrderItemOption = {
+  key: string;
+  value: string;
+};
+
+export type AssignedRouteOrderItem = {
+  name: string;
+  options: AssignedRouteOrderItemOption[];
+  productId: number;
+  quantity: number;
+  sku: string | null;
+  variationId: number;
+};
+
+export type AssignedRoutePaymentCopy = {
+  detail: string;
+  label: string;
+  tone: 'green' | 'neutral' | 'warning';
+};
+
 export type AssignedRouteStop = {
   address: AssignedRouteAddress;
   coordinates: AssignedRouteCoordinates | null;
   deliveryStopId: string;
+  items: AssignedRouteOrderItem[];
+  normalizedPaymentStatus: NormalizedPaymentStatus | null;
   orderName: string;
   phone: string | null;
   recipientName: string | null;
@@ -31,10 +101,25 @@ export type AssignedRouteStop = {
   status: string;
 };
 
+export type AssignedRouteStopPoint = {
+  deliveryStopId: string;
+  inputCoordinates: AssignedRouteLngLat | null;
+  name: string | null;
+  sequence: number;
+  snapDistanceMeters: number | null;
+  snappedCoordinates: AssignedRouteLngLat | null;
+};
+
+const DEFAULT_ASSIGNED_ROUTE_TIMEZONE = 'America/Toronto';
+
 export type AssignedRoute = {
   deliveryDate: string;
   id: string;
   name: string;
+  routeGeometry: AssignedRouteGeometry | null;
+  routeMapPreview: AssignedRouteMapPreview | null;
+  routeMetrics: AssignedRouteMetrics | null;
+  routeStopPoints: AssignedRouteStopPoint[];
   shopDomain: string;
   stops: AssignedRouteStop[];
   timezone: string;
@@ -103,6 +188,47 @@ export const sampleAssignedRoute: AssignedRoute = {
   deliveryDate: '2026-05-12',
   id: '11111111-1111-4111-8111-111111111111',
   name: 'Tuesday AM Route',
+  routeGeometry: {
+    coordinates: [
+      [-79.3832, 43.6532],
+      [-79.3817, 43.6487],
+      [-79.3909, 43.6509],
+    ],
+    type: 'LineString',
+  },
+  routeMapPreview: {
+    altText: 'Static route preview for 2 stops.',
+    contentType: 'image/png',
+    expiresAt: '2026-05-12T07:00:00.000Z',
+    generatedAt: '2026-05-12T06:50:00.000Z',
+    height: 430,
+    imageUrl: 'https://delivery.example.com/driver/route-map-preview/opaque?expires=1781142000000&signature=preview',
+    kind: 'static_route_map',
+    routeSequenceChecksum: 'sample-route-checksum',
+    width: 720,
+  },
+  routeMetrics: {
+    distanceMeters: 3250,
+    durationSeconds: 840,
+  },
+  routeStopPoints: [
+    {
+      deliveryStopId: '22222222-2222-4222-8222-222222222222',
+      inputCoordinates: [-79.3817, 43.6487],
+      name: 'King Street West',
+      sequence: 1,
+      snapDistanceMeters: 3.5,
+      snappedCoordinates: [-79.3818, 43.6488],
+    },
+    {
+      deliveryStopId: '33333333-3333-4333-8333-333333333333',
+      inputCoordinates: [-79.3909, 43.6509],
+      name: 'Queen Street West',
+      sequence: 2,
+      snapDistanceMeters: 8.2,
+      snappedCoordinates: [-79.391, 43.651],
+    },
+  ],
   shopDomain: 'tomatono.myshopify.com',
   stops: [
     {
@@ -119,6 +245,17 @@ export const sampleAssignedRoute: AssignedRoute = {
         longitude: -79.3817,
       },
       deliveryStopId: '22222222-2222-4222-8222-222222222222',
+      items: [
+        {
+          name: 'Tomato box',
+          options: [{ key: 'Size', value: 'Large' }],
+          productId: 101,
+          quantity: 2,
+          sku: 'TOM-L',
+          variationId: 7,
+        },
+      ],
+      normalizedPaymentStatus: 'CASH_COLLECT_REQUIRED',
       orderName: '#1001',
       phone: '+14165550123',
       recipientName: 'Recipient One',
@@ -139,6 +276,17 @@ export const sampleAssignedRoute: AssignedRoute = {
         longitude: -79.3909,
       },
       deliveryStopId: '33333333-3333-4333-8333-333333333333',
+      items: [
+        {
+          name: 'Basil bunch',
+          options: [],
+          productId: 202,
+          quantity: 1,
+          sku: null,
+          variationId: 0,
+        },
+      ],
+      normalizedPaymentStatus: 'TRANSFER_CHECK_PENDING',
       orderName: '#1002',
       phone: '+14165550124',
       recipientName: 'Recipient Two',
@@ -167,7 +315,7 @@ export async function loadAssignedRouteAfterConsent(
       return {
         flowState: 'consent_recorded',
         kind: 'no_assigned_route',
-        message: 'No assigned route is available for this driver and route context today.',
+        message: 'No current or upcoming route is available for this driver and route context.',
       };
     }
 
@@ -176,7 +324,9 @@ export async function loadAssignedRouteAfterConsent(
       kind: 'route_ready',
       route: {
         ...result.route,
-        stops: [...result.route.stops].sort((left, right) => left.sequence - right.sequence),
+        stops: [...result.route.stops]
+          .map(normalizeAssignedRouteStop)
+          .sort((left, right) => left.sequence - right.sequence),
       },
     };
   } catch (error) {
@@ -237,30 +387,111 @@ export function createAssignedRouteApiClient(input: {
   };
 }
 
+export function formatAssignedRouteDistance(metrics: AssignedRouteMetrics | null): string {
+  const distanceMeters = metrics?.distanceMeters;
+  if (typeof distanceMeters !== 'number' || !Number.isFinite(distanceMeters) || distanceMeters < 0) {
+    return 'Not available';
+  }
+
+  if (distanceMeters < 1000) {
+    return `${Math.round(distanceMeters)} m`;
+  }
+
+  return `${(distanceMeters / 1000).toFixed(1)} km`;
+}
+
+export function formatAssignedRouteDuration(metrics: AssignedRouteMetrics | null): string {
+  const durationSeconds = metrics?.durationSeconds;
+  if (typeof durationSeconds !== 'number' || !Number.isFinite(durationSeconds) || durationSeconds < 0) {
+    return 'Not available';
+  }
+
+  const minutes = Math.max(1, Math.round(durationSeconds / 60));
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes === 0 ? `${hours} hr` : `${hours} hr ${remainingMinutes} min`;
+}
+
+export function hasAssignedRouteGeometry(route: AssignedRoute): boolean {
+  return route.routeGeometry !== null && route.routeGeometry.coordinates.length >= 2;
+}
+
+export function formatAssignedRouteItemOptions(item: Pick<AssignedRouteOrderItem, 'options'>): string {
+  return item.options.map((option) => `${option.key}: ${option.value}`).join(' · ');
+}
+
+export function formatAssignedRouteItemLine(item: AssignedRouteOrderItem): string {
+  const options = formatAssignedRouteItemOptions(item);
+  return `${item.name}${options.length === 0 ? '' : ` (${options})`}: ${item.quantity}`;
+}
+
+export function resolveRouteMapPreviewState(input: {
+  loadStatus: RouteMapPreviewLoadStatus;
+  now: Date;
+  preview: AssignedRouteMapPreview | null;
+}): RouteMapPreviewState {
+  if (input.preview === null) {
+    return {
+      kind: 'missing',
+      message: 'Route preview unavailable. You can still open navigation for each stop.',
+    };
+  }
+
+  if (input.loadStatus === 'failed') {
+    return {
+      kind: 'failed',
+      message: 'Map preview couldn’t load. Route details are still available.',
+    };
+  }
+
+  const expiresAt = Date.parse(input.preview.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= input.now.getTime()) {
+    return {
+      kind: 'expired',
+      message: 'Map preview couldn’t load. Route details are still available.',
+    };
+  }
+
+  return {
+    accessibilityLabel: input.preview.altText,
+    imageUrl: input.preview.imageUrl,
+    kind: 'available',
+  };
+}
+
 function readAssignedRouteEnvelope(payload: unknown): AssignedRouteLookupResult {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
     throw new Error('Invalid assigned route response');
   }
 
   const data = (payload as { data?: unknown }).data;
-  if (!isAssignedRouteLookupResult(data)) {
+  const result = readAssignedRouteLookupResult(data);
+  if (result === null) {
     throw new Error('Invalid assigned route response');
   }
 
-  return data;
+  return result;
 }
 
-function isAssignedRouteLookupResult(value: unknown): value is AssignedRouteLookupResult {
+function readAssignedRouteLookupResult(value: unknown): AssignedRouteLookupResult | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return false;
+    return null;
   }
 
   const result = value as Record<string, unknown>;
   if (result.status === 'NO_ASSIGNED_ROUTE') {
-    return true;
+    return { status: 'NO_ASSIGNED_ROUTE' };
   }
 
-  return result.status === 'ASSIGNED_ROUTE' && isAssignedRoute(result.route);
+  if (result.status === 'ASSIGNED_ROUTE' && isAssignedRoute(result.route)) {
+    return { status: 'ASSIGNED_ROUTE', route: normalizeAssignedRoute(result.route) };
+  }
+
+  return null;
 }
 
 function isAssignedRoute(value: unknown): value is AssignedRoute {
@@ -273,10 +504,100 @@ function isAssignedRoute(value: unknown): value is AssignedRoute {
     typeof route.deliveryDate === 'string' &&
     typeof route.id === 'string' &&
     typeof route.name === 'string' &&
+    (route.routeGeometry === undefined || route.routeGeometry === null || isAssignedRouteGeometry(route.routeGeometry)) &&
+    (route.routeMapPreview === undefined || route.routeMapPreview === null || isAssignedRouteMapPreview(route.routeMapPreview)) &&
+    (route.routeMetrics === undefined || route.routeMetrics === null || isAssignedRouteMetrics(route.routeMetrics)) &&
+    (route.routeStopPoints === undefined || (Array.isArray(route.routeStopPoints) && route.routeStopPoints.every(isAssignedRouteStopPoint))) &&
     typeof route.shopDomain === 'string' &&
     Array.isArray(route.stops) &&
     route.stops.every(isAssignedRouteStop) &&
-    typeof route.timezone === 'string'
+    nullableString(route.timezone)
+  );
+}
+
+function normalizeAssignedRoute(route: AssignedRoute): AssignedRoute {
+  return {
+    ...route,
+    routeGeometry: route.routeGeometry ?? null,
+    routeMapPreview: route.routeMapPreview ?? null,
+    routeMetrics: route.routeMetrics ?? null,
+    routeStopPoints: route.routeStopPoints ?? [],
+    stops: route.stops.map(normalizeAssignedRouteStop),
+    timezone: route.timezone ?? DEFAULT_ASSIGNED_ROUTE_TIMEZONE,
+  };
+}
+
+function normalizeAssignedRouteStop(stop: AssignedRouteStop): AssignedRouteStop {
+  return {
+    ...stop,
+    items: stop.items.map((item) => ({
+      ...item,
+      options: [...item.options],
+    })),
+  };
+}
+
+function isAssignedRouteMapPreview(value: unknown): value is AssignedRouteMapPreview {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const preview = value as Record<string, unknown>;
+  return (
+    preview.kind === 'static_route_map' &&
+    typeof preview.imageUrl === 'string' &&
+    preview.imageUrl.trim().length > 0 &&
+    typeof preview.width === 'number' &&
+    Number.isFinite(preview.width) &&
+    preview.width > 0 &&
+    typeof preview.height === 'number' &&
+    Number.isFinite(preview.height) &&
+    preview.height > 0 &&
+    preview.contentType === 'image/png' &&
+    typeof preview.generatedAt === 'string' &&
+    typeof preview.expiresAt === 'string' &&
+    typeof preview.routeSequenceChecksum === 'string' &&
+    typeof preview.altText === 'string' &&
+    preview.altText.trim().length > 0
+  );
+}
+
+function isAssignedRouteGeometry(value: unknown): value is AssignedRouteGeometry {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const geometry = value as Record<string, unknown>;
+  return (
+    geometry.type === 'LineString' &&
+    Array.isArray(geometry.coordinates) &&
+    geometry.coordinates.length >= 2 &&
+    geometry.coordinates.every(isAssignedRouteLngLat)
+  );
+}
+
+function isAssignedRouteMetrics(value: unknown): value is AssignedRouteMetrics {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const metrics = value as Record<string, unknown>;
+  return nullableFiniteNumber(metrics.distanceMeters) && nullableFiniteNumber(metrics.durationSeconds);
+}
+
+function isAssignedRouteStopPoint(value: unknown): value is AssignedRouteStopPoint {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const stopPoint = value as Record<string, unknown>;
+  return (
+    typeof stopPoint.deliveryStopId === 'string' &&
+    (stopPoint.inputCoordinates === null || isAssignedRouteLngLat(stopPoint.inputCoordinates)) &&
+    nullableString(stopPoint.name) &&
+    typeof stopPoint.sequence === 'number' &&
+    nullableFiniteNumber(stopPoint.snapDistanceMeters) &&
+    (stopPoint.snappedCoordinates === null || isAssignedRouteLngLat(stopPoint.snappedCoordinates))
   );
 }
 
@@ -290,12 +611,49 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
     isAssignedRouteAddress(stop.address) &&
     (stop.coordinates === null || isAssignedRouteCoordinates(stop.coordinates)) &&
     typeof stop.deliveryStopId === 'string' &&
+    Array.isArray(stop.items) &&
+    stop.items.every(isAssignedRouteOrderItem) &&
+    isNormalizedPaymentStatus(stop.normalizedPaymentStatus) &&
     typeof stop.orderName === 'string' &&
     nullableString(stop.phone) &&
     nullableString(stop.recipientName) &&
     typeof stop.sequence === 'number' &&
     typeof stop.status === 'string'
   );
+}
+
+function isAssignedRouteOrderItem(value: unknown): value is AssignedRouteOrderItem {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.name === 'string' &&
+    Array.isArray(item.options) &&
+    item.options.every(isAssignedRouteOrderItemOption) &&
+    typeof item.productId === 'number' &&
+    Number.isFinite(item.productId) &&
+    typeof item.quantity === 'number' &&
+    Number.isFinite(item.quantity) &&
+    item.quantity > 0 &&
+    nullableString(item.sku) &&
+    typeof item.variationId === 'number' &&
+    Number.isFinite(item.variationId)
+  );
+}
+
+function isAssignedRouteOrderItemOption(value: unknown): value is AssignedRouteOrderItemOption {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const option = value as Record<string, unknown>;
+  return typeof option.key === 'string' && typeof option.value === 'string';
+}
+
+function isNormalizedPaymentStatus(value: unknown): value is NormalizedPaymentStatus | null {
+  return value === null || NORMALIZED_PAYMENT_STATUSES.some((status) => status === value);
 }
 
 function isAssignedRouteAddress(value: unknown): value is AssignedRouteAddress {
@@ -323,6 +681,78 @@ function isAssignedRouteCoordinates(value: unknown): value is AssignedRouteCoord
   return typeof coordinates.latitude === 'number' && typeof coordinates.longitude === 'number';
 }
 
+function isAssignedRouteLngLat(value: unknown): value is AssignedRouteLngLat {
+  if (!Array.isArray(value) || value.length !== 2) {
+    return false;
+  }
+
+  const longitude = value[0];
+  const latitude = value[1];
+  return (
+    typeof longitude === 'number' &&
+    Number.isFinite(longitude) &&
+    longitude >= -180 &&
+    longitude <= 180 &&
+    typeof latitude === 'number' &&
+    Number.isFinite(latitude) &&
+    latitude >= -90 &&
+    latitude <= 90
+  );
+}
+
+function nullableFiniteNumber(value: unknown): value is number | null {
+  return value === null || (typeof value === 'number' && Number.isFinite(value));
+}
+
 function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
+}
+
+export function formatAssignedRoutePaymentStatus(
+  status: NormalizedPaymentStatus | null,
+): AssignedRoutePaymentCopy {
+  switch (status) {
+    case 'PAID_CONFIRMED':
+      return {
+        detail: 'Payment is confirmed in WooCommerce. Do not request payment at delivery.',
+        label: 'Paid confirmed',
+        tone: 'green',
+      };
+    case 'CASH_COLLECT_REQUIRED':
+      return {
+        detail: 'Cash was selected. Collect payment directly at delivery.',
+        label: 'Collect cash',
+        tone: 'warning',
+      };
+    case 'TRANSFER_CHECK_PENDING':
+      return {
+        detail: 'E-mail/bank transfer still needs WooCommerce/admin confirmation. Do not ask again until confirmed by dispatch.',
+        label: 'Transfer pending',
+        tone: 'warning',
+      };
+    case 'ONLINE_PAYMENT_PENDING_OR_FAILED':
+      return {
+        detail: 'Online/card payment is not confirmed. Check with dispatch before requesting anything from the customer.',
+        label: 'Online pending',
+        tone: 'warning',
+      };
+    case 'NOT_DELIVERABLE_OR_EXCEPTION':
+      return {
+        detail: 'WooCommerce reports a cancelled, refunded, failed, or otherwise exceptional order status.',
+        label: 'Payment exception',
+        tone: 'warning',
+      };
+    case 'UNKNOWN_REVIEW':
+      return {
+        detail: 'Payment method/status is unknown to CLEVER Route. Ask dispatch/admin to review.',
+        label: 'Review payment',
+        tone: 'warning',
+      };
+    case null:
+      return {
+        detail: 'No normalized payment state was provided for this stop.',
+        label: 'Payment unavailable',
+        tone: 'neutral',
+      };
+  }
 }

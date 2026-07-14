@@ -5,7 +5,6 @@ import {
   canEnterDeliveryActive,
   canRevealRouteDetails,
   DRIVER_FLOW_STATES,
-  getInitialAccessValidation,
   getMvpRouteTabs,
   getMvpScenarioScreens,
   getStopCompletionProofFields,
@@ -24,24 +23,6 @@ describe('driver app MVP flow', () => {
       'delivery_active',
       'delivery_finished',
     ]);
-  });
-
-  it('accepts phone-only access as the lookup starting point', () => {
-    assert.deepEqual(
-      getInitialAccessValidation({ phoneE164: '+14165550123' }),
-      {
-        ok: true,
-      },
-    );
-  });
-
-  it('still accepts route context plus E.164 phone as an optional narrowed lookup', () => {
-    assert.deepEqual(
-      getInitialAccessValidation({ routeContext: 'route-tomato-2026-05-12', phoneE164: '+14165550123' }),
-      {
-        ok: true,
-      },
-    );
   });
 
   it('does not reveal route details before consent is recorded', () => {
@@ -63,6 +44,7 @@ describe('driver app MVP flow', () => {
         'login',
         'routeList',
         'routeDetail',
+        'routeSession',
         'liveTracking',
         'stopDetails',
         'arrivalCheck',
@@ -75,8 +57,9 @@ describe('driver app MVP flow', () => {
       getMvpScenarioScreens().map((screen) => screen.title),
       [
         'Login / Driver Verification',
-        'Today’s Route',
+        'Upcoming Routes',
         'Route Details',
+        'Route Session',
         'Live Tracking',
         'Stop Details',
         'Arrival Check',
@@ -90,6 +73,7 @@ describe('driver app MVP flow', () => {
     assert.deepEqual(getMvpRouteTabs(), [
       { id: 'upcoming', label: 'Pending' },
       { id: 'active', label: 'In Progress' },
+      { id: 'unfinished', label: 'Unfinished' },
       { id: 'completed', label: 'Completed' },
     ]);
   });
@@ -97,9 +81,9 @@ describe('driver app MVP flow', () => {
   it('keeps proof and optional stop inputs aligned to the English arrival check design', () => {
     assert.deepEqual(getStopCompletionProofFields(), [
       { id: 'photo', label: 'Photo Proof', required: true },
-      { id: 'todayNote', label: 'Today’s Delivery Notes', required: false },
+      { id: 'todayNote', label: 'Delivery Result', required: false },
       { id: 'locationTip', label: 'Location Tip', required: false },
-      { id: 'additionalNotes', label: 'Additional Notes', required: false },
+      { id: 'additionalNotes', label: 'Other Notes', required: false },
     ]);
   });
 });

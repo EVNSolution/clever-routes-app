@@ -1,28 +1,51 @@
 import { StatusBar } from 'expo-status-bar';
 import * as Speech from 'expo-speech';
-import { useEffect, useMemo, useState } from 'react';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  AppState,
+  BackHandler,
+  Image,
+  PanResponder,
+  InteractionManager,
   KeyboardAvoidingView,
   Linking,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   createMockAssignedRouteService,
+  formatAssignedRouteItemLine,
+  formatAssignedRouteDistance,
+  formatAssignedRouteDuration,
+  formatAssignedRoutePaymentStatus,
   loadAssignedRouteAfterConsent,
+  resolveRouteMapPreviewState,
   sampleAssignedRoute,
   type AssignedRoute,
   type AssignedRouteService,
   type AssignedRouteStop,
 } from '../domain/route/assignedRoute';
+import {
+  classifyAssignedRouteSession,
+  filterVisibleAssignedRouteSessions,
+  getInitialAssignedRouteTab,
+  type RouteSessionStatus,
+} from '../domain/route/routeSessionClassification';
+import {
+  getCurrentRouteStop,
+  getStopDetailsProgressState,
+  ROUTE_COMPANY_STEP_INDEX,
+} from '../domain/route/routeStepProgress';
 import {
   recordContinuousLocationUpdateBatch,
   startContinuousLocationUpdatesAfterDeliveryStart,
@@ -48,8 +71,18 @@ import {
   type ProofMediaUploadService,
 } from '../domain/proof/proofMediaUpload';
 import { createDriverRuntimeServices, readDriverRuntimeConfig } from './config/driverRuntimeConfig';
-import { createMockDriverConsentService, submitDriverConsent, type DriverConsentService, type DriverConsentSubmissionResult } from '../domain/consent/driverConsent';
+import { CONSENT_COPY_VERSIONS, createMockDriverConsentService, submitDriverConsent, type DriverConsentService, type DriverConsentSubmissionResult } from '../domain/consent/driverConsent';
 import { getMvpRouteTabs } from '../domain/driverFlow/driverFlow';
+import { resetDriverSession } from '../domain/driver/driverSessionReset';
+import type { PersistedActiveRouteSession } from '../domain/driver/driverAccessTokenStore';
+import type { DriverAccountAccessToken } from '../domain/driverAuth/driverAuth';
+import {
+  getDriverMainTabs,
+  getDriverPlaceholderCopy,
+  getVisibleBottomTab,
+  shouldShowDriverBottomTabs,
+  type DriverMainTabId,
+} from './driverMainTabs';
 import {
   DEFAULT_DRIVER_PHONE_COUNTRY,
   findDriverPhoneCountry,
@@ -62,31 +95,66 @@ import {
   createMockRouteAccessService,
   sampleInvitedRouteAccess,
   submitRouteAccess,
+  type DriverAccessToken,
   type RouteAccessCompanyGuidance,
   type RouteAccessLookupResult,
   type RouteAccessRouteChoice,
   type RouteAccessSubmissionResult,
 } from '../domain/routeAccess/routeAccess';
 import { recordStopProofEventAfterDeliveryStart, type StopProofEventResult } from '../domain/stop/stopProofEvents';
+import { openRouteNavigation, openStopNavigation } from '../domain/stop/stopNavigation';
 import {
   COUNTRY_SELECTOR_OVERLAY_BEHAVIOR,
   getCountrySelectorRowText,
   getSelectedCountryCardText,
 } from '../ui/components/countrySelectorBehavior';
+import {
+  getConsentCheckboxVisualState,
+} from '../ui/components/authFormUxBehavior';
 import { TransientToast } from '../ui/components/TransientToast';
 import { scheduleTransientToastDismiss } from '../ui/components/transientToastBehavior';
+import {
+  buildAuthFailureMessage,
+  buildAuthSuccessMessage,
+  getRuntimeHostLabel,
+} from './authDiagnostics';
+import {
+  getVerifiedDriverNoAssignedRouteMessage,
+  type VerifiedDriverNoAssignedRouteReason,
+} from './verifiedDriverNoAssignedRoutes';
+import { NativeRouteMapPreview } from './NativeRouteMapPreview';
+import { getBottomChromeOffset, getBottomChromePadding, getBottomTabPadding, getScrollContentBottomPadding } from './appLayoutMetrics';
+import { readDriverMapStyleUrl } from './routeMapGeoJson';
+import {
+  getStopArrivalNotificationCandidate,
+  type StopArrivalNotificationData,
+} from '../domain/notifications/stopArrivalNotifications';
+import { createExpoStopArrivalNotificationService } from '../platform/expo/notifications/expoStopArrivalNotificationService';
+import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
+import {
+  buildRoutePreviewSequence,
+  buildRoutePreviewRegionItems,
+  ROUTE_PREVIEW_COPY,
+  ROUTE_PREVIEW_LABELS,
+} from './routePreviewBehavior';
 
 type AppScreen =
   | 'arrivalCheck'
   | 'completedDeliveries'
   | 'liveTracking'
-  | 'login'
-  | 'routeDetail'
-  | 'routes'
+  | 'liveMapPreview'
+  | 'loginPhone'
+  | 'loginDetail'
+  | 'mainTabs'
+  | 'proofCamera'
+  | 'routePreview'
+  | 'routeSession'
   | 'stopCompleted'
   | 'stopDetails';
 type RouteTabId = ReturnType<typeof getMvpRouteTabs>[number]['id'];
-type RouteStatus = 'active' | 'completed' | 'upcoming';
+type RouteStatus = RouteSessionStatus;
+type StopDetailsBackTarget = 'liveTracking' | 'routeSession';
+type MapPreviewBackTarget = 'liveTracking' | 'routePreview' | 'routeSession';
 
 type StopProofDraft = {
   additionalNotes: string;
@@ -98,24 +166,59 @@ type RouteSession = RouteAccessRouteChoice & {
   route: AssignedRoute;
 };
 
-const DEFAULT_DRIVER_NAME = '';
-const COMPANY_STEP_INDEX = 0;
+type RouteLoadOptions = {
+  allowVerifiedDriverNoRoute?: boolean;
+  activeRouteSession?: PersistedActiveRouteSession | null;
+  navigateOnSuccess?: boolean;
+  resetProgress?: boolean;
+  successMessagePrefix?: string;
+};
+
+const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
+const DRIVER_APP_VERSION = '1.0.0';
+const SWIPE_BACK_DISTANCE = 90;
+const SWIPE_BACK_EDGE_WIDTH = 36;
+const SWIPE_BACK_MAX_VERTICAL_DELTA = 90;
+const SWIPE_BACK_DIRECTIONALITY_RATIO = 1.45;
+
+function runAfterUiInteractions(callback: () => void): void {
+  InteractionManager.runAfterInteractions(callback);
+}
 
 export default function App() {
-  const [screen, setScreen] = useState<AppScreen>('login');
+  return (
+    <SafeAreaProvider>
+      <DriverApp />
+    </SafeAreaProvider>
+  );
+}
+
+function DriverApp() {
+  const { bottom: bottomInset } = useSafeAreaInsets();
+  const bottomTabPadding = getBottomTabPadding();
+  const [screen, setScreen] = useState<AppScreen>('loginPhone');
   const [selectedPhoneCountryIso2, setSelectedPhoneCountryIso2] = useState(DEFAULT_DRIVER_PHONE_COUNTRY.iso2);
   const [selectedDriverLocale, setSelectedDriverLocale] = useState(DEFAULT_DRIVER_PHONE_COUNTRY.defaultLocale);
   const [nationalPhoneInput, setNationalPhoneInput] = useState('');
   const [countrySearchQuery, setCountrySearchQuery] = useState('');
   const [isCountrySelectorOpen, setIsCountrySelectorOpen] = useState(false);
-  const [verificationCode, setVerificationCode] = useState('');
-  const [driverName, setDriverName] = useState(DEFAULT_DRIVER_NAME);
+  const [inviteCode, setInviteCode] = useState('');
+  const [pin, setPin] = useState('');
+  const [pinConfirmation, setPinConfirmation] = useState('');
+  const [isRegistration, setIsRegistration] = useState(false);
+  const [verifiedDriverPhoneE164, setVerifiedDriverPhoneE164] = useState<string | null>(null);
   const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
   const [acceptedLocation, setAcceptedLocation] = useState(false);
+  const [selectedMainTab, setSelectedMainTab] = useState<DriverMainTabId>('home');
   const [selectedTab, setSelectedTab] = useState<RouteTabId>('upcoming');
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [navigationStepIndex, setNavigationStepIndex] = useState(COMPANY_STEP_INDEX);
+  const [selectedStopDetailsId, setSelectedStopDetailsId] = useState<string | null>(null);
+  const [stopDetailsBackTarget, setStopDetailsBackTarget] = useState<StopDetailsBackTarget>('liveTracking');
+  const [mapPreviewBackTarget, setMapPreviewBackTarget] = useState<MapPreviewBackTarget>('routeSession');
   const [routeSessions, setRouteSessions] = useState<RouteSession[]>([]);
+  const [routeReviewNote, setRouteReviewNote] = useState('');
+  const [pendingStopArrivalNotification, setPendingStopArrivalNotification] = useState<StopArrivalNotificationData | null>(null);
 
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
   const [, setConsentSubmission] = useState<DriverConsentSubmissionResult | null>(null);
@@ -135,14 +238,25 @@ export default function App() {
   const [message, setMessage] = useState<string | null>(null);
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isRefreshingRoutes, setIsRefreshingRoutes] = useState(false);
   const [isStartingRoute, setIsStartingRoute] = useState(false);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
+  const [isPhotoActionSheetVisible, setIsPhotoActionSheetVisible] = useState(false);
   const [isCompletingStop, setIsCompletingStop] = useState(false);
   const [isFinishingRoute, setIsFinishingRoute] = useState(false);
+  const selectedRouteIdRef = useRef<string | null>(null);
+  const notifiedStopArrivalIdsRef = useRef<Set<string>>(new Set());
+  const hasCheckedInitialStopArrivalNotificationRef = useRef(false);
+  const hasAttemptedDriverRestoreRef = useRef(false);
+
+  useEffect(() => {
+    selectedRouteIdRef.current = selectedRouteId;
+  }, [selectedRouteId]);
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
   const continuousLocationStreamService = useMemo(() => createExpoContinuousLocationStreamService(), []);
+  const stopArrivalNotificationService = useMemo(() => createExpoStopArrivalNotificationService(), []);
   const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
   const offlineSubmissionQueueStorage = useMemo(() => createExpoOfflineSubmissionQueueStorage(), []);
   const mockDriverEventService = useMemo(() => createMockDriverEventService(), []);
@@ -150,6 +264,7 @@ export default function App() {
   const mockAssignedRouteService = useMemo(() => createMockAssignedRouteService({ status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute }), []);
   const mockProofMediaUploadService = useMemo(() => createMockProofMediaUploadService({ mode: 'success' }), []);
   const routeTabs = useMemo(() => getMvpRouteTabs(), []);
+  const mainTabs = useMemo(() => getDriverMainTabs(), []);
   const selectedPhoneCountry = findDriverPhoneCountry(selectedPhoneCountryIso2) ?? DEFAULT_DRIVER_PHONE_COUNTRY;
   const visiblePhoneCountries = useMemo(
     () => searchDriverPhoneCountries(countrySearchQuery),
@@ -167,23 +282,162 @@ export default function App() {
     }),
     [],
   );
+  const driverMapStyleUrl = useMemo(() => readDriverMapStyleUrl(process.env.EXPO_PUBLIC_DRIVER_MAP_STYLE_URL), []);
 
-  const routeAccessService = useMemo(() => {
-    if (runtimeConfig.mode === 'live') {
-      return createDriverRuntimeServices({ config: runtimeConfig }).routeAccessService;
+  const runtimeServices = useMemo(() => createDriverRuntimeServices({ config: runtimeConfig }), [runtimeConfig]);
+  const routeAccessService = useMemo(() => (
+    runtimeConfig.mode === 'live'
+      ? runtimeServices.routeAccessService
+      : createMockRouteAccessService(sampleInvitedRouteAccess)
+  ), [runtimeConfig.mode, runtimeServices.routeAccessService]);
+  const driverAuthService = runtimeServices.driverAuthService;
+
+  const getActiveAccountAccess = useCallback(async (): Promise<DriverAccountAccessToken | null> => {
+    const restoredAccess = await driverAccessTokenStore.loadActiveDriverAccess();
+    if (restoredAccess.kind === 'active') {
+      return restoredAccess.accountAccess;
+    }
+    if (restoredAccess.kind !== 'refresh_required') {
+      return null;
     }
 
-    return createMockRouteAccessService(sampleInvitedRouteAccess);
-  }, [runtimeConfig]);
+    const refreshResult = await driverAuthService.refreshSession({
+      refreshToken: restoredAccess.accountAccess.refreshToken,
+    });
+    await driverAccessTokenStore.saveRefreshedAccountAccess(refreshResult.accountAccess);
+    return refreshResult.accountAccess;
+  }, [driverAccessTokenStore, driverAuthService]);
+
+  const refreshRouteAccessLookupForSubmission = useCallback(async (routePlanId: string): Promise<DriverAccessToken | null> => {
+    if (runtimeConfig.mode !== 'live') {
+      return null;
+    }
+
+    try {
+      const accountAccess = await getActiveAccountAccess();
+      if (accountAccess === null) {
+        return null;
+      }
+      const lookupResult = await submitRouteAccess({
+        accountAccessToken: accountAccess.accessToken,
+      }, routeAccessService);
+      if (lookupResult.kind !== 'company_guidance' && lookupResult.kind !== 'route_choices') {
+        if (lookupResult.kind === 'denied' && lookupResult.status === 'NOT_FOUND') {
+          await driverAccessTokenStore.clearCachedRouteAccess();
+          setRouteSessions([]);
+          setSubmission(null);
+        }
+        return null;
+      }
+
+      const refreshedChoice = getRouteChoicesFromSubmission(lookupResult).find(
+        (choice) => choice.routeAccess.routePlanId === routePlanId,
+      );
+      if (refreshedChoice === undefined) {
+        await driverAccessTokenStore.clearCachedRouteAccess();
+        setRouteSessions((current) => current.filter(
+          (session) => session.routeAccess.routePlanId !== routePlanId,
+        ));
+        return null;
+      }
+
+      const refreshedSubmission = toCompanyGuidanceSubmission(refreshedChoice);
+      setSubmission((current) => (
+        current?.kind === 'company_guidance' && current.routeAccess.routePlanId === routePlanId
+          ? refreshedSubmission
+          : current
+      ));
+      setRouteSessions((current) => current.map((session) => (
+        session.routeAccess.routePlanId === routePlanId ? { ...session, ...refreshedChoice } : session
+      )));
+      void driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(refreshedSubmission)).catch((error) => {
+        const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+        console.warn(`[driver-api] Refreshed route access could not be saved: ${errorMessage}`);
+      });
+      console.info('[driver-api] Refreshed route access after expired token.');
+      return refreshedSubmission.driverAccess;
+    } catch (error) {
+      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+      console.warn(`[driver-api] Route access refresh failed: ${errorMessage}`);
+      return null;
+    }
+  }, [driverAccessTokenStore, getActiveAccountAccess, routeAccessService, runtimeConfig.mode]);
+
+  const refreshDriverAccessForSubmission = useCallback(async (
+    currentSubmission: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>,
+  ): Promise<DriverAccessToken | null> => {
+    return refreshRouteAccessLookupForSubmission(currentSubmission.routeAccess.routePlanId);
+  }, [refreshRouteAccessLookupForSubmission]);
+
+  const buildDriverAccessRefresh = useCallback((
+    currentSubmission: RouteAccessSubmissionResult | null,
+  ): (() => Promise<DriverAccessToken | null>) | undefined => (
+    currentSubmission?.kind === 'company_guidance'
+      ? () => refreshDriverAccessForSubmission(currentSubmission)
+      : undefined
+  ), [refreshDriverAccessForSubmission]);
 
   const selectedRouteSession = routeSessions.find((session) => session.route.id === selectedRouteId) ?? routeSessions[0] ?? null;
   const selectedRoute = selectedRouteSession?.route ?? null;
   const routeStatus = getRouteStatus(deliveryStartResult, deliveryFinishResult);
-  const currentStop = selectedRoute === null ? null : selectedRoute.stops[navigationStepIndex - 1] ?? null;
+  const currentStop = selectedRoute === null ? null : getCurrentRouteStop({ navigationStepIndex, route: selectedRoute });
+  const stopDetailsProgressState = selectedRoute === null
+    ? null
+    : getStopDetailsProgressState({
+      navigationStepIndex,
+      route: selectedRoute,
+      selectedStopDetailsId,
+    });
+  const stopDetailsStop = stopDetailsProgressState?.stop ?? null;
   const isCompanyStep = navigationStepIndex === COMPANY_STEP_INDEX;
   const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => completedStopIds.includes(stop.deliveryStopId));
   const currentCompany = selectedRouteSession?.companyGuidance ?? null;
   const recentlyCompletedStop = selectedRoute?.stops.find((stop) => stop.deliveryStopId === recentlyCompletedStopId) ?? null;
+
+  const handleStopArrivalNotificationPress = useCallback((data: StopArrivalNotificationData) => {
+    const routeSession = routeSessions.find((session) => session.route.id === data.routePlanId) ?? null;
+    if (routeSession === null) {
+      setPendingStopArrivalNotification(data);
+      setMessage('Arrival alert opened. Loading assigned route before opening proof.');
+      return;
+    }
+
+    const stopIndex = routeSession.route.stops.findIndex((candidate) => candidate.deliveryStopId === data.deliveryStopId);
+    setPendingStopArrivalNotification(null);
+
+    if (stopIndex < 0) {
+      setMessage('Arrival alert opened, but the stop is no longer available on this route.');
+      return;
+    }
+
+    if (completedStopIds.includes(data.deliveryStopId)) {
+      setSelectedRouteId(routeSession.route.id);
+      setSubmission(toCompanyGuidanceSubmission(routeSession));
+      setNavigationStepIndex(stopIndex + 1);
+      setSelectedMainTab('home');
+      setScreen('routeSession');
+      setMessage('This stop is already completed.');
+      return;
+    }
+
+    if (deliveryStartResult?.kind !== 'delivery_active') {
+      setSelectedRouteId(routeSession.route.id);
+      setSubmission(toCompanyGuidanceSubmission(routeSession));
+      setNavigationStepIndex(stopIndex + 1);
+      setSelectedMainTab('home');
+      setScreen('routeSession');
+      setMessage('Arrival alert opened, but the route is not active yet. Start the session first.');
+      return;
+    }
+
+    setSelectedRouteId(routeSession.route.id);
+    setSubmission(toCompanyGuidanceSubmission(routeSession));
+    setSelectedStopDetailsId(null);
+    setNavigationStepIndex(stopIndex + 1);
+    setSelectedMainTab('home');
+    setScreen('arrivalCheck');
+    setMessage('Arrival alert opened. Add proof photo and delivery notes.');
+  }, [completedStopIds, deliveryStartResult?.kind, routeSessions]);
 
   useEffect(() => {
     let isMounted = true;
@@ -213,6 +467,44 @@ export default function App() {
   }), [message]);
 
   useEffect(() => {
+    const removeStopArrivalListener = stopArrivalNotificationService.addStopArrivalResponseListener(handleStopArrivalNotificationPress);
+    if (!hasCheckedInitialStopArrivalNotificationRef.current) {
+      hasCheckedInitialStopArrivalNotificationRef.current = true;
+      void stopArrivalNotificationService.getLastStopArrivalResponse().then((data) => {
+        if (data !== null) {
+          handleStopArrivalNotificationPress(data);
+        }
+      });
+    }
+
+    return removeStopArrivalListener;
+  }, [stopArrivalNotificationService, handleStopArrivalNotificationPress]);
+
+  useEffect(() => {
+    if (pendingStopArrivalNotification !== null && routeSessions.length > 0) {
+      const timeout = setTimeout(() => {
+        handleStopArrivalNotificationPress(pendingStopArrivalNotification);
+      }, 0);
+
+      return () => clearTimeout(timeout);
+    }
+
+    return undefined;
+  }, [handleStopArrivalNotificationPress, pendingStopArrivalNotification, routeSessions.length]);
+
+  useEffect(() => {
+    if (deliveryStartResult?.kind !== 'delivery_active' || deliveryFinishResult?.flowState === 'delivery_finished') {
+      return;
+    }
+
+    void stopArrivalNotificationService.registerForStopArrivalNotifications().then((result) => {
+      if (result.kind !== 'registered') {
+        setMessage(result.message);
+      }
+    });
+  }, [deliveryFinishResult?.flowState, deliveryStartResult?.kind, stopArrivalNotificationService]);
+
+  useEffect(() => {
     if (deliveryStartResult?.kind !== 'delivery_active' || deliveryFinishResult?.flowState === 'delivery_finished') {
       registerContinuousLocationTaskHandler(null);
       return;
@@ -228,6 +520,7 @@ export default function App() {
       await recordContinuousLocationUpdateBatch({
         driverEventService: getDriverEventServiceForCurrentSubmission({
           fallback: mockDriverEventService,
+          refreshDriverAccess: buildDriverAccessRefresh(submission),
           runtimeConfig,
           submission,
         }),
@@ -236,10 +529,39 @@ export default function App() {
         routePlanId,
       });
       setOfflineQueueCount(queue.listPending().length);
+
+      const lastLocation = locations[locations.length - 1] ?? null;
+      const candidate = getStopArrivalNotificationCandidate({
+        completedStopIds,
+        currentStepIndex: navigationStepIndex,
+        isActiveRoute: routeStatus === 'active',
+        lastLocation,
+        notifiedStopIds: [...notifiedStopArrivalIdsRef.current],
+        route: selectedRoute,
+      });
+
+      if (candidate !== null) {
+        notifiedStopArrivalIdsRef.current.add(candidate.stop.deliveryStopId);
+        await stopArrivalNotificationService.scheduleStopArrivalNotification(candidate);
+      }
     });
 
     return () => registerContinuousLocationTaskHandler(null);
-  }, [deliveryFinishResult, deliveryStartResult, mockDriverEventService, offlineSubmissionQueue, runtimeConfig, selectedRoute?.id, submission]);
+  }, [
+    buildDriverAccessRefresh,
+    completedStopIds,
+    deliveryFinishResult,
+    deliveryStartResult,
+    mockDriverEventService,
+    navigationStepIndex,
+    offlineSubmissionQueue,
+    routeStatus,
+    runtimeConfig,
+    selectedRoute,
+    selectedRoute?.id,
+    stopArrivalNotificationService,
+    submission,
+  ]);
 
   function handlePhoneInputChange(value: string) {
     setNationalPhoneInput(formatDriverNationalPhoneInput({
@@ -259,7 +581,7 @@ export default function App() {
     }));
   }
 
-  function handleSendVerificationCode() {
+  async function handlePhoneSubmit() {
     const phoneEntry = normalizeDriverPhoneEntry({
       countryIso2: selectedPhoneCountry.iso2,
       nationalPhoneInput,
@@ -270,12 +592,22 @@ export default function App() {
       return;
     }
 
-    setMessage(`Verification code request is ready for server integration for ${phoneEntry.phoneE164}.`);
+    setIsRegistration(false);
+    setInviteCode('');
+    setPin('');
+    setPinConfirmation('');
+    setMessage(`Enter your 6-digit PIN. ${getRuntimeHostLabel(runtimeConfig)}.`);
+    setScreen('loginDetail');
   }
 
-  async function handleLoginAndLoadRoutes() {
-    if (driverName.trim().length === 0) {
-      setMessage('Enter the driver name before continuing.');
+  async function handleDetailSubmit() {
+    const phoneEntry = normalizeDriverPhoneEntry({
+      countryIso2: selectedPhoneCountry.iso2,
+      nationalPhoneInput,
+    });
+
+    if (!phoneEntry.ok) {
+      setMessage(formatDriverPhoneEntryProblem(phoneEntry.reason));
       return;
     }
 
@@ -284,36 +616,128 @@ export default function App() {
       return;
     }
 
+    const safePin = pin.trim();
+    if (!/^\d{6}$/u.test(safePin)) {
+      setMessage('Enter your 6-digit numeric PIN.');
+      return;
+    }
+
+    const safeInviteCode = inviteCode.trim().toUpperCase();
+    if (isRegistration && !/^[0-9A-F]{6}$/u.test(safeInviteCode)) {
+      setMessage('Enter the 6-character invite code from dispatch.');
+      return;
+    }
+    if (isRegistration && pinConfirmation.trim() !== safePin) {
+      setMessage('PIN confirmation does not match.');
+      return;
+    }
+
+    setIsLoggingIn(true);
+    setMessage(`${isRegistration ? 'Creating account' : 'Signing in'}... ${getRuntimeHostLabel(runtimeConfig)}.`);
+    try {
+      const authResult = isRegistration
+        ? await driverAuthService.register({
+            phoneE164: phoneEntry.phoneE164,
+            inviteCode: safeInviteCode,
+            pin: safePin,
+          })
+        : await driverAuthService.login({
+            phoneE164: phoneEntry.phoneE164,
+            pin: safePin,
+          });
+      await driverAccessTokenStore.saveAuthenticatedDriver({
+        accountAccess: authResult.accountAccess,
+        phoneE164: phoneEntry.phoneE164,
+      });
+      setVerifiedDriverPhoneE164(phoneEntry.phoneE164);
+      setPin('');
+      setPinConfirmation('');
+      setMessage(buildAuthSuccessMessage({
+        runtimeConfig,
+        phase: isRegistration ? 'invite_verify' : 'pin_login',
+      }));
+      setIsLoggingIn(false);
+      await handleLoginAndLoadRoutes(
+        authResult.accountAccess,
+        phoneEntry.phoneE164,
+        { allowVerifiedDriverNoRoute: true },
+      );
+    } catch (error) {
+      const failure = buildAuthFailureMessage({
+        runtimeConfig,
+        phase: isRegistration ? 'invite_verify' : 'pin_login',
+        error,
+      });
+      setMessage(failure.message);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  }
+
+  function openMainTab(tab: DriverMainTabId) {
+    setSelectedMainTab(tab);
+    setScreen('mainTabs');
+    if (tab === 'routes') {
+      void handleRefreshRoutes();
+    }
+  }
+
+  function openHomeRoot() {
+    openMainTab('home');
+  }
+
+  function openRoutesRoot() {
+    openMainTab('routes');
+  }
+
+  const openVerifiedNoAssignedRoute = useCallback((reason: VerifiedDriverNoAssignedRouteReason) => {
+    resetRouteProgress();
+    setSelectedTab('upcoming');
+    setSubmission(null);
+    setSelectedMainTab('routes');
+    setScreen('mainTabs');
+    setMessage(getVerifiedDriverNoAssignedRouteMessage(reason));
+    void driverAccessTokenStore.clearCachedRouteAccess().catch(() => undefined);
+  }, [driverAccessTokenStore]);
+
+  const handleLoginAndLoadRoutes = useCallback(async (
+    accountAccess: DriverAccountAccessToken,
+    phoneE164: string,
+    options: RouteLoadOptions = {},
+  ) => {
+    const allowVerifiedDriverNoRoute = options.allowVerifiedDriverNoRoute ?? false;
+    const shouldResetProgress = options.resetProgress ?? true;
+    const shouldNavigateOnSuccess = options.navigateOnSuccess ?? true;
+    const successMessagePrefix = options.successMessagePrefix ?? 'assigned';
     setIsLoggingIn(true);
     setMessage(null);
-    resetRouteProgress();
+    setVerifiedDriverPhoneE164(phoneE164);
+    if (shouldResetProgress) {
+      resetRouteProgress();
+    }
 
     try {
-      const phoneEntry = normalizeDriverPhoneEntry({
-        countryIso2: selectedPhoneCountry.iso2,
-        nationalPhoneInput,
-      });
-
-      if (!phoneEntry.ok) {
-        setMessage(formatDriverPhoneEntryProblem(phoneEntry.reason));
-        return;
-      }
-
-      const lookupResult = await submitRouteAccess({ phoneE164: phoneEntry.phoneE164 }, routeAccessService);
+      const lookupResult = await submitRouteAccess({
+        accountAccessToken: accountAccess.accessToken,
+      }, routeAccessService);
       setSubmission(lookupResult);
 
       if (lookupResult.kind !== 'company_guidance' && lookupResult.kind !== 'route_choices') {
+        if (lookupResult.kind === 'denied' && lookupResult.status === 'NOT_FOUND') {
+          await driverAccessTokenStore.clearCachedRouteAccess();
+        }
+        if (allowVerifiedDriverNoRoute && lookupResult.kind === 'denied' && lookupResult.status === 'NOT_FOUND') {
+          openVerifiedNoAssignedRoute('route_lookup_not_found');
+          return;
+        }
+
         setMessage(formatRouteAccessProblem(lookupResult));
         return;
       }
 
       const choices = getRouteChoicesFromSubmission(lookupResult);
       if (choices.length === 0) {
-        setRouteSessions([]);
-        setSelectedRouteId(null);
-        setSelectedTab('upcoming');
-        setScreen('routes');
-        setMessage('Phone number verified. No active route is assigned right now.');
+        openVerifiedNoAssignedRoute('no_route_choices');
         return;
       }
 
@@ -323,12 +747,13 @@ export default function App() {
         const choiceSubmission = toCompanyGuidanceSubmission(choice);
         const consentResult = await submitDriverConsent(
           {
-            appContext: { appVersion: '0.1.0', driverName: driverName.trim() },
+            appContext: { appVersion: DRIVER_APP_VERSION },
             deviceContext: { platform: Platform.OS },
             routeContext: choice.routeAccess.routeContext,
           },
           getDriverConsentServiceForCurrentSubmission({
             fallback: mockDriverConsentService,
+            refreshDriverAccess: buildDriverAccessRefresh(choiceSubmission),
             runtimeConfig,
             submission: choiceSubmission,
           }),
@@ -339,6 +764,8 @@ export default function App() {
           setMessage(consentResult.message);
           continue;
         }
+        setAcceptedPrivacy(true);
+        setAcceptedLocation(true);
 
         const assignedRouteResult = await loadAssignedRouteAfterConsent(
           {
@@ -347,6 +774,7 @@ export default function App() {
           },
           getAssignedRouteServiceForCurrentSubmission({
             fallback: mockAssignedRouteService,
+            refreshDriverAccess: buildDriverAccessRefresh(choiceSubmission),
             runtimeConfig,
             submission: choiceSubmission,
           }),
@@ -362,26 +790,218 @@ export default function App() {
       }
 
       if (loadedSessions.length === 0) {
-        setRouteSessions([]);
-        setSubmission(null);
-        setMessage('No active assigned route could be loaded for this phone number.');
+        openVerifiedNoAssignedRoute('assigned_route_load_empty');
         return;
       }
 
+      const activeRouteSession = options.activeRouteSession ?? null;
+      const restoredActiveSession = activeRouteSession === null
+        ? null
+        : loadedSessions.find((session) => session.route.id === activeRouteSession.routePlanId) ?? null;
+      const currentSelectedRouteId = selectedRouteIdRef.current;
+      const selectedRouteWasRemoved = currentSelectedRouteId !== null &&
+        !loadedSessions.some((session) => session.route.id === currentSelectedRouteId);
+      const activeRouteWasRemoved = activeRouteSession !== null && restoredActiveSession === null;
+      if (selectedRouteWasRemoved || activeRouteWasRemoved) {
+        resetRouteProgress();
+        await driverAccessTokenStore.clearActiveRouteSession();
+      }
       setRouteSessions(loadedSessions);
-      setSelectedRouteId(loadedSessions[0].route.id);
-      const firstSubmission = toCompanyGuidanceSubmission(loadedSessions[0]);
+      const nextSelectedRouteId = restoredActiveSession !== null
+        ? restoredActiveSession.route.id
+        : currentSelectedRouteId !== null && loadedSessions.some((session) => session.route.id === currentSelectedRouteId)
+          ? currentSelectedRouteId
+          : loadedSessions[0].route.id;
+      setSelectedRouteId(nextSelectedRouteId);
+      const selectedSession = loadedSessions.find((session) => session.route.id === nextSelectedRouteId) ?? loadedSessions[0];
+      const firstSubmission = toCompanyGuidanceSubmission(selectedSession);
       setSubmission(firstSubmission);
-      await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(firstSubmission));
-      setSelectedTab('upcoming');
-      setScreen('routes');
-      setMessage(`${loadedSessions.length} route${loadedSessions.length === 1 ? '' : 's'} loaded.`);
+      void driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(firstSubmission)).catch(() => {
+        runAfterUiInteractions(() => {
+          setMessage('Route loaded, but session persistence failed. Sign in again if the app does not restore this route next launch.');
+        });
+      });
+      if (restoredActiveSession !== null) {
+        const restoredStepIndex = clampRouteNavigationStepIndex(activeRouteSession?.navigationStepIndex ?? COMPANY_STEP_INDEX, restoredActiveSession.route);
+        setDeliveryStartResult(getRestoredActiveDeliveryStartResult());
+        setDeliveryFinishResult(null);
+        setSelectedTab('active');
+        setSelectedMainTab('home');
+        setNavigationStepIndex(restoredStepIndex);
+        setScreen('routeSession');
+        runAfterUiInteractions(() => {
+          setMessage('Active route session restored. Continue from the current pickup or stop step.');
+        });
+        return;
+      }
+
+      setSelectedTab(getInitialAssignedRouteTab({
+        now: new Date(),
+        route: selectedSession.route,
+      }));
+      setSelectedMainTab(shouldNavigateOnSuccess ? 'home' : 'routes');
+      setScreen('mainTabs');
+      const routeLoadSuccessMessage = `${loadedSessions.length} ${successMessagePrefix} route${loadedSessions.length === 1 ? '' : 's'} loaded. ${buildAuthSuccessMessage({ runtimeConfig, phase: 'route_access' })}`;
+      runAfterUiInteractions(() => {
+        setMessage(routeLoadSuccessMessage);
+      });
+    } catch (error) {
+      const failure = buildAuthFailureMessage({
+        runtimeConfig,
+        phase: 'route_access',
+        error,
+      });
+      if (failure.kind === 'server_401') {
+        await driverAccessTokenStore.clear();
+        resetRouteProgress();
+        setVerifiedDriverPhoneE164(null);
+        setScreen('loginPhone');
+        setMessage('Your login expired. Sign in again with your phone number and PIN.');
+      } else {
+        setMessage(failure.message);
+      }
     } finally {
       setIsLoggingIn(false);
     }
+  }, [
+    buildDriverAccessRefresh,
+    driverAccessTokenStore,
+    mockAssignedRouteService,
+    mockDriverConsentService,
+    openVerifiedNoAssignedRoute,
+    routeAccessService,
+    runtimeConfig,
+  ]);
+
+  const handleRefreshRoutes = useCallback(async () => {
+    if (verifiedDriverPhoneE164 === null) {
+      setMessage('Saved driver phone is unavailable. Sign in again to refresh routes.');
+      return;
+    }
+    if (isRefreshingRoutes || isLoggingIn) {
+      return;
+    }
+
+    setIsRefreshingRoutes(true);
+    try {
+      const restoredAccess = await driverAccessTokenStore.loadActiveDriverAccess();
+      const accountAccess = await getActiveAccountAccess();
+      if (accountAccess === null) {
+        setMessage('Your saved login expired. Sign in with your phone number and PIN.');
+        resetRouteProgress();
+        setVerifiedDriverPhoneE164(null);
+        setScreen('loginPhone');
+        return;
+      }
+      await handleLoginAndLoadRoutes(
+        accountAccess,
+        verifiedDriverPhoneE164,
+        {
+          activeRouteSession: restoredAccess.kind === 'active' || restoredAccess.kind === 'refresh_required'
+            ? restoredAccess.activeRouteSession ?? null
+            : null,
+          allowVerifiedDriverNoRoute: true,
+          navigateOnSuccess: false,
+          resetProgress: false,
+          successMessagePrefix: 'refreshed assigned',
+        },
+      );
+    } finally {
+      setIsRefreshingRoutes(false);
+    }
+  }, [
+    driverAccessTokenStore,
+    getActiveAccountAccess,
+    handleLoginAndLoadRoutes,
+    isLoggingIn,
+    isRefreshingRoutes,
+    verifiedDriverPhoneE164,
+  ]);
+
+  useEffect(() => {
+    if (hasAttemptedDriverRestoreRef.current) {
+      return undefined;
+    }
+
+    hasAttemptedDriverRestoreRef.current = true;
+    let isMounted = true;
+    driverAccessTokenStore.loadActiveDriverAccess().then(async (result) => {
+      if (!isMounted) {
+        return;
+      }
+      if (result.kind === 'expired' && result.driverProfile !== undefined) {
+        setNationalPhoneInput(result.driverProfile.phoneE164);
+        setMessage('Your saved login expired. Enter your PIN to continue.');
+        return;
+      }
+      if (result.kind === 'active' || result.kind === 'refresh_required') {
+        try {
+          const accountAccess = result.kind === 'refresh_required'
+            ? (await driverAuthService.refreshSession({
+                refreshToken: result.accountAccess.refreshToken,
+              })).accountAccess
+            : result.accountAccess;
+          if (result.kind === 'refresh_required') {
+            await driverAccessTokenStore.saveRefreshedAccountAccess(accountAccess);
+          }
+          setNationalPhoneInput(result.driverProfile.phoneE164);
+          setVerifiedDriverPhoneE164(result.driverProfile.phoneE164);
+          await handleLoginAndLoadRoutes(
+            accountAccess,
+            result.driverProfile.phoneE164,
+            {
+              activeRouteSession: result.activeRouteSession ?? null,
+              allowVerifiedDriverNoRoute: true,
+            },
+          );
+        } catch {
+          await driverAccessTokenStore.clear();
+          if (isMounted) {
+            setMessage('Your saved login could not be refreshed. Sign in with your phone number and PIN.');
+            setScreen('loginPhone');
+          }
+        }
+      }
+    });
+    return () => { isMounted = false; };
+  }, [driverAccessTokenStore, driverAuthService, handleLoginAndLoadRoutes]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (
+        state === 'active' &&
+        screen === 'mainTabs' &&
+        verifiedDriverPhoneE164 !== null
+      ) {
+        void handleRefreshRoutes();
+      }
+    });
+
+    return () => subscription.remove();
+  }, [handleRefreshRoutes, screen, verifiedDriverPhoneE164]);
+
+  function handleStartRoute(routeId?: string) {
+    const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
+    if (routeSession === null) {
+      setMessage('No route is available to start.');
+      return;
+    }
+
+    requestRouteStartSessionConfirmation({
+      alertApi: {
+        alert: (title, message, buttons, options) => Alert.alert(title, message, buttons, options),
+      },
+      route: {
+        deliveryDate: routeSession.route.deliveryDate,
+        timezone: routeSession.route.timezone,
+      },
+      onConfirm: () => {
+        void startRouteSessionAfterConfirmed(routeSession.route.id);
+      },
+    });
   }
 
-  async function handleStartRoute(routeId?: string) {
+  async function startRouteSessionAfterConfirmed(routeId?: string) {
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
     if (routeSession === null) {
       setMessage('No route is available to start.');
@@ -410,6 +1030,7 @@ export default function App() {
       const queue = offlineSubmissionQueue ?? undefined;
       const eventService = getDriverEventServiceForCurrentSubmission({
         fallback: mockDriverEventService,
+        refreshDriverAccess: buildDriverAccessRefresh(activeSubmission),
         runtimeConfig,
         submission: activeSubmission,
       });
@@ -429,16 +1050,21 @@ export default function App() {
       setContinuousLocationResult(continuousResult);
 
       setSelectedTab('active');
+      setSelectedMainTab('home');
       setNavigationStepIndex(COMPANY_STEP_INDEX);
-      setScreen('liveTracking');
-      setMessage('Route started. Begin with the company pickup step, then continue in stop order.');
+      await driverAccessTokenStore.saveActiveRouteSession({
+        navigationStepIndex: COMPANY_STEP_INDEX,
+        routePlanId: routeSession.route.id,
+      });
+      setScreen('routeSession');
+      setMessage('Route session started. Continue the pickup and stop workflow in the session.');
     } finally {
       setIsStartingRoute(false);
       refreshOfflineQueueCount();
     }
   }
 
-  function handleOpenRouteDetail(routeId?: string) {
+  function handleOpenRoutePreview(routeId?: string) {
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
     if (routeSession === null) {
       setMessage('No route is available to review.');
@@ -447,11 +1073,30 @@ export default function App() {
 
     setSelectedRouteId(routeSession.route.id);
     setSubmission(toCompanyGuidanceSubmission(routeSession));
-    setScreen('routeDetail');
+    setSelectedMainTab('home');
+    setScreen('routePreview');
   }
 
-  async function handleCallCurrentStop() {
-    const phone = currentStop?.phone ?? currentCompany?.operatorSupportContact;
+  function handleOpenRouteSession(routeId?: string) {
+    const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
+    if (routeSession === null) {
+      setMessage('No route session is available to continue.');
+      return;
+    }
+
+    setSelectedRouteId(routeSession.route.id);
+    setSubmission(toCompanyGuidanceSubmission(routeSession));
+    setSelectedMainTab('home');
+    setScreen('routeSession');
+  }
+
+  function openMapPreviewFrom(backTarget: MapPreviewBackTarget) {
+    setMapPreviewBackTarget(backTarget);
+    setScreen('liveMapPreview');
+  }
+
+  async function handleCallStop(stop: AssignedRouteStop | null) {
+    const phone = stop?.phone ?? currentCompany?.operatorSupportContact;
     if (phone === null || phone === undefined || phone.trim().length === 0) {
       setMessage('No contact number is available for this stop.');
       return;
@@ -460,8 +1105,8 @@ export default function App() {
     await Linking.openURL(`tel:${phone}`);
   }
 
-  async function handleMessageCurrentStop() {
-    const phone = currentStop?.phone ?? currentCompany?.operatorSupportContact;
+  async function handleMessageStop(stop: AssignedRouteStop | null) {
+    const phone = stop?.phone ?? currentCompany?.operatorSupportContact;
     if (phone === null || phone === undefined || phone.trim().length === 0) {
       setMessage('No message contact is available for this stop.');
       return;
@@ -471,7 +1116,11 @@ export default function App() {
   }
 
   function handleAnnounceCurrentTip() {
-    const text = getNavigationTip({ company: currentCompany, isCompanyStep, stop: currentStop });
+    handleAnnounceNavigationTip({ isCompanyStep, stop: currentStop });
+  }
+
+  function handleAnnounceNavigationTip(input: { isCompanyStep: boolean; stop: AssignedRouteStop | null }) {
+    const text = getNavigationTip({ company: currentCompany, isCompanyStep: input.isCompanyStep, stop: input.stop });
     Speech.stop();
     Speech.speak(text, { language: 'en-CA', rate: 0.94 });
     setMessage(`Voice tip: ${text}`);
@@ -484,7 +1133,11 @@ export default function App() {
 
     if (isCompanyStep) {
       setNavigationStepIndex(1);
-      setScreen('liveTracking');
+      void driverAccessTokenStore.saveActiveRouteSession({
+        navigationStepIndex: 1,
+        routePlanId: selectedRoute.id,
+      });
+      setScreen('routeSession');
       setMessage('Company pickup confirmed. Continue to the first stop.');
       return;
     }
@@ -499,12 +1152,58 @@ export default function App() {
       return;
     }
 
+    setSelectedStopDetailsId(currentStop.deliveryStopId);
+    setStopDetailsBackTarget('routeSession');
     setScreen('stopDetails');
+  }
+
+  function handleOpenStopFromRouteSession(stop: AssignedRouteStop) {
+    if (selectedRoute === null) {
+      setMessage('No route is available to review.');
+      return;
+    }
+
+    const selectedStop = selectedRoute.stops.find((candidate) => candidate.deliveryStopId === stop.deliveryStopId);
+    if (selectedStop === undefined) {
+      setMessage('This stop is no longer available on the selected route.');
+      return;
+    }
+
+    setSelectedStopDetailsId(selectedStop.deliveryStopId);
+    setStopDetailsBackTarget('routeSession');
+    setScreen('stopDetails');
+  }
+
+  async function handleOpenRouteNavigation(route: AssignedRoute | null) {
+    if (route === null) {
+      setMessage('No route is available to open in map.');
+      return;
+    }
+
+    const result = await openRouteNavigation({
+      linking: Linking,
+      route,
+    });
+    setMessage(result.message);
+  }
+
+  async function handleOpenNavigationForStop(stop: AssignedRouteStop | null) {
+    if (stop === null || selectedRoute === null) {
+      setMessage('No stop is available to open in map.');
+      return;
+    }
+
+    const result = await openStopNavigation({
+      linking: Linking,
+      platform: Platform.OS,
+      stop,
+    });
+    setMessage(result.message);
   }
 
   function handleContinueAfterStopCompleted() {
     if (selectedRoute === null) {
-      setScreen('routes');
+      openHomeRoot();
       return;
     }
 
@@ -513,7 +1212,53 @@ export default function App() {
       return;
     }
 
-    setScreen('liveTracking');
+    setScreen('routeSession');
+  }
+
+  async function handleProofPhotoResult(input: {
+    captureResult: ProofPhotoCaptureResult;
+    route: AssignedRoute;
+    stop: AssignedRouteStop;
+  }) {
+    const { captureResult, route, stop } = input;
+    setProofPhotoResults((current) => ({ ...current, [stop.deliveryStopId]: captureResult }));
+
+    const uploadRequest = {
+      deliveryStopId: stop.deliveryStopId,
+      fileName: getFileNameFromUri(captureResult.kind === 'captured' ? captureResult.uri : '', stop.deliveryStopId),
+      routePlanId: route.id,
+    };
+
+    const uploadResult = await uploadCapturedProofPhoto({
+      captureResult,
+      uploadRequest,
+      uploadService: getProofMediaUploadServiceForCurrentSubmission({
+        fallback: mockProofMediaUploadService,
+        refreshDriverAccess: buildDriverAccessRefresh(submission),
+        runtimeConfig,
+        submission,
+      }),
+    });
+    setProofMediaResults((current) => ({ ...current, [stop.deliveryStopId]: uploadResult }));
+
+    if (uploadResult.kind === 'upload_failed') {
+      console.warn(`[proof-media] ${uploadResult.message}`);
+    }
+
+    if (shouldQueueFailedProofMediaUpload(uploadResult) && captureResult.kind === 'captured') {
+      offlineSubmissionQueue?.enqueueProofMediaUpload({
+        deliveryStopId: stop.deliveryStopId,
+        fileName: getFileNameFromUri(captureResult.uri, stop.deliveryStopId),
+        routePlanId: route.id,
+        source: captureResult.source,
+        uri: captureResult.uri,
+      });
+    }
+
+    const photoMessage = formatPhotoResult(captureResult, uploadResult);
+    if (photoMessage !== null) {
+      setMessage(photoMessage);
+    }
   }
 
   async function handleCapturePhoto(source: ProofPhotoCaptureSource) {
@@ -521,43 +1266,60 @@ export default function App() {
       return;
     }
 
+    const stop = currentStop;
+    const route = selectedRoute;
     setIsCapturingPhoto(true);
     setMessage(null);
 
     try {
       const captureResult = await captureProofPhoto({ captureService: proofPhotoCaptureService, source });
-      setProofPhotoResults((current) => ({ ...current, [currentStop.deliveryStopId]: captureResult }));
-
-      const uploadResult = await uploadCapturedProofPhoto({
-        captureResult,
-        uploadRequest: {
-          deliveryStopId: currentStop.deliveryStopId,
-          fileName: getFileNameFromUri(captureResult.kind === 'captured' ? captureResult.uri : '', currentStop.deliveryStopId),
-          routePlanId: selectedRoute.id,
-        },
-        uploadService: getProofMediaUploadServiceForCurrentSubmission({
-          fallback: mockProofMediaUploadService,
-          runtimeConfig,
-          submission,
-        }),
-      });
-      setProofMediaResults((current) => ({ ...current, [currentStop.deliveryStopId]: uploadResult }));
-
-      if (shouldQueueFailedProofMediaUpload(uploadResult) && captureResult.kind === 'captured') {
-        offlineSubmissionQueue?.enqueueProofMediaUpload({
-          deliveryStopId: currentStop.deliveryStopId,
-          fileName: getFileNameFromUri(captureResult.uri, currentStop.deliveryStopId),
-          routePlanId: selectedRoute.id,
-          source: captureResult.source,
-          uri: captureResult.uri,
-        });
-      }
-
-      setMessage(formatPhotoResult(captureResult, uploadResult));
+      await handleProofPhotoResult({ captureResult, route, stop });
     } finally {
       setIsCapturingPhoto(false);
       refreshOfflineQueueCount();
     }
+  }
+
+  async function handleCapturedCameraPhoto(uri: string) {
+    if (currentStop === null || selectedRoute === null) {
+      setScreen('arrivalCheck');
+      return;
+    }
+
+    const stop = currentStop;
+    const route = selectedRoute;
+    setScreen('arrivalCheck');
+    setIsCapturingPhoto(true);
+    setMessage(null);
+
+    try {
+      await handleProofPhotoResult({
+        captureResult: { kind: 'captured', source: 'camera', uri },
+        route,
+        stop,
+      });
+    } finally {
+      setIsCapturingPhoto(false);
+      refreshOfflineQueueCount();
+    }
+  }
+
+  function handleAddDeliveryPhoto() {
+    setIsPhotoActionSheetVisible(true);
+  }
+
+  function handleDismissPhotoActionSheet() {
+    setIsPhotoActionSheetVisible(false);
+  }
+
+  function handleSelectPhotoSource(source: ProofPhotoCaptureSource) {
+    setIsPhotoActionSheetVisible(false);
+    if (source === 'camera') {
+      setScreen('proofCamera');
+      return;
+    }
+
+    void handleCapturePhoto(source);
   }
 
   async function handleCompleteCurrentStop() {
@@ -567,7 +1329,13 @@ export default function App() {
 
     const photoResult = proofPhotoResults[currentStop.deliveryStopId];
     if (photoResult?.kind !== 'captured') {
-      setMessage('Photo proof is required. Capture or select a proof photo first.');
+      setMessage('Add a delivery photo first.');
+      return;
+    }
+
+    const mediaResult = proofMediaResults[currentStop.deliveryStopId];
+    if (mediaResult?.kind !== 'uploaded') {
+      setMessage(mediaResult?.kind === 'upload_failed' ? mediaResult.message : 'Photo is not uploaded yet. Add the photo again.');
       return;
     }
 
@@ -576,18 +1344,18 @@ export default function App() {
 
     try {
       const draft = getProofDraft(proofDrafts[currentStop.deliveryStopId]);
-      const mediaResult = proofMediaResults[currentStop.deliveryStopId];
       const result = await recordStopProofEventAfterDeliveryStart({
         deliveryStart: deliveryStartResult,
         driverEventService: getDriverEventServiceForCurrentSubmission({
           fallback: mockDriverEventService,
+          refreshDriverAccess: buildDriverAccessRefresh(submission),
           runtimeConfig,
           submission,
         }),
         input: {
           action: 'delivered',
           deliveryStopId: currentStop.deliveryStopId,
-          media: mediaResult?.kind === 'uploaded' ? [mediaResult.media] : [],
+          media: [mediaResult.media],
           note: formatStopProofNote(draft),
           photoUris: [photoResult.uri],
           routePlanId: selectedRoute.id,
@@ -615,7 +1383,12 @@ export default function App() {
         return;
       }
 
-      setNavigationStepIndex((index) => index + 1);
+      const nextNavigationStepIndex = navigationStepIndex + 1;
+      setNavigationStepIndex(nextNavigationStepIndex);
+      await driverAccessTokenStore.saveActiveRouteSession({
+        navigationStepIndex: nextNavigationStepIndex,
+        routePlanId: selectedRoute.id,
+      });
       setScreen('stopCompleted');
       setMessage('Stop completed. Continue to the next stop when ready.');
     } finally {
@@ -635,6 +1408,7 @@ export default function App() {
         deliveryStart: deliveryStartResult,
         driverEventService: getDriverEventServiceForCurrentSubmission({
           fallback: mockDriverEventService,
+          refreshDriverAccess: buildDriverAccessRefresh(submission),
           runtimeConfig,
           submission,
         }),
@@ -645,8 +1419,10 @@ export default function App() {
       setDeliveryFinishResult(finishResult);
       if (finishResult.kind !== 'blocked') {
         setContinuousLocationResult({ kind: 'stopped', taskName: finishResult.stoppedTaskName });
+        await driverAccessTokenStore.clearActiveRouteSession();
       }
       setSelectedTab('completed');
+      setSelectedMainTab('home');
       setScreen('completedDeliveries');
       setMessage(finishResult.message);
     } finally {
@@ -685,6 +1461,9 @@ export default function App() {
     setDeliveryFinishResult(null);
     setRouteStartedEventResult(null);
     setContinuousLocationResult(null);
+    notifiedStopArrivalIdsRef.current.clear();
+    hasCheckedInitialStopArrivalNotificationRef.current = false;
+    setPendingStopArrivalNotification(null);
     setStopProofResults({});
     setProofDrafts({});
     setProofPhotoResults({});
@@ -693,6 +1472,8 @@ export default function App() {
     setCompletedStopTimes({});
     setRecentlyCompletedStopId(null);
     setNavigationStepIndex(COMPANY_STEP_INDEX);
+    setSelectedStopDetailsId(null);
+    setStopDetailsBackTarget('liveTracking');
     setSelectedRouteId(null);
   }
 
@@ -700,49 +1481,226 @@ export default function App() {
     setOfflineQueueCount(offlineSubmissionQueue?.listPending().length ?? 0);
   }
 
+  async function handleLogout() {
+    setMessage(null);
+    if (offlineSubmissionQueue !== null) {
+      const resetResult = await resetDriverSession({
+        driverAccessTokenStore,
+        offlineQueue: offlineSubmissionQueue,
+      });
+      setMessage(`Signed out. Cleared ${resetResult.clearedOfflineSubmissions} offline retry item${resetResult.clearedOfflineSubmissions === 1 ? '' : 's'}.`);
+    } else {
+      await driverAccessTokenStore.clear();
+      setMessage('Signed out. Offline retry storage was not ready.');
+    }
+
+    resetRouteProgress();
+    setSelectedMainTab('home');
+    setSelectedTab('upcoming');
+    setVerifiedDriverPhoneE164(null);
+    setInviteCode('');
+    setPin('');
+    setPinConfirmation('');
+    setIsRegistration(false);
+    setAcceptedPrivacy(false);
+    setAcceptedLocation(false);
+    setRouteReviewNote('');
+    setScreen('loginPhone');
+  }
+
+  function handleRequestAccountDeletionInfo() {
+    setMessage(getDriverPlaceholderCopy('accountDeletion'));
+  }
+
+  function handleContinueActiveRoute() {
+    if (selectedRoute === null) {
+      openRoutesRoot();
+      return;
+    }
+
+    if (routeStatus === 'active') {
+      setSelectedMainTab('home');
+      setScreen('routeSession');
+      return;
+    }
+
+    setSelectedMainTab('home');
+    setScreen('routeSession');
+  }
+
+  const handleAppBack = useCallback((): boolean => {
+    switch (screen) {
+      case 'loginPhone':
+      case 'mainTabs':
+        return false;
+      case 'loginDetail':
+        setInviteCode('');
+        setPin('');
+        setPinConfirmation('');
+        setIsRegistration(false);
+        setScreen('loginPhone');
+        return true;
+      case 'routePreview':
+      case 'routeSession':
+        setSelectedMainTab('home');
+        setScreen('mainTabs');
+        return true;
+      case 'liveTracking':
+        setScreen('routeSession');
+        return true;
+      case 'liveMapPreview':
+        setScreen(mapPreviewBackTarget);
+        return true;
+      case 'proofCamera':
+        setScreen('arrivalCheck');
+        return true;
+      case 'stopDetails':
+        setSelectedStopDetailsId(null);
+        setScreen(stopDetailsBackTarget);
+        return true;
+      case 'arrivalCheck':
+        setScreen('stopDetails');
+        return true;
+      case 'stopCompleted':
+        setScreen('routeSession');
+        return true;
+      case 'completedDeliveries':
+        setSelectedMainTab('home');
+        setScreen('mainTabs');
+        return true;
+    }
+  }, [mapPreviewBackTarget, screen, stopDetailsBackTarget]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return undefined;
+    }
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', handleAppBack);
+    return () => subscription.remove();
+  }, [handleAppBack]);
+
+  const swipeBackResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_event, gestureState) => {
+      if (screen === 'loginPhone' || screen === 'mainTabs' || screen === 'liveMapPreview' || gestureState.x0 > SWIPE_BACK_EDGE_WIDTH) {
+        return false;
+      }
+
+      const horizontalDistance = Math.abs(gestureState.dx);
+      const verticalDistance = Math.abs(gestureState.dy);
+      return horizontalDistance > 35 && horizontalDistance > verticalDistance * SWIPE_BACK_DIRECTIONALITY_RATIO;
+    },
+    onPanResponderRelease: (_event, gestureState) => {
+      const horizontalDistance = Math.abs(gestureState.dx);
+      const verticalDistance = Math.abs(gestureState.dy);
+
+      if (horizontalDistance >= SWIPE_BACK_DISTANCE && verticalDistance <= SWIPE_BACK_MAX_VERTICAL_DELTA) {
+        handleAppBack();
+      }
+    },
+  }), [handleAppBack, screen]);
+  const isFullMapScreen = screen === 'liveMapPreview' && selectedRoute !== null;
+  const isProofCameraScreen = screen === 'proofCamera';
+  const contentBottomPadding = shouldShowDriverBottomTabs(screen) ? getScrollContentBottomPadding(bottomInset) : 28;
+  const scrollContentContainerStyle = [styles.container, { paddingBottom: contentBottomPadding }];
+
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <View style={styles.safeArea}>
       <StatusBar style="dark" />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.keyboardArea}>
-        <ScrollView
-          contentContainerStyle={styles.container}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {screen === 'login' ? (
-            <LoginScreen
-              acceptedLocation={acceptedLocation}
-              acceptedPrivacy={acceptedPrivacy}
+      <KeyboardAvoidingView
+        {...swipeBackResponder.panHandlers}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
+        style={styles.keyboardArea}
+      >
+        {isFullMapScreen ? (
+          <LiveMapPreviewScreen
+            currentStepIndex={navigationStepIndex}
+            mapStyleUrl={driverMapStyleUrl}
+            onBack={() => setScreen(mapPreviewBackTarget)}
+            route={selectedRoute}
+          />
+        ) : isProofCameraScreen ? (
+          <ProofCameraScreen
+            disabled={isCapturingPhoto}
+            onCancel={() => setScreen('arrivalCheck')}
+            onCaptured={(uri) => {
+              void handleCapturedCameraPhoto(uri);
+            }}
+            onOpenGallery={() => {
+              setScreen('arrivalCheck');
+              void handleCapturePhoto('library');
+            }}
+          />
+        ) : (
+          <ScrollView
+            contentContainerStyle={scrollContentContainerStyle}
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+          {screen === 'loginPhone' ? (
+            <LoginPhoneScreen
               countrySearchQuery={countrySearchQuery}
               driverPhoneCountries={visiblePhoneCountries}
-              driverName={driverName}
-              isLoggingIn={isLoggingIn}
               isCountrySelectorOpen={isCountrySelectorOpen}
+              isSendingCode={isLoggingIn}
               nationalPhoneInput={nationalPhoneInput}
-              onAcceptedLocationChange={setAcceptedLocation}
-              onAcceptedPrivacyChange={setAcceptedPrivacy}
               onCountrySearchChange={setCountrySearchQuery}
               onCountrySelect={handlePhoneCountrySelect}
               onCountrySelectorToggle={() => setIsCountrySelectorOpen((current) => !current)}
-              onDriverNameChange={setDriverName}
               onPhoneChange={handlePhoneInputChange}
-              onSendCode={handleSendVerificationCode}
-              onSubmit={handleLoginAndLoadRoutes}
-              onVerificationCodeChange={setVerificationCode}
+              onSendCode={handlePhoneSubmit}
               phoneE164Preview={phoneE164Preview}
               selectedDriverLocale={selectedDriverLocale}
               selectedPhoneCountry={selectedPhoneCountry}
-              verificationCode={verificationCode}
             />
           ) : null}
 
-          {screen === 'routes' ? (
-            <RouteListScreen
+          {screen === 'loginDetail' ? (
+            <LoginDetailScreen
+              acceptedLocation={acceptedLocation}
+              acceptedPrivacy={acceptedPrivacy}
+              inviteCode={inviteCode}
+              isRegistration={isRegistration}
+              isLoggingIn={isLoggingIn}
+              onAcceptedLocationChange={setAcceptedLocation}
+              onAcceptedPrivacyChange={setAcceptedPrivacy}
+              onInviteCodeChange={setInviteCode}
+              onModeChange={setIsRegistration}
+              onPinChange={setPin}
+              onPinConfirmationChange={setPinConfirmation}
+              onSubmit={handleDetailSubmit}
+              pin={pin}
+              pinConfirmation={pinConfirmation}
+            />
+          ) : null}
+
+          {screen === 'mainTabs' && selectedMainTab === 'home' ? (
+            <HomePage
+              allStopsCompleted={allStopsCompleted}
+              company={currentCompany}
               completedStopIds={completedStopIds}
-              driverName={driverName}
+              isStartingRoute={isStartingRoute}
+              onBrowseRoutes={openRoutesRoot}
+              onContinueRoute={handleContinueActiveRoute}
+              onOpenRoutePreview={() => selectedRoute !== null ? handleOpenRoutePreview(selectedRoute.id) : undefined}
+              onReviewNoteChange={setRouteReviewNote}
+              onStartRoute={() => selectedRoute !== null ? handleStartRoute(selectedRoute.id) : undefined}
+              route={selectedRoute}
+              routeReviewNote={routeReviewNote}
+              routeStatus={routeStatus}
+            />
+          ) : null}
+
+          {screen === 'mainTabs' && selectedMainTab === 'routes' ? (
+            <RoutesPage
+              isRefreshingRoutes={isRefreshingRoutes || isLoggingIn}
               isStartingRoute={isStartingRoute}
               onOpenCompletedDeliveries={() => setScreen('completedDeliveries')}
-              onOpenRouteDetail={handleOpenRouteDetail}
+              onOpenRoutePreview={handleOpenRoutePreview}
+              onContinueRoute={handleOpenRouteSession}
+              onRefreshRoutes={handleRefreshRoutes}
               onSelectRoute={setSelectedRouteId}
               onSelectTab={setSelectedTab}
               onStartRoute={handleStartRoute}
@@ -754,32 +1712,56 @@ export default function App() {
             />
           ) : null}
 
-          {screen === 'routeDetail' && selectedRoute !== null ? (
-            <RouteDetailScreen
+          {screen === 'mainTabs' && selectedMainTab === 'earnings' ? (
+            <EarningsPage />
+          ) : null}
+
+          {screen === 'mainTabs' && selectedMainTab === 'profile' ? (
+            <ProfilePage
+              acceptedLocation={acceptedLocation}
+              acceptedPrivacy={acceptedPrivacy}
+              appVersion={DRIVER_APP_VERSION}
+              onLogout={handleLogout}
+              onRequestAccountDeletionInfo={handleRequestAccountDeletionInfo}
+              phoneE164={verifiedDriverPhoneE164 ?? phoneE164Preview}
+            />
+          ) : null}
+
+          {screen === 'routeSession' && selectedRoute !== null ? (
+            <RouteSessionScreen
               allStopsCompleted={allStopsCompleted}
               company={currentCompany}
               completedStopIds={completedStopIds}
               continuousLocationResult={continuousLocationResult}
+              currentNavigationStepIndex={navigationStepIndex}
               deliveryFinishResult={deliveryFinishResult}
               isFinishingRoute={isFinishingRoute}
               isStartingRoute={isStartingRoute}
-              onBack={() => setScreen('routes')}
+              isCompanyStep={isCompanyStep}
+              mapStyleUrl={driverMapStyleUrl}
+              onArrived={handleArrivedAtStep}
+              onBack={openHomeRoot}
               onFinishRoute={handleManualFinishRoute}
+              onOpenMapPreview={() => openMapPreviewFrom('routeSession')}
+              onOpenNavigation={() => handleOpenRouteNavigation(selectedRoute)}
+              onOpenStop={handleOpenStopFromRouteSession}
               onStartRoute={() => handleStartRoute(selectedRoute.id)}
+              onViewCurrentStop={handleViewCurrentStop}
               route={selectedRoute}
               routeStartedEventResult={routeStartedEventResult}
               routeStatus={routeStatus}
+              stop={currentStop}
             />
           ) : null}
 
           {screen === 'liveTracking' && selectedRoute !== null ? (
             <LiveTrackingScreen
               company={currentCompany}
-              continuousLocationResult={continuousLocationResult}
-              currentStepIndex={navigationStepIndex}
               isCompanyStep={isCompanyStep}
               onArrived={handleArrivedAtStep}
-              onBack={() => setScreen('routeDetail')}
+              onBack={() => setScreen('routeSession')}
+              onOpenMapPreview={() => openMapPreviewFrom('liveTracking')}
+              onOpenNavigation={() => handleOpenRouteNavigation(selectedRoute)}
               onViewStop={handleViewCurrentStop}
               route={selectedRoute}
               routeStatus={routeStatus}
@@ -787,15 +1769,24 @@ export default function App() {
             />
           ) : null}
 
-          {screen === 'stopDetails' && currentStop !== null ? (
+          {screen === 'routePreview' && selectedRoute !== null ? (
+            <RoutePreviewScreen
+              mapStyleUrl={driverMapStyleUrl}
+              onBack={openHomeRoot}
+              onOpenMapPreview={() => openMapPreviewFrom('routePreview')}
+              route={selectedRoute}
+            />
+          ) : null}
+
+          {screen === 'stopDetails' && stopDetailsStop !== null ? (
             <StopDetailsScreen
-              company={currentCompany}
-              onAnnounceTip={handleAnnounceCurrentTip}
-              onArrived={handleArrivedAtStep}
-              onBack={() => setScreen('liveTracking')}
-              onCall={handleCallCurrentStop}
-              onMessage={handleMessageCurrentStop}
-              stop={currentStop}
+              onBack={() => {
+                handleAppBack();
+              }}
+              onCall={() => handleCallStop(stopDetailsStop)}
+              onMessage={() => handleMessageStop(stopDetailsStop)}
+              onOpenNavigation={() => handleOpenNavigationForStop(stopDetailsStop)}
+              stop={stopDetailsStop}
             />
           ) : null}
 
@@ -804,13 +1795,11 @@ export default function App() {
               draft={getProofDraft(proofDrafts[currentStop.deliveryStopId])}
               isCapturingPhoto={isCapturingPhoto}
               isCompletingStop={isCompletingStop || isFinishingRoute}
-              mediaResult={proofMediaResults[currentStop.deliveryStopId]}
               onAnnounceTip={handleAnnounceCurrentTip}
               onBack={() => setScreen('stopDetails')}
-              onCapturePhoto={handleCapturePhoto}
+              onAddPhoto={handleAddDeliveryPhoto}
               onCompleteStop={handleCompleteCurrentStop}
               onDraftChange={updateCurrentStopDraft}
-              photoResult={proofPhotoResults[currentStop.deliveryStopId]}
               proofResult={stopProofResults[currentStop.deliveryStopId]}
               stop={currentStop}
             />
@@ -821,7 +1810,7 @@ export default function App() {
               completedStop={recentlyCompletedStop}
               completedStopIds={completedStopIds}
               completedStopTimes={completedStopTimes}
-              onBackToRoute={() => setScreen('routeDetail')}
+              onBackToRoute={() => setScreen('routeSession')}
               onContinue={handleContinueAfterStopCompleted}
               route={selectedRoute}
             />
@@ -831,65 +1820,63 @@ export default function App() {
             <CompletedDeliveriesScreen
               completedStopIds={completedStopIds}
               completedStopTimes={completedStopTimes}
-              onBack={() => setScreen('routes')}
+              onBack={openHomeRoot}
               proofMediaResults={proofMediaResults}
               route={selectedRoute}
             />
           ) : null}
-        </ScrollView>
+          </ScrollView>
+        )}
+        {shouldShowDriverBottomTabs(screen) ? (
+          <View style={[styles.bottomNavArea, { paddingBottom: bottomTabPadding }]}>
+            <BottomNavigation
+              items={mainTabs}
+              onSelect={openMainTab}
+              selected={getVisibleBottomTab({ screen, selectedMainTab })}
+            />
+          </View>
+        ) : null}
       </KeyboardAvoidingView>
+      <DeliveryPhotoActionSheet
+        disabled={isCapturingPhoto}
+        onCancel={handleDismissPhotoActionSheet}
+        onSelectSource={handleSelectPhotoSource}
+        visible={isPhotoActionSheetVisible}
+      />
       {message !== null ? <TransientToast text={message} /> : null}
-    </SafeAreaView>
+    </View>
   );
 }
 
 
-function LoginScreen({
-  acceptedLocation,
-  acceptedPrivacy,
+function LoginPhoneScreen({
   countrySearchQuery,
   driverPhoneCountries,
-  driverName,
   isCountrySelectorOpen,
-  isLoggingIn,
+  isSendingCode,
   nationalPhoneInput,
-  onAcceptedLocationChange,
-  onAcceptedPrivacyChange,
   onCountrySearchChange,
   onCountrySelect,
   onCountrySelectorToggle,
-  onDriverNameChange,
   onPhoneChange,
   onSendCode,
-  onSubmit,
-  onVerificationCodeChange,
   phoneE164Preview,
   selectedDriverLocale,
   selectedPhoneCountry,
-  verificationCode,
 }: {
-  acceptedLocation: boolean;
-  acceptedPrivacy: boolean;
   countrySearchQuery: string;
   driverPhoneCountries: DriverPhoneCountry[];
-  driverName: string;
   isCountrySelectorOpen: boolean;
-  isLoggingIn: boolean;
+  isSendingCode: boolean;
   nationalPhoneInput: string;
-  onAcceptedLocationChange(value: boolean): void;
-  onAcceptedPrivacyChange(value: boolean): void;
   onCountrySearchChange(value: string): void;
   onCountrySelect(country: DriverPhoneCountry): void;
   onCountrySelectorToggle(): void;
-  onDriverNameChange(value: string): void;
   onPhoneChange(value: string): void;
   onSendCode(): void;
-  onSubmit(): void;
-  onVerificationCodeChange(value: string): void;
   phoneE164Preview: string | null;
   selectedDriverLocale: string;
   selectedPhoneCountry: DriverPhoneCountry;
-  verificationCode: string;
 }) {
   return (
     <View style={styles.screenStack}>
@@ -915,39 +1902,208 @@ function LoginScreen({
           onChangeText={onPhoneChange}
           value={nationalPhoneInput}
         />
-        <LabeledInput
-          label="Verification Code"
-          onChangeText={onVerificationCodeChange}
-          placeholder="Verification code"
-          rightActionLabel="Send Code"
-          onRightAction={onSendCode}
-          value={verificationCode}
-        />
-        <LabeledInput label="Full Name" onChangeText={onDriverNameChange} placeholder="Enter your full name" value={driverName} />
-        <ConsentRow
-          label="I agree to the"
-          linkLabel="Privacy Policy"
-          onValueChange={onAcceptedPrivacyChange}
-          value={acceptedPrivacy}
-        />
-        <ConsentRow
-          label="I agree to"
-          linkLabel="Location-Based Services"
-          onValueChange={onAcceptedLocationChange}
-          value={acceptedLocation}
-        />
-        <PrimaryButton disabled={isLoggingIn} label="Continue" loading={isLoggingIn} onPress={onSubmit} />
+        <PrimaryButton disabled={isSendingCode} label="Continue" loading={isSendingCode} onPress={onSendCode} />
       </View>
     </View>
   );
 }
 
-function RouteListScreen({
+function LoginDetailScreen({
+  acceptedLocation,
+  acceptedPrivacy,
+  inviteCode,
+  isRegistration,
+  isLoggingIn,
+  onAcceptedLocationChange,
+  onAcceptedPrivacyChange,
+  onInviteCodeChange,
+  onModeChange,
+  onPinChange,
+  onPinConfirmationChange,
+  onSubmit,
+  pin,
+  pinConfirmation,
+}: {
+  acceptedLocation: boolean;
+  acceptedPrivacy: boolean;
+  inviteCode: string;
+  isRegistration: boolean;
+  isLoggingIn: boolean;
+  onAcceptedLocationChange(value: boolean): void;
+  onAcceptedPrivacyChange(value: boolean): void;
+  onInviteCodeChange(value: string): void;
+  onModeChange(value: boolean): void;
+  onPinChange(value: string): void;
+  onPinConfirmationChange(value: string): void;
+  onSubmit(): void;
+  pin: string;
+  pinConfirmation: string;
+}) {
+  return (
+    <View style={styles.screenStack}>
+      <View style={styles.brandPanel}>
+        <Text style={styles.brandName}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Driver</Text></Text>
+        <Text style={styles.brandTagline}>{isRegistration ? 'Create your driver account' : 'Enter your PIN'}</Text>
+      </View>
+
+      <View style={styles.formCard}>
+        {isRegistration ? (
+          <LabeledInput
+            label="Invite Code"
+            maxLength={6}
+            onChangeText={(value) => onInviteCodeChange(value.replace(/[^0-9a-f]/giu, '').slice(0, 6).toUpperCase())}
+            placeholder="6-character code"
+            returnKeyType="next"
+            value={inviteCode}
+          />
+        ) : null}
+        <LabeledInput
+          keyboardType="number-pad"
+          label="6-digit PIN"
+          maxLength={6}
+          onChangeText={(value) => onPinChange(value.replace(/\D/gu, '').slice(0, 6))}
+          onSubmitEditing={isRegistration ? undefined : onSubmit}
+          placeholder="6 digits"
+          returnKeyType={isRegistration ? 'next' : 'done'}
+          secureTextEntry
+          value={pin}
+        />
+        {isRegistration ? (
+          <LabeledInput
+            keyboardType="number-pad"
+            label="Confirm PIN"
+            maxLength={6}
+            onChangeText={(value) => onPinConfirmationChange(value.replace(/\D/gu, '').slice(0, 6))}
+            onSubmitEditing={onSubmit}
+            placeholder="Enter the PIN again"
+            returnKeyType="done"
+            secureTextEntry
+            value={pinConfirmation}
+          />
+        ) : null}
+        <View style={styles.consentStack}>
+          <ConsentRow
+            label="I agree to the"
+            linkLabel="Privacy Policy"
+            onValueChange={onAcceptedPrivacyChange}
+            value={acceptedPrivacy}
+          />
+          <ConsentRow
+            label="I agree to"
+            linkLabel="Location-Based Services"
+            onValueChange={onAcceptedLocationChange}
+            value={acceptedLocation}
+          />
+        </View>
+        <PrimaryButton
+          disabled={isLoggingIn}
+          label={isRegistration ? 'Register and Continue' : 'Login'}
+          loading={isLoggingIn}
+          onPress={onSubmit}
+        />
+        <SecondaryButton
+          disabled={isLoggingIn}
+          label={isRegistration ? 'Already registered? Log in' : 'First time? Register with invite code'}
+          onPress={() => onModeChange(!isRegistration)}
+        />
+      </View>
+    </View>
+  );
+}
+
+function HomePage({
+  allStopsCompleted,
+  company,
   completedStopIds,
-  driverName,
+  isStartingRoute,
+  onBrowseRoutes,
+  onContinueRoute,
+  onOpenRoutePreview,
+  onReviewNoteChange,
+  onStartRoute,
+  route,
+  routeReviewNote,
+  routeStatus,
+}: {
+  allStopsCompleted: boolean;
+  company: RouteAccessCompanyGuidance | null;
+  completedStopIds: string[];
+  isStartingRoute: boolean;
+  onBrowseRoutes(): void;
+  onContinueRoute(): void;
+  onOpenRoutePreview(): void;
+  onReviewNoteChange(value: string): void;
+  onStartRoute(): void;
+  route: AssignedRoute | null;
+  routeReviewNote: string;
+  routeStatus: RouteStatus;
+}) {
+  if (route === null) {
+    return (
+      <View style={styles.screenStack}>
+        <View style={styles.pageHeader}>
+          <Text style={styles.pageTitle}>Home</Text>
+          <Text style={styles.helperText}>Your active route cockpit will appear here after you select an assigned route.</Text>
+        </View>
+        <EmptyState title="No active route selected" body="Open Routes to choose the nearest current or upcoming route." />
+        <PrimaryButton label="Browse Routes" onPress={onBrowseRoutes} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.screenStack}>
+      <View style={styles.pageHeader}>
+        <Text style={styles.pageTitle}>Home</Text>
+        <Text style={styles.helperText}>This is your current route cockpit.</Text>
+      </View>
+
+      <View style={styles.selectedRouteCard}>
+        <View style={styles.routeCardHeader}>
+          <View style={styles.routeInitialBadge}>
+            <Text style={styles.routeInitialText}>{getInitials(company?.companyDisplayName ?? route.name)}</Text>
+          </View>
+          <View style={styles.routeHeaderText}>
+            <Text numberOfLines={1} style={styles.cardTitle}>{company?.companyDisplayName ?? route.name}</Text>
+            <Text numberOfLines={1} style={styles.helperText}>{route.name}</Text>
+          </View>
+          <StatusChip tone={getChipTone(routeStatus)} label={formatRouteStatus(routeStatus)} />
+        </View>
+
+        <DataRow label="Date" value={route.deliveryDate} />
+        <DataRow label="Region" value={getRouteRegion(route)} />
+        <DataRow label="Stops" value={`${completedStopIds.length}/${route.stops.length} completed`} />
+        <ProgressBar value={route.stops.length === 0 ? 0 : completedStopIds.length / route.stops.length} />
+
+        {routeStatus === 'completed' ? (
+          <View style={styles.buttonColumn}>
+            <StatusBanner tone="green" text={allStopsCompleted ? 'Route completed. Add a review or tip for your next run.' : 'Route marked completed for this session.'} />
+            <LabeledInput
+              label="Post-route review / tip"
+              multiline
+              onChangeText={onReviewNoteChange}
+              placeholder="Write a local note or tip for this route. Server sync is not connected yet."
+              value={routeReviewNote}
+            />
+          </View>
+        ) : (
+          <View style={styles.buttonColumn}>
+            <PrimaryButton disabled={isStartingRoute} label={routeStatus === 'active' ? 'Continue Session' : 'Start Session'} loading={isStartingRoute} onPress={routeStatus === 'active' ? onContinueRoute : onStartRoute} />
+            <SecondaryButton label="Route Details" onPress={onOpenRoutePreview} />
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function RoutesPage({
+  isRefreshingRoutes,
   isStartingRoute,
   onOpenCompletedDeliveries,
-  onOpenRouteDetail,
+  onOpenRoutePreview,
+  onContinueRoute,
+  onRefreshRoutes,
   onSelectRoute,
   onSelectTab,
   onStartRoute,
@@ -957,11 +2113,12 @@ function RouteListScreen({
   selectedTab,
   tabs,
 }: {
-  completedStopIds: string[];
-  driverName: string;
+  isRefreshingRoutes: boolean;
   isStartingRoute: boolean;
   onOpenCompletedDeliveries(): void;
-  onOpenRouteDetail(routeId: string): void;
+  onOpenRoutePreview(routeId: string): void;
+  onContinueRoute(routeId: string): void;
+  onRefreshRoutes(): void;
   onSelectRoute(routeId: string): void;
   onSelectTab(tab: RouteTabId): void;
   onStartRoute(routeId: string): void;
@@ -971,9 +2128,26 @@ function RouteListScreen({
   selectedTab: RouteTabId;
   tabs: ReturnType<typeof getMvpRouteTabs>;
 }) {
-  const visibleRouteSessions = routeSessions.filter((session) => getRouteSessionStatus(session.route.id, selectedRouteId, routeStatus) === selectedTab);
+  const classificationNow = new Date();
+  const visibleRouteSessions = filterVisibleAssignedRouteSessions(routeSessions, {
+    now: classificationNow,
+    selectedRouteId,
+    selectedRouteStatus: routeStatus,
+    selectedTab,
+  });
   const activeSession = visibleRouteSessions.find((session) => session.route.id === selectedRouteId) ?? visibleRouteSessions[0] ?? null;
   const activeIndex = activeSession === null ? -1 : visibleRouteSessions.findIndex((session) => session.route.id === activeSession.route.id);
+  const activeRouteStatusForTabs = activeSession === null
+    ? null
+    : classifyAssignedRouteSession({
+      now: classificationNow,
+      route: activeSession.route,
+      selectedRouteId,
+      selectedRouteStatus: routeStatus,
+    });
+  const [collapsedRouteKey, setCollapsedRouteKey] = useState<string | null>(null);
+  const activeRouteCollapseKey = activeSession === null ? null : `${selectedTab}:${activeSession.route.id}`;
+  const isRouteCardExpanded = activeRouteCollapseKey === null || collapsedRouteKey !== activeRouteCollapseKey;
 
   function selectRelativeRoute(offset: number) {
     if (visibleRouteSessions.length === 0 || activeIndex < 0) {
@@ -987,102 +2161,285 @@ function RouteListScreen({
   return (
     <View style={styles.screenStack}>
       <View style={styles.pageHeader}>
-        <Text style={styles.pageTitle}>Today’s Route</Text>
-        <Text style={styles.helperText}>{driverName.trim() ? `${driverName.trim()}, your assigned route is ready.` : 'Your assigned route is ready.'}</Text>
+        <Text style={styles.pageTitle}>Routes</Text>
+        <Text style={styles.helperText}>View current and upcoming routes first.</Text>
       </View>
+      <SecondaryButton disabled={isRefreshingRoutes} label="Refresh routes" loading={isRefreshingRoutes} onPress={onRefreshRoutes} />
       <SegmentedTabs onSelectTab={onSelectTab} selectedTab={selectedTab} tabs={tabs} />
+      {selectedTab === 'completed' ? (
+        <InfoPanel tone="green" title="Current-session completion only" body={getDriverPlaceholderCopy('routeHistory')} />
+      ) : null}
 
       {activeSession !== null ? (
         <View style={styles.selectedRouteCard}>
-          <View style={styles.routeCardHeader}>
+          <Pressable
+            accessibilityLabel={isRouteCardExpanded ? 'Collapse route details' : 'Expand route details'}
+            accessibilityRole="button"
+            onPress={() => {
+              setCollapsedRouteKey((value) => value === activeRouteCollapseKey ? null : activeRouteCollapseKey);
+            }}
+            style={styles.routeCardHeader}
+          >
             <View style={styles.routeInitialBadge}>
-              <Text style={styles.routeInitialText}>{getInitials(activeSession.companyGuidance.companyDisplayName)}</Text>
+              <Text style={styles.routeInitialText}>{getInitials(activeSession.route.name)}</Text>
             </View>
             <View style={styles.routeHeaderText}>
-              <Text numberOfLines={1} style={styles.cardTitle}>{activeSession.companyGuidance.companyDisplayName}</Text>
-              <Text numberOfLines={1} style={styles.helperText}>{activeSession.route.name}</Text>
+              <Text numberOfLines={1} style={styles.cardTitle}>{activeSession.route.name}</Text>
+              <Text numberOfLines={1} style={styles.helperText}>{activeSession.route.deliveryDate}</Text>
             </View>
-            <StatusChip tone={getChipTone(getRouteSessionStatus(activeSession.route.id, selectedRouteId, routeStatus))} label={formatRouteStatus(getRouteSessionStatus(activeSession.route.id, selectedRouteId, routeStatus))} />
-          </View>
-
-          <DataRow label="Company" value={activeSession.companyGuidance.companyDisplayName} />
-          <DataRow label="Date" value={activeSession.route.deliveryDate} />
-          <DataRow label="Region" value={getRouteRegion(activeSession.route)} />
-          <DataRow label="Route" value={formatRouteSequence(activeSession.route)} />
-          <DataRow label="Stops" value={formatStopCount(activeSession.route.stops.length)} />
-          <DataRow label="Estimated Distance" value="Not available" />
-          <DataRow label="Estimated Time" value="Not available" />
-
-          {visibleRouteSessions.length > 1 ? (
-            <View style={styles.routePagerRow}>
-              <SecondaryButton compact label="Previous Route" onPress={() => selectRelativeRoute(-1)} />
-              <Text style={styles.routePagerText}>Route {activeIndex + 1} of {visibleRouteSessions.length}</Text>
-              <SecondaryButton compact label="Next Route" onPress={() => selectRelativeRoute(1)} />
+            <View style={styles.routeCardStatusGroup}>
+              <StatusChip
+                tone={getChipTone(activeRouteStatusForTabs ?? 'upcoming')}
+                label={formatRouteStatus(activeRouteStatusForTabs ?? 'upcoming')}
+              />
+              <Text style={styles.routeToggleText}>{isRouteCardExpanded ? '−' : '+'}</Text>
             </View>
+          </Pressable>
+
+          {isRouteCardExpanded ? (
+            <>
+              <DataRow label="Date" value={activeSession.route.deliveryDate} />
+              <DataRow label="Region" value={getRouteRegion(activeSession.route)} />
+              <DataRow label="Stops" value={formatStopCount(activeSession.route.stops.length)} />
+              <DataRow label="Estimated Distance" value={formatAssignedRouteDistance(activeSession.route.routeMetrics)} />
+              <DataRow label="Estimated Time" value={formatAssignedRouteDuration(activeSession.route.routeMetrics)} />
+
+              {visibleRouteSessions.length > 1 ? (
+                <View style={styles.routePagerRow}>
+                  <SecondaryButton compact label="Previous Route" onPress={() => selectRelativeRoute(-1)} />
+                  <Text style={styles.routePagerText}>Route {activeIndex + 1} of {visibleRouteSessions.length}</Text>
+                  <SecondaryButton compact label="Next Route" onPress={() => selectRelativeRoute(1)} />
+                </View>
+              ) : null}
+
+              {selectedTab === 'completed' ? (
+                <PrimaryButton label="View Completed Deliveries" onPress={onOpenCompletedDeliveries} />
+              ) : selectedTab === 'active' ? (
+                <PrimaryButton label="Continue Session" onPress={() => onContinueRoute(activeSession.route.id)} />
+              ) : (
+                <View style={styles.buttonColumn}>
+                  <PrimaryButton disabled={isStartingRoute} label="Start Session" loading={isStartingRoute} onPress={() => onStartRoute(activeSession.route.id)} />
+                  <SecondaryButton label="Route Details" onPress={() => onOpenRoutePreview(activeSession.route.id)} />
+                </View>
+              )}
+            </>
           ) : null}
-
-          {selectedTab === 'completed' ? (
-            <PrimaryButton label="View Completed Deliveries" onPress={onOpenCompletedDeliveries} />
-          ) : selectedTab === 'active' ? (
-            <PrimaryButton label="Continue Route" onPress={() => onOpenRouteDetail(activeSession.route.id)} />
-          ) : (
-            <View style={styles.buttonColumn}>
-              <PrimaryButton disabled={isStartingRoute} label="Start Route" loading={isStartingRoute} onPress={() => onStartRoute(activeSession.route.id)} />
-              <SecondaryButton label="Route Details" onPress={() => onOpenRouteDetail(activeSession.route.id)} />
-            </View>
-          )}
         </View>
       ) : (
         <EmptyState
           title="No assigned route"
-          body={selectedTab === 'completed' && completedStopIds.length > 0 ? 'Completed stops are available after route completion.' : 'No route is available for this status.'}
+          body={selectedTab === 'completed' ? getDriverPlaceholderCopy('routeHistory') : 'No assigned route is available for this status.'}
         />
       )}
-
-      <BottomNavigation selected="Home" />
     </View>
   );
 }
 
-function RouteDetailScreen({
+function EarningsPage() {
+  return (
+    <View style={styles.screenStack}>
+      <View style={styles.pageHeader}>
+        <Text style={styles.pageTitle}>Earnings</Text>
+        <Text style={styles.helperText}>Payouts and route earnings will appear here after the business rules and API are ready.</Text>
+      </View>
+      <EmptyState title="Coming soon" body={getDriverPlaceholderCopy('earnings')} />
+    </View>
+  );
+}
+
+function ProfilePage({
+  acceptedLocation,
+  acceptedPrivacy,
+  appVersion,
+  onLogout,
+  onRequestAccountDeletionInfo,
+  phoneE164,
+}: {
+  acceptedLocation: boolean;
+  acceptedPrivacy: boolean;
+  appVersion: string;
+  onLogout(): void;
+  onRequestAccountDeletionInfo(): void;
+  phoneE164: string | null;
+}) {
+  return (
+    <View style={styles.screenStack}>
+      <View style={styles.pageHeader}>
+        <Text style={styles.pageTitle}>Profile</Text>
+        <Text style={styles.helperText}>Local driver session, consent, and app information.</Text>
+      </View>
+
+      <View style={styles.summaryCard}>
+        <Text style={styles.cardTitle}>Driver information</Text>
+        <DataRow label="Phone" value={phoneE164 ?? 'Saved phone unavailable'} />
+        <DataRow label="App Version" value={`${appVersion} (package/app config)`} />
+        <InfoPanel tone="green" title="Profile editing" body={getDriverPlaceholderCopy('profileUpdate')} />
+      </View>
+
+      <View style={styles.summaryCard}>
+        <Text style={styles.cardTitle}>Permissions & consent</Text>
+        <DataRow label="Privacy consent" value={acceptedPrivacy ? `Accepted · v${CONSENT_COPY_VERSIONS.personalInformation}` : `Needs review · v${CONSENT_COPY_VERSIONS.personalInformation}`} />
+        <DataRow label="Location consent" value={acceptedLocation ? `Accepted · v${CONSENT_COPY_VERSIONS.locationInformation}` : `Needs review · v${CONSENT_COPY_VERSIONS.locationInformation}`} />
+        <Text style={styles.helperText}>OS location permission is requested when delivery starts. This page reviews the app consent versions accepted during login.</Text>
+      </View>
+
+      <View style={styles.summaryCard}>
+        <Text style={styles.cardTitle}>Account</Text>
+        <SecondaryButton label="Logout and reset this device" onPress={onLogout} />
+        <SecondaryButton label="Account deletion information" onPress={onRequestAccountDeletionInfo} />
+        <Text style={styles.helperText}>{getDriverPlaceholderCopy('accountDeletion')}</Text>
+      </View>
+    </View>
+  );
+}
+
+
+
+function RoutePreviewRegionBlock({ items }: { items: string[] }) {
+  return (
+    <View style={styles.routePreviewRegionBlock}>
+      <Text style={styles.routePreviewRegionLabel}>{ROUTE_PREVIEW_LABELS.region}</Text>
+      <View style={styles.routePreviewRegionList}>
+        {items.map((item) => (
+          <Text key={item} style={styles.routePreviewRegionItem}>{item}</Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function RoutePreviewScreen({
+  mapStyleUrl,
+  onBack,
+  onOpenMapPreview,
+  route,
+}: {
+  mapStyleUrl: string;
+  onBack(): void;
+  onOpenMapPreview(): void;
+  route: AssignedRoute;
+}) {
+  const previewSequence = buildRoutePreviewSequence(route);
+
+  return (
+    <View style={styles.screenStack}>
+      <ScreenHeader hideRightAction onBack={onBack} title={ROUTE_PREVIEW_COPY.title} />
+
+      <View style={styles.summaryCard}>
+        <DataRow label={ROUTE_PREVIEW_LABELS.date} value={route.deliveryDate} />
+        <RoutePreviewRegionBlock items={buildRoutePreviewRegionItems(route)} />
+        <View style={styles.summaryGrid}>
+          <MetricBlock label={ROUTE_PREVIEW_LABELS.stops} value={formatStopCount(route.stops.length)} />
+          <MetricBlock label={ROUTE_PREVIEW_LABELS.distance} value={formatAssignedRouteDistance(route.routeMetrics)} />
+          <MetricBlock label={ROUTE_PREVIEW_LABELS.time} value={formatAssignedRouteDuration(route.routeMetrics)} />
+        </View>
+      </View>
+
+      <View style={styles.routePreviewCard}>
+        <Text style={styles.sectionTitle}>{ROUTE_PREVIEW_LABELS.map}</Text>
+        <Pressable
+          accessibilityLabel={ROUTE_PREVIEW_COPY.mapAccessibilityLabel}
+          accessibilityRole="button"
+          onPress={onOpenMapPreview}
+          style={styles.routePreviewCanvas}
+        >
+          <View pointerEvents="none">
+            <MapOverview route={route} currentStepIndex={COMPANY_STEP_INDEX} mapStyleUrl={mapStyleUrl} />
+          </View>
+        </Pressable>
+      </View>
+
+      <View style={styles.summaryCard}>
+        <Text style={styles.sectionTitle}>{ROUTE_PREVIEW_LABELS.sequence}</Text>
+        {previewSequence.items.length > 0 ? previewSequence.items.map((item) => (
+          <View key={item.deliveryStopId} style={styles.routePreviewSequenceRow}>
+            <Text style={styles.routePreviewSequenceMarker}>{item.marker}</Text>
+            <Text numberOfLines={2} style={styles.routePreviewSequenceAddress}>{item.address}</Text>
+          </View>
+        )) : <Text style={styles.helperText}>No stops assigned.</Text>}
+        {previewSequence.overflowCount > 0 ? (
+          <Text style={styles.helperText}>+ {previewSequence.overflowCount} more stops</Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+function RouteSessionScreen({
   allStopsCompleted,
   company,
   completedStopIds,
   continuousLocationResult,
+  currentNavigationStepIndex,
   deliveryFinishResult,
   isFinishingRoute,
   isStartingRoute,
+  isCompanyStep,
+  mapStyleUrl,
+  onArrived,
   onBack,
   onFinishRoute,
+  onOpenMapPreview,
+  onOpenNavigation,
+  onOpenStop,
   onStartRoute,
+  onViewCurrentStop,
   route,
   routeStartedEventResult,
   routeStatus,
+  stop,
 }: {
   allStopsCompleted: boolean;
   company: RouteAccessCompanyGuidance | null;
   completedStopIds: string[];
   continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
+  currentNavigationStepIndex: number;
   deliveryFinishResult: DeliveryFinishResult | null;
   isFinishingRoute: boolean;
   isStartingRoute: boolean;
+  isCompanyStep: boolean;
+  mapStyleUrl: string;
+  onArrived(): void;
   onBack(): void;
   onFinishRoute(): void;
+  onOpenMapPreview(): void;
+  onOpenNavigation(): void;
+  onOpenStop(stop: AssignedRouteStop): void;
   onStartRoute(): void;
+  onViewCurrentStop(): void;
   route: AssignedRoute;
   routeStartedEventResult: RouteStartedRecordResult | null;
   routeStatus: RouteStatus;
+  stop: AssignedRouteStop | null;
 }) {
+  const depotIsProcessing = routeStatus === 'active' && currentNavigationStepIndex === COMPANY_STEP_INDEX;
+  const depotMeta = depotIsProcessing ? 'Pickup' : routeStatus === 'completed' || currentNavigationStepIndex > COMPANY_STEP_INDEX ? 'Done' : undefined;
+  const depotMetaTone = depotIsProcessing ? 'blue' : 'green';
+  const depotState = routeStatus === 'upcoming' || depotIsProcessing ? 'current' : 'completed';
+  const currentTaskTitle = isCompanyStep ? 'Company Pickup' : stop === null ? 'Next Stop' : `Stop ${stop.sequence}`;
+  const currentTaskAddress = isCompanyStep ? company?.pickupGuidance ?? 'Pickup point' : stop === null ? 'Stop address' : formatStopAddress(stop);
+  const currentTaskPayment = stop === null ? null : formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
+  const primaryProgressAction = routeStatus === 'upcoming'
+    ? { disabled: isStartingRoute, label: 'Start Session', loading: isStartingRoute, onPress: onStartRoute }
+    : routeStatus === 'active' && allStopsCompleted
+      ? { disabled: isFinishingRoute, label: 'Finish Route', loading: isFinishingRoute, onPress: onFinishRoute }
+      : routeStatus === 'active' && isCompanyStep
+        ? { disabled: false, label: 'Complete Pickup', loading: false, onPress: onArrived }
+        : routeStatus === 'active'
+          ? { disabled: false, label: 'Mark as Arrived', loading: false, onPress: onArrived }
+          : null;
+  const showPrimaryActionInCurrentTask = routeStatus === 'active' && !allStopsCompleted && primaryProgressAction !== null;
+
   return (
     <View style={styles.screenStack}>
-      <ScreenHeader onBack={onBack} title="Route Details" />
+      <ScreenHeader onBack={onBack} title="Route Session" />
       <View style={styles.summaryCard}>
-        <Text numberOfLines={1} style={styles.cardTitle}>{company?.companyDisplayName ?? route.shopDomain}</Text>
+        <Text numberOfLines={1} style={styles.cardTitle}>{route.name}</Text>
         <DataRow label="Date" value={route.deliveryDate} />
         <View style={styles.summaryGrid}>
           <MetricBlock label="Stops" value={formatStopCount(route.stops.length)} />
-          <MetricBlock label="Distance" value="Not available" />
-          <MetricBlock label="Duration" value="Not available" />
+          <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
+          <MetricBlock label="Duration" value={formatAssignedRouteDuration(route.routeMetrics)} />
         </View>
       </View>
 
@@ -1098,20 +2455,65 @@ function RouteDetailScreen({
         </View>
       ) : null}
 
+      {routeStatus === 'active' && !allStopsCompleted ? (
+        <View style={styles.currentTaskCard}>
+          <Text style={styles.sectionTitle}>Current Task</Text>
+          <View style={styles.trackingCardHeader}>
+            <View style={styles.routeHeaderText}>
+              <Text style={styles.labelText}>{currentTaskTitle}</Text>
+              <Text style={styles.currentTaskAddressText}>{currentTaskAddress}</Text>
+            </View>
+            {currentTaskPayment !== null && currentTaskPayment.tone !== 'green' ? (
+              <StatusChip compact label={currentTaskPayment.label} tone={currentTaskPayment.tone} />
+            ) : null}
+          </View>
+          <View style={styles.currentTaskActions}>
+            {showPrimaryActionInCurrentTask ? (
+              <PrimaryButton
+                compact
+                disabled={primaryProgressAction.disabled}
+                label={primaryProgressAction.label}
+                loading={primaryProgressAction.loading}
+                onPress={primaryProgressAction.onPress}
+              />
+            ) : null}
+            {routeStatus === 'active' && !isCompanyStep && stop !== null ? (
+              <SecondaryButton compact label="View Stop Details" onPress={onViewCurrentStop} />
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+
+      <View style={styles.routePreviewCard}>
+        <View style={styles.routePreviewHeader}>
+          <Text style={styles.sectionTitle}>Route Preview</Text>
+          <Text style={styles.routePreviewHint}>Tap for full map</Text>
+        </View>
+        <Pressable accessibilityRole="button" onPress={onOpenMapPreview} style={styles.routePreviewCanvas}>
+          <View pointerEvents="none">
+            <MapOverview route={route} currentStepIndex={currentNavigationStepIndex} mapStyleUrl={mapStyleUrl} />
+          </View>
+        </Pressable>
+      </View>
+
       <View style={styles.timelineCard}>
         <Text style={styles.sectionTitle}>Route Sequence</Text>
-        <TimelineRow marker="D" title="Depot" subtitle="Pickup point" state={routeStatus === 'upcoming' ? 'current' : 'completed'} meta="Start" />
-        {route.stops.map((stop) => {
+        <TimelineRow marker="D" title="Depot" subtitle="Pickup point" state={depotState} meta={depotMeta} metaTone={depotMetaTone} />
+        {route.stops.map((stop, index) => {
           const completed = completedStopIds.includes(stop.deliveryStopId);
-          const state = completed ? 'completed' : routeStatus === 'active' && !completed ? 'current' : 'upcoming';
+          const isProcessing = routeStatus === 'active' && currentNavigationStepIndex === index + 1 && !completed;
+          const state = completed ? 'completed' : isProcessing ? 'current' : 'upcoming';
+          const progressMeta = completed ? 'Done' : isProcessing ? 'Current' : undefined;
+          const metaTone = completed ? 'green' : isProcessing ? 'blue' : 'neutral';
           return (
             <TimelineRow
               key={stop.deliveryStopId}
               marker={String(stop.sequence)}
-              title={`Stop ${stop.sequence}`}
-              subtitle={formatStopAddress(stop)}
+              title={formatStopStreetAddress(stop)}
               state={state}
-              meta="ETA"
+              meta={progressMeta}
+              metaTone={metaTone}
+              onPress={() => onOpenStop(stop)}
             />
           );
         })}
@@ -1122,11 +2524,16 @@ function RouteDetailScreen({
       {deliveryFinishResult?.flowState === 'delivery_finished' ? <StatusBanner tone="green" text={deliveryFinishResult.message} /> : null}
 
       <View style={styles.buttonColumn}>
-        {routeStatus === 'upcoming' ? (
-          <PrimaryButton disabled={isStartingRoute} label="Begin Tracking" loading={isStartingRoute} onPress={onStartRoute} />
-        ) : routeStatus === 'active' && allStopsCompleted ? (
-          <PrimaryButton disabled={isFinishingRoute} label="Finish Route" loading={isFinishingRoute} onPress={onFinishRoute} />
+        {primaryProgressAction !== null && !showPrimaryActionInCurrentTask ? (
+          <PrimaryButton
+            disabled={primaryProgressAction.disabled}
+            label={primaryProgressAction.label}
+            loading={primaryProgressAction.loading}
+            onPress={primaryProgressAction.onPress}
+          />
         ) : null}
+        {routeStatus === 'active' ? <SecondaryButton label="Map Preview" onPress={onOpenMapPreview} /> : null}
+        <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
         <SecondaryButton label="Back to Routes" onPress={onBack} />
       </View>
     </View>
@@ -1135,22 +2542,22 @@ function RouteDetailScreen({
 
 function LiveTrackingScreen({
   company,
-  continuousLocationResult,
-  currentStepIndex,
   isCompanyStep,
   onArrived,
   onBack,
+  onOpenMapPreview,
+  onOpenNavigation,
   onViewStop,
   route,
   routeStatus,
   stop,
 }: {
   company: RouteAccessCompanyGuidance | null;
-  continuousLocationResult: ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null;
-  currentStepIndex: number;
   isCompanyStep: boolean;
   onArrived(): void;
   onBack(): void;
+  onOpenMapPreview(): void;
+  onOpenNavigation(): void;
   onViewStop(): void;
   route: AssignedRoute;
   routeStatus: RouteStatus;
@@ -1158,74 +2565,121 @@ function LiveTrackingScreen({
 }) {
   const stepLabel = isCompanyStep ? 'Company Pickup' : stop === null ? 'Next Stop' : `Stop ${stop.sequence}`;
   const address = isCompanyStep ? company?.pickupGuidance ?? 'Pickup guidance' : stop === null ? 'Stop address' : formatStopAddress(stop);
-  const trackingLabel = continuousLocationResult?.kind === 'streaming' || routeStatus === 'active' ? 'GPS tracking active' : 'GPS tracking pending';
+  const payment = stop === null ? null : formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
 
   return (
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Live Tracking" />
-      <View style={styles.mapPanel}>
-        <View style={styles.gpsPill}><View style={styles.statusDot} /><Text style={styles.gpsPillText}>{trackingLabel}</Text></View>
-        <MapOverview route={route} currentStepIndex={currentStepIndex} />
-        <View style={styles.trackingSheet}>
-          <View style={styles.sheetHandle} />
-          <Text style={styles.labelText}>Next Stop</Text>
-          <Text numberOfLines={2} style={styles.sheetTitle}>{address}</Text>
-          <View style={styles.trackingMetrics}>
-            <MetricBlock label="Distance" value="Not available" />
-            <MetricBlock label="ETA" value="Not available" />
-            <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : 'Pending'} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
+      <View style={styles.trackingDetailsPage}>
+        <Pressable accessibilityRole="button" onPress={onOpenMapPreview} style={styles.mapPreviewInlineButton}>
+          <View style={styles.mapPreviewInlineButtonTextBlock}>
+            <Text style={styles.mapPreviewInlineButtonText}>Map Preview</Text>
+            <Text style={styles.mapPreviewInlineButtonSubtext}>View route on map</Text>
           </View>
-          <View style={styles.buttonRow}>
-            <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
-            <PrimaryButton label={isCompanyStep ? 'Pickup Confirmed' : 'Arrived'} onPress={onArrived} />
+          <View style={styles.mapPreviewInlineButtonAction}>
+            <Text style={styles.mapPreviewInlineButtonActionText}>Open</Text>
           </View>
-          <Text style={styles.helperText}>{stepLabel}</Text>
+        </Pressable>
+        <View style={styles.trackingCardHeader}>
+          <View style={styles.routeHeaderText}>
+            <Text style={styles.labelText}>Delivery details</Text>
+            <Text style={styles.sheetTitle}>{address}</Text>
+          </View>
         </View>
+        <View style={styles.trackingMetrics}>
+          <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
+          <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
+          <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : 'Pending'} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
+        </View>
+        {payment !== null ? (
+          <View style={styles.paymentInlineRow}>
+            <Text style={styles.labelText}>Payment</Text>
+            <StatusChip label={payment.label} tone={payment.tone} />
+          </View>
+        ) : null}
+        <View style={styles.trackingButtonColumn}>
+          <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
+          <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
+          <PrimaryButton label={isCompanyStep ? 'Find Next Stop' : 'Arrived'} onPress={onArrived} />
+        </View>
+        <Text style={styles.helperText}>{stepLabel}</Text>
+      </View>
+    </View>
+  );
+}
+
+function LiveMapPreviewScreen({
+  currentStepIndex,
+  mapStyleUrl,
+  onBack,
+  route,
+}: {
+  currentStepIndex: number;
+  mapStyleUrl: string;
+  onBack(): void;
+  route: AssignedRoute;
+}) {
+  return (
+    <View style={styles.fullScreenMap}>
+      <MapOverview
+        mapSize="full"
+        route={route}
+        currentStepIndex={currentStepIndex}
+        mapStyleUrl={mapStyleUrl}
+      />
+      <View style={styles.fullScreenMapHeader}>
+        <ScreenHeader hideRightAction onBack={onBack} title="Map Preview" />
       </View>
     </View>
   );
 }
 
 function StopDetailsScreen({
-  company,
-  onAnnounceTip,
-  onArrived,
   onBack,
   onCall,
   onMessage,
+  onOpenNavigation,
   stop,
 }: {
-  company: RouteAccessCompanyGuidance | null;
-  onAnnounceTip(): void;
-  onArrived(): void;
   onBack(): void;
   onCall(): void;
   onMessage(): void;
+  onOpenNavigation(): void;
   stop: AssignedRouteStop;
 }) {
-  const tip = getNavigationTip({ company, isCompanyStep: false, stop });
+  const payment = formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
   return (
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Stop Details" />
       <View style={styles.stopSummaryCard}>
         <View style={styles.stopBadge}><Text style={styles.stopBadgeText}>Stop {stop.sequence}</Text></View>
         <View style={styles.routeHeaderText}>
-          <Text numberOfLines={2} style={styles.cardTitle}>{formatStopAddress(stop)}</Text>
-          <Text numberOfLines={1} style={styles.helperText}>{stop.recipientName ?? 'Recipient / Location'}</Text>
+          <Text numberOfLines={2} style={styles.cardTitle}>{formatStopStreetAddress(stop)}</Text>
         </View>
       </View>
 
+      <Text style={styles.sectionTitle}>Payment</Text>
+      <View style={styles.paymentBadgeOnlyPanel}>
+        <StatusChip label={payment.label} tone={payment.tone} />
+      </View>
+
+      <Text style={styles.sectionTitle}>Items to drop</Text>
+      <View style={styles.stopItemsPanel}>
+        {stop.items.map((item, itemIndex) => (
+          <Text key={`${item.productId}:${item.variationId}:${item.name}:${itemIndex}`} style={styles.stopItemLine}>
+            {formatAssignedRouteItemLine(item)}
+          </Text>
+        ))}
+      </View>
+
       <Text style={styles.sectionTitle}>Delivery Instructions</Text>
-      <TextCard text="Delivery instructions are provided by dispatch when available." />
+      <TextCard text="No delivery instructions provided." />
       <Text style={styles.sectionTitle}>Location Tips</Text>
-      <TextCard text={tip} />
+      <TextCard text="No location tips provided." />
       <View style={styles.buttonRow}>
+        <SecondaryButton label="Open Stop Map" onPress={onOpenNavigation} />
         <SecondaryButton label="Call" onPress={onCall} />
         <SecondaryButton label="Message" onPress={onMessage} />
-      </View>
-      <View style={styles.buttonColumn}>
-        <PrimaryButton label="Arrived" onPress={onArrived} />
-        <SecondaryButton label="I’m Nearby" onPress={onAnnounceTip} />
       </View>
     </View>
   );
@@ -1235,32 +2689,28 @@ function ArrivalCheckScreen({
   draft,
   isCapturingPhoto,
   isCompletingStop,
-  mediaResult,
   onAnnounceTip,
   onBack,
-  onCapturePhoto,
+  onAddPhoto,
   onCompleteStop,
   onDraftChange,
-  photoResult,
   proofResult,
   stop,
 }: {
   draft: StopProofDraft;
   isCapturingPhoto: boolean;
   isCompletingStop: boolean;
-  mediaResult?: ProofMediaUploadResult;
   onAnnounceTip(): void;
   onBack(): void;
-  onCapturePhoto(source: ProofPhotoCaptureSource): void;
+  onAddPhoto(): void;
   onCompleteStop(): void;
   onDraftChange(patch: Partial<StopProofDraft>): void;
-  photoResult?: ProofPhotoCaptureResult;
   proofResult?: StopProofEventResult;
   stop: AssignedRouteStop;
 }) {
   return (
     <View style={styles.screenStack}>
-      <ScreenHeader onBack={onBack} title="Arrival Check" />
+      <ScreenHeader onBack={onBack} title="Complete Delivery" />
       <Pressable accessibilityRole="button" onPress={onAnnounceTip} style={styles.nearbyBanner}>
         <View style={styles.statusDot} />
         <View style={styles.routeHeaderText}>
@@ -1269,32 +2719,26 @@ function ArrivalCheckScreen({
         </View>
       </Pressable>
 
-      <Text style={styles.sectionTitle}>Photo Proof</Text>
-      <View style={styles.proofTileRow}>
-        <ProofTile disabled={isCapturingPhoto} label="Camera Proof" loading={isCapturingPhoto} onPress={() => onCapturePhoto('camera')} />
-        <ProofTile disabled={isCapturingPhoto} label="Library Proof" loading={isCapturingPhoto} onPress={() => onCapturePhoto('library')} />
-        <View style={styles.proofTile}><Text style={styles.proofTileText}>{photoResult?.kind === 'captured' ? 'Proof Ready' : 'Proof Item'}</Text></View>
-      </View>
-      {photoResult !== undefined ? <StatusBanner tone={photoResult.kind === 'captured' ? 'green' : 'warning'} text={formatPhotoCaptureResult(photoResult)} /> : null}
-      {mediaResult !== undefined ? <StatusBanner tone={mediaResult.kind === 'uploaded' ? 'green' : 'warning'} text={formatMediaUploadResult(mediaResult)} /> : null}
+      <Text style={styles.sectionTitle}>Delivery Photo</Text>
+      <SecondaryButton compact disabled={isCapturingPhoto} label="Add Photo" loading={isCapturingPhoto} onPress={onAddPhoto} />
 
       <LabeledInput
-        label="Today’s Delivery Notes"
+        label="Delivery Result"
         onChangeText={(value) => onDraftChange({ todayNote: value })}
-        placeholder="Select an issue"
+        placeholder="e.g. Left at front door"
         value={draft.todayNote}
       />
       <LabeledInput
         label="Location Tip"
         onChangeText={(value) => onDraftChange({ locationTip: value })}
-        placeholder="Add or select a delivery tip"
+        placeholder="e.g. Side entrance, gate code, parking note"
         value={draft.locationTip}
       />
       <LabeledInput
-        label="Additional Notes"
+        label="Other Notes"
         multiline
         onChangeText={(value) => onDraftChange({ additionalNotes: value })}
-        placeholder="Add any additional notes here…"
+        placeholder="Anything else for this stop"
         value={draft.additionalNotes}
       />
       {proofResult !== undefined ? <StatusBanner tone={proofResult.kind === 'recorded' ? 'green' : 'warning'} text={formatStopProofResult(proofResult)} /> : null}
@@ -1338,7 +2782,7 @@ function StopCompletedScreen({
         <ProgressBar value={route.stops.length === 0 ? 0 : completedStopIds.length / route.stops.length} />
         <Text style={styles.helperText}>Route progress</Text>
       </View>
-      <PrimaryButton label={nextStop === null ? 'View Completed Deliveries' : 'Continue to Next Stop'} onPress={onContinue} />
+      <PrimaryButton label={nextStop === null ? 'View Completed Deliveries' : 'Find Next Stop'} onPress={onContinue} />
       <SecondaryButton label="Back to Route" onPress={onBackToRoute} />
     </View>
   );
@@ -1363,7 +2807,7 @@ function CompletedDeliveriesScreen({
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Completed Deliveries" rightLabel="Filter" />
       <View>
-        <Text style={styles.pageTitleSmall}>Today</Text>
+        <Text style={styles.pageTitleSmall}>Current session</Text>
         <Text style={styles.helperText}>{route.deliveryDate}</Text>
       </View>
       <View style={styles.completionSummaryCard}>
@@ -1401,12 +2845,35 @@ function CompletedDeliveriesScreen({
   );
 }
 
-function ScreenHeader({ onBack, rightLabel, title }: { onBack?(): void; rightLabel?: string; title: string }) {
+function ScreenHeader({
+  hideRightAction = false,
+  onBack,
+  onRightPress,
+  rightLabel,
+  title,
+}: {
+  hideRightAction?: boolean;
+  onBack?(): void;
+  onRightPress?(): void;
+  rightLabel?: string;
+  title: string;
+}) {
+  const rightContent = rightLabel ?? 'Menu';
+  const rightSlot = hideRightAction ? (
+    <Text style={styles.headerSideText} />
+  ) : onRightPress === undefined ? (
+    <Text style={rightLabel === undefined ? styles.headerSideText : styles.headerActionText}>{rightContent}</Text>
+  ) : (
+    <Pressable accessibilityRole="button" onPress={onRightPress}>
+      <Text style={styles.headerActionText}>{rightContent}</Text>
+    </Pressable>
+  );
+
   return (
     <View style={styles.screenHeader}>
       {onBack === undefined ? <Text style={styles.headerSideText} /> : <Pressable accessibilityRole="button" onPress={onBack}><Text style={styles.headerActionText}>Back</Text></Pressable>}
       <Text numberOfLines={1} style={styles.headerTitle}>{title}</Text>
-      <Text style={rightLabel === undefined ? styles.headerSideText : styles.headerActionText}>{rightLabel ?? 'Menu'}</Text>
+      {rightSlot}
     </View>
   );
 }
@@ -1527,22 +2994,38 @@ function PhoneNumberInput({
 }
 
 function LabeledInput({
+  blurOnSubmit,
+  inputAccessoryViewID,
+  inputRef,
   keyboardType,
   label,
+  maxLength,
   multiline,
   onChangeText,
+  onFocus,
   onRightAction,
+  onSubmitEditing,
   placeholder,
   rightActionLabel,
+  returnKeyType,
+  secureTextEntry,
   value,
 }: {
-  keyboardType?: 'default' | 'phone-pad';
+  blurOnSubmit?: boolean;
+  inputAccessoryViewID?: string;
+  inputRef?: (input: TextInput | null) => void;
+  keyboardType?: 'default' | 'number-pad' | 'phone-pad';
   label: string;
+  maxLength?: number;
   multiline?: boolean;
   onChangeText(value: string): void;
+  onFocus?(): void;
   onRightAction?(): void;
+  onSubmitEditing?(): void;
   placeholder: string;
   rightActionLabel?: string;
+  returnKeyType?: 'done' | 'next';
+  secureTextEntry?: boolean;
   value: string;
 }) {
   return (
@@ -1552,11 +3035,19 @@ function LabeledInput({
         <TextInput
           autoCapitalize="none"
           autoCorrect={false}
+          blurOnSubmit={blurOnSubmit}
+          inputAccessoryViewID={inputAccessoryViewID}
           keyboardType={keyboardType ?? 'default'}
+          maxLength={maxLength}
           multiline={multiline}
           onChangeText={onChangeText}
+          onFocus={onFocus}
+          onSubmitEditing={onSubmitEditing}
           placeholder={placeholder}
           placeholderTextColor="#8a94a6"
+          ref={inputRef}
+          returnKeyType={returnKeyType}
+          secureTextEntry={secureTextEntry}
           style={[styles.input, multiline === true && styles.multilineTextInput]}
           value={value}
         />
@@ -1571,18 +3062,22 @@ function LabeledInput({
 }
 
 function ConsentRow({ label, linkLabel, onValueChange, value }: { label: string; linkLabel: string; onValueChange(value: boolean): void; value: boolean }) {
+  const checkboxVisualState = getConsentCheckboxVisualState(value);
+
   return (
-    <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: value }} onPress={() => onValueChange(!value)} style={styles.consentRow}>
-      <View style={[styles.checkboxBox, value && styles.checkboxBoxSelected]} />
+    <Pressable accessibilityRole="checkbox" accessibilityState={checkboxVisualState.accessibilityState} onPress={() => onValueChange(!value)} style={styles.consentRow}>
+      <View style={[styles.checkboxBox, value && styles.checkboxBoxSelected]}>
+        {checkboxVisualState.checkmark !== null ? <Text style={styles.checkboxCheckmark}>{checkboxVisualState.checkmark}</Text> : null}
+      </View>
       <Text style={styles.consentText}>{label} <Text style={styles.linkText}>{linkLabel}</Text></Text>
     </Pressable>
   );
 }
 
-function PrimaryButton({ disabled, label, loading, onPress }: { disabled?: boolean; label: string; loading?: boolean; onPress(): void }) {
+function PrimaryButton({ compact, disabled, label, loading, onPress }: { compact?: boolean; disabled?: boolean; label: string; loading?: boolean; onPress(): void }) {
   return (
-    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.primaryButton, disabled === true && styles.buttonDisabled]}>
-      {loading === true ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryButtonText}>{label}</Text>}
+    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.primaryButton, compact === true && styles.compactButton, disabled === true && styles.buttonDisabled]}>
+      {loading === true ? <ActivityIndicator color="#ffffff" /> : <Text style={[styles.primaryButtonText, compact === true && styles.compactButtonText]}>{label}</Text>}
     </Pressable>
   );
 }
@@ -1590,7 +3085,7 @@ function PrimaryButton({ disabled, label, loading, onPress }: { disabled?: boole
 function SecondaryButton({ compact, disabled, label, loading, onPress }: { compact?: boolean; disabled?: boolean; label: string; loading?: boolean; onPress(): void }) {
   return (
     <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.secondaryButton, compact === true && styles.compactButton, disabled === true && styles.buttonDisabled]}>
-      {loading === true ? <ActivityIndicator color="#0b57d0" /> : <Text style={styles.secondaryButtonText}>{label}</Text>}
+      {loading === true ? <ActivityIndicator color="#0b57d0" /> : <Text style={[styles.secondaryButtonText, compact === true && styles.compactButtonText]}>{label}</Text>}
     </Pressable>
   );
 }
@@ -1613,7 +3108,7 @@ function MetricBlock({ label, tone, value }: { label: string; tone?: 'green' | '
   );
 }
 
-function StatusChip({ label, tone }: { label: string; tone: 'blue' | 'green' | 'neutral' | 'warning' }) {
+function StatusChip({ compact, label, tone }: { compact?: boolean; label: string; tone: 'blue' | 'green' | 'neutral' | 'warning' }) {
   const toneStyle = tone === 'blue'
     ? styles.statusChipBlue
     : tone === 'green'
@@ -1621,49 +3116,332 @@ function StatusChip({ label, tone }: { label: string; tone: 'blue' | 'green' | '
       : tone === 'warning'
         ? styles.statusChipWarning
         : styles.statusChipNeutral;
-  return <Text style={[styles.statusChip, toneStyle]}>{label}</Text>;
+  return <Text style={[styles.statusChip, compact === true && styles.statusChipCompact, toneStyle]}>{label}</Text>;
 }
 
-function TimelineRow({ marker, meta, state, subtitle, title }: { marker: string; meta: string; state: 'completed' | 'current' | 'upcoming'; subtitle: string; title: string }) {
-  return (
-    <View style={[styles.timelineRow, state === 'current' && styles.timelineRowCurrent]}>
+function TimelineRow({
+  marker,
+  meta,
+  metaTone = 'neutral',
+  onPress,
+  state,
+  subtitle,
+  title,
+}: {
+  marker: string;
+  meta?: string;
+  metaTone?: 'blue' | 'green' | 'neutral';
+  onPress?: () => void;
+  state: 'completed' | 'current' | 'upcoming';
+  subtitle?: string;
+  title: string;
+}) {
+  const content = (
+    <>
       <View style={[styles.timelineMarker, state === 'completed' && styles.timelineMarkerCompleted, state === 'current' && styles.timelineMarkerCurrent]}>
         <Text style={[styles.timelineMarkerText, (state === 'completed' || state === 'current') && styles.timelineMarkerTextActive]}>{marker}</Text>
       </View>
       <View style={styles.routeHeaderText}>
-        <Text style={styles.timelineTitle}>{title}</Text>
-        <Text numberOfLines={2} style={styles.helperText}>{subtitle}</Text>
+        <Text style={[styles.timelineTitle, state === 'current' && styles.timelineTitleCurrent]}>{title}</Text>
+        {subtitle !== undefined ? <Text numberOfLines={2} style={styles.helperText}>{subtitle}</Text> : null}
       </View>
-      <Text style={styles.timelineMeta}>{meta}</Text>
-    </View>
+      {meta !== undefined ? <StatusChip compact label={meta} tone={metaTone} /> : null}
+    </>
   );
+
+  if (onPress !== undefined) {
+    return (
+      <Pressable
+        accessibilityLabel={`${title}. ${subtitle}${meta === undefined ? '' : `. ${meta}`}.`}
+        accessibilityRole="button"
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.timelineRow,
+          state === 'current' && styles.timelineRowCurrent,
+          pressed && { opacity: 0.88 },
+        ]}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+
+  return <View style={[styles.timelineRow, state === 'current' && styles.timelineRowCurrent]}>{content}</View>;
 }
 
-function MapOverview({ currentStepIndex, route }: { currentStepIndex: number; route: AssignedRoute }) {
+function MapOverview({
+  currentStepIndex,
+  mapSize = 'preview',
+  mapStyleUrl,
+  route,
+}: {
+  currentStepIndex: number;
+  mapSize?: 'full' | 'live' | 'preview';
+  mapStyleUrl: string;
+  route: AssignedRoute;
+}) {
+  const previewKey = route.routeMapPreview?.imageUrl ?? null;
+  const interactiveMapKey = `${mapStyleUrl}:${route.id}:${route.routeGeometry?.coordinates.length ?? 0}`;
+  const [previewLoadState, setPreviewLoadState] = useState<{ key: string | null; status: 'failed' } | null>(null);
+  const [interactiveMapState, setInteractiveMapState] = useState<{ key: string; status: 'failed' } | null>(null);
+  const previewLoadStatus = previewLoadState?.key === previewKey ? previewLoadState.status : 'idle';
+  const interactiveMapStatus = interactiveMapState?.key === interactiveMapKey ? interactiveMapState.status : 'idle';
+  const previewState = resolveRouteMapPreviewState({
+    loadStatus: previewLoadStatus,
+    now: new Date(),
+    preview: route.routeMapPreview,
+  });
+
+  const handleInteractiveMapUnavailable = useCallback(() => {
+    setInteractiveMapState({ key: interactiveMapKey, status: 'failed' });
+  }, [interactiveMapKey]);
+  const canvasStyle = [
+    styles.mapCanvas,
+    mapSize === 'live' ? styles.liveMapCanvas : null,
+    mapSize === 'full' ? styles.fullMapCanvas : null,
+  ];
+
+  if (interactiveMapStatus === 'idle' && route.routeGeometry !== null && route.routeGeometry.coordinates.length >= 2) {
+    return (
+      <View style={canvasStyle}>
+        <NativeRouteMapPreview
+          currentStepIndex={currentStepIndex}
+          mapStyleUrl={mapStyleUrl}
+          onUnavailable={handleInteractiveMapUnavailable}
+          route={route}
+        />
+      </View>
+    );
+  }
+
+  if (previewState.kind === 'available') {
+    return (
+      <View style={canvasStyle}>
+        <Image
+          accessibilityIgnoresInvertColors
+          accessibilityLabel={previewState.accessibilityLabel}
+          onError={() => setPreviewLoadState({ key: previewKey, status: 'failed' })}
+          resizeMode="contain"
+          source={{ uri: previewState.imageUrl }}
+          style={styles.mapPreviewImage}
+        />
+        <View style={styles.mapPreviewBadge}>
+          <Text style={styles.mapPreviewBadgeText}>Route preview</Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.mapCanvas}>
+    <View style={canvasStyle}>
       <View style={[styles.mapBlock, styles.mapBlockOne]} />
       <View style={[styles.mapBlock, styles.mapBlockTwo]} />
       <View style={[styles.mapRoad, styles.mapRoadOne]} />
       <View style={[styles.mapRoad, styles.mapRoadTwo]} />
       <View style={[styles.mapRouteLine, styles.mapRouteLineOne]} />
       <View style={[styles.mapRouteLine, styles.mapRouteLineTwo]} />
-      <View style={styles.currentLocationPulse}><View style={styles.currentLocationDot} /></View>
-      {route.stops.slice(0, 3).map((stop, index) => (
-        <View key={stop.deliveryStopId} style={[styles.mapMarker, getMapMarkerStyle(index)]}>
-          <Text style={styles.mapMarkerText}>{stop.sequence}</Text>
-        </View>
-      ))}
-      <View style={styles.mapLastMarker}><Text style={styles.mapLastMarkerText}>{currentStepIndex >= route.stops.length ? 'Last' : 'Next'}</Text></View>
+      {route.stops.slice(0, 3).map((stop, index) => {
+        const isCurrentStop = currentStepIndex === index + 1;
+
+        return (
+          <View key={stop.deliveryStopId} style={[styles.mapMarker, getMapMarkerStyle(index), isCurrentStop && styles.mapMarkerCurrent]}>
+            <Text style={styles.mapMarkerText}>{stop.sequence}</Text>
+          </View>
+        );
+      })}
+      <View style={styles.mapLastMarker}><Text style={styles.mapLastMarkerText}>{currentStepIndex >= route.stops.length ? 'Last' : currentStepIndex === COMPANY_STEP_INDEX ? 'Pickup' : `Stop ${currentStepIndex}`}</Text></View>
+      <View style={styles.mapPreviewFallback}>
+        <Text style={styles.mapPreviewFallbackTitle}>Route preview</Text>
+        <Text style={styles.mapPreviewFallbackText}>{previewState.message}</Text>
+      </View>
     </View>
   );
 }
 
-function ProofTile({ disabled, label, loading, onPress }: { disabled?: boolean; label: string; loading?: boolean; onPress(): void }) {
+function DeliveryPhotoActionSheet({
+  disabled,
+  onCancel,
+  onSelectSource,
+  visible,
+}: {
+  disabled?: boolean;
+  onCancel(): void;
+  onSelectSource(source: ProofPhotoCaptureSource): void;
+  visible: boolean;
+}) {
+  const { bottom: bottomInset } = useSafeAreaInsets();
+  const bottomChromePadding = getBottomChromePadding(bottomInset);
+
+  if (!visible) {
+    return null;
+  }
+
   return (
-    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.proofTile, disabled === true && styles.buttonDisabled]}>
-      {loading === true ? <ActivityIndicator color="#0b57d0" /> : <Text style={styles.proofTileText}>{label}</Text>}
-    </Pressable>
+    <View accessibilityViewIsModal style={styles.photoActionSheetOverlay}>
+      <Pressable accessibilityLabel="Close Add Photo" accessibilityRole="button" onPress={onCancel} style={styles.photoActionSheetBackdrop} />
+      <View style={[styles.photoActionSheetCard, { paddingBottom: bottomChromePadding + 8 }]}>
+        <View style={styles.sheetHandle} />
+        <Text style={styles.photoActionSheetTitle}>Add Photo</Text>
+        <View style={styles.photoActionSheetActions}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={disabled}
+            onPress={() => onSelectSource('camera')}
+            style={[styles.photoActionSheetAction, disabled === true && styles.buttonDisabled]}
+          >
+            <Text style={styles.photoActionSheetActionText}>Take Photo</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={disabled}
+            onPress={() => onSelectSource('library')}
+            style={[styles.photoActionSheetAction, disabled === true && styles.buttonDisabled]}
+          >
+            <Text style={styles.photoActionSheetActionText}>Choose from Album</Text>
+          </Pressable>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          disabled={disabled}
+          onPress={onCancel}
+          style={[styles.photoActionSheetCancel, disabled === true && styles.buttonDisabled]}
+        >
+          <Text style={styles.photoActionSheetCancelText}>Cancel</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function ProofCameraScreen({
+  disabled,
+  onCancel,
+  onCaptured,
+  onOpenGallery,
+}: {
+  disabled?: boolean;
+  onCancel(): void;
+  onCaptured(uri: string): void;
+  onOpenGallery(): void;
+}) {
+  const { bottom: bottomInset } = useSafeAreaInsets();
+  const cameraRef = useRef<CameraView | null>(null);
+  const [permission, requestPermission] = useCameraPermissions();
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [flashMode, setFlashMode] = useState<'off' | 'on'>('off');
+  const [isCameraReady, setIsCameraReady] = useState(false);
+  const [isTakingPhoto, setIsTakingPhoto] = useState(false);
+
+  useEffect(() => {
+    if (permission !== null) {
+      return;
+    }
+
+    void requestPermission();
+  }, [permission, requestPermission]);
+
+  async function handleTakePhoto() {
+    if (disabled === true || isTakingPhoto || !isCameraReady) {
+      return;
+    }
+
+    setIsTakingPhoto(true);
+    try {
+      const photo = await cameraRef.current?.takePictureAsync({ quality: 0.7 });
+      if (photo?.uri !== undefined && photo.uri.trim() !== '') {
+        onCaptured(photo.uri);
+        return;
+      }
+
+      setCameraError('Could not save this photo. Try again.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Camera capture failed.';
+      console.warn(`[proof-camera] ${message}`);
+      setCameraError(message);
+    } finally {
+      setIsTakingPhoto(false);
+    }
+  }
+
+  if (permission?.granted !== true) {
+    return (
+      <View style={styles.proofCameraPermissionScreen}>
+        <Text style={styles.pageTitleSmall}>Camera access needed</Text>
+        <Text style={styles.bodyText}>Allow camera access to take a delivery photo.</Text>
+        <PrimaryButton
+          label={permission === null ? 'Checking Camera' : 'Allow Camera'}
+          loading={permission === null}
+          onPress={() => {
+            void requestPermission();
+          }}
+        />
+        <SecondaryButton label="Cancel" onPress={onCancel} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.proofCameraScreen}>
+      <CameraView
+        active
+        facing="back"
+        flash={flashMode}
+        mode="picture"
+        onCameraReady={() => setIsCameraReady(true)}
+        onMountError={(event) => {
+          const message = event.message || 'Camera could not start.';
+          console.warn(`[proof-camera] ${message}`);
+          setCameraError(message);
+        }}
+        ref={cameraRef}
+        style={styles.proofCameraPreview}
+      />
+      <View pointerEvents="none" style={styles.proofCameraDimTop} />
+      <View pointerEvents="none" style={styles.proofCameraDimBottom} />
+      <View pointerEvents="none" style={styles.proofCameraDimLeft} />
+      <View pointerEvents="none" style={styles.proofCameraDimRight} />
+      <View style={styles.proofCameraTopBar}>
+        <Pressable accessibilityLabel="Close camera" accessibilityRole="button" disabled={disabled} onPress={onCancel} style={styles.proofCameraCloseButton}>
+          <Text style={styles.proofCameraCloseText}>×</Text>
+        </Pressable>
+        <View style={styles.proofCameraInstructionCard}>
+          <Text style={styles.proofCameraInstructionText}>Please make sure the package and surrounding location are clearly visible.</Text>
+        </View>
+      </View>
+      <View pointerEvents="none" style={styles.proofCameraGuide}>
+        <View style={[styles.proofCameraGuideCorner, styles.proofCameraGuideCornerTopLeft]} />
+        <View style={[styles.proofCameraGuideCorner, styles.proofCameraGuideCornerTopRight]} />
+        <View style={[styles.proofCameraGuideCorner, styles.proofCameraGuideCornerBottomLeft]} />
+        <View style={[styles.proofCameraGuideCorner, styles.proofCameraGuideCornerBottomRight]} />
+      </View>
+      {cameraError !== null ? <Text style={[styles.proofCameraErrorText, { bottom: getBottomChromeOffset(bottomInset, 138) }]}>{cameraError}</Text> : null}
+      <View style={[styles.proofCameraControls, { bottom: getBottomChromeOffset(bottomInset, 58) }]}>
+        <Pressable accessibilityRole="button" disabled={disabled === true || isTakingPhoto} onPress={onOpenGallery} style={styles.proofCameraSideButton}>
+          <Text style={styles.proofCameraSideButtonText}>Gallery</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          disabled={disabled === true || isTakingPhoto || !isCameraReady}
+          onPress={() => {
+            void handleTakePhoto();
+          }}
+          style={[styles.proofCameraCaptureButton, (disabled === true || isTakingPhoto || !isCameraReady) && styles.buttonDisabled]}
+        >
+          <View style={styles.proofCameraCaptureInner} />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          disabled={disabled === true || isTakingPhoto}
+          onPress={() => setFlashMode((current) => current === 'off' ? 'on' : 'off')}
+          style={[styles.proofCameraSideButton, flashMode === 'on' && styles.proofCameraSideButtonActive]}
+        >
+          <Text style={styles.proofCameraSideButtonText}>Flash</Text>
+        </Pressable>
+      </View>
+      <View style={[styles.proofCameraFooter, { paddingBottom: getBottomChromeOffset(bottomInset, 8) }]}>
+        <Text style={styles.proofCameraFooterText}>This photo will be used as proof of delivery.</Text>
+      </View>
+    </View>
   );
 }
 
@@ -1702,17 +3480,39 @@ function EmptyState({ body, title }: { body: string; title: string }) {
   );
 }
 
-function BottomNavigation({ selected }: { selected: 'Earnings' | 'Home' | 'Profile' | 'Routes' }) {
-  const items = ['Home', 'Routes', 'Earnings', 'Profile'] as const;
+function BottomNavigation({
+  items,
+  onSelect,
+  selected,
+}: {
+  items: ReturnType<typeof getDriverMainTabs>;
+  onSelect(tab: DriverMainTabId): void;
+  selected: DriverMainTabId;
+}) {
   return (
     <View style={styles.bottomNav}>
-      {items.map((item) => <Text key={item} style={[styles.bottomNavLabel, item === selected && styles.bottomNavLabelSelected]}>{item}</Text>)}
+      {items.map((item) => {
+        const isSelected = item.id === selected;
+        return (
+          <Pressable
+            accessibilityLabel={item.accessibilityLabel}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: isSelected }}
+            key={item.id}
+            onPress={() => onSelect(item.id)}
+            style={[styles.bottomNavItem, isSelected && styles.bottomNavItemSelected]}
+          >
+            <Text style={[styles.bottomNavLabel, isSelected && styles.bottomNavLabelSelected]}>{item.label}</Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
 
 function getDriverConsentServiceForCurrentSubmission(input: {
   fallback: DriverConsentService;
+  refreshDriverAccess?: () => Promise<DriverAccessToken | null>;
   runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
   submission: RouteAccessSubmissionResult | null;
 }): DriverConsentService {
@@ -1722,12 +3522,14 @@ function getDriverConsentServiceForCurrentSubmission(input: {
 
   return createDriverApiClientsFromRouteAccess({
     baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
+    refreshDriverAccess: input.refreshDriverAccess,
     routeAccess: toInvitedRouteAccess(input.submission),
   }).driverConsentService;
 }
 
 function getAssignedRouteServiceForCurrentSubmission(input: {
   fallback: AssignedRouteService;
+  refreshDriverAccess?: () => Promise<DriverAccessToken | null>;
   runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
   submission: RouteAccessSubmissionResult | null;
 }): AssignedRouteService {
@@ -1737,12 +3539,14 @@ function getAssignedRouteServiceForCurrentSubmission(input: {
 
   return createDriverApiClientsFromRouteAccess({
     baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
+    refreshDriverAccess: input.refreshDriverAccess,
     routeAccess: toInvitedRouteAccess(input.submission),
   }).assignedRouteService;
 }
 
 function getDriverEventServiceForCurrentSubmission(input: {
   fallback: DriverEventService;
+  refreshDriverAccess?: () => Promise<DriverAccessToken | null>;
   runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
   submission: RouteAccessSubmissionResult | null;
 }): DriverEventService {
@@ -1752,12 +3556,14 @@ function getDriverEventServiceForCurrentSubmission(input: {
 
   return createDriverApiClientsFromRouteAccess({
     baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
+    refreshDriverAccess: input.refreshDriverAccess,
     routeAccess: toInvitedRouteAccess(input.submission),
   }).driverEventService;
 }
 
 function getProofMediaUploadServiceForCurrentSubmission(input: {
   fallback: ProofMediaUploadService;
+  refreshDriverAccess?: () => Promise<DriverAccessToken | null>;
   runtimeConfig: ReturnType<typeof readDriverRuntimeConfig>;
   submission: RouteAccessSubmissionResult | null;
 }): ProofMediaUploadService {
@@ -1767,6 +3573,7 @@ function getProofMediaUploadServiceForCurrentSubmission(input: {
 
   return createDriverApiClientsFromRouteAccess({
     baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
+    refreshDriverAccess: input.refreshDriverAccess,
     routeAccess: toInvitedRouteAccess(input.submission),
   }).proofMediaUploadService;
 }
@@ -1813,12 +3620,8 @@ function getRouteSessionForAction(routeSessions: RouteSession[], routeId: string
   return routeSessions[0] ?? null;
 }
 
-function getRouteSessionStatus(routeId: string, selectedRouteId: string | null, selectedRouteStatus: RouteStatus): RouteStatus {
-  return routeId === selectedRouteId ? selectedRouteStatus : 'upcoming';
-}
-
 function formatRouteAccessProblem(result: RouteAccessSubmissionResult): string {
-  if (result.kind === 'validation_error' || result.kind === 'denied' || result.kind === 'multiple_matches') {
+  if (result.kind === 'denied' || result.kind === 'multiple_matches') {
     return result.message;
   }
 
@@ -1834,6 +3637,23 @@ function formatDriverPhoneEntryProblem(reason: 'country_required' | 'phone_inval
     case 'phone_required':
       return 'Enter the phone number registered with dispatch.';
   }
+}
+
+function getRestoredActiveDeliveryStartResult(): DeliveryStartResult {
+  return {
+    flowState: 'delivery_active',
+    kind: 'delivery_active',
+    locationPermission: 'foreground',
+    message: 'Active route session restored on this device.',
+  };
+}
+
+function clampRouteNavigationStepIndex(stepIndex: number, route: AssignedRoute): number {
+  if (!Number.isInteger(stepIndex)) {
+    return COMPANY_STEP_INDEX;
+  }
+
+  return Math.min(Math.max(stepIndex, COMPANY_STEP_INDEX), route.stops.length);
 }
 
 function getRouteStatus(deliveryStartResult: DeliveryStartResult | null, deliveryFinishResult: DeliveryFinishResult | null): RouteStatus {
@@ -1854,6 +3674,8 @@ function formatRouteStatus(status: RouteStatus): string {
       return 'In progress';
     case 'completed':
       return 'Completed';
+    case 'unfinished':
+      return 'Unfinished';
     case 'upcoming':
       return 'Pending';
   }
@@ -1876,6 +3698,15 @@ function formatStopAddress(stop: AssignedRouteStop): string {
     .map((part) => part?.trim() ?? '')
     .filter(Boolean)
     .join(', ');
+}
+
+function formatStopStreetAddress(stop: AssignedRouteStop): string {
+  const streetAddress = [stop.address.address1, stop.address.address2]
+    .map((part) => part?.trim() ?? '')
+    .filter(Boolean)
+    .join(', ');
+
+  return streetAddress.length === 0 ? formatStopAddress(stop) : streetAddress;
 }
 
 function getNavigationTip(input: {
@@ -1905,45 +3736,29 @@ function getProofDraft(draft?: StopProofDraft): StopProofDraft {
 
 function formatStopProofNote(draft: StopProofDraft): string {
   return [
-    draft.todayNote.trim().length > 0 ? `Delivery note: ${draft.todayNote.trim()}` : null,
+    draft.todayNote.trim().length > 0 ? `Delivery result: ${draft.todayNote.trim()}` : null,
     draft.locationTip.trim().length > 0 ? `Location tip: ${draft.locationTip.trim()}` : null,
-    draft.additionalNotes.trim().length > 0 ? `Additional notes: ${draft.additionalNotes.trim()}` : null,
+    draft.additionalNotes.trim().length > 0 ? `Other notes: ${draft.additionalNotes.trim()}` : null,
   ]
     .filter((value): value is string => value !== null)
     .join('\n') || 'Photo proof submitted.';
 }
 
-function formatPhotoResult(captureResult: ProofPhotoCaptureResult, uploadResult: ProofMediaUploadResult): string {
-  return `${formatPhotoCaptureResult(captureResult)} ${formatMediaUploadResult(uploadResult)}`.trim();
-}
-
-function formatPhotoCaptureResult(result: ProofPhotoCaptureResult): string {
-  if (result.kind === 'captured') {
-    return `Photo proof attached from ${result.source}.`;
+function formatPhotoResult(captureResult: ProofPhotoCaptureResult, uploadResult: ProofMediaUploadResult): string | null {
+  if (captureResult.kind !== 'captured') {
+    return captureResult.kind === 'cancelled' ? null : captureResult.message;
   }
 
-  if (result.kind === 'cancelled') {
-    return 'Photo selection was cancelled.';
-  }
-
-  return result.message;
-}
-
-function formatMediaUploadResult(result: ProofMediaUploadResult): string {
-  if (result.kind === 'uploaded') {
-    return `Proof uploaded: ${result.media.mediaId}`;
-  }
-
-  return result.message;
+  return uploadResult.kind === 'uploaded' ? null : uploadResult.message;
 }
 
 function formatStopProofResult(result: StopProofEventResult): string {
   if (result.kind === 'recorded') {
-    return `Stop completion recorded: ${result.eventId}`;
+    return 'Stop completed.';
   }
 
   if (result.kind === 'queued') {
-    return `Saved to offline queue: ${result.queueItemId}`;
+    return 'Saved offline. It will sync when connected.';
   }
 
   return result.message;
@@ -1967,6 +3782,8 @@ function getChipTone(status: RouteStatus): 'blue' | 'green' | 'neutral' {
       return 'blue';
     case 'completed':
       return 'green';
+    case 'unfinished':
+      return 'neutral';
     case 'upcoming':
       return 'neutral';
   }
@@ -1974,15 +3791,6 @@ function getChipTone(status: RouteStatus): 'blue' | 'green' | 'neutral' {
 
 function formatStopCount(count: number): string {
   return `${count} stop${count === 1 ? '' : 's'}`;
-}
-
-function formatRouteSequence(route: AssignedRoute): string {
-  if (route.stops.length === 0) {
-    return 'Depot';
-  }
-
-  const stopMarkers = route.stops.map((stop, index) => (index === route.stops.length - 1 ? 'Last' : String(stop.sequence)));
-  return ['Depot', ...stopMarkers].join(' → ');
 }
 
 function getInitials(value: string): string {
@@ -2033,14 +3841,17 @@ const styles = StyleSheet.create({
   safeArea: {
     backgroundColor: '#f7f9fc',
     flex: 1,
+    position: 'relative',
   },
   keyboardArea: {
     flex: 1,
   },
   container: {
+    flexGrow: 1,
     gap: 22,
     padding: 22,
-    paddingBottom: 36,
+    paddingBottom: 28,
+    paddingTop: 34,
   },
   screenStack: {
     gap: 22,
@@ -2227,23 +4038,34 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     paddingLeft: 10,
   },
+  consentStack: {
+    gap: 6,
+  },
   consentRow: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 12,
-    minHeight: 48,
+    gap: 8,
+    minHeight: 38,
   },
   checkboxBox: {
+    alignItems: 'center',
     backgroundColor: '#ffffff',
     borderColor: '#cfd6e4',
     borderRadius: 6,
     borderWidth: 1.5,
-    height: 24,
-    width: 24,
+    height: 22,
+    justifyContent: 'center',
+    width: 22,
   },
   checkboxBoxSelected: {
     backgroundColor: '#0b57d0',
     borderColor: '#0b57d0',
+  },
+  checkboxCheckmark: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 17,
   },
   consentText: {
     color: '#111827',
@@ -2286,6 +4108,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
+  compactButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
   secondaryButtonText: {
     color: '#0b57d0',
     fontSize: 16,
@@ -2300,6 +4126,9 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   buttonColumn: {
+    gap: 12,
+  },
+  trackingButtonColumn: {
     gap: 12,
   },
   tabs: {
@@ -2319,7 +4148,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   tabActive: {
-    backgroundColor: '#0b57d0',
+    backgroundColor: '#eef6ff',
+    borderColor: '#bfdbfe',
+    borderWidth: 1,
   },
   tabText: {
     color: '#475467',
@@ -2328,7 +4159,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   tabTextActive: {
-    color: '#ffffff',
+    color: '#0b57d0',
+    fontWeight: '800',
   },
   selectedRouteCard: {
     backgroundColor: '#ffffff',
@@ -2361,6 +4193,17 @@ const styles = StyleSheet.create({
   routeHeaderText: {
     flex: 1,
     gap: 4,
+  },
+  routeCardStatusGroup: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  routeToggleText: {
+    color: '#475467',
+    fontSize: 20,
+    fontWeight: '800',
+    lineHeight: 22,
   },
   cardTitle: {
     color: '#111827',
@@ -2403,6 +4246,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
+  statusChipCompact: {
+    fontSize: 11,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
   statusChipBlue: {
     backgroundColor: '#e8f1ff',
     color: '#0b57d0',
@@ -2431,24 +4279,44 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
   },
+  bottomNavArea: {
+    backgroundColor: '#f7f9fc',
+    paddingBottom: 8,
+    paddingHorizontal: 18,
+    paddingTop: 8,
+  },
   bottomNav: {
     alignItems: 'center',
     backgroundColor: '#ffffff',
-    borderColor: '#eef2f6',
-    borderRadius: 18,
-    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderRadius: 22,
+    borderWidth: 1.4,
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    minHeight: 62,
-    paddingHorizontal: 10,
+    gap: 8,
+    justifyContent: 'space-between',
+    minHeight: 68,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    ...shadow,
+  },
+  bottomNavItem: {
+    alignItems: 'center',
+    borderRadius: 16,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 50,
+    paddingHorizontal: 8,
+  },
+  bottomNavItemSelected: {
+    backgroundColor: '#0b57d0',
   },
   bottomNavLabel: {
     color: '#667085',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   bottomNavLabelSelected: {
-    color: '#0b57d0',
+    color: '#ffffff',
     fontWeight: '900',
   },
   screenHeader: {
@@ -2534,6 +4402,37 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
   },
+  paymentInlineRow: {
+    alignItems: 'center',
+    borderColor: '#eef2f6',
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 12,
+  },
+  paymentBadgeOnlyPanel: {
+    alignItems: 'flex-start',
+    backgroundColor: '#ffffff',
+    borderColor: '#e5e7eb',
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 14,
+  },
+  stopItemsPanel: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e5e7eb',
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 8,
+    padding: 14,
+  },
+  stopItemLine: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '800',
+    lineHeight: 22,
+  },
   timelineCard: {
     backgroundColor: '#ffffff',
     borderColor: '#e5e7eb',
@@ -2541,6 +4440,89 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: 8,
     padding: 16,
+  },
+  routePreviewCard: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e5e7eb',
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 10,
+    padding: 16,
+  },
+  routePreviewHeader: {
+    alignItems: 'baseline',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  routePreviewHint: {
+    color: '#667085',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  routePreviewRegionBlock: {
+    borderBottomColor: '#eef2f6',
+    borderBottomWidth: 1,
+    gap: 4,
+    paddingBottom: 8,
+  },
+  routePreviewRegionLabel: {
+    color: '#667085',
+    fontSize: 12,
+    fontWeight: '400',
+  },
+  routePreviewRegionList: {
+    gap: 2,
+  },
+  routePreviewRegionItem: {
+    color: '#475467',
+    fontSize: 13,
+    fontWeight: '400',
+    lineHeight: 18,
+  },
+  routePreviewCanvas: {
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  routePreviewSequenceRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  routePreviewSequenceMarker: {
+    backgroundColor: '#eef2f6',
+    borderRadius: 999,
+    color: '#475467',
+    fontSize: 12,
+    fontWeight: '800',
+    minWidth: 28,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    textAlign: 'center',
+  },
+  routePreviewSequenceAddress: {
+    color: '#111827',
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+  },
+  currentTaskCard: {
+    backgroundColor: '#ffffff',
+    borderColor: '#bfdbfe',
+    borderRadius: 18,
+    borderWidth: 1.4,
+    gap: 14,
+    padding: 16,
+  },
+  currentTaskActions: {
+    gap: 8,
+  },
+  currentTaskAddressText: {
+    color: '#374151',
+    fontSize: 14,
+    fontWeight: '400',
+    lineHeight: 20,
   },
   timelineRow: {
     alignItems: 'center',
@@ -2577,35 +4559,42 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   timelineTitle: {
-    color: '#111827',
+    color: '#344054',
     fontSize: 15,
-    fontWeight: '800',
+    fontWeight: '400',
+    lineHeight: 20,
+  },
+  timelineTitleCurrent: {
+    color: '#111827',
+    fontWeight: '700',
   },
   timelineMeta: {
     color: '#475467',
     fontSize: 12,
     fontWeight: '800',
   },
-  mapPanel: {
-    backgroundColor: '#eef5f8',
-    borderRadius: 22,
-    minHeight: 660,
+  trackingDetailsPage: {
+    backgroundColor: '#ffffff',
+    borderColor: '#dbeafe',
+    borderRadius: 24,
+    borderWidth: 1,
+    gap: 16,
+    padding: 20,
+    ...shadow,
+  },
+  fullScreenMap: {
+    flex: 1,
     overflow: 'hidden',
   },
-  gpsPill: {
-    alignItems: 'center',
-    alignSelf: 'center',
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    flexDirection: 'row',
-    gap: 9,
-    marginTop: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+  fullScreenMapHeader: {
+    left: 0,
+    paddingHorizontal: 22,
+    paddingBottom: 12,
+    paddingTop: 34,
     position: 'absolute',
+    right: 0,
     top: 0,
-    zIndex: 4,
-    ...shadow,
+    zIndex: 2,
   },
   statusDot: {
     backgroundColor: '#12b76a',
@@ -2613,15 +4602,269 @@ const styles = StyleSheet.create({
     height: 12,
     width: 12,
   },
-  gpsPillText: {
-    color: '#087443',
-    fontSize: 14,
-    fontWeight: '800',
-  },
   mapCanvas: {
     backgroundColor: '#f3f8fb',
     height: 430,
+    overflow: 'hidden',
     position: 'relative',
+  },
+  liveMapCanvas: {
+    height: 540,
+  },
+  fullMapCanvas: {
+    flex: 1,
+    height: '100%',
+  },
+  proofCameraScreen: {
+    backgroundColor: '#000000',
+    flex: 1,
+  },
+  proofCameraPreview: {
+    flex: 1,
+  },
+  proofCameraPermissionScreen: {
+    flex: 1,
+    gap: 14,
+    justifyContent: 'center',
+    padding: 22,
+  },
+  proofCameraTopBar: {
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 22,
+    zIndex: 3,
+  },
+  proofCameraCloseButton: {
+    alignItems: 'center',
+    height: 40,
+    justifyContent: 'center',
+    left: 14,
+    position: 'absolute',
+    top: 0,
+    width: 40,
+  },
+  proofCameraCloseText: {
+    color: '#ffffff',
+    fontSize: 34,
+    fontWeight: '300',
+    lineHeight: 36,
+  },
+  proofCameraInstructionCard: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(8, 8, 8, 0.66)',
+    borderRadius: 10,
+    flexDirection: 'row',
+    left: 34,
+    minHeight: 50,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    position: 'absolute',
+    right: 34,
+    top: 46,
+  },
+  proofCameraInstructionText: {
+    color: '#ffffff',
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
+    textAlign: 'left',
+  },
+  proofCameraDimTop: {
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
+    height: '21%',
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  proofCameraDimBottom: {
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
+    bottom: 0,
+    height: '27%',
+    left: 0,
+    position: 'absolute',
+    right: 0,
+  },
+  proofCameraDimLeft: {
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
+    bottom: '27%',
+    left: 0,
+    position: 'absolute',
+    top: '21%',
+    width: 34,
+  },
+  proofCameraDimRight: {
+    backgroundColor: 'rgba(0, 0, 0, 0.42)',
+    bottom: '27%',
+    position: 'absolute',
+    right: 0,
+    top: '21%',
+    width: 34,
+  },
+  proofCameraGuide: {
+    borderColor: 'rgba(255, 255, 255, 0.7)',
+    borderWidth: 1,
+    bottom: '27%',
+    left: 34,
+    position: 'absolute',
+    right: 34,
+    top: '21%',
+    zIndex: 2,
+  },
+  proofCameraGuideCorner: {
+    borderColor: '#ffffff',
+    height: 42,
+    position: 'absolute',
+    width: 42,
+  },
+  proofCameraGuideCornerTopLeft: {
+    borderLeftWidth: 4,
+    borderTopWidth: 4,
+    left: -2,
+    top: -2,
+  },
+  proofCameraGuideCornerTopRight: {
+    borderRightWidth: 4,
+    borderTopWidth: 4,
+    right: -2,
+    top: -2,
+  },
+  proofCameraGuideCornerBottomLeft: {
+    borderBottomWidth: 4,
+    borderLeftWidth: 4,
+    bottom: -2,
+    left: -2,
+  },
+  proofCameraGuideCornerBottomRight: {
+    borderBottomWidth: 4,
+    borderRightWidth: 4,
+    bottom: -2,
+    right: -2,
+  },
+  proofCameraControls: {
+    alignItems: 'center',
+    bottom: 66,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    left: 36,
+    position: 'absolute',
+    right: 36,
+    zIndex: 3,
+  },
+  proofCameraSideButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(12, 12, 12, 0.62)',
+    borderRadius: 999,
+    minWidth: 68,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  proofCameraSideButtonActive: {
+    opacity: 0.82,
+  },
+  proofCameraSideButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  proofCameraCaptureButton: {
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    borderColor: '#ffffff',
+    borderRadius: 999,
+    borderWidth: 4,
+    height: 68,
+    justifyContent: 'center',
+    width: 68,
+  },
+  proofCameraCaptureInner: {
+    backgroundColor: '#ffffff',
+    borderRadius: 999,
+    height: 52,
+    width: 52,
+  },
+  proofCameraErrorText: {
+    alignSelf: 'center',
+    backgroundColor: 'rgba(127, 29, 29, 0.82)',
+    borderRadius: 999,
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+    overflow: 'hidden',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    position: 'absolute',
+    bottom: 146,
+    textAlign: 'center',
+    zIndex: 4,
+  },
+  proofCameraFooter: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.78)',
+    bottom: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    left: 0,
+    paddingBottom: 12,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    position: 'absolute',
+    right: 0,
+    zIndex: 2,
+  },
+  proofCameraFooterText: {
+    color: '#ffffff',
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 17,
+  },
+  mapPreviewImage: {
+    height: '100%',
+    width: '100%',
+  },
+  mapPreviewBadge: {
+    backgroundColor: 'rgba(12, 18, 32, 0.76)',
+    borderRadius: 999,
+    left: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    position: 'absolute',
+    top: 16,
+  },
+  mapPreviewBadgeText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
+  },
+  mapPreviewFallback: {
+    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    borderColor: '#d0d5dd',
+    borderRadius: 18,
+    borderWidth: 1,
+    bottom: 24,
+    left: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    position: 'absolute',
+    right: 18,
+  },
+  mapPreviewFallbackTitle: {
+    color: '#101828',
+    fontSize: 15,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+  mapPreviewFallbackText: {
+    color: '#475467',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
   },
   mapBlock: {
     backgroundColor: '#dff3e8',
@@ -2703,11 +4946,19 @@ const styles = StyleSheet.create({
   mapMarker: {
     alignItems: 'center',
     backgroundColor: '#0b57d0',
-    borderRadius: 17,
-    height: 34,
+    borderRadius: 15,
+    height: 30,
     justifyContent: 'center',
     position: 'absolute',
-    width: 34,
+    width: 30,
+  },
+  mapMarkerCurrent: {
+    backgroundColor: '#f97316',
+    borderColor: '#fed7aa',
+    borderRadius: 19,
+    borderWidth: 3,
+    height: 38,
+    width: 38,
   },
   mapMarkerText: {
     color: '#ffffff',
@@ -2728,17 +4979,120 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
   },
-  trackingSheet: {
-    backgroundColor: '#ffffff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+  trackingCardHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 14,
+    justifyContent: 'space-between',
+  },
+  mapPreviewInlineButton: {
+    alignItems: 'center',
+    backgroundColor: '#0b57d0',
+    borderRadius: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 58,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  mapPreviewInlineButtonTextBlock: {
+    flex: 1,
+    gap: 2,
+  },
+  mapPreviewInlineButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  mapPreviewInlineButtonSubtext: {
+    color: '#dbeafe',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  mapPreviewInlineButtonAction: {
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    borderRadius: 999,
+    marginLeft: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  mapPreviewInlineButtonActionText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  photoActionSheetOverlay: {
     bottom: 0,
-    gap: 13,
+    justifyContent: 'flex-end',
     left: 0,
-    padding: 18,
     position: 'absolute',
     right: 0,
+    top: 0,
+    zIndex: 50,
+  },
+  photoActionSheetBackdrop: {
+    backgroundColor: 'rgba(15, 23, 42, 0.32)',
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  photoActionSheetCard: {
+    backgroundColor: '#ffffff',
+    borderColor: '#e5e7eb',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderWidth: 1,
+    gap: 8,
+    paddingBottom: 12,
+    paddingHorizontal: 22,
+    paddingTop: 10,
     ...shadow,
+  },
+  photoActionSheetTitle: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  photoActionSheetActions: {
+    gap: 8,
+  },
+  photoActionSheetAction: {
+    alignItems: 'center',
+    borderColor: '#0b57d0',
+    borderRadius: 14,
+    borderWidth: 1.2,
+    height: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 0,
+  },
+  photoActionSheetActionText: {
+    color: '#0b57d0',
+    fontSize: 14,
+    fontWeight: '800',
+    includeFontPadding: false,
+    lineHeight: 18,
+  },
+  photoActionSheetCancel: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderColor: '#dc2626',
+    borderRadius: 14,
+    borderWidth: 1.2,
+    height: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 0,
+  },
+  photoActionSheetCancelText: {
+    color: '#dc2626',
+    fontSize: 14,
+    fontWeight: '800',
+    includeFontPadding: false,
+    lineHeight: 18,
   },
   sheetHandle: {
     alignSelf: 'center',
@@ -2816,29 +5170,6 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 16,
     fontWeight: '800',
-  },
-  proofTileRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  proofTile: {
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderColor: '#cbd5e1',
-    borderRadius: 14,
-    borderStyle: 'dashed',
-    borderWidth: 1.4,
-    flex: 1,
-    height: 112,
-    justifyContent: 'center',
-    padding: 10,
-  },
-  proofTileText: {
-    color: '#475467',
-    fontSize: 13,
-    fontWeight: '800',
-    lineHeight: 18,
-    textAlign: 'center',
   },
   statusBanner: {
     borderRadius: 14,

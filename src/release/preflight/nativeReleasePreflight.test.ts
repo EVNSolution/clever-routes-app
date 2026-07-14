@@ -35,7 +35,8 @@ test('native release preflight passes for the committed Expo and EAS config', ()
       'expo.permissions',
       'eas.preview',
       'eas.production',
-      'runtime.env.example'
+      'runtime.env.example',
+      'ios.native'
     ]
   );
 });
@@ -106,6 +107,92 @@ test('native release preflight rejects accidental iOS Contacts usage description
     {
       id: 'expo.permissions',
       message: 'Contacts/address-book permissions must stay absent from the driver app native config.'
+    }
+  ]);
+});
+
+
+test('native release preflight validates a source-controlled iOS project when present', () => {
+  const input = currentInput();
+  const result = runNativeReleasePreflight({
+    ...input,
+    iosNativeProject: {
+      infoPlist: [
+        'NSLocationWhenInUseUsageDescription',
+        'NSLocationAlwaysAndWhenInUseUsageDescription',
+        'NSCameraUsageDescription',
+        'NSPhotoLibraryUsageDescription',
+      ].join('\n'),
+      privacyManifest: '<key>NSPrivacyTracking</key>\n<false/>',
+      projectPbxproj: [
+        'MARKETING_VERSION = 1.0.0;',
+        'CURRENT_PROJECT_VERSION = 1;',
+        'PRODUCT_BUNDLE_IDENTIFIER = com.evns.cleverdriverapp;',
+      ].join('\n'),
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.failures.length, 0);
+  assert.equal(result.checks.at(-1)?.id, 'ios.native');
+});
+
+test('native release preflight rejects local Apple team pins in source-controlled iOS project', () => {
+  const input = currentInput();
+  const result = runNativeReleasePreflight({
+    ...input,
+    iosNativeProject: {
+      infoPlist: [
+        'NSLocationWhenInUseUsageDescription',
+        'NSLocationAlwaysAndWhenInUseUsageDescription',
+        'NSCameraUsageDescription',
+        'NSPhotoLibraryUsageDescription',
+      ].join('\n'),
+      privacyManifest: '<key>NSPrivacyTracking</key>\n<false/>',
+      projectPbxproj: [
+        'DEVELOPMENT_TEAM = Y4RMZPJAA7;',
+        'MARKETING_VERSION = 1.0.0;',
+        'CURRENT_PROJECT_VERSION = 1;',
+        'PRODUCT_BUNDLE_IDENTIFIER = com.evns.cleverdriverapp;',
+      ].join('\n'),
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.failures, [
+    {
+      id: 'ios.native',
+      message: 'Source-controlled iOS project must not pin a local Apple DEVELOPMENT_TEAM.'
+    }
+  ]);
+});
+
+test('native release preflight rejects unapproved generated iOS permission copy', () => {
+  const input = currentInput();
+  const result = runNativeReleasePreflight({
+    ...input,
+    iosNativeProject: {
+      infoPlist: [
+        'NSLocationWhenInUseUsageDescription',
+        'NSLocationAlwaysAndWhenInUseUsageDescription',
+        'NSCameraUsageDescription',
+        'NSPhotoLibraryUsageDescription',
+        'NSMicrophoneUsageDescription',
+      ].join('\n'),
+      privacyManifest: '<key>NSPrivacyTracking</key>\n<false/>',
+      projectPbxproj: [
+        'MARKETING_VERSION = 1.0.0;',
+        'CURRENT_PROJECT_VERSION = 1;',
+        'PRODUCT_BUNDLE_IDENTIFIER = com.evns.cleverdriverapp;',
+      ].join('\n'),
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.failures, [
+    {
+      id: 'ios.native',
+      message: 'Microphone usage description must stay absent until an approved audio feature exists.'
     }
   ]);
 });

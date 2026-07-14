@@ -2,7 +2,6 @@ import type { DeliveryStartResult } from '../delivery/deliveryStart';
 import { formatDriverApiErrorForDriver, getDriverApiRequiresRouteLookup } from '../../api/deliveryServer/driverApiError';
 import type { DriverEventRecordResult, DriverEventService, DriverEventType } from '../events/driverEvents';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
-import type { ProofBarcodeReference } from '../proof/proofBarcodeCapture';
 import type { ProofMediaReference } from '../proof/proofMediaUpload';
 import type { ProofSignatureReference } from '../proof/proofSignatureCapture';
 
@@ -11,7 +10,6 @@ export type StopProofFailureReason = 'CUSTOMER_UNAVAILABLE' | 'DAMAGED' | 'INACC
 
 export type StopProofEventInput = {
   action: StopProofAction;
-  barcodes?: ProofBarcodeReference[];
   deliveryStopId: string;
   media?: ProofMediaReference[];
   note: string;
@@ -79,12 +77,10 @@ function getStopProofPayload(input: StopProofEventInput): Record<string, unknown
     ...getProofMedia(input.photoUris ?? []),
     ...(input.media ?? []),
   ];
-  const barcodes = input.barcodes ?? [];
   const signatures = input.signatures ?? [];
 
   if (input.action === 'delivered') {
     return {
-      ...(barcodes.length === 0 ? {} : { barcodes }),
       ...(media.length === 0 ? {} : { media }),
       note: input.note,
       ...(signatures.length === 0 ? {} : { signatures }),
@@ -94,7 +90,6 @@ function getStopProofPayload(input: StopProofEventInput): Record<string, unknown
   }
 
   return {
-    ...(barcodes.length === 0 ? {} : { barcodes }),
     ...(media.length === 0 ? {} : { media }),
     note: input.note,
     reason: input.reason ?? 'OTHER',

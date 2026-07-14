@@ -2,30 +2,30 @@
 
 ## Purpose
 
-This document records the driver-app phone entry implementation, supported-country i18n metadata, and the remaining SMS verification plan. The current driver app is phone-first, but not yet SMS-verified: it accepts a selected country plus national phone input, normalizes the value to E.164 for route access, shows a verification-code field, and calls route access by phone. The remaining SMS slice should add OTP only through the backend.
+This document records the driver-app phone entry implementation and the optional future SMS verification plan. The current app does not use SMS OTP: it normalizes the phone to E.164, signs an existing account in with a six-digit PIN, or registers once with an existing Shopify invitation code plus a new PIN. Shopify invitation/signup creation stays manual and is not requested by the app or server login flow. Any future SMS slice must be backend-owned.
 
 ## Current app state
 
-- `src/app/AppRoot.tsx` owns the current login screen state: selected phone country, national phone input, `verificationCode`, `driverName`, privacy consent, and location consent.
-- `LoginScreen` currently renders a country selector/search panel, localized country/language label, culture metadata row, calling-code prefix, national `Phone Number` input, E.164 preview, and one `Verification Code` input. `Send Code` is visible in the UI, but the current phone lookup path does not depend on SMS verification.
-- `handleLoginAndLoadRoutes()` normalizes selected country + national phone input and calls `submitRouteAccess({ phoneE164 }, routeAccessService)` after driver name and consent checks.
+- `src/app/AppRoot.tsx` owns selected country, national phone input, six-digit PIN, optional first-registration invitation code/PIN confirmation, and required consent state. It does not collect a driver name.
+- The first page contains country + phone. The second page defaults to existing-account PIN login and can switch to first registration, which adds the existing invitation code and PIN confirmation.
+- Existing accounts call `POST /driver/auth/login`; first registration calls `POST /driver/auth/verify-invite`; both return a server-owned account session before route lookup.
 - `src/domain/phone/phoneEntry.ts` owns the supported country catalog, localized country/language labels, culture metadata, search, and national formatting/E.164 normalization; `src/domain/driverFlow/driverFlow.ts` still validates the E.164 boundary with `E164_PHONE_PATTERN = /^\+[1-9]\d{7,14}$/`.
-- `src/domain/routeAccess/routeAccess.ts` sends `phoneE164` and `routeContext: null` to `POST /driver/route-access/lookup` in live mode.
-- Successful route lookup returns route choices, company guidance, and a short-lived driver bearer token. SMS must not be implemented in the app with provider credentials.
+- `src/domain/routeAccess/routeAccess.ts` sends the account bearer plus `routeContext: null` to `POST /driver/route-access/lookup`; it does not resend the phone.
+- Successful route lookup returns route choices, company guidance, and route-scoped driver tokens. SMS provider credentials must never be implemented in the app.
 
 ## Implementation status
 
 Implemented in the driver app for the phone-entry foundation:
 
 - `src/domain/phone/phoneEntry.ts` owns a broad supported-country catalog of 70+ driver markets, country calling codes derived from `libphonenumber-js` metadata, localized country/language labels, native country/language names, locale, text direction, week-start, measurement-system metadata, search by country/native name/ISO/calling code/locale/language, national formatting, and E.164 normalization.
-- `src/app/AppRoot.tsx` renders the selected country row, localized country/language label, culture metadata row, searchable country panel, calling-code prefix, national phone input, and E.164 preview. Selecting a country updates the phone-entry locale to that country's default locale.
-- Existing route access still receives only `phoneE164`; SMS sending remains server-integration-ready but not active in the app.
+- `src/app/AppRoot.tsx` renders the selected country row, searchable country panel, calling-code prefix, national phone input, PIN login, and first-registration invitation/PIN controls.
+- Server-owned phone/PIN account authentication and account-bearer route lookup are implemented. SMS sending is not active.
 
 Still pending from this plan:
 
 - Server-owned OTP start/verify endpoints.
 - SMS provider selection, budget controls, fraud/rate limits, and production pricing recheck.
-- Native OTP autofill hardening beyond the current verification-code field.
+- Native OTP entry/autofill UI if the server-owned OTP path is approved later.
 
 ## Target UX
 
@@ -64,7 +64,7 @@ Supported countries are still explicit app data rather than unrestricted global-
 Split phone entry into two values:
 
 - `nationalPhoneInput`: what the driver types and sees.
-- `phoneE164`: normalized identity sent to route access and SMS verification APIs.
+- `phoneE164`: normalized identity sent to account authentication and any future SMS verification APIs.
 
 Example for South Korea:
 
@@ -83,7 +83,7 @@ Example for Canada:
 Implementation recommendation:
 
 - Use a maintained phone-number library with country metadata, such as `libphonenumber-js`, for parsing, country-specific formatting, and E.164 normalization.
-- Keep the current app/server contract as E.164. The UI may format per country, but API payloads should continue to send `phoneE164`.
+- Keep the current app/server contract as E.164. The UI may format per country, while account-auth payloads send the normalized phone and route lookup uses the resulting account bearer.
 - Do not rely on manual regex per country except as a fallback or smoke-test fixture. Country numbering plans change, and trunk-prefix rules differ by country.
 
 Planned domain boundary:
@@ -107,7 +107,7 @@ type PhoneEntryNormalizationResult =
     };
 ```
 
-Validation should happen before enabling `Send Code` or `Continue`. Error copy should avoid technical E.164 wording; use driver-facing text such as `Enter a valid mobile phone number for the selected country.`
+Validation happens before `Continue`. Error copy avoids technical E.164 wording; use driver-facing text such as `Enter a valid mobile phone number for the selected country.`
 
 ### 3. SMS verification and OTP autofill
 
@@ -239,8 +239,9 @@ Recommendation: do not use raw SMS for the first production OTP slice. Start wit
 - Add country selector/search UI. — completed
 - Add phone normalization domain module and tests. — completed
 - Expand supported-country i18n metadata and representative national phone formatting coverage across driver markets. — completed
-- Convert national input + country to E.164 before calling existing route access. — completed
-- Keep current phone-only route lookup behavior. — completed
+- Convert national input + country to E.164 before account authentication. — completed
+- Replace phone-only route lookup with phone + PIN account login and account-bearer route lookup. — completed
+- Keep first registration invitation-based and Shopify invitation creation manual. — completed
 - Add phone-domain tests for KR, CA, and representative global formatting examples. — completed
 
 ### Phase 2: Server-owned OTP verification

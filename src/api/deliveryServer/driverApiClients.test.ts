@@ -70,7 +70,17 @@ describe('driver API client token handoff', () => {
         };
       },
       persistedAccess: {
+        accountAccess: {
+          accessToken: 'account-access-token',
+          expiresAt: '2026-05-12T07:10:00.000Z',
+          refreshToken: 'account-refresh-token',
+          refreshTokenExpiresAt: '2026-06-12T07:00:00.000Z',
+          tokenType: 'Bearer',
+          ttlSeconds: 900,
+          use: 'driver_account',
+        },
         driverAccess: sampleInvitedRouteAccess.driverAccess,
+        driverProfile: { phoneE164: '+14165550123' },
         routeAccess: sampleInvitedRouteAccess.routeAccess,
       },
     });
@@ -83,6 +93,48 @@ describe('driver API client token handoff', () => {
     assert.equal(
       requests[0]?.url,
       'https://delivery.example.com/driver/assigned-route?routeContext=11111111-1111-4111-8111-111111111111',
+    );
+  });
+
+  it('retries a driver API call once with refreshed access after an expired driver token', async () => {
+    const requests: { headers: Record<string, string>; url: string }[] = [];
+    let refreshCount = 0;
+    const clients = createDriverApiClientsFromRouteAccess({
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async (url, init) => {
+        requests.push({ headers: init?.headers ?? {}, url: String(url) });
+
+        if (requests.length === 1) {
+          return {
+            ok: false,
+            status: 401,
+            json: async () => ({ data: null, error: { code: 'UNAUTHORIZED' } }),
+          };
+        }
+
+        return {
+          ok: true,
+          json: async () => ({ data: { status: 'NO_ASSIGNED_ROUTE' }, error: null }),
+        };
+      },
+      refreshDriverAccess: async () => {
+        refreshCount += 1;
+        return {
+          ...sampleInvitedRouteAccess.driverAccess,
+          accessToken: 'fresh-driver-token',
+        };
+      },
+      routeAccess: sampleInvitedRouteAccess,
+    });
+
+    await clients.assignedRouteService.getAssignedRoute({
+      routeContext: sampleInvitedRouteAccess.routeAccess.routeContext,
+    });
+
+    assert.equal(refreshCount, 1);
+    assert.deepEqual(
+      requests.map((request) => request.headers.Authorization),
+      ['Bearer fixture-driver-access-token', 'Bearer fresh-driver-token'],
     );
   });
 });

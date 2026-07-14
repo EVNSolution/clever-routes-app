@@ -3,25 +3,34 @@
     "name": "Clever Driver",
     "slug": "clever-driver-app",
     "scheme": "clever-driver",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.evns.cleverdriverapp",
-      "buildNumber": "1"
+      "buildNumber": "1",
+      "icon": "./assets/icon.png"
     },
     "android": {
       "package": "com.evns.cleverdriverapp",
-      "edgeToEdgeEnabled": true,
-      "versionCode": 1
+      "versionCode": 1,
+      "icon": "./assets/icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#C7D833"
+      },
+      "softwareKeyboardLayoutMode": "resize",
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "extra": {
       "projectStartIssue": "EVNSolution/clever-change-control#145",
       "frameworkBootstrapIssue": "EVNSolution/clever-change-control#146"
     },
     "plugins": [
+      "expo-notifications",
       "expo-secure-store",
       [
         "expo-location",
@@ -43,9 +52,14 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Clever Driver to scan proof barcodes for active deliveries."
+          "cameraPermission": "Allow Clever Driver to take proof photos for active deliveries.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": false
         }
-      ]
-    ]
+      ],
+      "@maplibre/maplibre-react-native",
+      "expo-status-bar"
+    ],
+    "icon": "./assets/icon.png"
   }
 }

@@ -93,6 +93,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
     discardRouteSubmissions: (routePlanId) => {
       const queueItemIds = Array.from(items.values())
         .filter((item) => getQueueItemRoutePlanId(item) === routePlanId)
+        .filter((item) => !isTerminalStopDriverEvent(item))
         .map((item) => item.queueItemId);
       for (const queueItemId of queueItemIds) {
         items.delete(queueItemId);
@@ -254,6 +255,12 @@ function getProofMediaQueueItemId(request: ProofMediaUploadRequest): string {
 
 function getQueueItemRoutePlanId(item: OfflineSubmissionQueueItem): string | undefined {
   return item.kind === 'driver_event' ? item.event.routePlanId ?? undefined : item.request.routePlanId;
+}
+
+function isTerminalStopDriverEvent(item: OfflineSubmissionQueueItem): boolean {
+  return item.kind === 'driver_event' && (
+    item.event.eventType === 'STOP_DELIVERED' || item.event.eventType === 'STOP_FAILED'
+  );
 }
 
 function shouldDiscardOfflineSubmission(

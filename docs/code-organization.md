@@ -18,7 +18,8 @@ src/
   domain/
     consent/                    # consent state and consent service contract/mock/API behavior
     delivery/                   # delivery start/finish lifecycle decisions
-    driver/                     # access-token store contract and session reset policy
+    driver/                     # separate account/route token store and session reset policy
+    driverAuth/                 # phone/PIN login, invitation registration, and account refresh contract
     driverFlow/                 # driver flow guards and MVP route-tab metadata
     events/                     # driver event recording decisions
     location/                   # foreground/background location event decisions
@@ -26,7 +27,7 @@ src/
     proof/                      # proof capture/upload decisions
     phone/                      # supported-country i18n metadata, national phone formatting, E.164 normalization
     route/                      # assigned-route model and lookup loading decisions
-    routeAccess/                # phone/context route-access decisions
+    routeAccess/                # account-bearer route-access decisions
     stop/                       # stop navigation and proof-event decisions
   platform/
     expo/
@@ -91,12 +92,12 @@ Reserved roots from the target architecture remain valid for future additions wh
 | Events domain | `src/domain/events/driverEvents.ts`, `src/domain/events/driverEvents.test.ts` |
 | Location domain | `src/domain/location/continuousLocationStream.ts`, `src/domain/location/continuousLocationStream.test.ts`, `src/domain/location/foregroundLocationEvent.ts`, `src/domain/location/foregroundLocationEvent.test.ts` |
 | Offline domain | `src/domain/offline/offlineSubmissionQueue.ts`, `src/domain/offline/offlineSubmissionQueue.test.ts` |
-| Proof domain | `src/domain/proof/proofPhotoCapture.ts`, `src/domain/proof/proofPhotoCapture.test.ts`, `src/domain/proof/proofMediaUpload.ts`, `src/domain/proof/proofMediaUpload.test.ts`, `src/domain/proof/proofBarcodeCapture.ts`, `src/domain/proof/proofBarcodeCapture.test.ts`, `src/domain/proof/proofSignatureCapture.ts`, `src/domain/proof/proofSignatureCapture.test.ts` |
+| Proof domain | `src/domain/proof/proofPhotoCapture.ts`, `src/domain/proof/proofPhotoCapture.test.ts`, `src/domain/proof/proofMediaUpload.ts`, `src/domain/proof/proofMediaUpload.test.ts`, `src/domain/proof/proofSignatureCapture.ts`, `src/domain/proof/proofSignatureCapture.test.ts` |
 | Phone domain | `src/domain/phone/phoneEntry.ts`, `src/domain/phone/phoneEntry.test.ts` |
 | Route domain | `src/domain/route/assignedRoute.ts`, `src/domain/route/assignedRoute.test.ts` |
 | Route-access domain | `src/domain/routeAccess/routeAccess.ts`, `src/domain/routeAccess/routeAccess.test.ts` |
 | Stop domain | `src/domain/stop/stopNavigation.ts`, `src/domain/stop/stopNavigation.test.ts`, `src/domain/stop/stopProofEvents.ts`, `src/domain/stop/stopProofEvents.test.ts` |
-| Expo camera adapters | `src/platform/expo/camera/expoProofPhotoCaptureService.ts`, `src/platform/expo/camera/expoProofBarcodeCaptureService.ts` |
+| Expo proof photo adapter | `src/platform/expo/camera/expoProofPhotoCaptureService.ts` |
 | Expo location adapters | `src/platform/expo/location/expoLocationPermissionService.ts`, `src/platform/expo/location/expoForegroundLocationSnapshotService.ts`, `src/platform/expo/location/expoContinuousLocationStreamService.ts` |
 | Expo storage adapters | `src/platform/expo/secureStore/expoSecureDriverAccessTokenStore.ts`, `src/platform/expo/storage/expoOfflineSubmissionQueueStorage.ts` |
 | Release evidence | `src/release/evidence/releaseEvidenceSeed.ts`, `src/release/evidence/releaseEvidenceSeedCli.ts`, `src/release/evidence/releaseEvidenceSeed.test.ts`, `src/release/evidence/releaseEvidenceVerifier.ts`, `src/release/evidence/releaseEvidenceVerifierCli.ts`, `src/release/evidence/releaseEvidenceVerifier.test.ts` |

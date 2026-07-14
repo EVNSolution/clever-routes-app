@@ -1,12 +1,12 @@
 {
   "name": "clever-driver-app",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-tests.mjs",
@@ -20,31 +20,45 @@
     "check:source-layout": "tsx src/release/preflight/sourceLayoutPreflightCli.ts"
   },
   "dependencies": {
+    "@maplibre/maplibre-react-native": "^11.3.4",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "expo": "~54.0.33",
-    "expo-camera": "~17.0.10",
-    "expo-image-picker": "~17.0.11",
-    "expo-location": "~19.0.8",
-    "expo-secure-store": "~15.0.8",
-    "expo-speech": "~14.0.8",
-    "expo-status-bar": "~3.0.9",
-    "expo-task-manager": "~14.0.9",
-    "libphonenumber-js": "1.13.1",
-    "react": "19.1.0",
-    "react-native": "0.81.5"
+    "expo": "~56.0.15",
+    "expo-camera": "~56.0.8",
+    "expo-dev-client": "~56.0.22",
+    "expo-image-picker": "~56.0.20",
+    "expo-location": "~56.0.20",
+    "expo-notifications": "~56.0.20",
+    "expo-secure-store": "~56.0.4",
+    "expo-speech": "~56.0.3",
+    "expo-status-bar": "~56.0.4",
+    "expo-task-manager": "~56.0.21",
+    "libphonenumber-js": "1.13.6",
+    "react": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-safe-area-context": "~5.7.0"
   },
   "devDependencies": {
-    "@types/node": "^20.19.41",
-    "@types/react": "~19.1.0",
+    "@types/node": "^20.19.43",
+    "@types/react": "~19.2.14",
     "eslint": "^9.0.0",
-    "eslint-config-expo": "~10.0.0",
-    "tsx": "^4.20.6",
-    "typescript": "~5.9.2"
+    "eslint-config-expo": "~56.0.4",
+    "tsx": "^4.22.4",
+    "typescript": "~6.0.3"
   },
   "engines": {
     "node": ">=20.19.4"
   },
   "overrides": {
-    "postcss": "8.5.10"
+    "postcss": "8.5.10",
+    "uuid": "11.1.1",
+    "ws": "8.21.0",
+    "shell-quote": "1.8.4"
+  },
+  "expo": {
+    "doctor": {
+      "appConfigFieldsNotSyncedCheck": {
+        "enabled": false
+      }
+    }
   }
 }

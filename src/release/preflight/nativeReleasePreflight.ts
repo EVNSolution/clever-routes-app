@@ -3,6 +3,7 @@ export type NativeReleasePreflightCheckId =
   | 'eas.production'
   | 'expo.identity'
   | 'expo.permissions'
+  | 'ios.native'
   | 'runtime.env.example';
 
 export type NativeReleasePreflightCheck = {
@@ -22,7 +23,6 @@ export type NativeReleasePreflightInput = {
   appConfig: {
     expo?: {
       android?: {
-        edgeToEdgeEnabled?: boolean;
         package?: string;
         permissions?: string[];
         versionCode?: number;
@@ -54,6 +54,11 @@ export type NativeReleasePreflightInput = {
     submit?: Record<string, unknown>;
   };
   envExample: string;
+  iosNativeProject?: {
+    infoPlist?: string;
+    privacyManifest?: string;
+    projectPbxproj?: string;
+  };
 };
 
 const FORBIDDEN_CONTACTS_ANDROID_PERMISSIONS = new Set([
@@ -71,7 +76,8 @@ export function runNativeReleasePreflight(input: NativeReleasePreflightInput): N
     checkExpoPermissions(input.appConfig),
     checkEasPreview(input.easConfig),
     checkEasProduction(input.easConfig),
-    checkRuntimeEnvExample(input.envExample)
+    checkRuntimeEnvExample(input.envExample),
+    checkIosNativeProject(input.iosNativeProject, input.appConfig)
   ];
   const failures = checks
     .filter((check) => !check.ok)
@@ -100,8 +106,8 @@ function checkExpoIdentity(appConfig: NativeReleasePreflightInput['appConfig']):
   if (expo.scheme !== 'clever-driver') {
     return fail('expo.identity', 'Expo URL scheme must be clever-driver.');
   }
-  if (expo.version !== '0.1.0') {
-    return fail('expo.identity', 'Expo app version must be 0.1.0 until owner-approved release versioning changes.');
+  if (expo.version !== '1.0.0') {
+    return fail('expo.identity', 'Expo app version must match the approved 1.0.0 release baseline.');
   }
   if (expo.ios?.bundleIdentifier !== 'com.evns.cleverdriverapp') {
     return fail('expo.identity', 'iOS bundleIdentifier must be com.evns.cleverdriverapp.');
@@ -117,9 +123,6 @@ function checkExpoIdentity(appConfig: NativeReleasePreflightInput['appConfig']):
   }
   if (expo.android?.versionCode !== 1) {
     return fail('expo.identity', 'Android versionCode must remain 1 before the first EAS remote version sync.');
-  }
-  if (expo.android?.edgeToEdgeEnabled !== true) {
-    return fail('expo.identity', 'Android edgeToEdgeEnabled must stay enabled for the current Expo baseline.');
   }
   if (expo.extra?.projectStartIssue !== 'EVNSolution/clever-change-control#145') {
     return fail('expo.identity', 'Expo extra.projectStartIssue must reference EVNSolution/clever-change-control#145.');
@@ -164,11 +167,6 @@ function checkExpoPermissions(appConfig: NativeReleasePreflightInput['appConfig'
     return fail('expo.permissions', 'expo-image-picker camera/photos permission copy is required.');
   }
 
-  const cameraPlugin = tuplePluginConfig(plugins, 'expo-camera');
-  if (cameraPlugin === null || typeof cameraPlugin.cameraPermission !== 'string' || cameraPlugin.cameraPermission.trim() === '') {
-    return fail('expo.permissions', 'expo-camera barcode scanner permission copy is required.');
-  }
-
   if (!plugins.includes('expo-secure-store')) {
     return fail('expo.permissions', 'expo-secure-store plugin is required for native driver token storage.');
   }
@@ -179,7 +177,57 @@ function checkExpoPermissions(appConfig: NativeReleasePreflightInput['appConfig'
     return fail('expo.permissions', 'Contacts/address-book permissions must stay absent from the driver app native config.');
   }
 
-  return pass('expo.permissions', 'Native location, camera, photo, scanner, and secure storage permissions are declared.');
+  return pass('expo.permissions', 'Native location, proof photo, and secure storage permissions are declared.');
+}
+
+
+function checkIosNativeProject(
+  iosNativeProject: NativeReleasePreflightInput['iosNativeProject'],
+  appConfig: NativeReleasePreflightInput['appConfig'],
+): NativeReleasePreflightCheck {
+  if (iosNativeProject === undefined) {
+    return pass('ios.native', 'No source-controlled iOS native project is present; Expo config remains the native source of truth.');
+  }
+
+  const pbxproj = iosNativeProject.projectPbxproj ?? '';
+  const infoPlist = iosNativeProject.infoPlist ?? '';
+  const privacyManifest = iosNativeProject.privacyManifest ?? '';
+  const expectedVersion = appConfig.expo?.version ?? '';
+  const expectedBuildNumber = appConfig.expo?.ios?.buildNumber ?? '';
+  const expectedBundleIdentifier = appConfig.expo?.ios?.bundleIdentifier ?? '';
+
+  if (pbxproj.includes('DEVELOPMENT_TEAM =')) {
+    return fail('ios.native', 'Source-controlled iOS project must not pin a local Apple DEVELOPMENT_TEAM.');
+  }
+  if (!pbxproj.includes(`MARKETING_VERSION = ${expectedVersion};`)) {
+    return fail('ios.native', 'iOS MARKETING_VERSION must match the Expo app version baseline.');
+  }
+  if (!pbxproj.includes(`CURRENT_PROJECT_VERSION = ${expectedBuildNumber};`)) {
+    return fail('ios.native', 'iOS CURRENT_PROJECT_VERSION must match the Expo iOS buildNumber baseline.');
+  }
+  if (!pbxproj.includes(`PRODUCT_BUNDLE_IDENTIFIER = ${expectedBundleIdentifier};`)) {
+    return fail('ios.native', 'iOS PRODUCT_BUNDLE_IDENTIFIER must match the Expo bundleIdentifier baseline.');
+  }
+  if (infoPlist.includes('NSContactsUsageDescription')) {
+    return fail('ios.native', 'Contacts usage description must stay absent from the source-controlled iOS project.');
+  }
+  if (infoPlist.includes('NSMicrophoneUsageDescription')) {
+    return fail('ios.native', 'Microphone usage description must stay absent until an approved audio feature exists.');
+  }
+  if (infoPlist.includes('NSFaceIDUsageDescription')) {
+    return fail('ios.native', 'Face ID usage description must stay absent until biometric auth is approved.');
+  }
+  if (!infoPlist.includes('NSLocationWhenInUseUsageDescription') || !infoPlist.includes('NSLocationAlwaysAndWhenInUseUsageDescription')) {
+    return fail('ios.native', 'Source-controlled iOS project must include active-delivery location permission copy.');
+  }
+  if (!infoPlist.includes('NSCameraUsageDescription') || !infoPlist.includes('NSPhotoLibraryUsageDescription')) {
+    return fail('ios.native', 'Source-controlled iOS project must include proof photo camera/photo permission copy.');
+  }
+  if (!privacyManifest.includes('NSPrivacyTracking') || !privacyManifest.includes('<false/>')) {
+    return fail('ios.native', 'iOS privacy manifest must explicitly keep tracking disabled.');
+  }
+
+  return pass('ios.native', 'Source-controlled iOS native project matches app identity, permission, and privacy guardrails.');
 }
 
 function hasForbiddenContactsAndroidPermission(permissions: string[] | undefined): boolean {

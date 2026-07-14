@@ -24,7 +24,7 @@ async function requestImagePickerPermission(source: ProofPhotoCaptureSource): Pr
 
 async function launchImagePicker(source: ProofPhotoCaptureSource): Promise<ProofPhotoCaptureLaunchResult> {
   const result = source === 'camera'
-    ? await ImagePicker.launchCameraAsync(getImagePickerOptions())
+    ? await ImagePicker.launchCameraAsync({ ...getImagePickerOptions(), cameraType: ImagePicker.CameraType.back })
     : await ImagePicker.launchImageLibraryAsync(getImagePickerOptions());
 
   if (result.canceled || result.assets.length === 0) {

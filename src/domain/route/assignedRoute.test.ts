@@ -4,9 +4,16 @@ import { describe, it } from 'node:test';
 import {
   createAssignedRouteApiClient,
   createMockAssignedRouteService,
+  formatAssignedRouteDistance,
+  formatAssignedRouteDuration,
+  formatAssignedRouteItemLine,
+  hasAssignedRouteGeometry,
+  formatAssignedRoutePaymentStatus,
   loadAssignedRouteAfterConsent,
+  resolveRouteMapPreviewState,
   sampleAssignedRoute,
 } from './assignedRoute';
+import { assignedRouteValidationScenarios } from './assignedRouteValidationScenarios';
 
 describe('driver assigned route UX flow', () => {
   it('blocks route reads before consent is recorded', async () => {
@@ -45,10 +52,19 @@ describe('driver assigned route UX flow', () => {
     assert.equal(result.flowState, 'route_ready');
     assert.equal(result.route.name, 'Tuesday AM Route');
     assert.equal(result.route.stops.length, 2);
+    assert.equal(formatAssignedRouteDistance(result.route.routeMetrics), '3.3 km');
+    assert.equal(formatAssignedRouteDuration(result.route.routeMetrics), '14 min');
+    assert.equal(hasAssignedRouteGeometry(result.route), true);
     assert.deepEqual(
       result.route.stops.map((stop) => stop.sequence),
       [1, 2],
     );
+    assert.deepEqual(
+      result.route.stops.map((stop) => stop.normalizedPaymentStatus),
+      ['CASH_COLLECT_REQUIRED', 'TRANSFER_CHECK_PENDING'],
+    );
+    assert.equal(result.route.stops[0]?.items[0]?.name, 'Tomato box');
+    assert.equal(formatAssignedRouteItemLine(result.route.stops[0]!.items[0]!), 'Tomato box (Size: Large): 2');
     assert.equal(JSON.stringify(result).includes('tomatono.myshopify.com'), true);
   });
 
@@ -64,7 +80,7 @@ describe('driver assigned route UX flow', () => {
     assert.deepEqual(result, {
       flowState: 'consent_recorded',
       kind: 'no_assigned_route',
-      message: 'No assigned route is available for this driver and route context today.',
+      message: 'No current or upcoming route is available for this driver and route context.',
     });
   });
 
@@ -146,6 +162,7 @@ describe('driver assigned route UX flow', () => {
     });
 
     assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.equal(result.route.routeMetrics?.distanceMeters, 3250);
     assert.deepEqual(requests, [
       {
         cache: 'no-store',
@@ -159,5 +176,339 @@ describe('driver assigned route UX flow', () => {
         url: 'https://delivery.example.com/driver/assigned-route?routeContext=11111111-1111-4111-8111-111111111111',
       },
     ]);
+  });
+
+
+  it('accepts assigned routes when the server omits shop timezone', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              timezone: null,
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: sampleAssignedRoute.id });
+
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.equal(result.route.timezone, 'America/Toronto');
+  });
+
+  it('rejects assigned route payloads that omit required stop item arrays', async () => {
+    const routePayload = {
+      ...sampleAssignedRoute,
+      stops: sampleAssignedRoute.stops.map(({ items: _items, ...stop }) => stop),
+    };
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: { status: 'ASSIGNED_ROUTE', route: routePayload },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.getAssignedRoute({ routeContext: sampleAssignedRoute.id }),
+      /Invalid assigned route response/u,
+    );
+  });
+
+
+  it('accepts additive OSRM route geometry, metrics, and stop snap points from assigned-route responses', async () => {
+    const firstStop = sampleAssignedRoute.stops[0];
+    assert.ok(firstStop);
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              routeGeometry: {
+                coordinates: [
+                  [-79.3832, 43.6532],
+                  [-79.3817, 43.6487],
+                ],
+                type: 'LineString',
+              },
+              routeMetrics: {
+                distanceMeters: 980.5,
+                durationSeconds: 420,
+              },
+              routeStopPoints: [
+                {
+                  deliveryStopId: firstStop.deliveryStopId,
+                  inputCoordinates: [-79.3817, 43.6487],
+                  name: 'King Street West',
+                  sequence: 1,
+                  snapDistanceMeters: 3.5,
+                  snappedCoordinates: [-79.3818, 43.6488],
+                },
+              ],
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: sampleAssignedRoute.id });
+
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.deepEqual(result.route.routeMetrics, { distanceMeters: 980.5, durationSeconds: 420 });
+    assert.equal(formatAssignedRouteDistance(result.route.routeMetrics), '981 m');
+    assert.equal(formatAssignedRouteDuration(result.route.routeMetrics), '7 min');
+    assert.equal(result.route.routeGeometry?.coordinates.length, 2);
+    assert.equal(result.route.routeStopPoints[0]?.name, 'King Street West');
+  });
+
+  it('accepts static route map preview metadata from assigned-route responses', async () => {
+    const preview = {
+      altText: 'Static route preview for 2 stops.',
+      contentType: 'image/png',
+      expiresAt: '2026-05-12T07:00:00.000Z',
+      generatedAt: '2026-05-12T06:50:00.000Z',
+      height: 430,
+      imageUrl: 'https://delivery.example.com/driver/route-map-preview/opaque?expires=1781142000000&signature=preview',
+      kind: 'static_route_map',
+      routeSequenceChecksum: 'sample-route-checksum',
+      width: 720,
+    };
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              routeMapPreview: preview,
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: sampleAssignedRoute.id });
+
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.deepEqual(result.route.routeMapPreview, preview);
+    assert.deepEqual(
+      resolveRouteMapPreviewState({
+        loadStatus: 'idle',
+        now: new Date('2026-05-12T06:55:00.000Z'),
+        preview: result.route.routeMapPreview,
+      }),
+      {
+        accessibilityLabel: preview.altText,
+        imageUrl: preview.imageUrl,
+        kind: 'available',
+      },
+    );
+  });
+
+  it('defines tab-level synthetic validation scenarios with safe coordinates and OSRM evidence expectations', () => {
+    assert.deepEqual(
+      assignedRouteValidationScenarios.map((scenario) => scenario.tab),
+      ['upcoming', 'active', 'completed'],
+    );
+
+    for (const scenario of assignedRouteValidationScenarios) {
+      assert.equal(scenario.route.name.startsWith('[TEST]'), true);
+      assert.equal(scenario.route.shopDomain, 'validation-only.example.test');
+      assert.equal(scenario.expectedEvidence.safeForOperationalSmoke, true);
+      assert.equal(
+        scenario.route.stops.every((stop) => stop.coordinates !== null && stop.orderName.includes('TEST-OSRM')),
+        scenario.expectedEvidence.hasCoordinatesForEveryStop,
+      );
+      assert.equal(hasAssignedRouteGeometry(scenario.route), scenario.expectedEvidence.hasOsrmGeometry);
+      assert.equal(scenario.route.routeMetrics !== null, scenario.expectedEvidence.hasOsrmMetrics);
+    }
+  });
+
+  it('keeps legacy assigned-route responses compatible by defaulting OSRM fields to unavailable', async () => {
+    const {
+      routeGeometry: _routeGeometry,
+      routeMetrics: _routeMetrics,
+      routeStopPoints: _routeStopPoints,
+      routeMapPreview: _routeMapPreview,
+      ...legacyRoute
+    } = sampleAssignedRoute;
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: { status: 'ASSIGNED_ROUTE', route: legacyRoute },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: sampleAssignedRoute.id });
+
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.equal(result.route.routeGeometry, null);
+    assert.equal(result.route.routeMapPreview, null);
+    assert.equal(result.route.routeMetrics, null);
+    assert.deepEqual(result.route.routeStopPoints, []);
+    assert.equal(formatAssignedRouteDistance(result.route.routeMetrics), 'Not available');
+    assert.equal(formatAssignedRouteDuration(result.route.routeMetrics), 'Not available');
+  });
+
+  it('maps route map preview helper states for missing, expired, and failed images', () => {
+    assert.deepEqual(
+      resolveRouteMapPreviewState({
+        loadStatus: 'idle',
+        now: new Date('2026-05-12T06:55:00.000Z'),
+        preview: null,
+      }),
+      {
+        kind: 'missing',
+        message: 'Route preview unavailable. You can still open navigation for each stop.',
+      },
+    );
+
+    assert.deepEqual(
+      resolveRouteMapPreviewState({
+        loadStatus: 'idle',
+        now: new Date('2026-05-12T07:01:00.000Z'),
+        preview: sampleAssignedRoute.routeMapPreview,
+      }),
+      {
+        kind: 'expired',
+        message: 'Map preview couldn’t load. Route details are still available.',
+      },
+    );
+
+    assert.deepEqual(
+      resolveRouteMapPreviewState({
+        loadStatus: 'failed',
+        now: new Date('2026-05-12T06:55:00.000Z'),
+        preview: sampleAssignedRoute.routeMapPreview,
+      }),
+      {
+        kind: 'failed',
+        message: 'Map preview couldn’t load. Route details are still available.',
+      },
+    );
+  });
+
+  it('rejects malformed route map preview metadata from the assigned-route contract', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              routeMapPreview: {
+                ...sampleAssignedRoute.routeMapPreview,
+                contentType: 'image/svg+xml',
+              },
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.getAssignedRoute({ routeContext: 'route-id' }),
+      /Invalid assigned route response/u,
+    );
+  });
+
+  it('preserves canonical normalizedPaymentStatus even when legacy payment fields conflict', async () => {
+    const routePayload = {
+      ...sampleAssignedRoute,
+      stops: [
+        {
+          ...sampleAssignedRoute.stops[0],
+          financialStatus: 'Cash',
+          normalizedPaymentStatus: 'PAID_CONFIRMED',
+          paymentStatus: 'CASH_COLLECT_REQUIRED',
+        },
+      ],
+    };
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: { status: 'ASSIGNED_ROUTE', route: routePayload },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: 'route-id' });
+
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.equal(result.route.stops[0]?.normalizedPaymentStatus, 'PAID_CONFIRMED');
+  });
+
+  it('rejects malformed normalized payment statuses from the assigned-route contract', async () => {
+    const routePayload = {
+      ...sampleAssignedRoute,
+      stops: [
+        {
+          ...sampleAssignedRoute.stops[0],
+          normalizedPaymentStatus: 'cash',
+        },
+      ],
+    };
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: { status: 'ASSIGNED_ROUTE', route: routePayload },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.getAssignedRoute({ routeContext: 'route-id' }),
+      /Invalid assigned route response/u,
+    );
+  });
+
+  it('formats all normalized payment states into visible driver copy', () => {
+    assert.deepEqual(formatAssignedRoutePaymentStatus('PAID_CONFIRMED'), {
+      detail: 'Payment is confirmed in WooCommerce. Do not request payment at delivery.',
+      label: 'Paid confirmed',
+      tone: 'green',
+    });
+    assert.equal(formatAssignedRoutePaymentStatus('UNKNOWN_REVIEW').label, 'Review payment');
+    assert.equal(formatAssignedRoutePaymentStatus('NOT_DELIVERABLE_OR_EXCEPTION').label, 'Payment exception');
+    assert.equal(formatAssignedRoutePaymentStatus(null).label, 'Payment unavailable');
   });
 });

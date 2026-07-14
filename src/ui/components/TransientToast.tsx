@@ -1,9 +1,11 @@
 import { Platform, StyleSheet, Text, View } from 'react-native';
 
 import {
+  TRANSIENT_TOAST_ANDROID_ELEVATION,
   TRANSIENT_TOAST_ANDROID_TOP_OFFSET,
   TRANSIENT_TOAST_BORDER_ALPHA,
   TRANSIENT_TOAST_SURFACE_ALPHA,
+  TRANSIENT_TOAST_Z_INDEX,
 } from './transientToastBehavior';
 
 export function TransientToast({ text }: { text: string }) {
@@ -16,7 +18,7 @@ export function TransientToast({ text }: { text: string }) {
 
 const shadow = Platform.select({
   android: {
-    elevation: 1,
+    elevation: TRANSIENT_TOAST_ANDROID_ELEVATION,
   },
   ios: {
     shadowColor: '#0f172a',
@@ -33,7 +35,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 22,
     top: Platform.select({ android: TRANSIENT_TOAST_ANDROID_TOP_OFFSET, default: 32, ios: 18 }),
-    zIndex: 50,
+    zIndex: TRANSIENT_TOAST_Z_INDEX,
     ...shadow,
   },
   toastText: {

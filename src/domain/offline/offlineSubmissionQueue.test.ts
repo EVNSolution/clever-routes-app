@@ -464,10 +464,16 @@ describe('offline submission queue', () => {
     assert.deepEqual(queue.listPending(), []);
   });
 
-  it('discards route-scoped queued submissions when a route is completed', () => {
+  it('discards route-scoped non-terminal submissions when a route is completed', () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueDriverEvent({
       clientEventId: 'route-1-event',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-05-12T11:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-1-terminal-stop',
       eventType: 'STOP_DELIVERED',
       occurredAt: new Date('2026-05-12T11:00:00.000Z'),
       routePlanId: 'route-1',
@@ -481,7 +487,7 @@ describe('offline submission queue', () => {
     });
     queue.enqueueDriverEvent({
       clientEventId: 'route-2-event',
-      eventType: 'STOP_DELIVERED',
+      eventType: 'LOCATION_UPDATED',
       occurredAt: new Date('2026-05-12T11:00:00.000Z'),
       routePlanId: 'route-2',
     });
@@ -493,6 +499,7 @@ describe('offline submission queue', () => {
 
     assert.equal(queue.discardRouteSubmissions('route-1'), 2);
     assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+      'driver-event:route-1-terminal-stop',
       'driver-event:route-2-event',
       'driver-event:unscoped-event',
     ]);
