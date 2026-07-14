@@ -6,6 +6,7 @@ import {
   createMockAssignedRouteService,
   formatAssignedRouteDistance,
   formatAssignedRouteDuration,
+  formatAssignedRouteItemLine,
   hasAssignedRouteGeometry,
   formatAssignedRoutePaymentStatus,
   loadAssignedRouteAfterConsent,
@@ -62,6 +63,8 @@ describe('driver assigned route UX flow', () => {
       result.route.stops.map((stop) => stop.normalizedPaymentStatus),
       ['CASH_COLLECT_REQUIRED', 'TRANSFER_CHECK_PENDING'],
     );
+    assert.equal(result.route.stops[0]?.items[0]?.name, 'Tomato box');
+    assert.equal(formatAssignedRouteItemLine(result.route.stops[0]!.items[0]!), 'Tomato box (Size: Large): 2');
     assert.equal(JSON.stringify(result).includes('tomatono.myshopify.com'), true);
   });
 
@@ -173,6 +176,55 @@ describe('driver assigned route UX flow', () => {
         url: 'https://delivery.example.com/driver/assigned-route?routeContext=11111111-1111-4111-8111-111111111111',
       },
     ]);
+  });
+
+
+  it('accepts assigned routes when the server omits shop timezone', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              timezone: null,
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: sampleAssignedRoute.id });
+
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.equal(result.route.timezone, 'America/Toronto');
+  });
+
+  it('rejects assigned route payloads that omit required stop item arrays', async () => {
+    const routePayload = {
+      ...sampleAssignedRoute,
+      stops: sampleAssignedRoute.stops.map(({ items: _items, ...stop }) => stop),
+    };
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: { status: 'ASSIGNED_ROUTE', route: routePayload },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.getAssignedRoute({ routeContext: sampleAssignedRoute.id }),
+      /Invalid assigned route response/u,
+    );
   });
 
 

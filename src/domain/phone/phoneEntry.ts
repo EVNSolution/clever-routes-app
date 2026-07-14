@@ -49,6 +49,9 @@ type DisplayNamesConstructor = new (
 ) => { of(code: string): string | undefined };
 
 type IntlLocaleWithWeekInfo = {
+  getWeekInfo?: () => {
+    firstDay?: number;
+  };
   weekInfo?: {
     firstDay?: number;
   };
@@ -422,7 +425,8 @@ function getWeekStartsOn(locale: string): DriverWeekStartDay {
   }
 
   try {
-    const firstDay = new LOCALE(locale).weekInfo?.firstDay;
+    const localeInfo = new LOCALE(locale);
+    const firstDay = localeInfo.weekInfo?.firstDay ?? localeInfo.getWeekInfo?.().firstDay;
 
     if (typeof firstDay === 'number') {
       return WEEK_START_BY_FIRST_DAY[firstDay] ?? 'monday';

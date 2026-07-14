@@ -18,7 +18,8 @@ src/
   domain/
     consent/                    # consent state and consent service contract/mock/API behavior
     delivery/                   # delivery start/finish lifecycle decisions
-    driver/                     # access-token store contract and session reset policy
+    driver/                     # separate account/route token store and session reset policy
+    driverAuth/                 # phone/PIN login, invitation registration, and account refresh contract
     driverFlow/                 # driver flow guards and MVP route-tab metadata
     events/                     # driver event recording decisions
     location/                   # foreground/background location event decisions
@@ -26,7 +27,7 @@ src/
     proof/                      # proof capture/upload decisions
     phone/                      # supported-country i18n metadata, national phone formatting, E.164 normalization
     route/                      # assigned-route model and lookup loading decisions
-    routeAccess/                # phone/context route-access decisions
+    routeAccess/                # account-bearer route-access decisions
     stop/                       # stop navigation and proof-event decisions
   platform/
     expo/

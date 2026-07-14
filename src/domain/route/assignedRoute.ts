@@ -68,6 +68,20 @@ export const NORMALIZED_PAYMENT_STATUSES = [
 
 export type NormalizedPaymentStatus = (typeof NORMALIZED_PAYMENT_STATUSES)[number];
 
+export type AssignedRouteOrderItemOption = {
+  key: string;
+  value: string;
+};
+
+export type AssignedRouteOrderItem = {
+  name: string;
+  options: AssignedRouteOrderItemOption[];
+  productId: number;
+  quantity: number;
+  sku: string | null;
+  variationId: number;
+};
+
 export type AssignedRoutePaymentCopy = {
   detail: string;
   label: string;
@@ -78,6 +92,7 @@ export type AssignedRouteStop = {
   address: AssignedRouteAddress;
   coordinates: AssignedRouteCoordinates | null;
   deliveryStopId: string;
+  items: AssignedRouteOrderItem[];
   normalizedPaymentStatus: NormalizedPaymentStatus | null;
   orderName: string;
   phone: string | null;
@@ -94,6 +109,8 @@ export type AssignedRouteStopPoint = {
   snapDistanceMeters: number | null;
   snappedCoordinates: AssignedRouteLngLat | null;
 };
+
+const DEFAULT_ASSIGNED_ROUTE_TIMEZONE = 'America/Toronto';
 
 export type AssignedRoute = {
   deliveryDate: string;
@@ -228,6 +245,16 @@ export const sampleAssignedRoute: AssignedRoute = {
         longitude: -79.3817,
       },
       deliveryStopId: '22222222-2222-4222-8222-222222222222',
+      items: [
+        {
+          name: 'Tomato box',
+          options: [{ key: 'Size', value: 'Large' }],
+          productId: 101,
+          quantity: 2,
+          sku: 'TOM-L',
+          variationId: 7,
+        },
+      ],
       normalizedPaymentStatus: 'CASH_COLLECT_REQUIRED',
       orderName: '#1001',
       phone: '+14165550123',
@@ -249,6 +276,16 @@ export const sampleAssignedRoute: AssignedRoute = {
         longitude: -79.3909,
       },
       deliveryStopId: '33333333-3333-4333-8333-333333333333',
+      items: [
+        {
+          name: 'Basil bunch',
+          options: [],
+          productId: 202,
+          quantity: 1,
+          sku: null,
+          variationId: 0,
+        },
+      ],
       normalizedPaymentStatus: 'TRANSFER_CHECK_PENDING',
       orderName: '#1002',
       phone: '+14165550124',
@@ -287,7 +324,9 @@ export async function loadAssignedRouteAfterConsent(
       kind: 'route_ready',
       route: {
         ...result.route,
-        stops: [...result.route.stops].sort((left, right) => left.sequence - right.sequence),
+        stops: [...result.route.stops]
+          .map(normalizeAssignedRouteStop)
+          .sort((left, right) => left.sequence - right.sequence),
       },
     };
   } catch (error) {
@@ -381,6 +420,15 @@ export function hasAssignedRouteGeometry(route: AssignedRoute): boolean {
   return route.routeGeometry !== null && route.routeGeometry.coordinates.length >= 2;
 }
 
+export function formatAssignedRouteItemOptions(item: Pick<AssignedRouteOrderItem, 'options'>): string {
+  return item.options.map((option) => `${option.key}: ${option.value}`).join(' · ');
+}
+
+export function formatAssignedRouteItemLine(item: AssignedRouteOrderItem): string {
+  const options = formatAssignedRouteItemOptions(item);
+  return `${item.name}${options.length === 0 ? '' : ` (${options})`}: ${item.quantity}`;
+}
+
 export function resolveRouteMapPreviewState(input: {
   loadStatus: RouteMapPreviewLoadStatus;
   now: Date;
@@ -463,7 +511,7 @@ function isAssignedRoute(value: unknown): value is AssignedRoute {
     typeof route.shopDomain === 'string' &&
     Array.isArray(route.stops) &&
     route.stops.every(isAssignedRouteStop) &&
-    typeof route.timezone === 'string'
+    nullableString(route.timezone)
   );
 }
 
@@ -474,6 +522,18 @@ function normalizeAssignedRoute(route: AssignedRoute): AssignedRoute {
     routeMapPreview: route.routeMapPreview ?? null,
     routeMetrics: route.routeMetrics ?? null,
     routeStopPoints: route.routeStopPoints ?? [],
+    stops: route.stops.map(normalizeAssignedRouteStop),
+    timezone: route.timezone ?? DEFAULT_ASSIGNED_ROUTE_TIMEZONE,
+  };
+}
+
+function normalizeAssignedRouteStop(stop: AssignedRouteStop): AssignedRouteStop {
+  return {
+    ...stop,
+    items: stop.items.map((item) => ({
+      ...item,
+      options: [...item.options],
+    })),
   };
 }
 
@@ -551,6 +611,8 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
     isAssignedRouteAddress(stop.address) &&
     (stop.coordinates === null || isAssignedRouteCoordinates(stop.coordinates)) &&
     typeof stop.deliveryStopId === 'string' &&
+    Array.isArray(stop.items) &&
+    stop.items.every(isAssignedRouteOrderItem) &&
     isNormalizedPaymentStatus(stop.normalizedPaymentStatus) &&
     typeof stop.orderName === 'string' &&
     nullableString(stop.phone) &&
@@ -558,6 +620,36 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
     typeof stop.sequence === 'number' &&
     typeof stop.status === 'string'
   );
+}
+
+function isAssignedRouteOrderItem(value: unknown): value is AssignedRouteOrderItem {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.name === 'string' &&
+    Array.isArray(item.options) &&
+    item.options.every(isAssignedRouteOrderItemOption) &&
+    typeof item.productId === 'number' &&
+    Number.isFinite(item.productId) &&
+    typeof item.quantity === 'number' &&
+    Number.isFinite(item.quantity) &&
+    item.quantity > 0 &&
+    nullableString(item.sku) &&
+    typeof item.variationId === 'number' &&
+    Number.isFinite(item.variationId)
+  );
+}
+
+function isAssignedRouteOrderItemOption(value: unknown): value is AssignedRouteOrderItemOption {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const option = value as Record<string, unknown>;
+  return typeof option.key === 'string' && typeof option.value === 'string';
 }
 
 function isNormalizedPaymentStatus(value: unknown): value is NormalizedPaymentStatus | null {

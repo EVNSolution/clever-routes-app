@@ -26,7 +26,9 @@ describe('driver main tab IA', () => {
   it('excludes auth and dedicated preview screens from the bottom tab shell', () => {
     assert.equal(shouldShowDriverBottomTabs('loginPhone'), false);
     assert.equal(shouldShowDriverBottomTabs('loginDetail'), false);
+    assert.equal(shouldShowDriverBottomTabs('arrivalCheck'), false);
     assert.equal(shouldShowDriverBottomTabs('liveMapPreview'), false);
+    assert.equal(shouldShowDriverBottomTabs('proofCamera'), false);
     assert.equal(shouldShowDriverBottomTabs('routePreview'), false);
     assert.equal(shouldShowDriverBottomTabs('mainTabs'), true);
     assert.equal(shouldShowDriverBottomTabs('routeSession'), true);

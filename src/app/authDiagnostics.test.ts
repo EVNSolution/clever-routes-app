@@ -75,15 +75,37 @@ describe('authDiagnostics', () => {
     assert.equal(result.message.includes('401'), true);
   });
 
+  it('explains invalid phone or PIN without exposing which credential failed', () => {
+    const result = buildAuthFailureMessage({
+      runtimeConfig: liveConfig,
+      phase: 'pin_login',
+      error: createDriverApiHttpError({ endpoint: 'PIN Login', status: 401 }),
+    });
+
+    assert.equal(result.kind, 'server_401');
+    assert.equal(result.message, 'PIN login: phone number or PIN is incorrect.');
+  });
+
+  it('explains invalid or expired invite codes during registration', () => {
+    const result = buildAuthFailureMessage({
+      runtimeConfig: liveConfig,
+      phase: 'invite_verify',
+      error: createDriverApiHttpError({ endpoint: 'Verify Invite Code', status: 401 }),
+    });
+
+    assert.equal(result.kind, 'server_401');
+    assert.equal(result.message, 'Account registration: invite code is invalid or expired.');
+  });
+
   it('builds success message with live endpoint context', () => {
     const message = buildAuthSuccessMessage({ runtimeConfig: liveConfig, phase: 'invite_verify' });
 
     assert.equal(message.includes('live server https://clever-route.example'), true);
-    assert.equal(message.includes('Invite verification'), true);
+    assert.equal(message.includes('Account registration'), true);
   });
 
-  const phaseKinds: AuthPhase[] = ['invite_verify', 'route_access'];
-  it('emits non-empty messages for both phases', () => {
+  const phaseKinds: AuthPhase[] = ['invite_verify', 'pin_login', 'route_access'];
+  it('emits non-empty messages for every auth phase', () => {
     phaseKinds.forEach((phase) => {
       const message = buildAuthSuccessMessage({ runtimeConfig: liveConfig, phase });
       assert.equal(typeof message, 'string');

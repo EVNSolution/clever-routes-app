@@ -4,10 +4,10 @@ Dedicated native mobile app repository for Clever delivery drivers.
 
 ## MVP direction
 
-1. Driver selects a supported country and enters the dispatch-registered phone number in national format.
-2. Driver confirms the company/shop/route guidance for the assigned work.
+1. Driver selects a supported country, enters the dispatch-registered phone number, and signs in with a six-digit PIN.
+2. A first-time driver uses an existing Shopify invitation code once and creates the six-digit PIN; the app does not create or request the invitation.
 3. Driver accepts location-information and personal-information consent.
-4. Driver views the route assigned for the current delivery day.
+4. Driver confirms the company/shop/route guidance and views assigned work.
 
 ## Platform direction
 
@@ -19,14 +19,16 @@ Dedicated native mobile app repository for Clever delivery drivers.
 
 - `clever-delivery-server` is the source of truth for companies/shops, drivers, routes, orders, assignments, consent records, and location/compliance logs.
 - This repository owns the driver-facing mobile UX, runtime, local verification, and mobile release evidence.
-- Phone number alone must not be treated as a global driver identity; route/company context is part of the access boundary.
+- The delivery server owns one global driver account per normalized E.164 phone number. Phone possession alone is not authentication: existing accounts require the PIN, while first registration additionally requires an existing invitation code.
+- Shopify invitation/signup creation is administrator- and user-managed. This app does not send or automate that request.
 
 ## Current app flow
 
 The app includes an interactive route access screen:
 
-- country-aware phone entry with a broad supported-country catalog, locale/language/culture metadata, national display formatting, and E.164 normalization before lookup
-- local mock service for delivery-server `POST /driver/route-access/lookup`
+- country-aware phone entry with a broad supported-country catalog, national display formatting, and E.164 normalization before account authentication
+- phone + six-digit PIN login for existing accounts; first-registration mode adds the existing six-character invitation code and PIN confirmation without collecting a driver name
+- separate server-issued account and route access tokens, with account-authenticated `POST /driver/route-access/lookup`
 - company/shop/route guidance for `INVITED`, plus safe multi-company ambiguity guidance that does not expose route/stop/customer data or driver access tokens
 - local proof-media upload smoke selector for success, retryable failure, and scanner rejection while the app is using mock services
 - app-side consent gate for required location-information and personal-information consent
@@ -37,7 +39,7 @@ The app includes an interactive route access screen:
 - explicit delivery start action that requests OS foreground location permission before `delivery_active`
 - route started, foreground one-shot location update, continuous background-capable location streaming, native proof photo URI capture, proof media upload references, scanner-rejected proof photo recapture guidance, signature proof capture, richer stop delivered/failed proof-event mock/API boundaries, and route-completed delivery finish cleanup for delivery-server `POST /driver/events` after delivery_active succeeds
 - safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
-- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for route lookup, native secure storage for the short-lived driver token, live downstream consent/assigned-route/driver-event/proof-media clients with no-store/no-cookie request options, and live `401` recovery that clears the active driver token and returns the driver to country-aware phone lookup; durable app-side offline queue/retry for pending driver events and proof media using AsyncStorage-backed non-secret queue metadata, with app-side discard thresholds for repeated failure, stale age, recorded route completion cleanup, explicit scanner-rejected proof media discard/recapture handling, and an explicit driver session reset action that clears secure access plus queued retry state; delivery-server local/manual proof-media cleanup support and server-side scan rejection hook; production proof-media object storage, signed access, deployed scanner evidence, deployed cleanup evidence, physical-device smoke evidence, and store/privacy disclosure evidence left for follow-up slices
+- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for account authentication and route lookup, native secure storage with account and route credentials kept separate, account refresh plus one route-token retry on downstream `401`, and authoritative removal of cached routes when assignments disappear; durable app-side offline queue/retry for pending driver events and proof media using AsyncStorage-backed non-secret queue metadata, with explicit reset and cleanup behavior
 
 See `docs/route-access-flow.md` for the app-side route access, consent, assigned-route, native map handoff, and delivery evidence boundary.
 
@@ -60,7 +62,7 @@ npm install
 npm run start
 ```
 
-Optional live API mode (route lookup saves the returned short-lived driver token through Expo SecureStore, clears expired/invalid persisted tokens before reuse, and clears live downstream `401` tokens before requiring country-aware phone lookup again; see `.env.example`):
+Optional live API mode (account login/registration stores server-issued account access and refresh credentials separately from route-scoped driver access; expired route access is reacquired through account refresh and route lookup, while an expired account session returns to phone + PIN login; see `.env.example`):
 
 ```bash
 EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://delivery.example.com npm run start
@@ -89,8 +91,7 @@ npx expo install --check
 git diff --check
 ```
 
-GitHub Actions runs the PR/push subset in `.github/workflows/ci.yml` for
-`dev` and `main`: dependency install, workspace checks, lint, native release
+GitHub Actions provides a manually dispatched verification workflow in `.github/workflows/ci.yml` to avoid consuming minutes on every PR/push: dependency install, workspace checks, lint, native release
 preflight, non-secret release evidence seed rendering, app bundle export, npm
 audit, Expo dependency alignment, and diff whitespace checks. CI does not run
 EAS binary builds and does not replace Apple/Google signing, store/private

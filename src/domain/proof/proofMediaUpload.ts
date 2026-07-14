@@ -1,6 +1,7 @@
 import type { ProofPhotoCaptureResult, ProofPhotoCaptureSource } from './proofPhotoCapture';
 import {
   createDriverApiHttpError,
+  DriverApiHttpError,
   getDriverApiRecoveryReason,
 } from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
@@ -70,6 +71,12 @@ export type FetchLike = (
   status?: number;
 }>;
 
+type ProofMediaHttpResponse = {
+  json(): Promise<unknown>;
+  ok: boolean;
+  status?: number;
+};
+
 export function createMockProofMediaUploadService(input?: {
   mode?: ProofMediaUploadMockMode;
 }): ProofMediaUploadService {
@@ -105,22 +112,32 @@ export function createProofMediaUploadApiClient(input: {
   accessToken: string;
   baseUrl: string;
   fetchImpl?: FetchLike;
+  xmlHttpRequestFactory?: () => XMLHttpRequest;
 }): ProofMediaUploadService {
   const baseUrl = input.baseUrl.replace(/\/$/u, '');
-  const fetchImpl = input.fetchImpl ?? globalThis.fetch;
 
   return {
     uploadProofMedia: async (request) => {
-      const response = await fetchImpl(`${baseUrl}/driver/proof-media`, withNoStoreDriverApiRequest({
-        body: toProofMediaFormData(request),
-        headers: {
-          Authorization: `Bearer ${input.accessToken}`,
-        },
-        method: 'POST',
-      }));
-      const payload = await response.json();
+      const url = `${baseUrl}/driver/proof-media`;
+      const body = toProofMediaFormData(request);
+      const response = input.fetchImpl === undefined
+        ? await postProofMediaFormDataWithXmlHttpRequest({
+          accessToken: input.accessToken,
+          body,
+          url,
+          xmlHttpRequestFactory: input.xmlHttpRequestFactory,
+        })
+        : await input.fetchImpl(url, withNoStoreDriverApiRequest({
+          body,
+          headers: {
+            Authorization: `Bearer ${input.accessToken}`,
+          },
+          method: 'POST',
+        }));
+      const payload = await readResponseJson(response);
       if (!response.ok) {
-        if (response.status === 422 && readDriverApiErrorCode(payload) === 'PROOF_MEDIA_REJECTED') {
+        const apiError = readDriverApiError(payload);
+        if (response.status === 422 && apiError.code === 'PROOF_MEDIA_REJECTED') {
           throw createProofMediaRejectedError();
         }
 
@@ -133,6 +150,34 @@ export function createProofMediaUploadApiClient(input: {
       return readProofMediaReferenceEnvelope(payload);
     },
   };
+}
+
+function postProofMediaFormDataWithXmlHttpRequest(input: {
+  accessToken: string;
+  body: FormData;
+  url: string;
+  xmlHttpRequestFactory?: () => XMLHttpRequest;
+}): Promise<ProofMediaHttpResponse> {
+  const createRequest = input.xmlHttpRequestFactory ?? (() => new XMLHttpRequest());
+
+  return new Promise((resolve, reject) => {
+    const request = createRequest();
+    request.open('POST', input.url);
+    request.timeout = 30000;
+    request.setRequestHeader('Authorization', `Bearer ${input.accessToken}`);
+    request.setRequestHeader('Cache-Control', 'no-store');
+    request.setRequestHeader('Pragma', 'no-cache');
+    request.onload = () => {
+      resolve({
+        ok: request.status >= 200 && request.status < 300,
+        status: request.status,
+        json: async () => parseJsonOrNull(request.responseText),
+      });
+    };
+    request.onerror = () => reject(new Error('Network request failed'));
+    request.ontimeout = () => reject(new Error('Network request timed out'));
+    request.send(input.body);
+  });
 }
 
 export async function uploadCapturedProofPhoto(input: {
@@ -180,6 +225,14 @@ function formatProofMediaUploadFailure(error: unknown): string {
     return 'Session expired. Sign in again to sync this photo.';
   }
 
+  if (error instanceof DriverApiHttpError) {
+    return `Photo upload failed (HTTP ${error.status}). Try again.`;
+  }
+
+  if (error instanceof Error && error.message.trim() !== '') {
+    return `Photo upload failed: ${error.message}`;
+  }
+
   return 'Photo upload failed. Try again.';
 }
 
@@ -222,18 +275,36 @@ function readProofMediaReferenceEnvelope(payload: unknown): ProofMediaReference 
   return data;
 }
 
-function readDriverApiErrorCode(payload: unknown): string | null {
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+async function readResponseJson(response: { json(): Promise<unknown> }): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
     return null;
+  }
+}
+
+function parseJsonOrNull(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function readDriverApiError(payload: unknown): { code?: string } {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    return {};
   }
 
   const error = (payload as { error?: unknown }).error;
   if (typeof error !== 'object' || error === null || Array.isArray(error)) {
-    return null;
+    return {};
   }
 
   const code = (error as { code?: unknown }).code;
-  return typeof code === 'string' ? code : null;
+  return {
+    ...(typeof code === 'string' ? { code } : {}),
+  };
 }
 
 function isProofMediaReference(value: unknown): value is ProofMediaReference {

@@ -2,50 +2,75 @@
 
 ## Purpose
 
-This document records the current app-side route access, consent, assigned-route, and delivery-start event UX boundary. Product scenarios remain in `docs/project-brief.md`; server contract details are owned by `clever-delivery-server/docs/api/driver-route-access.md`, `clever-delivery-server/docs/api/driver-consents.md`, and `clever-delivery-server/docs/api/driver-assigned-route.md`.
+This document records the current app-side account authentication, route access, consent, assigned-route, and delivery-start event UX boundary. Product scenarios remain in `docs/project-brief.md`; the delivery server owns the account, session, invitation verification, route access, consent, and assigned-route contracts.
 
 ## Current app behavior
 
 The app now has an interactive phone-first driver flow:
 
-1. Driver selects a supported country, enters the phone number registered with dispatch in national format, enters driver name, and acknowledges required privacy/location consent.
-2. App formats the national phone input for the selected country and normalizes it to E.164 before lookup.
-3. App calls a `RouteAccessService` boundary shaped like delivery-server `POST /driver/route-access/lookup` with `routeContext: null`.
-4. `ROUTES_FOUND` returns zero or more selectable route choices for a registered active phone. Each choice carries its own company guidance, route access identifiers, and short-lived driver access token.
-5. From the driver's point of view, multi-company assignments are just multiple routes; each route card shows the company/shop and route metadata attached to that route.
-6. The app records required `LOCATION_INFORMATION` and `PERSONAL_INFORMATION` consent through the `DriverConsentService` boundary for the selected/loaded route token.
-7. Assigned route loading calls an `AssignedRouteService` boundary shaped like delivery-server `GET /driver/assigned-route` for each route choice.
-8. Loaded current/upcoming routes render in `Pending`, `In Progress`, and `Completed` tabs; a route card can open detail or start delivery. Past routes are hidden until a server-backed route-history API exists, and `Completed` means current-session completion only in this beta.
-9. Delivery start requests foreground location permission and moves to `delivery_active` only when permission is granted.
-10. Live tracking starts at the company/pickup step, then proceeds through ordered stops without presenting turn-by-turn instruction UI.
-11. Each stop can play a local area tip, open stop details, capture required proof photo, and record optional delivery notes, location-specific tips, and additional notes.
-12. Delivery finish stops the continuous location task, records or queues a `ROUTE_COMPLETED` driver event, and discards route-scoped local retry items only after route completion is recorded.
-13. `INVITED` remains accepted as a legacy exact route-context response from the API, but the app no longer asks the driver for any external route access artifact.
-14. `NO_ASSIGNED_ROUTE`, `NOT_FOUND`, `DISABLED`, `BLOCKED`, and API errors stay in safe user-visible states without exposing other tenant/driver data.
+1. Driver selects a supported country and enters the dispatch-registered phone number in national format. The app normalizes it to E.164.
+2. Existing accounts submit phone + six-digit PIN to `POST /driver/auth/login`; they are not asked for another invitation code.
+3. First-registration mode submits phone + an existing Shopify invitation code + new six-digit PIN to `POST /driver/auth/verify-invite`. It does not collect a driver name and does not create or request the Shopify invitation.
+4. Successful login or registration returns an account access/refresh session with `use: driver_account`, stored in native SecureStore without persisting the PIN or invitation code.
+5. The app calls `POST /driver/route-access/lookup` with the account bearer token and `routeContext: null`; the phone number is not resent in this request.
+6. `ROUTES_FOUND` returns zero or more selectable route choices. Each choice carries company guidance, route access identifiers, and its own short-lived route-scoped driver token.
+7. From the driver's point of view, multi-company assignments are just multiple routes; each route card shows the company/shop and route metadata attached to that route.
+8. The app records required `LOCATION_INFORMATION` and `PERSONAL_INFORMATION` consent through the selected route token, then loads assigned-route detail for each route choice.
+9. Loaded routes render in `Pending`, `In Progress`, and `Completed` tabs; a route card can open detail or start delivery.
+10. Delivery start requests foreground location permission and moves to `delivery_active` only when permission is granted.
+11. Live tracking starts at the company/pickup step, then proceeds through ordered stops without presenting turn-by-turn instruction UI.
+12. Each stop can play a local area tip, open stop details, capture required proof photo, and record optional delivery notes, location-specific tips, and additional notes.
+13. Delivery finish stops continuous location, records or queues `ROUTE_COMPLETED`, and discards route-scoped local retry items only after route completion is recorded.
+14. An authoritative empty route list, `NOT_FOUND`, or a missing prior assignment removes that route from the app and clears only route-scoped cache. Network errors retain the last safe cache.
+15. `NO_ASSIGNED_ROUTE`, `DISABLED`, `BLOCKED`, and API errors stay in safe user-visible states without exposing other tenant/driver data.
 
 ## Local mock boundary
 
-`App.tsx` uses `createMockRouteAccessService()` from `src/domain/routeAccess/routeAccess.ts`, `createMockDriverConsentService()` from `src/domain/consent/driverConsent.ts`, and `createMockAssignedRouteService()` from `src/domain/route/assignedRoute.ts` when no live delivery-server base URL is configured. The default mock returns a phone-resolvable route choice with company guidance, so the app can run the same phone → current/upcoming route choice → route details → live tracking → stop details → arrival check → stop completed/completed deliveries flow without a live server.
+`src/app/AppRoot.tsx` uses mock account-auth, route-access, consent, and assigned-route services when no live delivery-server base URL is configured. The default mock runs the same phone + PIN → account-authenticated route choice → route details → live tracking → stop proof/completion flow without a live server. It never pretends that an SMS was sent.
 
 Mock services are for local UX smoke only and do not replace backend integration tests.
 
 ## API client boundary
 
-`src/domain/routeAccess/routeAccess.ts` exports `createRouteAccessApiClient({ baseUrl, fetchImpl })`, which posts:
+`src/domain/driverAuth/driverAuth.ts` owns the account-auth client. Existing-account login posts:
+
+```http
+POST /driver/auth/login
+Content-Type: application/json
+```
+
+```json
+{ "phone": "+14165550123", "pin": "123456" }
+```
+
+First registration posts the already-issued invitation code and new PIN:
+
+```http
+POST /driver/auth/verify-invite
+Content-Type: application/json
+```
+
+```json
+{ "phone": "+14165550123", "inviteCode": "A1B2C3", "pin": "123456" }
+```
+
+`POST /driver/auth/refresh` exchanges the opaque refresh token for a new account session. All three responses must include an access token, refresh token, their expiries, `tokenType: Bearer`, a positive TTL, and `use: driver_account`.
+
+`src/domain/routeAccess/routeAccess.ts` exports `createRouteAccessApiClient({ baseUrl, fetchImpl })`, which posts only after account authentication:
 
 ```http
 POST /driver/route-access/lookup
+Authorization: Bearer <server-issued account JWT>
 Content-Type: application/json
 ```
 
 ```json
 {
-  "phoneE164": "+14165550123",
   "routeContext": null
 }
 ```
 
-The expected phone-first success response is `ROUTES_FOUND`; `routes` may be empty when the phone is registered but no active route is assigned:
+The expected account-authenticated success response is `ROUTES_FOUND`; `routes` may be empty when the account has no active assignment:
 
 ```json
 {
@@ -69,7 +94,7 @@ The expected phone-first success response is `ROUTES_FOUND`; `routes` may be emp
           "driverInstructions": ["Bring insulated bag"]
         },
         "driverAccess": {
-          "accessToken": "<server-issued-driver-jwt>",
+          "accessToken": "<server-issued-route-driver-jwt>",
           "tokenType": "Bearer",
           "expiresAt": "2026-05-12T06:55:00.000Z",
           "ttlSeconds": 900,
@@ -84,7 +109,7 @@ The expected phone-first success response is `ROUTES_FOUND`; `routes` may be emp
 
 Each non-empty route choice must include `driverAccess` token evidence (`accessToken`, `tokenType`, `expiresAt`, `ttlSeconds`, and `use`) so later consent and assigned-route clients can use the server-issued driver bearer token for that route.
 
-A legacy `INVITED` response with the same single-route fields is still accepted for backward compatibility. `MULTIPLE_MATCHES` remains a safe display-only legacy response and must not include `driverAccess`, `routePlanId`, delivery stops, customer addresses, coordinates, order data, or proof data. In the current app UX, drivers do not type external route artifacts; ambiguous legacy responses should direct the driver back to phone lookup or dispatch support.
+A legacy `INVITED` response with the same single-route fields is still accepted for backward compatibility. `MULTIPLE_MATCHES` remains a safe display-only legacy response and must not include `driverAccess`, `routePlanId`, delivery stops, customer addresses, coordinates, order data, or proof data. Ambiguous legacy responses direct the driver to the account route list or dispatch support.
 
 ## Consent API client boundary
 
@@ -101,7 +126,7 @@ Content-Type: application/json
   "routeContext": "11111111-1111-4111-8111-111111111111",
   "recordedAt": "2026-05-12T06:20:00.000Z",
   "deviceContext": { "platform": "ios" },
-  "appContext": { "appVersion": "0.1.0" },
+  "appContext": { "appVersion": "1.0.0" },
   "consents": [
     { "type": "LOCATION_INFORMATION", "version": "location-v1", "accepted": true },
     { "type": "PERSONAL_INFORMATION", "version": "privacy-v1", "accepted": true }
@@ -109,7 +134,7 @@ Content-Type: application/json
 }
 ```
 
-The app-side response boundary accepts only `CONSENT_RECORDED` evidence and never treats consent submission as an assigned route/stop read. Production phone lookup returns the server-issued driver access token, and live mode builds the consent client from that token after persisting it through native secure storage.
+The app-side response boundary accepts only `CONSENT_RECORDED` evidence and never treats consent submission as an assigned route/stop read. Production route lookup returns a route-scoped driver token, and live mode builds the consent client from that token after persisting it separately from account access.
 
 ## Assigned route API client boundary
 
@@ -195,20 +220,18 @@ For physical-device smoke runs without a deployed scanner backend, local mock mo
 
 ## Runtime API mode
 
-By default the app uses local mock services. Setting `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switches phone lookup to the live delivery-server `POST /driver/route-access/lookup` API. A successful `ROUTES_FOUND` or legacy `INVITED` lookup stores the selected route's short-lived `driverAccess` token in Expo SecureStore via `src/platform/expo/secureStore/expoSecureDriverAccessTokenStore.ts`. The app clears denied lookup sessions and clears expired or malformed persisted token payloads before reuse. Downstream live consent, assigned-route, driver-event, and proof-media API clients are built from the active route lookup token via `src/api/deliveryServer/driverApiClients.ts`.
+By default the app uses local mock services. Setting `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switches account login/registration/refresh and route lookup to the live delivery server. SecureStore schema v4 keeps required account access separate from optional selected-route access and invalidates legacy phone-only payloads. PINs and invitation codes are never persisted.
 
-If a live downstream consent, assigned-route, driver-event, proof-media upload, or offline retry call returns `401`, the app classifies the token as expired driver access. It shows phone re-lookup guidance, clears the secure token, stops/clears active route UI state, and leaves retryable event/proof submissions in the non-secret offline queue so they can be retried after the driver obtains a fresh route-scoped token.
-
-The persisted payload stores only the driver token and route access identifiers required for downstream consent/assigned-route calls. It does not change the server-owned token TTL, refresh policy, tenant boundary, or route/stop authorization checks.
+When a downstream consent, assigned-route, driver-event, proof-media, or offline retry request returns `401`, the app refreshes the account session if necessary, performs account-authenticated route lookup, and retries once with the new route token. If account refresh or account-authenticated lookup is unauthorized, the app clears the account session and returns to phone + PIN login. Authoritative empty/deleted assignment results clear route access while keeping the account signed in.
 
 ## Follow-up
 
-- Country-aware phone entry now uses the supported-country i18n catalog in `src/domain/phone/phoneEntry.ts`: country labels include localized country name, ISO, calling code, and language; search covers name/native name/ISO/calling code/locale/language; national input is normalized to E.164 before route access. The remaining slice from `docs/phone-verification-plan.md` is server-owned SMS OTP verification/cost controls and per-country SMS compliance/rate-limit policy.
-- Define release environment profiles and any server-issued token refresh, OTP, managed identity, or stronger re-auth UX beyond the current phone re-lookup recovery for short-lived token expiry.
+- Country-aware phone entry normalizes national input to the server-owned E.164 account identity. The remaining SMS slice is optional server-owned OTP registration/recovery with provider cost, compliance, fraud, and rate-limit controls.
+- Define forgotten-PIN recovery and owner-approved SMS OTP onboarding before allowing registration without a Shopify invitation.
 - Add production proof-media object storage, signed access, scanner backend deployment/private evidence storage, and deployed cleanup/scheduler evidence. The delivery server already exposes a scan rejection hook and a local/manual cleanup runner via `npm run driver:proof-media:cleanup`.
 - Add physical-device background tracking smoke evidence and production privacy disclosures for updates emitted while the app process cannot reach the live delivery server. Expo SDK 54 requires foreground permission before background permission and native background configuration for real background tracking.
 ## Driver API cache and cookie policy
 
-Driver API calls are bearer-token based and must not rely on ambient browser or WebView cookies. The app request helper applies `credentials: 'omit'`, `cache: 'no-store'`, `Cache-Control: no-store`, and `Pragma: no-cache` to live delivery-server fetches for route lookup, consent, assigned-route reads, driver events, and proof-media upload. This keeps the native app session boundary tied to the short-lived driver token in SecureStore and avoids stale route/proof responses being reused by an intermediate cache.
+Driver API calls are bearer-token based and must not rely on ambient browser or WebView cookies. The app request helper applies `credentials: 'omit'`, `cache: 'no-store'`, `Cache-Control: no-store`, and `Pragma: no-cache` to live account-auth, route lookup, consent, assigned-route, event, and proof-media requests. This keeps the native session tied to server-issued account and route tokens and avoids stale route/proof responses being reused by an intermediate cache.
 
-AsyncStorage remains limited to non-secret offline retry metadata and local file URI references. Driver access tokens stay in SecureStore and are cleared on expiry, malformed payload, downstream `401`, denied lookup, and explicit driver session reset.
+AsyncStorage remains limited to non-secret offline retry metadata and local file URI references. Account and route access stay in SecureStore; the app clears only route cache for deleted assignments and clears the whole account on expired refresh, malformed payload, unauthorized account access, or explicit session reset.

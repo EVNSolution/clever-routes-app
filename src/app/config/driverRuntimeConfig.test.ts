@@ -9,8 +9,8 @@ describe('driver runtime API config', () => {
     const services = createDriverRuntimeServices({ config });
 
     const result = await services.routeAccessService.lookupRouteAccess({
+      accountAccessToken: 'account-access-token',
       routeContext: 'route-context',
-      phoneE164: '+14165550123',
     });
 
     assert.equal(config.mode, 'mock');
@@ -31,15 +31,15 @@ describe('driver runtime API config', () => {
     });
 
     const result = await services.routeAccessService.lookupRouteAccess({
+      accountAccessToken: 'account-access-token',
       routeContext: 'route-context',
-      phoneE164: '+14165550123',
     });
 
     assert.equal(config.mode, 'live');
     assert.deepEqual(result, { status: 'NOT_FOUND' });
     assert.deepEqual(requests, [
       {
-        body: { routeContext: 'route-context', phoneE164: '+14165550123' },
+        body: { routeContext: 'route-context' },
         method: 'POST',
         url: 'https://delivery.example.com/driver/route-access/lookup',
       },
@@ -64,6 +64,9 @@ describe('driver runtime API config', () => {
               expiresAt: '2026-05-15T00:15:00.000Z',
               refreshToken: 'refresh-token',
               refreshTokenExpiresAt: '2026-06-15T00:00:00.000Z',
+              tokenType: 'Bearer',
+              ttlSeconds: 900,
+              use: 'driver_account',
             },
             error: null,
           }),
@@ -71,17 +74,17 @@ describe('driver runtime API config', () => {
       },
     });
 
-    const result = await services.driverAuthService.verifyCode({
+    const result = await services.driverAuthService.register({
       inviteCode: 'ABC123',
       phoneE164: '+14165550123',
-      displayName: 'Minji Kim',
+      pin: '654321',
     });
 
-    assert.equal(result.driverAccess.accessToken, 'access-token');
-    assert.equal(result.driverAccess.refreshToken, 'refresh-token');
+    assert.equal(result.accountAccess.accessToken, 'access-token');
+    assert.equal(result.accountAccess.refreshToken, 'refresh-token');
     assert.deepEqual(requests, [
       {
-        body: { phone: '+14165550123', inviteCode: 'ABC123', displayName: 'Minji Kim' },
+        body: { phone: '+14165550123', inviteCode: 'ABC123', pin: '654321' },
         method: 'POST',
         url: 'https://delivery.example.com/driver/auth/verify-invite',
       },

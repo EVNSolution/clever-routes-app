@@ -2,6 +2,7 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import {
+  formatStopArrivalNotificationContent,
   parseStopArrivalNotificationData,
   type StopArrivalNotificationService,
 } from '../../../domain/notifications/stopArrivalNotifications';
@@ -60,18 +61,20 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
         };
       }
     },
-    scheduleStopArrivalNotification: async ({ data, distanceMeters, radiusMeters, stop }) => {
+    scheduleStopArrivalNotification: async (candidate) => {
       await ensureStopArrivalNotificationChannel();
+      const content = formatStopArrivalNotificationContent(candidate);
       await Notifications.scheduleNotificationAsync({
         content: {
-          body: `You are within ${Math.round(radiusMeters)}m of Stop ${stop.sequence}. Tap to add proof photo and delivery notes.`,
-          data,
+          body: content.body,
+          data: candidate.data,
           sound: true,
-          title: `Arrived near Stop ${stop.sequence}`,
+          title: content.title,
         },
         trigger: null,
       });
-      void distanceMeters;
+      void candidate.distanceMeters;
+      void candidate.radiusMeters;
     },
   };
 }

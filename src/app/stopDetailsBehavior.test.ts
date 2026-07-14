@@ -27,6 +27,8 @@ describe('stop details simplification', () => {
 
     assert.match(componentSource, /formatStopStreetAddress\(stop\)/u);
     assert.match(componentSource, /StatusChip label=\{payment\.label\} tone=\{payment\.tone\}/u);
+    assert.match(componentSource, /Items to drop/u);
+    assert.match(componentSource, /formatAssignedRouteItemLine\(item\)/u);
     assert.match(componentSource, /No delivery instructions provided\./u);
     assert.match(componentSource, /No location tips provided\./u);
     assert.match(componentSource, /label="Open Stop Map"/u);

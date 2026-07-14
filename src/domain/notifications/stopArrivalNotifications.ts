@@ -1,4 +1,9 @@
-import type { AssignedRoute, AssignedRouteCoordinates, AssignedRouteStop } from '../route/assignedRoute';
+import {
+  formatAssignedRouteItemLine,
+  type AssignedRoute,
+  type AssignedRouteCoordinates,
+  type AssignedRouteStop,
+} from '../route/assignedRoute';
 
 export const STOP_ARRIVAL_NOTIFICATION_TYPE = 'stop_arrival';
 export const DEFAULT_STOP_ARRIVAL_RADIUS_METERS = 50;
@@ -14,6 +19,11 @@ export type StopArrivalNotificationCandidate = {
   distanceMeters: number;
   radiusMeters: number;
   stop: AssignedRouteStop;
+};
+
+export type StopArrivalNotificationContent = {
+  body: string;
+  title: string;
 };
 
 export type StopArrivalLocation = {
@@ -101,6 +111,17 @@ export function parseStopArrivalNotificationData(data: Record<string, unknown> |
   };
 }
 
+export function formatStopArrivalNotificationContent(candidate: StopArrivalNotificationCandidate): StopArrivalNotificationContent {
+  const itemLines = candidate.stop.items.map(formatAssignedRouteItemLine);
+  return {
+    body: [
+      `You have arrived near the destination: ${formatStopArrivalAddress(candidate.stop)}.`,
+      ...itemLines,
+    ].join('\n'),
+    title: `Arrived near Stop ${candidate.stop.sequence}`,
+  };
+}
+
 function resolveStopCoordinates(route: AssignedRoute, stop: AssignedRouteStop): AssignedRouteCoordinates | null {
   if (stop.coordinates !== null) {
     return stop.coordinates;
@@ -113,6 +134,19 @@ function resolveStopCoordinates(route: AssignedRoute, stop: AssignedRouteStop): 
   }
 
   return null;
+}
+
+function formatStopArrivalAddress(stop: AssignedRouteStop): string {
+  return [
+    stop.address.address1,
+    stop.address.address2,
+    stop.address.city,
+    stop.address.province,
+    stop.address.postalCode,
+  ]
+    .map((part) => part?.trim() ?? '')
+    .filter(Boolean)
+    .join(', ');
 }
 
 function getDistanceMeters(a: StopArrivalLocation, b: StopArrivalLocation): number {

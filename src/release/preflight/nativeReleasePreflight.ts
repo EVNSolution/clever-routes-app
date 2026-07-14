@@ -106,8 +106,8 @@ function checkExpoIdentity(appConfig: NativeReleasePreflightInput['appConfig']):
   if (expo.scheme !== 'clever-driver') {
     return fail('expo.identity', 'Expo URL scheme must be clever-driver.');
   }
-  if (expo.version !== '0.1.0') {
-    return fail('expo.identity', 'Expo app version must be 0.1.0 until owner-approved release versioning changes.');
+  if (expo.version !== '1.0.0') {
+    return fail('expo.identity', 'Expo app version must match the approved 1.0.0 release baseline.');
   }
   if (expo.ios?.bundleIdentifier !== 'com.evns.cleverdriverapp') {
     return fail('expo.identity', 'iOS bundleIdentifier must be com.evns.cleverdriverapp.');

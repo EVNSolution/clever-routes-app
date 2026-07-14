@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import { sampleAssignedRoute } from '../route/assignedRoute';
 import {
+  formatStopArrivalNotificationContent,
   getStopArrivalNotificationCandidate,
   parseStopArrivalNotificationData,
   STOP_ARRIVAL_NOTIFICATION_TYPE,
@@ -27,6 +28,10 @@ describe('stop arrival notifications', () => {
     assert.equal(candidate?.data.routePlanId, sampleAssignedRoute.id);
     assert.equal(candidate?.data.deliveryStopId, firstStop.deliveryStopId);
     assert.equal(candidate?.stop.deliveryStopId, firstStop.deliveryStopId);
+    assert.deepEqual(candidate === null ? null : formatStopArrivalNotificationContent(candidate), {
+      body: 'You have arrived near the destination: 100 King St W, Toronto, ON, M5X 1A9.\nTomato box (Size: Large): 2',
+      title: 'Arrived near Stop 1',
+    });
   });
 
   it('does not notify for company pickup, completed stops, repeated stops, or distant stops', () => {

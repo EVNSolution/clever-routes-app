@@ -6,6 +6,7 @@ export const DEFAULT_DRIVER_MAP_STYLE_URL = 'https://tiles.openfreemap.org/style
 
 export type RouteDepotFeature = Feature<Point, { kind: 'depot'; label: 'D'; sequence: 0 }>;
 export type RouteLineFeature = Feature<LineString, { kind: 'route' }>;
+export type RouteProgressLineFeature = Feature<LineString, { kind: 'route_progress' }>;
 export type RouteStopFeature = Feature<Point, { kind: 'stop'; label: string; sequence: number }>;
 export type RouteStopFeatureCollection = FeatureCollection<Point, RouteStopFeature['properties']>;
 
@@ -26,7 +27,7 @@ export function readDriverMapStyleUrl(value: string | null | undefined): string 
 }
 
 export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel | null {
-  const routeCoordinates = route.routeGeometry?.coordinates.filter(isRenderableLngLat) ?? [];
+  const routeCoordinates = normalizeRouteCoordinates(route.routeGeometry?.coordinates ?? []);
   if (routeCoordinates.length < 2) {
     return null;
   }
@@ -107,8 +108,61 @@ export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel
   };
 }
 
+export function buildRouteProgressFeature(model: RouteMapGeoJsonModel, targetStopSequence: number | null): RouteProgressLineFeature | null {
+  if (model.routeFeature === null || targetStopSequence === null) {
+    return null;
+  }
+
+  const targetStop = model.stopCollection.features.find((feature) => feature.properties.sequence === targetStopSequence) ?? null;
+  if (targetStop === null) {
+    return null;
+  }
+
+  const routeCoordinates = model.routeFeature.geometry.coordinates as AssignedRouteLngLat[];
+  const targetCoordinate = targetStop.geometry.coordinates as AssignedRouteLngLat;
+  const targetRouteIndex = findNearestRouteCoordinateIndex(routeCoordinates, targetCoordinate);
+  if (targetRouteIndex < 1) {
+    return null;
+  }
+
+  const progressCoordinates = routeCoordinates.slice(0, targetRouteIndex + 1);
+  const lastProgressCoordinate = progressCoordinates[progressCoordinates.length - 1];
+  if (lastProgressCoordinate !== undefined && !sameLngLat(lastProgressCoordinate, targetCoordinate)) {
+    progressCoordinates.push(targetCoordinate);
+  }
+
+  return {
+    type: 'Feature',
+    geometry: {
+      type: 'LineString',
+      coordinates: progressCoordinates,
+    },
+    properties: {
+      kind: 'route_progress',
+    },
+  };
+}
+
 function hasRoadFollowingGeometry(routeCoordinates: AssignedRouteLngLat[], stopCount: number): boolean {
   return routeCoordinates.length > stopCount + 1;
+}
+
+function normalizeRouteCoordinates(coordinates: unknown[]): AssignedRouteLngLat[] {
+  const normalized: AssignedRouteLngLat[] = [];
+  for (const coordinate of coordinates) {
+    if (!isRenderableLngLat(coordinate)) {
+      continue;
+    }
+
+    const previous = normalized[normalized.length - 1];
+    if (previous !== undefined && previous[0] === coordinate[0] && previous[1] === coordinate[1]) {
+      continue;
+    }
+
+    normalized.push(coordinate);
+  }
+
+  return normalized;
 }
 
 function readStopLngLat(coordinates: AssignedRoute['stops'][number]['coordinates']): AssignedRouteLngLat | null {
@@ -153,6 +207,27 @@ function calculateBounds(coordinates: AssignedRouteLngLat[]): RouteMapGeoJsonMod
   }
 
   return [west, south, east, north];
+}
+
+function findNearestRouteCoordinateIndex(routeCoordinates: AssignedRouteLngLat[], targetCoordinate: AssignedRouteLngLat): number {
+  let nearestIndex = -1;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  routeCoordinates.forEach((coordinate, index) => {
+    const longitudeDelta = coordinate[0] - targetCoordinate[0];
+    const latitudeDelta = coordinate[1] - targetCoordinate[1];
+    const distance = longitudeDelta * longitudeDelta + latitudeDelta * latitudeDelta;
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  });
+
+  return nearestIndex;
+}
+
+function sameLngLat(left: AssignedRouteLngLat, right: AssignedRouteLngLat): boolean {
+  return left[0] === right[0] && left[1] === right[1];
 }
 
 function isRenderableLngLat(value: unknown): value is AssignedRouteLngLat {

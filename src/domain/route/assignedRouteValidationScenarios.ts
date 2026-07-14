@@ -198,6 +198,16 @@ function validationStop(input: {
       longitude: input.longitude,
     },
     deliveryStopId: input.deliveryStopId,
+    items: [
+      {
+        name: 'Validation tomato box',
+        options: [{ key: 'Scenario', value: input.orderName }],
+        productId: 9001,
+        quantity: 1,
+        sku: null,
+        variationId: 0,
+      },
+    ],
     normalizedPaymentStatus: input.normalizedPaymentStatus ?? 'PAID_CONFIRMED',
     orderName: input.orderName,
     phone: '+14165550100',

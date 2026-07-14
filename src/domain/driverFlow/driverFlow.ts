@@ -12,18 +12,6 @@ export const DRIVER_FLOW_STATES = [
 
 export type DriverFlowState = (typeof DRIVER_FLOW_STATES)[number];
 
-export type InitialAccessValidationInput = {
-  routeContext?: string | null;
-  phoneE164: string;
-};
-
-export type InitialAccessValidationResult =
-  | { ok: true }
-  | {
-      ok: false;
-      reason: 'phone_required' | 'phone_invalid';
-    };
-
 export type DeliveryActiveGuardInput = {
   state: DriverFlowState;
   hasLocationPermission: boolean;
@@ -65,22 +53,6 @@ const ROUTE_REVEAL_STATES = new Set<DriverFlowState>([
   'delivery_finished',
 ]);
 
-const E164_PHONE_PATTERN = /^\+[1-9]\d{7,14}$/;
-
-export function getInitialAccessValidation({
-  phoneE164,
-}: InitialAccessValidationInput): InitialAccessValidationResult {
-  if (phoneE164.trim().length === 0) {
-    return { ok: false, reason: 'phone_required' };
-  }
-
-  if (!E164_PHONE_PATTERN.test(phoneE164.trim())) {
-    return { ok: false, reason: 'phone_invalid' };
-  }
-
-  return { ok: true };
-}
-
 export function canRevealRouteDetails(state: DriverFlowState): boolean {
   return ROUTE_REVEAL_STATES.has(state);
 }
@@ -98,7 +70,7 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
       id: 'login',
       title: 'Login / Driver Verification',
       purpose:
-        'Confirm the driver by phone, then collect name and required consent.',
+        'Authenticate by phone and PIN, then collect required consent.',
       primaryAction: 'Continue',
     },
     {
@@ -173,8 +145,8 @@ export function getMvpRouteTabs(): MvpRouteTab[] {
 export function getStopCompletionProofFields(): StopCompletionProofField[] {
   return [
     { id: 'photo', label: 'Photo Proof', required: true },
-    { id: 'todayNote', label: 'Delivery Notes', required: false },
+    { id: 'todayNote', label: 'Delivery Result', required: false },
     { id: 'locationTip', label: 'Location Tip', required: false },
-    { id: 'additionalNotes', label: 'Additional Notes', required: false },
+    { id: 'additionalNotes', label: 'Other Notes', required: false },
   ];
 }

@@ -1,3 +1,4 @@
+import type { DriverAccountAccessToken } from '../driverAuth/driverAuth';
 import {
   isDriverAccessToken,
   type DriverAccessToken,
@@ -13,13 +14,11 @@ export type SecureTokenStorage = {
 };
 
 export type PersistedDriverAccess = {
+  accountAccess: DriverAccountAccessToken;
   activeRouteSession?: PersistedActiveRouteSession;
-  driverAccess: DriverAccessToken;
-  driverProfile?: PersistedDriverProfile;
-  routeAccess?: Extract<
-    RouteAccessLookupResult,
-    { status: 'INVITED' }
-  >['routeAccess'];
+  driverAccess?: DriverAccessToken;
+  driverProfile: PersistedDriverProfile;
+  routeAccess?: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess'];
 };
 
 export type PersistedActiveRouteSession = {
@@ -30,42 +29,37 @@ export type PersistedActiveRouteSession = {
 };
 
 export type PersistedDriverProfile = {
-  displayName: string;
   phoneE164: string;
 };
 
 export type DriverAccessRestoreResult =
   | ({ kind: 'active' } & PersistedDriverAccess)
   | ({ kind: 'refresh_required' } & PersistedDriverAccess)
-  | {
-      driverProfile?: PersistedDriverProfile;
-      isReturningDriver: boolean;
-      kind: 'expired';
-      routeAccess?: PersistedDriverAccess['routeAccess'];
-    }
+  | { driverProfile?: PersistedDriverProfile; kind: 'expired' }
   | { kind: 'invalid' | 'missing' };
 
 type StoredDriverAccessPayload = PersistedDriverAccess & {
-  schemaVersion: 1 | 2 | 3;
+  schemaVersion: 4;
   savedAt: string;
 };
 
 export type DriverAccessTokenStore = {
   clear(): Promise<void>;
   clearActiveRouteSession(): Promise<void>;
+  clearCachedRouteAccess(): Promise<void>;
   loadActiveDriverAccess(): Promise<DriverAccessRestoreResult>;
   saveActiveRouteSession(input: {
     navigationStepIndex: number;
     routePlanId: string;
   }): Promise<void>;
+  saveAuthenticatedDriver(input: {
+    accountAccess: DriverAccountAccessToken;
+    phoneE164: string;
+  }): Promise<void>;
   saveFromInvitedRouteAccess(
     routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>,
   ): Promise<void>;
-  saveVerifiedDriver(input: {
-    displayName: string;
-    driverAccess: DriverAccessToken;
-    phoneE164: string;
-  }): Promise<void>;
+  saveRefreshedAccountAccess(accountAccess: DriverAccountAccessToken): Promise<void>;
 };
 
 export function createDriverAccessTokenStore(input: {
@@ -76,6 +70,11 @@ export function createDriverAccessTokenStore(input: {
 
   async function clear(): Promise<void> {
     await input.storage.deleteItemAsync(DRIVER_ACCESS_TOKEN_STORAGE_KEY);
+  }
+
+  async function loadStoredPayload(): Promise<StoredDriverAccessPayload | null> {
+    const rawPayload = await input.storage.getItemAsync(DRIVER_ACCESS_TOKEN_STORAGE_KEY);
+    return rawPayload === null ? null : parseStoredDriverAccessPayload(rawPayload);
   }
 
   async function updateStoredPayload(
@@ -92,31 +91,27 @@ export function createDriverAccessTokenStore(input: {
     );
   }
 
-  async function loadStoredPayload(): Promise<StoredDriverAccessPayload | null> {
-    const rawPayload = await input.storage.getItemAsync(
-      DRIVER_ACCESS_TOKEN_STORAGE_KEY,
-    );
-    return rawPayload === null
-      ? null
-      : parseStoredDriverAccessPayload(rawPayload);
-  }
-
   return {
     clear,
     clearActiveRouteSession: async () => {
       await updateStoredPayload((payload) => {
         const { activeRouteSession: _activeRouteSession, ...rest } = payload;
-        return {
-          ...rest,
-          schemaVersion: 3,
-          savedAt: now().toISOString(),
-        };
+        return { ...rest, savedAt: now().toISOString() };
+      });
+    },
+    clearCachedRouteAccess: async () => {
+      await updateStoredPayload((payload) => {
+        const {
+          activeRouteSession: _activeRouteSession,
+          driverAccess: _driverAccess,
+          routeAccess: _routeAccess,
+          ...rest
+        } = payload;
+        return { ...rest, savedAt: now().toISOString() };
       });
     },
     loadActiveDriverAccess: async () => {
-      const rawPayload = await input.storage.getItemAsync(
-        DRIVER_ACCESS_TOKEN_STORAGE_KEY,
-      );
+      const rawPayload = await input.storage.getItemAsync(DRIVER_ACCESS_TOKEN_STORAGE_KEY);
       if (rawPayload === null) {
         return { kind: 'missing' };
       }
@@ -127,53 +122,40 @@ export function createDriverAccessTokenStore(input: {
         return { kind: 'invalid' };
       }
 
-      if (isDriverAccessExpired(payload.driverAccess, now())) {
-        if (isDriverRefreshTokenValid(payload.driverAccess, now())) {
+      if (isDriverAccessExpired(payload.accountAccess, now())) {
+        if (isDriverRefreshTokenValid(payload.accountAccess, now())) {
           return buildDriverAccessRestoreResult('refresh_required', payload);
         }
+
         await clear();
-        return {
-          kind: 'expired',
-          isReturningDriver: true,
-          ...optionalDriverProfile(payload.driverProfile),
-          ...optionalRouteAccess(payload.routeAccess),
-        };
+        return { kind: 'expired', driverProfile: payload.driverProfile };
       }
 
       return buildDriverAccessRestoreResult('active', payload);
     },
     saveActiveRouteSession: async (activeRouteSession) => {
-      const safeNavigationStepIndex =
-        Number.isInteger(activeRouteSession.navigationStepIndex) &&
+      const navigationStepIndex = Number.isInteger(activeRouteSession.navigationStepIndex) &&
         activeRouteSession.navigationStepIndex >= 0
-          ? activeRouteSession.navigationStepIndex
-          : 0;
+        ? activeRouteSession.navigationStepIndex
+        : 0;
 
       await updateStoredPayload((payload) => ({
         ...payload,
-        schemaVersion: 3,
         savedAt: now().toISOString(),
         activeRouteSession: {
-          navigationStepIndex: safeNavigationStepIndex,
+          navigationStepIndex,
           routePlanId: activeRouteSession.routePlanId,
           status: 'active',
           updatedAt: now().toISOString(),
         },
       }));
     },
-    saveFromInvitedRouteAccess: async (routeAccess) => {
-      const storedPayload = await loadStoredPayload();
+    saveAuthenticatedDriver: async (driver) => {
       const payload: StoredDriverAccessPayload = {
-        schemaVersion: 3,
+        accountAccess: driver.accountAccess,
+        driverProfile: { phoneE164: driver.phoneE164.trim() },
         savedAt: now().toISOString(),
-        driverAccess: mergeRefreshTokenFromStoredAccess(
-          routeAccess.driverAccess,
-          storedPayload?.driverAccess,
-          now(),
-        ),
-        ...optionalDriverProfile(storedPayload?.driverProfile),
-        ...optionalActiveRouteSession(storedPayload?.activeRouteSession),
-        routeAccess: routeAccess.routeAccess,
+        schemaVersion: 4,
       };
 
       await input.storage.setItemAsync(
@@ -181,27 +163,26 @@ export function createDriverAccessTokenStore(input: {
         JSON.stringify(payload),
       );
     },
-    saveVerifiedDriver: async (driver) => {
-      const payload: StoredDriverAccessPayload = {
-        schemaVersion: 3,
+    saveFromInvitedRouteAccess: async (routeAccess) => {
+      await updateStoredPayload((payload) => ({
+        ...payload,
+        driverAccess: routeAccess.driverAccess,
+        routeAccess: routeAccess.routeAccess,
         savedAt: now().toISOString(),
-        driverAccess: driver.driverAccess,
-        driverProfile: {
-          displayName: driver.displayName.trim(),
-          phoneE164: driver.phoneE164.trim(),
-        },
-      };
-
-      await input.storage.setItemAsync(
-        DRIVER_ACCESS_TOKEN_STORAGE_KEY,
-        JSON.stringify(payload),
-      );
+      }));
+    },
+    saveRefreshedAccountAccess: async (accountAccess) => {
+      await updateStoredPayload((payload) => ({
+        ...payload,
+        accountAccess,
+        savedAt: now().toISOString(),
+      }));
     },
   };
 }
 
 export function isDriverAccessExpired(
-  driverAccess: DriverAccessToken,
+  driverAccess: Pick<DriverAccessToken | DriverAccountAccessToken, 'expiresAt'>,
   now: Date,
 ): boolean {
   const expiresAtMs = Date.parse(driverAccess.expiresAt);
@@ -209,26 +190,17 @@ export function isDriverAccessExpired(
 }
 
 export function isDriverRefreshTokenValid(
-  driverAccess: DriverAccessToken,
+  accountAccess: Pick<DriverAccountAccessToken, 'refreshToken' | 'refreshTokenExpiresAt'>,
   now: Date,
 ): boolean {
-  if (!driverAccess.refreshToken || !driverAccess.refreshTokenExpiresAt) {
-    return false;
-  }
-  const expiresAtMs = Date.parse(driverAccess.refreshTokenExpiresAt);
+  const expiresAtMs = Date.parse(accountAccess.refreshTokenExpiresAt);
   return Number.isFinite(expiresAtMs) && expiresAtMs > now.getTime();
 }
 
-function parseStoredDriverAccessPayload(
-  rawPayload: string,
-): StoredDriverAccessPayload | null {
+function parseStoredDriverAccessPayload(rawPayload: string): StoredDriverAccessPayload | null {
   try {
     const payload: unknown = JSON.parse(rawPayload);
-    if (!isStoredDriverAccessPayload(payload)) {
-      return null;
-    }
-
-    return payload;
+    return isStoredDriverAccessPayload(payload) ? payload : null;
   } catch {
     return null;
   }
@@ -238,42 +210,47 @@ function buildDriverAccessRestoreResult(
   kind: 'active' | 'refresh_required',
   payload: StoredDriverAccessPayload,
 ): Extract<DriverAccessRestoreResult, { kind: 'active' | 'refresh_required' }> {
-  return {
-    kind,
-    driverAccess: payload.driverAccess,
-    ...optionalDriverProfile(payload.driverProfile),
-    ...optionalRouteAccess(payload.routeAccess),
-    ...optionalActiveRouteSession(payload.activeRouteSession),
-  };
+  const { savedAt: _savedAt, schemaVersion: _schemaVersion, ...access } = payload;
+  return { kind, ...access };
 }
 
-function isStoredDriverAccessPayload(
-  value: unknown,
-): value is StoredDriverAccessPayload {
+function isStoredDriverAccessPayload(value: unknown): value is StoredDriverAccessPayload {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }
 
   const payload = value as Record<string, unknown>;
-  const routeAccess = payload.routeAccess;
-  const driverProfile = payload.driverProfile;
   return (
-    (payload.schemaVersion === 1 ||
-      payload.schemaVersion === 2 ||
-      payload.schemaVersion === 3) &&
+    payload.schemaVersion === 4 &&
     typeof payload.savedAt === 'string' &&
-    isDriverAccessToken(payload.driverAccess) &&
-    (driverProfile === undefined || isPersistedDriverProfile(driverProfile)) &&
-    (driverProfile !== undefined || routeAccess !== undefined) &&
-    (routeAccess === undefined || isPersistedRouteAccess(routeAccess)) &&
-    (payload.activeRouteSession === undefined ||
-      isPersistedActiveRouteSession(payload.activeRouteSession))
+    isDriverAccountAccessToken(payload.accountAccess) &&
+    isPersistedDriverProfile(payload.driverProfile) &&
+    (payload.driverAccess === undefined || isDriverAccessToken(payload.driverAccess)) &&
+    (payload.routeAccess === undefined || isPersistedRouteAccess(payload.routeAccess)) &&
+    (payload.activeRouteSession === undefined || isPersistedActiveRouteSession(payload.activeRouteSession))
+  );
+}
+
+function isDriverAccountAccessToken(value: unknown): value is DriverAccountAccessToken {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const token = value as Record<string, unknown>;
+  return (
+    typeof token.accessToken === 'string' && token.accessToken.trim() !== '' &&
+    typeof token.expiresAt === 'string' && Number.isFinite(Date.parse(token.expiresAt)) &&
+    typeof token.refreshToken === 'string' && token.refreshToken.trim() !== '' &&
+    typeof token.refreshTokenExpiresAt === 'string' && Number.isFinite(Date.parse(token.refreshTokenExpiresAt)) &&
+    token.tokenType === 'Bearer' &&
+    typeof token.ttlSeconds === 'number' && Number.isInteger(token.ttlSeconds) && token.ttlSeconds > 0 &&
+    token.use === 'driver_account'
   );
 }
 
 function isPersistedRouteAccess(
   value: unknown,
-): value is PersistedDriverAccess['routeAccess'] {
+): value is NonNullable<PersistedDriverAccess['routeAccess']> {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -284,57 +261,16 @@ function isPersistedRouteAccess(
   );
 }
 
-function isPersistedDriverProfile(
-  value: unknown,
-): value is PersistedDriverProfile {
+function isPersistedDriverProfile(value: unknown): value is PersistedDriverProfile {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }
 
   const profile = value as Record<string, unknown>;
-  return (
-    typeof profile.displayName === 'string' &&
-    profile.displayName.trim() !== '' &&
-    typeof profile.phoneE164 === 'string' &&
-    /^\+[1-9]\d{7,14}$/u.test(profile.phoneE164.trim())
-  );
+  return typeof profile.phoneE164 === 'string' && /^\+[1-9]\d{7,14}$/u.test(profile.phoneE164.trim());
 }
 
-function mergeRefreshTokenFromStoredAccess(
-  driverAccess: DriverAccessToken,
-  storedDriverAccess: DriverAccessToken | undefined,
-  now: Date,
-): DriverAccessToken {
-  if (
-    driverAccess.refreshToken !== undefined ||
-    storedDriverAccess === undefined ||
-    !isDriverRefreshTokenValid(storedDriverAccess, now)
-  ) {
-    return driverAccess;
-  }
-
-  return {
-    ...driverAccess,
-    refreshToken: storedDriverAccess.refreshToken,
-    refreshTokenExpiresAt: storedDriverAccess.refreshTokenExpiresAt,
-  };
-}
-
-function optionalDriverProfile(
-  driverProfile: PersistedDriverProfile | undefined,
-): Pick<PersistedDriverAccess, 'driverProfile'> | Record<string, never> {
-  return driverProfile === undefined ? {} : { driverProfile };
-}
-
-function optionalRouteAccess(
-  routeAccess: PersistedDriverAccess['routeAccess'] | undefined,
-): Pick<PersistedDriverAccess, 'routeAccess'> | Record<string, never> {
-  return routeAccess === undefined ? {} : { routeAccess };
-}
-
-function isPersistedActiveRouteSession(
-  value: unknown,
-): value is PersistedActiveRouteSession {
+function isPersistedActiveRouteSession(value: unknown): value is PersistedActiveRouteSession {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }
@@ -342,17 +278,8 @@ function isPersistedActiveRouteSession(
   const session = value as Record<string, unknown>;
   return (
     session.status === 'active' &&
-    typeof session.routePlanId === 'string' &&
-    session.routePlanId.trim() !== '' &&
-    Number.isInteger(session.navigationStepIndex) &&
-    (session.navigationStepIndex as number) >= 0 &&
-    typeof session.updatedAt === 'string' &&
-    Number.isFinite(Date.parse(session.updatedAt))
+    typeof session.routePlanId === 'string' && session.routePlanId.trim() !== '' &&
+    Number.isInteger(session.navigationStepIndex) && (session.navigationStepIndex as number) >= 0 &&
+    typeof session.updatedAt === 'string' && Number.isFinite(Date.parse(session.updatedAt))
   );
-}
-
-function optionalActiveRouteSession(
-  activeRouteSession: PersistedActiveRouteSession | undefined,
-): Pick<PersistedDriverAccess, 'activeRouteSession'> | Record<string, never> {
-  return activeRouteSession === undefined ? {} : { activeRouteSession };
 }

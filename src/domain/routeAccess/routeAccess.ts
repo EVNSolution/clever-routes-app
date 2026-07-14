@@ -1,10 +1,10 @@
-import { getInitialAccessValidation, type DriverFlowState } from '../driverFlow/driverFlow';
+import type { DriverFlowState } from '../driverFlow/driverFlow';
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
 
 export type RouteAccessLookupInput = {
+  accountAccessToken: string;
   routeContext?: string | null;
-  phoneE164: string;
 };
 
 export type RouteAccessCompanyGuidance = {
@@ -71,11 +71,6 @@ export type RouteAccessService = {
 };
 
 export type RouteAccessSubmissionResult =
-  | {
-      kind: 'validation_error';
-      message: string;
-      reason: 'phone_invalid' | 'phone_required';
-    }
   | {
       kind: 'route_choices';
       flowState: Extract<DriverFlowState, 'company_context_confirmed'>;
@@ -165,7 +160,7 @@ export const sampleMultipleRouteAccess: Extract<RouteAccessLookupResult, { statu
       timezone: 'America/Toronto',
     },
   ],
-  resolutionHint: 'Use the phone-only route list or contact dispatch.',
+  resolutionHint: 'Use the account route list or contact dispatch.',
 };
 
 export const samplePhoneRouteChoices: Extract<RouteAccessLookupResult, { status: 'ROUTES_FOUND' }> = {
@@ -192,18 +187,10 @@ export async function submitRouteAccess(
   service: RouteAccessService,
 ): Promise<RouteAccessSubmissionResult> {
   const routeContext = input.routeContext?.trim() || null;
-  const phoneE164 = input.phoneE164.trim();
-  const validation = getInitialAccessValidation({ routeContext, phoneE164 });
-
-  if (!validation.ok) {
-    return {
-      kind: 'validation_error',
-      message: getRouteAccessValidationMessage(validation.reason),
-      reason: validation.reason,
-    };
-  }
-
-  const lookup = await service.lookupRouteAccess({ routeContext, phoneE164 });
+  const lookup = await service.lookupRouteAccess({
+    accountAccessToken: input.accountAccessToken.trim(),
+    routeContext,
+  });
   if (lookup.status === 'INVITED') {
     return {
       kind: 'company_guidance',
@@ -240,25 +227,14 @@ export async function submitRouteAccess(
   };
 }
 
-export function getRouteAccessValidationMessage(
-  reason: 'phone_invalid' | 'phone_required',
-): string {
-  switch (reason) {
-    case 'phone_required':
-      return 'Enter the driver phone number in E.164 format.';
-    case 'phone_invalid':
-      return 'Use E.164 phone format, for example +14165550123.';
-  }
-}
-
 export function getRouteAccessMultipleMatchesMessage(): string {
-  return 'Multiple route assignments matched. Use the phone-only route list or contact dispatch.';
+  return 'Multiple route assignments matched. Use the account route list or contact dispatch.';
 }
 
 export function getRouteAccessDeniedMessage(status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND'): string {
   switch (status) {
     case 'NOT_FOUND':
-      return 'No active route is assigned to this phone number. Check the phone number or contact dispatch.';
+      return 'No active route is assigned to this account. Contact dispatch if you expected an assignment.';
     case 'DISABLED':
       return 'This driver profile is inactive. Contact dispatch before continuing.';
     case 'BLOCKED':
@@ -290,10 +266,12 @@ export function createRouteAccessApiClient(input: {
     lookupRouteAccess: async (request) => {
       const response = await fetchImpl(`${baseUrl}/driver/route-access/lookup`, withNoStoreDriverApiRequest({
         body: JSON.stringify({
-          phoneE164: request.phoneE164,
           routeContext: request.routeContext?.trim() || null,
         }),
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${request.accountAccessToken.trim()}`,
+          'Content-Type': 'application/json',
+        },
         method: 'POST',
       }));
       const payload = await response.json();

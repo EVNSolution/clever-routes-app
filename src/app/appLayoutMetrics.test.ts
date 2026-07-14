@@ -5,29 +5,30 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import {
-  ANDROID_SYSTEM_BOTTOM_CLEARANCE,
-  APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE,
-  APP_CONTENT_BOTTOM_CLEARANCE,
   BOTTOM_NAV_MIN_HEIGHT,
+  getBottomChromeOffset,
+  getBottomChromePadding,
+  getBottomTabPadding,
+  getScrollContentBottomPadding,
 } from './appLayoutMetrics';
 
 describe('app layout metrics', () => {
-  it('keeps scroll content clear of the bottom navigation on Android', () => {
+  it('uses the real native bottom inset with a small fallback', () => {
+    assert.equal(getBottomChromePadding(0), 8);
+    assert.equal(getBottomChromePadding(47.2), 48);
+    assert.equal(getBottomChromeOffset(47.2, 58), 106);
+    assert.equal(getBottomTabPadding(), 8);
+  });
+
+  it('keeps scroll content clear of bottom tabs plus native system chrome', () => {
     assert.equal(BOTTOM_NAV_MIN_HEIGHT, 62);
-    assert.equal(ANDROID_SYSTEM_BOTTOM_CLEARANCE, 0);
-    assert.equal(APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE, 56);
-    assert.ok(APP_CONTENT_BOTTOM_CLEARANCE > BOTTOM_NAV_MIN_HEIGHT + ANDROID_SYSTEM_BOTTOM_CLEARANCE);
+    assert.equal(getScrollContentBottomPadding(48), 142);
   });
 
-  it('keeps Android bottom tabs close to the system navigation bar', () => {
+  it('keeps bottom tabs stable instead of following variant-specific safe area insets', () => {
     const appSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx'), 'utf8');
 
-    assert.match(appSource, /bottomNavArea:[\s\S]*paddingBottom: Platform\.OS === 'android' \? ANDROID_SYSTEM_BOTTOM_CLEARANCE : 8/u);
-  });
-
-  it('keeps app-owned bottom sheets above the Android system navigation area', () => {
-    const appSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx'), 'utf8');
-
-    assert.match(appSource, /photoActionSheetCard:[\s\S]*paddingBottom: Platform\.OS === 'android' \? APP_OWNED_BOTTOM_CHROME_ANDROID_CLEARANCE \+ 8 : 12/u);
+    assert.match(appSource, /useSafeAreaInsets\(\)/u);
+    assert.match(appSource, /getBottomTabPadding\(\)/u);
   });
 });

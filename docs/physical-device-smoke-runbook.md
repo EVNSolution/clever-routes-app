@@ -70,7 +70,8 @@ Use synthetic route, stop, proof, and signature data unless production validatio
 | Step | Expected evidence | Stop condition |
 | --- | --- | --- |
 | Fresh install and launch | App opens with version/build identifier recorded. | App cannot launch or crashes before route lookup. |
-| E.164 phone lookup | Company guidance appears before any stop/customer data. | Route data appears before company guidance or consent. |
+| E.164 phone + PIN login | Existing account signs in without another invitation code; no company/route data appears before account authentication. | Phone alone reveals company, route, stop, or customer data. |
+| First invitation registration | An administrator-created invitation code plus matching six-digit PIN/confirmation creates the account without asking for a driver name. | The app attempts to create/request a Shopify invitation, persists the PIN/invitation, or accepts mismatched PINs. |
 | Multi-company guidance | Shop/company name, route name/date, timezone, pickup guidance, and support contact match the test assignment. | Wrong tenant/company guidance appears. |
 | Consent gate | Required location-information and personal-information consent can be recorded; failure/retry state is visible if simulated. | Assigned route appears before consent success. |
 | Assigned route and stop list | Route summary and ordered stop cards match synthetic route data. | Wrong route, wrong date/timezone, or another driver's stop appears. |
@@ -82,7 +83,8 @@ Use synthetic route, stop, proof, and signature data unless production validatio
 | Offline retry/discard | Network loss queues driver events/proof media; retry syncs or discards according to policy; app restart hydrates queue count. | Queue loses pending evidence unexpectedly or stores driver access tokens. |
 | Delivery finish cleanup | Finish stops continuous tracking, records or queues `ROUTE_COMPLETED`, and only clears route-scoped queue items after recorded completion. | Tracking continues after finish or queued completion evidence is discarded after failed record. |
 | Driver session reset | Reset stops tracking, clears SecureStore driver access, clears queued retry state, blanks lookup inputs, and returns to safe lookup state. | Secure token or queued retry state remains after reset. |
-| Token expiry/invalid token recovery | Expired or malformed persisted token is cleared before reuse; live downstream `401` from consent, assigned route, event, proof media, or offline retry clears the active token, stops/clears active route UI state, and requires phone lookup again. | Expired token can still access downstream route/event/proof APIs or retry loops without re-lookup guidance. |
+| Token expiry/invalid token recovery | Expired route access triggers account refresh plus route lookup and one retry; expired account refresh clears authentication and requires phone + PIN login. | Account and route tokens are confused, or expired credentials continue to access downstream APIs. |
+| Deleted/unassigned route refresh | Removing an assignment server-side makes the route disappear after refresh while the account remains signed in. | Deleted routes remain actionable or a transient network failure incorrectly signs the account out. |
 
 ## Evidence notes
 

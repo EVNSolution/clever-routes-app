@@ -1,17 +1,33 @@
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
-import { type DriverAccessToken } from '../routeAccess/routeAccess';
 
-export type VerifyDriverAuthCodeInput = {
-  displayName: string;
+export type DriverAccountAccessToken = {
+  accessToken: string;
+  expiresAt: string;
+  refreshToken: string;
+  refreshTokenExpiresAt: string;
+  tokenType: 'Bearer';
+  ttlSeconds: number;
+  use: 'driver_account';
+};
+
+export type LoginDriverAccountInput = {
   phoneE164: string;
+  pin: string;
+};
+
+export type RegisterDriverAccountInput = LoginDriverAccountInput & {
   inviteCode: string;
 };
 
+export type RefreshDriverAuthSessionInput = {
+  refreshToken: string;
+};
+
 export type DriverAuthService = {
-  verifyCode(input: VerifyDriverAuthCodeInput): Promise<{
-    driverAccess: DriverAccessToken;
-  }>;
+  login(input: LoginDriverAccountInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
+  refreshSession(input: RefreshDriverAuthSessionInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
+  register(input: RegisterDriverAccountInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
 };
 
 export type FetchLike = (
@@ -36,54 +52,53 @@ export function createDriverAuthApiClient(input: {
   const baseUrl = input.baseUrl.replace(/\/$/u, '');
   const fetchImpl = input.fetchImpl ?? globalThis.fetch;
 
-  return {
-    verifyCode: async (request) => {
-      const response = await fetchImpl(`${baseUrl}/driver/auth/verify-invite`, withNoStoreDriverApiRequest({
-        body: JSON.stringify({
-          phone: request.phoneE164,
-          inviteCode: request.inviteCode,
-          displayName: request.displayName.trim(),
-        }),
-        headers: { 'Content-Type': 'application/json' },
-        method: 'POST',
-      }));
-      const payload = await response.json();
-      if (!response.ok) {
-        throw createDriverApiHttpError({ endpoint: 'Verify Auth Code', status: response.status });
-      }
-
-      const data = readDriverAuthEnvelope(payload);
-      return {
-        driverAccess: {
-          accessToken: data.accessToken,
-          expiresAt: data.expiresAt,
-          tokenType: 'Bearer',
-          ttlSeconds: 900,
-          use: 'consent_and_assigned_route',
-          refreshToken: data.refreshToken,
-          refreshTokenExpiresAt: data.refreshTokenExpiresAt,
-        }
-      };
+  async function postAuth(endpoint: string, body: Record<string, string>, label: string) {
+    const response = await fetchImpl(`${baseUrl}${endpoint}`, withNoStoreDriverApiRequest({
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    }));
+    const payload = await response.json();
+    if (!response.ok) {
+      throw createDriverApiHttpError({ endpoint: label, status: response.status });
     }
+
+    return { accountAccess: readDriverAuthEnvelope(payload) };
+  }
+
+  return {
+    login: (request) => postAuth('/driver/auth/login', {
+      phone: request.phoneE164.trim(),
+      pin: request.pin.trim(),
+    }, 'Driver PIN login'),
+    refreshSession: (request) => postAuth('/driver/auth/refresh', {
+      refreshToken: request.refreshToken.trim(),
+    }, 'Refresh Auth Session'),
+    register: (request) => postAuth('/driver/auth/verify-invite', {
+      phone: request.phoneE164.trim(),
+      inviteCode: request.inviteCode.trim().toUpperCase(),
+      pin: request.pin.trim(),
+    }, 'Register Driver Account'),
   };
 }
 
-export function createMockDriverAuthService(driverAccess: DriverAccessToken = {
-  accessToken: 'fixture-driver-access-token',
-  expiresAt: '2026-05-12T06:55:00.000Z',
+export function createMockDriverAuthService(accountAccess: DriverAccountAccessToken = {
+  accessToken: 'fixture-driver-account-access-token',
+  expiresAt: '2100-05-12T06:55:00.000Z',
+  refreshToken: 'fixture-driver-account-refresh-token',
+  refreshTokenExpiresAt: '2100-06-11T06:55:00.000Z',
   tokenType: 'Bearer',
   ttlSeconds: 900,
-  use: 'consent_and_assigned_route',
+  use: 'driver_account',
 }): DriverAuthService {
   return {
-    verifyCode: async () => ({ driverAccess }),
+    login: async () => ({ accountAccess }),
+    refreshSession: async () => ({ accountAccess }),
+    register: async () => ({ accountAccess }),
   };
 }
 
-function readDriverAuthEnvelope(payload: unknown): DriverAccessToken & {
-  refreshToken?: string;
-  refreshTokenExpiresAt?: string;
-} {
+function readDriverAuthEnvelope(payload: unknown): DriverAccountAccessToken {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
     throw new Error('Invalid driver auth response');
   }
@@ -95,10 +110,13 @@ function readDriverAuthEnvelope(payload: unknown): DriverAccessToken & {
 
   const record = data as Record<string, unknown>;
   if (
-    typeof record.accessToken !== 'string' ||
-    record.accessToken.trim() === '' ||
-    typeof record.expiresAt !== 'string' ||
-    record.expiresAt.trim() === ''
+    typeof record.accessToken !== 'string' || record.accessToken.trim() === '' ||
+    typeof record.expiresAt !== 'string' || !Number.isFinite(Date.parse(record.expiresAt)) ||
+    typeof record.refreshToken !== 'string' || record.refreshToken.trim() === '' ||
+    typeof record.refreshTokenExpiresAt !== 'string' || !Number.isFinite(Date.parse(record.refreshTokenExpiresAt)) ||
+    record.tokenType !== 'Bearer' ||
+    typeof record.ttlSeconds !== 'number' || !Number.isInteger(record.ttlSeconds) || record.ttlSeconds <= 0 ||
+    record.use !== 'driver_account'
   ) {
     throw new Error('Invalid driver auth response');
   }
@@ -106,10 +124,10 @@ function readDriverAuthEnvelope(payload: unknown): DriverAccessToken & {
   return {
     accessToken: record.accessToken,
     expiresAt: record.expiresAt,
+    refreshToken: record.refreshToken,
+    refreshTokenExpiresAt: record.refreshTokenExpiresAt,
     tokenType: 'Bearer',
-    ttlSeconds: 900,
-    use: 'consent_and_assigned_route',
-    ...(typeof record.refreshToken === 'string' ? { refreshToken: record.refreshToken } : {}),
-    ...(typeof record.refreshTokenExpiresAt === 'string' ? { refreshTokenExpiresAt: record.refreshTokenExpiresAt } : {}),
+    ttlSeconds: record.ttlSeconds,
+    use: 'driver_account',
   };
 }
