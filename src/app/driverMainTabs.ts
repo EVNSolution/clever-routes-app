@@ -25,6 +25,7 @@ export const DRIVER_APP_SERVER_BACKED_FEATURE_GATES = {
 export type DriverAppScreenId =
   | 'arrivalCheck'
   | 'completedDeliveries'
+  | 'countrySelect'
   | 'liveTracking'
   | 'liveMapPreview'
   | 'loginDetail'
@@ -43,7 +44,7 @@ export function getDriverMainTabs(): DriverMainTab[] {
 }
 
 export function shouldShowDriverBottomTabs(screen: DriverAppScreenId): boolean {
-  return screen !== 'arrivalCheck' && screen !== 'loginPhone' && screen !== 'loginDetail' && screen !== 'liveMapPreview' && screen !== 'proofCamera' && screen !== 'routePreview';
+  return screen !== 'arrivalCheck' && screen !== 'countrySelect' && screen !== 'loginPhone' && screen !== 'loginDetail' && screen !== 'liveMapPreview' && screen !== 'proofCamera' && screen !== 'routePreview';
 }
 
 export function getVisibleBottomTab(input: {

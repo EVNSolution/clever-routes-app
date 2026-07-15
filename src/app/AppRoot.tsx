@@ -104,7 +104,6 @@ import {
 import { recordStopProofEventAfterDeliveryStart, type StopProofEventResult } from '../domain/stop/stopProofEvents';
 import { openRouteNavigation, openStopNavigation } from '../domain/stop/stopNavigation';
 import {
-  COUNTRY_SELECTOR_OVERLAY_BEHAVIOR,
   getCountrySelectorRowText,
   getSelectedCountryCardText,
 } from '../ui/components/countrySelectorBehavior';
@@ -141,6 +140,7 @@ import {
 type AppScreen =
   | 'arrivalCheck'
   | 'completedDeliveries'
+  | 'countrySelect'
   | 'liveTracking'
   | 'liveMapPreview'
   | 'loginPhone'
@@ -201,7 +201,6 @@ function DriverApp() {
   const [selectedDriverLocale, setSelectedDriverLocale] = useState(DEFAULT_DRIVER_PHONE_COUNTRY.defaultLocale);
   const [nationalPhoneInput, setNationalPhoneInput] = useState('');
   const [countrySearchQuery, setCountrySearchQuery] = useState('');
-  const [isCountrySelectorOpen, setIsCountrySelectorOpen] = useState(false);
   const [inviteCode, setInviteCode] = useState('');
   const [pin, setPin] = useState('');
   const [pinConfirmation, setPinConfirmation] = useState('');
@@ -574,11 +573,16 @@ function DriverApp() {
     setSelectedPhoneCountryIso2(country.iso2);
     setSelectedDriverLocale(country.defaultLocale);
     setCountrySearchQuery('');
-    setIsCountrySelectorOpen(false);
+    setScreen('loginPhone');
     setNationalPhoneInput(formatDriverNationalPhoneInput({
       countryIso2: country.iso2,
       nationalPhoneInput,
     }));
+  }
+
+  function openPhoneCountrySelector() {
+    setCountrySearchQuery('');
+    setScreen('countrySelect');
   }
 
   async function handlePhoneSubmit() {
@@ -1533,6 +1537,10 @@ function DriverApp() {
       case 'loginPhone':
       case 'mainTabs':
         return false;
+      case 'countrySelect':
+        setCountrySearchQuery('');
+        setScreen('loginPhone');
+        return true;
       case 'loginDetail':
         setInviteCode('');
         setPin('');
@@ -1599,6 +1607,7 @@ function DriverApp() {
       }
     },
   }), [handleAppBack, screen]);
+  const isCountrySelectionScreen = screen === 'countrySelect';
   const isFullMapScreen = screen === 'liveMapPreview' && selectedRoute !== null;
   const isProofCameraScreen = screen === 'proofCamera';
   const contentBottomPadding = shouldShowDriverBottomTabs(screen) ? getScrollContentBottomPadding(bottomInset) : 28;
@@ -1613,7 +1622,19 @@ function DriverApp() {
         keyboardVerticalOffset={0}
         style={styles.keyboardArea}
       >
-        {isFullMapScreen ? (
+        {isCountrySelectionScreen ? (
+          <CountrySelectionScreen
+            countries={visiblePhoneCountries}
+            onBack={() => {
+              handleAppBack();
+            }}
+            onSearchChange={setCountrySearchQuery}
+            onSelectCountry={handlePhoneCountrySelect}
+            searchQuery={countrySearchQuery}
+            selectedCountry={selectedPhoneCountry}
+            selectedLocale={selectedDriverLocale}
+          />
+        ) : isFullMapScreen ? (
           <LiveMapPreviewScreen
             currentStepIndex={navigationStepIndex}
             mapStyleUrl={driverMapStyleUrl}
@@ -1641,14 +1662,9 @@ function DriverApp() {
           >
           {screen === 'loginPhone' ? (
             <LoginPhoneScreen
-              countrySearchQuery={countrySearchQuery}
-              driverPhoneCountries={visiblePhoneCountries}
-              isCountrySelectorOpen={isCountrySelectorOpen}
               isSendingCode={isLoggingIn}
               nationalPhoneInput={nationalPhoneInput}
-              onCountrySearchChange={setCountrySearchQuery}
-              onCountrySelect={handlePhoneCountrySelect}
-              onCountrySelectorToggle={() => setIsCountrySelectorOpen((current) => !current)}
+              onCountrySelectorOpen={openPhoneCountrySelector}
               onPhoneChange={handlePhoneInputChange}
               onSendCode={handlePhoneSubmit}
               phoneE164Preview={phoneE164Preview}
@@ -1850,28 +1866,18 @@ function DriverApp() {
 
 
 function LoginPhoneScreen({
-  countrySearchQuery,
-  driverPhoneCountries,
-  isCountrySelectorOpen,
   isSendingCode,
   nationalPhoneInput,
-  onCountrySearchChange,
-  onCountrySelect,
-  onCountrySelectorToggle,
+  onCountrySelectorOpen,
   onPhoneChange,
   onSendCode,
   phoneE164Preview,
   selectedDriverLocale,
   selectedPhoneCountry,
 }: {
-  countrySearchQuery: string;
-  driverPhoneCountries: DriverPhoneCountry[];
-  isCountrySelectorOpen: boolean;
   isSendingCode: boolean;
   nationalPhoneInput: string;
-  onCountrySearchChange(value: string): void;
-  onCountrySelect(country: DriverPhoneCountry): void;
-  onCountrySelectorToggle(): void;
+  onCountrySelectorOpen(): void;
   onPhoneChange(value: string): void;
   onSendCode(): void;
   phoneE164Preview: string | null;
@@ -1886,13 +1892,8 @@ function LoginPhoneScreen({
       </View>
 
       <View style={styles.formCard}>
-        <CountrySelector
-          countries={driverPhoneCountries}
-          isOpen={isCountrySelectorOpen}
-          onSearchChange={onCountrySearchChange}
-          onSelectCountry={onCountrySelect}
-          onToggle={onCountrySelectorToggle}
-          searchQuery={countrySearchQuery}
+        <CountrySelectorButton
+          onPress={onCountrySelectorOpen}
           selectedCountry={selectedPhoneCountry}
           selectedLocale={selectedDriverLocale}
         />
@@ -2890,35 +2891,25 @@ function SegmentedTabs({ onSelectTab, selectedTab, tabs }: { onSelectTab(tab: Ro
   );
 }
 
-function CountrySelector({
-  countries,
-  isOpen,
-  onSearchChange,
-  onSelectCountry,
-  onToggle,
-  searchQuery,
+function CountrySelectorButton({
+  onPress,
   selectedCountry,
   selectedLocale,
 }: {
-  countries: DriverPhoneCountry[];
-  isOpen: boolean;
-  onSearchChange(value: string): void;
-  onSelectCountry(country: DriverPhoneCountry): void;
-  onToggle(): void;
-  searchQuery: string;
+  onPress(): void;
   selectedCountry: DriverPhoneCountry;
   selectedLocale: string;
 }) {
   const selectedText = getSelectedCountryCardText(selectedCountry, { locale: selectedLocale });
 
   return (
-    <View style={[styles.inputGroup, styles.countrySelectorGroup, isOpen && styles.countrySelectorGroupOpen]}>
+    <View style={styles.inputGroup}>
       <Text style={styles.inputLabel}>Country</Text>
       <Pressable
-        accessibilityHint={isOpen ? 'Closes the country search list.' : 'Opens the country search list.'}
+        accessibilityHint="Opens the full country selection list."
         accessibilityLabel={`Country ${selectedText.title} ${selectedText.callingCode}`}
         accessibilityRole="button"
-        onPress={onToggle}
+        onPress={onPress}
         style={styles.countrySelectorButton}
       >
         <View style={styles.routeHeaderText}>
@@ -2926,33 +2917,59 @@ function CountrySelector({
         </View>
         <Text style={styles.countryCallingCodeText}>{selectedText.callingCode}</Text>
       </Pressable>
-      {isOpen ? (
-        <View style={styles.countryListPanel}>
-          <LabeledInput
-            label="Search Country"
-            onChangeText={onSearchChange}
-            placeholder="Country, ISO, + code, locale, or language"
-            value={searchQuery}
-          />
-          <ScrollView nestedScrollEnabled style={styles.countryListScroll}>
-            {countries.length > 0 ? countries.map((country) => {
-              const rowText = getCountrySelectorRowText(country, { locale: selectedLocale });
+    </View>
+  );
+}
 
-              return (
-                <Pressable
-                  accessibilityRole="button"
-                  key={country.iso2}
-                  onPress={() => onSelectCountry(country)}
-                  style={[styles.countryRow, country.iso2 === selectedCountry.iso2 && styles.countryRowSelected]}
-                >
-                  <Text numberOfLines={1} style={styles.countrySelectorText}>{rowText.title}</Text>
-                  <Text numberOfLines={1} style={styles.helperText}>{rowText.subtitle}</Text>
-                </Pressable>
-              );
-            }) : <Text style={styles.helperText}>No supported countries matched this search.</Text>}
-          </ScrollView>
-        </View>
-      ) : null}
+function CountrySelectionScreen({
+  countries,
+  onBack,
+  onSearchChange,
+  onSelectCountry,
+  searchQuery,
+  selectedCountry,
+  selectedLocale,
+}: {
+  countries: DriverPhoneCountry[];
+  onBack(): void;
+  onSearchChange(value: string): void;
+  onSelectCountry(country: DriverPhoneCountry): void;
+  searchQuery: string;
+  selectedCountry: DriverPhoneCountry;
+  selectedLocale: string;
+}) {
+  return (
+    <View style={styles.countrySelectionScreen}>
+      <ScreenHeader hideRightAction onBack={onBack} title="Select Country" />
+      <LabeledInput
+        label="Search Country"
+        onChangeText={onSearchChange}
+        placeholder="Country, ISO, + code, locale, or language"
+        value={searchQuery}
+      />
+      <ScrollView
+        contentContainerStyle={styles.countrySelectionListContent}
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        style={styles.countrySelectionList}
+      >
+        {countries.length > 0 ? countries.map((country) => {
+          const rowText = getCountrySelectorRowText(country, { locale: selectedLocale });
+
+          return (
+            <Pressable
+              accessibilityRole="button"
+              key={country.iso2}
+              onPress={() => onSelectCountry(country)}
+              style={[styles.countryRow, country.iso2 === selectedCountry.iso2 && styles.countryRowSelected]}
+            >
+              <Text numberOfLines={1} style={styles.countrySelectorText}>{rowText.title}</Text>
+              <Text numberOfLines={1} style={styles.helperText}>{rowText.subtitle}</Text>
+            </Pressable>
+          );
+        }) : <Text style={styles.helperText}>No supported countries matched this search.</Text>}
+      </ScrollView>
     </View>
   );
 }
@@ -3929,14 +3946,6 @@ const styles = StyleSheet.create({
     minHeight: 52,
     paddingHorizontal: 14,
   },
-  countrySelectorGroup: {
-    overflow: 'visible',
-    position: 'relative',
-    zIndex: 20,
-  },
-  countrySelectorGroupOpen: {
-    zIndex: COUNTRY_SELECTOR_OVERLAY_BEHAVIOR.zIndex,
-  },
   countrySelectorButton: {
     alignItems: 'center',
     backgroundColor: '#ffffff',
@@ -3963,26 +3972,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
-  countryListPanel: {
-    backgroundColor: '#ffffff',
-    borderColor: '#e5e7eb',
-    borderRadius: 16,
-    borderWidth: 1,
-    elevation: COUNTRY_SELECTOR_OVERLAY_BEHAVIOR.elevation,
-    gap: 10,
-    left: 0,
-    padding: 12,
-    position: COUNTRY_SELECTOR_OVERLAY_BEHAVIOR.position,
-    right: 0,
-    shadowColor: '#101828',
-    shadowOffset: { width: 0, height: 16 },
-    shadowOpacity: 0.16,
-    shadowRadius: 24,
-    top: 84,
-    zIndex: COUNTRY_SELECTOR_OVERLAY_BEHAVIOR.zIndex,
+  countrySelectionScreen: {
+    flex: 1,
+    gap: 18,
+    padding: 22,
+    paddingBottom: 28,
+    paddingTop: 34,
   },
-  countryListScroll: {
-    maxHeight: COUNTRY_SELECTOR_OVERLAY_BEHAVIOR.maxVisibleRows * 62,
+  countrySelectionList: {
+    flex: 1,
+  },
+  countrySelectionListContent: {
+    gap: 10,
+    paddingBottom: 28,
   },
   countryRow: {
     borderColor: '#eef2f6',

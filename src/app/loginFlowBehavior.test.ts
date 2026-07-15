@@ -26,4 +26,21 @@ describe('driver login flow', () => {
     assert.doesNotMatch(loginDetailScreen, /label="Last Name"/u);
     assert.doesNotMatch(source, /Enter your first and last name/u);
   });
+
+  it('opens country selection as a full page without focusing search on entry', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const countrySelectionScreen = source.slice(
+      source.indexOf('function CountrySelectionScreen'),
+      source.indexOf('function PhoneNumberInput'),
+    );
+
+    assert.match(source, /\| 'countrySelect'/u);
+    assert.match(source, /case 'countrySelect':[\s\S]*setScreen\('loginPhone'\)/u);
+    assert.match(source, /const isCountrySelectionScreen = screen === 'countrySelect'/u);
+    assert.match(source, /isCountrySelectionScreen \? \([\s\S]*<CountrySelectionScreen/u);
+    assert.match(countrySelectionScreen, /<ScreenHeader hideRightAction onBack=\{onBack\} title="Select Country" \/>/u);
+    assert.match(countrySelectionScreen, /<LabeledInput[\s\S]*label="Search Country"/u);
+    assert.match(countrySelectionScreen, /<ScrollView/u);
+    assert.doesNotMatch(countrySelectionScreen, /autoFocus/u);
+  });
 });

@@ -24,6 +24,7 @@ describe('driver main tab IA', () => {
   });
 
   it('excludes auth and dedicated preview screens from the bottom tab shell', () => {
+    assert.equal(shouldShowDriverBottomTabs('countrySelect'), false);
     assert.equal(shouldShowDriverBottomTabs('loginPhone'), false);
     assert.equal(shouldShowDriverBottomTabs('loginDetail'), false);
     assert.equal(shouldShowDriverBottomTabs('arrivalCheck'), false);
