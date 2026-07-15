@@ -7,13 +7,6 @@ type DisplayNamesConstructor = new (
 
 const DISPLAY_NAMES: DisplayNamesConstructor | undefined = (Intl as typeof Intl & { DisplayNames?: DisplayNamesConstructor }).DisplayNames;
 
-export const COUNTRY_SELECTOR_OVERLAY_BEHAVIOR = {
-  elevation: 24,
-  maxVisibleRows: 6,
-  position: 'absolute',
-  zIndex: 1000,
-} as const;
-
 export function getSelectedCountryCardText(
   country: DriverPhoneCountry,
   options: { locale?: string } = {},
