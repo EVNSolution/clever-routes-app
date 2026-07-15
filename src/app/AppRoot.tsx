@@ -1,4 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Speech from 'expo-speech';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -20,7 +21,15 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import Reanimated, {
+  ReduceMotion,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { scheduleOnRN } from 'react-native-worklets';
 
 import {
   createMockAssignedRouteService,
@@ -37,8 +46,6 @@ import {
 } from '../domain/route/assignedRoute';
 import {
   classifyAssignedRouteSession,
-  filterVisibleAssignedRouteSessions,
-  getInitialAssignedRouteTab,
   type RouteSessionStatus,
 } from '../domain/route/routeSessionClassification';
 import {
@@ -71,18 +78,10 @@ import {
   type ProofMediaUploadService,
 } from '../domain/proof/proofMediaUpload';
 import { createDriverRuntimeServices, readDriverRuntimeConfig } from './config/driverRuntimeConfig';
-import { CONSENT_COPY_VERSIONS, createMockDriverConsentService, submitDriverConsent, type DriverConsentService, type DriverConsentSubmissionResult } from '../domain/consent/driverConsent';
-import { getMvpRouteTabs } from '../domain/driverFlow/driverFlow';
+import { createMockDriverConsentService, submitDriverConsent, type DriverConsentService, type DriverConsentSubmissionResult } from '../domain/consent/driverConsent';
 import { resetDriverSession } from '../domain/driver/driverSessionReset';
 import type { PersistedActiveRouteSession } from '../domain/driver/driverAccessTokenStore';
 import type { DriverAccountAccessToken } from '../domain/driverAuth/driverAuth';
-import {
-  getDriverMainTabs,
-  getDriverPlaceholderCopy,
-  getVisibleBottomTab,
-  shouldShowDriverBottomTabs,
-  type DriverMainTabId,
-} from './driverMainTabs';
 import {
   DEFAULT_DRIVER_PHONE_COUNTRY,
   findDriverPhoneCountry,
@@ -117,12 +116,9 @@ import {
   buildAuthSuccessMessage,
   getRuntimeHostLabel,
 } from './authDiagnostics';
-import {
-  getVerifiedDriverNoAssignedRouteMessage,
-  type VerifiedDriverNoAssignedRouteReason,
-} from './verifiedDriverNoAssignedRoutes';
 import { NativeRouteMapPreview } from './NativeRouteMapPreview';
-import { getBottomChromeOffset, getBottomChromePadding, getBottomTabPadding, getScrollContentBottomPadding } from './appLayoutMetrics';
+import { getBottomChromeOffset, getBottomChromePadding } from './appLayoutMetrics';
+import { formatRouteListUpdatedAt } from './routeListBehavior';
 import { readDriverMapStyleUrl } from './routeMapGeoJson';
 import {
   getStopArrivalNotificationCandidate,
@@ -138,6 +134,7 @@ import {
 } from './routePreviewBehavior';
 
 type AppScreen =
+  | 'accountName'
   | 'arrivalCheck'
   | 'completedDeliveries'
   | 'countrySelect'
@@ -149,9 +146,9 @@ type AppScreen =
   | 'proofCamera'
   | 'routePreview'
   | 'routeSession'
+  | 'settings'
   | 'stopCompleted'
   | 'stopDetails';
-type RouteTabId = ReturnType<typeof getMvpRouteTabs>[number]['id'];
 type RouteStatus = RouteSessionStatus;
 type StopDetailsBackTarget = 'liveTracking' | 'routeSession';
 type MapPreviewBackTarget = 'liveTracking' | 'routePreview' | 'routeSession';
@@ -176,6 +173,17 @@ type RouteLoadOptions = {
 
 const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
 const DRIVER_APP_VERSION = '1.0.0';
+const PULL_REFRESH_DRAG_RESISTANCE = 0.72;
+const PULL_REFRESH_MAX_DISTANCE = 120;
+const PULL_REFRESH_REVEAL_HEIGHT = 96;
+const PULL_REFRESH_TRIGGER_DISTANCE = 80;
+const PULL_REFRESH_SPRING_CONFIG = {
+  damping: 18,
+  mass: 0.7,
+  overshootClamping: true,
+  reduceMotion: ReduceMotion.System,
+  stiffness: 180,
+} as const;
 const SWIPE_BACK_DISTANCE = 90;
 const SWIPE_BACK_EDGE_WIDTH = 36;
 const SWIPE_BACK_MAX_VERTICAL_DELTA = 90;
@@ -187,15 +195,16 @@ function runAfterUiInteractions(callback: () => void): void {
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <DriverApp />
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={styles.gestureRoot}>
+      <SafeAreaProvider>
+        <DriverApp />
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
 function DriverApp() {
-  const { bottom: bottomInset } = useSafeAreaInsets();
-  const bottomTabPadding = getBottomTabPadding();
+  const { top: topInset } = useSafeAreaInsets();
   const [screen, setScreen] = useState<AppScreen>('loginPhone');
   const [selectedPhoneCountryIso2, setSelectedPhoneCountryIso2] = useState(DEFAULT_DRIVER_PHONE_COUNTRY.iso2);
   const [selectedDriverLocale, setSelectedDriverLocale] = useState(DEFAULT_DRIVER_PHONE_COUNTRY.defaultLocale);
@@ -206,17 +215,16 @@ function DriverApp() {
   const [pinConfirmation, setPinConfirmation] = useState('');
   const [isRegistration, setIsRegistration] = useState(false);
   const [verifiedDriverPhoneE164, setVerifiedDriverPhoneE164] = useState<string | null>(null);
+  const [accountName, setAccountName] = useState<string | null>(null);
+  const [accountNameDraft, setAccountNameDraft] = useState('');
   const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
   const [acceptedLocation, setAcceptedLocation] = useState(false);
-  const [selectedMainTab, setSelectedMainTab] = useState<DriverMainTabId>('home');
-  const [selectedTab, setSelectedTab] = useState<RouteTabId>('upcoming');
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [navigationStepIndex, setNavigationStepIndex] = useState(COMPANY_STEP_INDEX);
   const [selectedStopDetailsId, setSelectedStopDetailsId] = useState<string | null>(null);
   const [stopDetailsBackTarget, setStopDetailsBackTarget] = useState<StopDetailsBackTarget>('liveTracking');
   const [mapPreviewBackTarget, setMapPreviewBackTarget] = useState<MapPreviewBackTarget>('routeSession');
   const [routeSessions, setRouteSessions] = useState<RouteSession[]>([]);
-  const [routeReviewNote, setRouteReviewNote] = useState('');
   const [pendingStopArrivalNotification, setPendingStopArrivalNotification] = useState<StopArrivalNotificationData | null>(null);
 
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
@@ -234,9 +242,12 @@ function DriverApp() {
   const [recentlyCompletedStopId, setRecentlyCompletedStopId] = useState<string | null>(null);
   const [offlineSubmissionQueue, setOfflineSubmissionQueue] = useState<OfflineSubmissionQueue | null>(null);
   const [, setOfflineQueueCount] = useState(0);
+  const [lastRoutesUpdatedAt, setLastRoutesUpdatedAt] = useState<Date | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isLoadingAccountProfile, setIsLoadingAccountProfile] = useState(false);
+  const [isSavingAccountName, setIsSavingAccountName] = useState(false);
   const [isRefreshingRoutes, setIsRefreshingRoutes] = useState(false);
   const [isStartingRoute, setIsStartingRoute] = useState(false);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
@@ -244,6 +255,10 @@ function DriverApp() {
   const [isCompletingStop, setIsCompletingStop] = useState(false);
   const [isFinishingRoute, setIsFinishingRoute] = useState(false);
   const selectedRouteIdRef = useRef<string | null>(null);
+  const routesAtTopRef = useRef(true);
+  const [areRoutesAtTop, setAreRoutesAtTop] = useState(true);
+  const isPullRefreshingRef = useRef(false);
+  const pullRefreshOffset = useSharedValue(0);
   const notifiedStopArrivalIdsRef = useRef<Set<string>>(new Set());
   const hasCheckedInitialStopArrivalNotificationRef = useRef(false);
   const hasAttemptedDriverRestoreRef = useRef(false);
@@ -262,8 +277,6 @@ function DriverApp() {
   const mockDriverConsentService = useMemo(() => createMockDriverConsentService(), []);
   const mockAssignedRouteService = useMemo(() => createMockAssignedRouteService({ status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute }), []);
   const mockProofMediaUploadService = useMemo(() => createMockProofMediaUploadService({ mode: 'success' }), []);
-  const routeTabs = useMemo(() => getMvpRouteTabs(), []);
-  const mainTabs = useMemo(() => getDriverMainTabs(), []);
   const selectedPhoneCountry = findDriverPhoneCountry(selectedPhoneCountryIso2) ?? DEFAULT_DRIVER_PHONE_COUNTRY;
   const visiblePhoneCountries = useMemo(
     () => searchDriverPhoneCountries(countrySearchQuery),
@@ -306,6 +319,72 @@ function DriverApp() {
     await driverAccessTokenStore.saveRefreshedAccountAccess(refreshResult.accountAccess);
     return refreshResult.accountAccess;
   }, [driverAccessTokenStore, driverAuthService]);
+
+  async function loadAccountProfile(): Promise<void> {
+    setIsLoadingAccountProfile(true);
+    try {
+      const accountAccess = await getActiveAccountAccess();
+      if (accountAccess === null) {
+        setMessage('Your saved login expired. Sign in again to view account details.');
+        return;
+      }
+      const result = await driverAuthService.getAccountProfile({
+        accountAccessToken: accountAccess.accessToken,
+      });
+      setAccountName(result.account.name);
+      setAccountNameDraft(result.account.name ?? '');
+      setVerifiedDriverPhoneE164(result.account.phone);
+    } catch {
+      setMessage('Account details could not be loaded. Check your connection and try again.');
+    } finally {
+      setIsLoadingAccountProfile(false);
+    }
+  }
+
+  function handleOpenSettings(): void {
+    setMessage(null);
+    setScreen('settings');
+    void loadAccountProfile();
+  }
+
+  function handleOpenAccountName(): void {
+    setAccountNameDraft(accountName ?? '');
+    setScreen('accountName');
+  }
+
+  function handleCloseAccountName(): void {
+    setAccountNameDraft(accountName ?? '');
+    setScreen('settings');
+  }
+
+  async function handleSaveAccountName(): Promise<void> {
+    const name = accountNameDraft.trim();
+    if (name.length === 0 || name.length > 80 || isSavingAccountName) {
+      return;
+    }
+
+    setIsSavingAccountName(true);
+    setMessage(null);
+    try {
+      const accountAccess = await getActiveAccountAccess();
+      if (accountAccess === null) {
+        setMessage('Your saved login expired. Sign in again to update your name.');
+        return;
+      }
+      const result = await driverAuthService.updateAccountProfile({
+        accountAccessToken: accountAccess.accessToken,
+        name,
+      });
+      setAccountName(result.account.name);
+      setAccountNameDraft(result.account.name ?? '');
+      setVerifiedDriverPhoneE164(result.account.phone);
+      setScreen('settings');
+    } catch {
+      setMessage('Name could not be updated. Check your connection and try again.');
+    } finally {
+      setIsSavingAccountName(false);
+    }
+  }
 
   const refreshRouteAccessLookupForSubmission = useCallback(async (routePlanId: string): Promise<DriverAccessToken | null> => {
     if (runtimeConfig.mode !== 'live') {
@@ -413,7 +492,6 @@ function DriverApp() {
       setSelectedRouteId(routeSession.route.id);
       setSubmission(toCompanyGuidanceSubmission(routeSession));
       setNavigationStepIndex(stopIndex + 1);
-      setSelectedMainTab('home');
       setScreen('routeSession');
       setMessage('This stop is already completed.');
       return;
@@ -423,7 +501,6 @@ function DriverApp() {
       setSelectedRouteId(routeSession.route.id);
       setSubmission(toCompanyGuidanceSubmission(routeSession));
       setNavigationStepIndex(stopIndex + 1);
-      setSelectedMainTab('home');
       setScreen('routeSession');
       setMessage('Arrival alert opened, but the route is not active yet. Start the session first.');
       return;
@@ -433,7 +510,6 @@ function DriverApp() {
     setSubmission(toCompanyGuidanceSubmission(routeSession));
     setSelectedStopDetailsId(null);
     setNavigationStepIndex(stopIndex + 1);
-    setSelectedMainTab('home');
     setScreen('arrivalCheck');
     setMessage('Arrival alert opened. Add proof photo and delivery notes.');
   }, [completedStopIds, deliveryStartResult?.kind, routeSessions]);
@@ -678,29 +754,15 @@ function DriverApp() {
     }
   }
 
-  function openMainTab(tab: DriverMainTabId) {
-    setSelectedMainTab(tab);
-    setScreen('mainTabs');
-    if (tab === 'routes') {
-      void handleRefreshRoutes();
-    }
-  }
-
   function openHomeRoot() {
-    openMainTab('home');
-  }
-
-  function openRoutesRoot() {
-    openMainTab('routes');
-  }
-
-  const openVerifiedNoAssignedRoute = useCallback((reason: VerifiedDriverNoAssignedRouteReason) => {
-    resetRouteProgress();
-    setSelectedTab('upcoming');
-    setSubmission(null);
-    setSelectedMainTab('routes');
     setScreen('mainTabs');
-    setMessage(getVerifiedDriverNoAssignedRouteMessage(reason));
+  }
+
+  const openVerifiedNoAssignedRoute = useCallback(() => {
+    resetRouteProgress();
+    setSubmission(null);
+    setLastRoutesUpdatedAt(new Date());
+    setScreen('mainTabs');
     void driverAccessTokenStore.clearCachedRouteAccess().catch(() => undefined);
   }, [driverAccessTokenStore]);
 
@@ -731,7 +793,7 @@ function DriverApp() {
           await driverAccessTokenStore.clearCachedRouteAccess();
         }
         if (allowVerifiedDriverNoRoute && lookupResult.kind === 'denied' && lookupResult.status === 'NOT_FOUND') {
-          openVerifiedNoAssignedRoute('route_lookup_not_found');
+          openVerifiedNoAssignedRoute();
           return;
         }
 
@@ -741,7 +803,7 @@ function DriverApp() {
 
       const choices = getRouteChoicesFromSubmission(lookupResult);
       if (choices.length === 0) {
-        openVerifiedNoAssignedRoute('no_route_choices');
+        openVerifiedNoAssignedRoute();
         return;
       }
 
@@ -788,13 +850,13 @@ function DriverApp() {
             ...choice,
             route: assignedRouteResult.route,
           });
-        } else {
+        } else if (assignedRouteResult.kind !== 'no_assigned_route') {
           setMessage(assignedRouteResult.message);
         }
       }
 
       if (loadedSessions.length === 0) {
-        openVerifiedNoAssignedRoute('assigned_route_load_empty');
+        openVerifiedNoAssignedRoute();
         return;
       }
 
@@ -811,6 +873,7 @@ function DriverApp() {
         await driverAccessTokenStore.clearActiveRouteSession();
       }
       setRouteSessions(loadedSessions);
+      setLastRoutesUpdatedAt(new Date());
       const nextSelectedRouteId = restoredActiveSession !== null
         ? restoredActiveSession.route.id
         : currentSelectedRouteId !== null && loadedSessions.some((session) => session.route.id === currentSelectedRouteId)
@@ -829,8 +892,6 @@ function DriverApp() {
         const restoredStepIndex = clampRouteNavigationStepIndex(activeRouteSession?.navigationStepIndex ?? COMPANY_STEP_INDEX, restoredActiveSession.route);
         setDeliveryStartResult(getRestoredActiveDeliveryStartResult());
         setDeliveryFinishResult(null);
-        setSelectedTab('active');
-        setSelectedMainTab('home');
         setNavigationStepIndex(restoredStepIndex);
         setScreen('routeSession');
         runAfterUiInteractions(() => {
@@ -839,12 +900,9 @@ function DriverApp() {
         return;
       }
 
-      setSelectedTab(getInitialAssignedRouteTab({
-        now: new Date(),
-        route: selectedSession.route,
-      }));
-      setSelectedMainTab(shouldNavigateOnSuccess ? 'home' : 'routes');
-      setScreen('mainTabs');
+      if (shouldNavigateOnSuccess) {
+        setScreen('mainTabs');
+      }
       const routeLoadSuccessMessage = `${loadedSessions.length} ${successMessagePrefix} route${loadedSessions.length === 1 ? '' : 's'} loaded. ${buildAuthSuccessMessage({ runtimeConfig, phase: 'route_access' })}`;
       runAfterUiInteractions(() => {
         setMessage(routeLoadSuccessMessage);
@@ -921,6 +979,21 @@ function DriverApp() {
     isRefreshingRoutes,
     verifiedDriverPhoneE164,
   ]);
+
+  const handlePullRefresh = useCallback(async () => {
+    if (isPullRefreshingRef.current) {
+      return;
+    }
+
+    isPullRefreshingRef.current = true;
+    pullRefreshOffset.value = withSpring(PULL_REFRESH_REVEAL_HEIGHT, PULL_REFRESH_SPRING_CONFIG);
+    try {
+      await handleRefreshRoutes();
+    } finally {
+      pullRefreshOffset.value = withSpring(0, PULL_REFRESH_SPRING_CONFIG);
+      isPullRefreshingRef.current = false;
+    }
+  }, [handleRefreshRoutes, pullRefreshOffset]);
 
   useEffect(() => {
     if (hasAttemptedDriverRestoreRef.current) {
@@ -1053,8 +1126,6 @@ function DriverApp() {
       });
       setContinuousLocationResult(continuousResult);
 
-      setSelectedTab('active');
-      setSelectedMainTab('home');
       setNavigationStepIndex(COMPANY_STEP_INDEX);
       await driverAccessTokenStore.saveActiveRouteSession({
         navigationStepIndex: COMPANY_STEP_INDEX,
@@ -1077,7 +1148,6 @@ function DriverApp() {
 
     setSelectedRouteId(routeSession.route.id);
     setSubmission(toCompanyGuidanceSubmission(routeSession));
-    setSelectedMainTab('home');
     setScreen('routePreview');
   }
 
@@ -1090,7 +1160,6 @@ function DriverApp() {
 
     setSelectedRouteId(routeSession.route.id);
     setSubmission(toCompanyGuidanceSubmission(routeSession));
-    setSelectedMainTab('home');
     setScreen('routeSession');
   }
 
@@ -1425,8 +1494,6 @@ function DriverApp() {
         setContinuousLocationResult({ kind: 'stopped', taskName: finishResult.stoppedTaskName });
         await driverAccessTokenStore.clearActiveRouteSession();
       }
-      setSelectedTab('completed');
-      setSelectedMainTab('home');
       setScreen('completedDeliveries');
       setMessage(finishResult.message);
     } finally {
@@ -1499,37 +1566,17 @@ function DriverApp() {
     }
 
     resetRouteProgress();
-    setSelectedMainTab('home');
-    setSelectedTab('upcoming');
+    setLastRoutesUpdatedAt(null);
     setVerifiedDriverPhoneE164(null);
+    setAccountName(null);
+    setAccountNameDraft('');
     setInviteCode('');
     setPin('');
     setPinConfirmation('');
     setIsRegistration(false);
     setAcceptedPrivacy(false);
     setAcceptedLocation(false);
-    setRouteReviewNote('');
     setScreen('loginPhone');
-  }
-
-  function handleRequestAccountDeletionInfo() {
-    setMessage(getDriverPlaceholderCopy('accountDeletion'));
-  }
-
-  function handleContinueActiveRoute() {
-    if (selectedRoute === null) {
-      openRoutesRoot();
-      return;
-    }
-
-    if (routeStatus === 'active') {
-      setSelectedMainTab('home');
-      setScreen('routeSession');
-      return;
-    }
-
-    setSelectedMainTab('home');
-    setScreen('routeSession');
   }
 
   const handleAppBack = useCallback((): boolean => {
@@ -1548,9 +1595,15 @@ function DriverApp() {
         setIsRegistration(false);
         setScreen('loginPhone');
         return true;
+      case 'accountName':
+        setAccountNameDraft(accountName ?? '');
+        setScreen('settings');
+        return true;
+      case 'settings':
+        setScreen('mainTabs');
+        return true;
       case 'routePreview':
       case 'routeSession':
-        setSelectedMainTab('home');
         setScreen('mainTabs');
         return true;
       case 'liveTracking':
@@ -1573,11 +1626,10 @@ function DriverApp() {
         setScreen('routeSession');
         return true;
       case 'completedDeliveries':
-        setSelectedMainTab('home');
         setScreen('mainTabs');
         return true;
     }
-  }, [mapPreviewBackTarget, screen, stopDetailsBackTarget]);
+  }, [accountName, mapPreviewBackTarget, screen, stopDetailsBackTarget]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
@@ -1607,11 +1659,47 @@ function DriverApp() {
       }
     },
   }), [handleAppBack, screen]);
+  const pullRefreshGesture = useMemo(() => Gesture.Pan()
+    .enabled(
+      screen === 'mainTabs' &&
+      areRoutesAtTop &&
+      !isRefreshingRoutes &&
+      !isLoggingIn,
+    )
+    .activeOffsetY(8)
+    .failOffsetX([-18, 18])
+    .onUpdate((event) => {
+      pullRefreshOffset.value = Math.min(
+        PULL_REFRESH_MAX_DISTANCE,
+        Math.max(0, event.translationY * PULL_REFRESH_DRAG_RESISTANCE),
+      );
+    })
+    .onEnd(() => {
+      if (pullRefreshOffset.value >= PULL_REFRESH_TRIGGER_DISTANCE) {
+        pullRefreshOffset.value = withSpring(PULL_REFRESH_REVEAL_HEIGHT, PULL_REFRESH_SPRING_CONFIG);
+        scheduleOnRN(handlePullRefresh);
+        return;
+      }
+
+      pullRefreshOffset.value = withSpring(0, PULL_REFRESH_SPRING_CONFIG);
+    })
+    .onFinalize((_event, success) => {
+      if (!success) {
+        pullRefreshOffset.value = withSpring(0, PULL_REFRESH_SPRING_CONFIG);
+      }
+    }), [areRoutesAtTop, handlePullRefresh, isLoggingIn, isRefreshingRoutes, pullRefreshOffset, screen]);
+  const pullRefreshSurfaceStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: pullRefreshOffset.value }],
+  }));
+  const pullRefreshContentStyle = useAnimatedStyle(() => ({
+    opacity: Math.max(0, Math.min(1, (pullRefreshOffset.value - 24) / 36)),
+    transform: [{
+      translateY: (Math.min(pullRefreshOffset.value, PULL_REFRESH_REVEAL_HEIGHT) - PULL_REFRESH_REVEAL_HEIGHT) / 2,
+    }],
+  }));
   const isCountrySelectionScreen = screen === 'countrySelect';
   const isFullMapScreen = screen === 'liveMapPreview' && selectedRoute !== null;
   const isProofCameraScreen = screen === 'proofCamera';
-  const contentBottomPadding = shouldShowDriverBottomTabs(screen) ? getScrollContentBottomPadding(bottomInset) : 28;
-  const scrollContentContainerStyle = [styles.container, { paddingBottom: contentBottomPadding }];
 
   return (
     <View style={styles.safeArea}>
@@ -1654,12 +1742,49 @@ function DriverApp() {
             }}
           />
         ) : (
-          <ScrollView
-            contentContainerStyle={scrollContentContainerStyle}
-            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
+          <View style={styles.scrollStage}>
+            {screen === 'mainTabs' ? (
+              <View pointerEvents="none" style={[styles.pullRefreshReveal, { top: topInset }]}>
+                <Reanimated.View style={[styles.pullRefreshContent, pullRefreshContentStyle]}>
+                  <Text style={styles.pullRefreshUpdatedAt}>
+                    {lastRoutesUpdatedAt === null ? 'Last updated —' : formatRouteListUpdatedAt(lastRoutesUpdatedAt)}
+                  </Text>
+                  <ActivityIndicator
+                    accessibilityElementsHidden
+                    color="#0b57d0"
+                    importantForAccessibility="no-hide-descendants"
+                    size="small"
+                    style={styles.pullRefreshIcon}
+                  />
+                </Reanimated.View>
+              </View>
+            ) : null}
+            <GestureDetector gesture={pullRefreshGesture}>
+              <Reanimated.View
+                style={[
+                  styles.scrollSurface,
+                  screen === 'mainTabs' && pullRefreshSurfaceStyle,
+                ]}
+              >
+                <ScrollView
+                  bounces={screen !== 'mainTabs'}
+                  contentContainerStyle={styles.container}
+                  keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
+                  keyboardShouldPersistTaps="handled"
+                  onScroll={(event) => {
+                    if (screen === 'mainTabs') {
+                      const nextAreRoutesAtTop = event.nativeEvent.contentOffset.y <= 0.5;
+                      if (routesAtTopRef.current !== nextAreRoutesAtTop) {
+                        routesAtTopRef.current = nextAreRoutesAtTop;
+                        setAreRoutesAtTop(nextAreRoutesAtTop);
+                      }
+                    }
+                  }}
+                  overScrollMode={screen === 'mainTabs' ? 'never' : 'auto'}
+                  scrollEventThrottle={16}
+                  showsVerticalScrollIndicator={false}
+                  style={styles.scrollView}
+                >
           {screen === 'loginPhone' ? (
             <LoginPhoneScreen
               isSendingCode={isLoggingIn}
@@ -1692,54 +1817,42 @@ function DriverApp() {
             />
           ) : null}
 
-          {screen === 'mainTabs' && selectedMainTab === 'home' ? (
-            <HomePage
-              allStopsCompleted={allStopsCompleted}
-              company={currentCompany}
-              completedStopIds={completedStopIds}
-              isStartingRoute={isStartingRoute}
-              onBrowseRoutes={openRoutesRoot}
-              onContinueRoute={handleContinueActiveRoute}
-              onOpenRoutePreview={() => selectedRoute !== null ? handleOpenRoutePreview(selectedRoute.id) : undefined}
-              onReviewNoteChange={setRouteReviewNote}
-              onStartRoute={() => selectedRoute !== null ? handleStartRoute(selectedRoute.id) : undefined}
-              route={selectedRoute}
-              routeReviewNote={routeReviewNote}
-              routeStatus={routeStatus}
-            />
-          ) : null}
-
-          {screen === 'mainTabs' && selectedMainTab === 'routes' ? (
-            <RoutesPage
-              isRefreshingRoutes={isRefreshingRoutes || isLoggingIn}
+          {screen === 'mainTabs' ? (
+            <MyRoutesPage
               isStartingRoute={isStartingRoute}
               onOpenCompletedDeliveries={() => setScreen('completedDeliveries')}
               onOpenRoutePreview={handleOpenRoutePreview}
               onContinueRoute={handleOpenRouteSession}
-              onRefreshRoutes={handleRefreshRoutes}
+              onOpenSettings={handleOpenSettings}
               onSelectRoute={setSelectedRouteId}
-              onSelectTab={setSelectedTab}
               onStartRoute={handleStartRoute}
               routeSessions={routeSessions}
               routeStatus={routeStatus}
               selectedRouteId={selectedRouteId}
-              selectedTab={selectedTab}
-              tabs={routeTabs}
             />
           ) : null}
 
-          {screen === 'mainTabs' && selectedMainTab === 'earnings' ? (
-            <EarningsPage />
-          ) : null}
-
-          {screen === 'mainTabs' && selectedMainTab === 'profile' ? (
-            <ProfilePage
+          {screen === 'settings' ? (
+            <SettingsPage
               acceptedLocation={acceptedLocation}
               acceptedPrivacy={acceptedPrivacy}
+              accountName={accountName}
               appVersion={DRIVER_APP_VERSION}
+              isLoadingAccountProfile={isLoadingAccountProfile}
+              onBack={openHomeRoot}
+              onEditName={handleOpenAccountName}
               onLogout={handleLogout}
-              onRequestAccountDeletionInfo={handleRequestAccountDeletionInfo}
               phoneE164={verifiedDriverPhoneE164 ?? phoneE164Preview}
+            />
+          ) : null}
+
+          {screen === 'accountName' ? (
+            <AccountNamePage
+              isSaving={isSavingAccountName}
+              nameDraft={accountNameDraft}
+              onBack={handleCloseAccountName}
+              onChangeName={setAccountNameDraft}
+              onSave={() => { void handleSaveAccountName(); }}
             />
           ) : null}
 
@@ -1841,17 +1954,11 @@ function DriverApp() {
               route={selectedRoute}
             />
           ) : null}
-          </ScrollView>
-        )}
-        {shouldShowDriverBottomTabs(screen) ? (
-          <View style={[styles.bottomNavArea, { paddingBottom: bottomTabPadding }]}>
-            <BottomNavigation
-              items={mainTabs}
-              onSelect={openMainTab}
-              selected={getVisibleBottomTab({ screen, selectedMainTab })}
-            />
+                </ScrollView>
+              </Reanimated.View>
+            </GestureDetector>
           </View>
-        ) : null}
+        )}
       </KeyboardAvoidingView>
       <DeliveryPhotoActionSheet
         disabled={isCapturingPhoto}
@@ -2012,133 +2119,34 @@ function LoginDetailScreen({
   );
 }
 
-function HomePage({
-  allStopsCompleted,
-  company,
-  completedStopIds,
-  isStartingRoute,
-  onBrowseRoutes,
-  onContinueRoute,
-  onOpenRoutePreview,
-  onReviewNoteChange,
-  onStartRoute,
-  route,
-  routeReviewNote,
-  routeStatus,
-}: {
-  allStopsCompleted: boolean;
-  company: RouteAccessCompanyGuidance | null;
-  completedStopIds: string[];
-  isStartingRoute: boolean;
-  onBrowseRoutes(): void;
-  onContinueRoute(): void;
-  onOpenRoutePreview(): void;
-  onReviewNoteChange(value: string): void;
-  onStartRoute(): void;
-  route: AssignedRoute | null;
-  routeReviewNote: string;
-  routeStatus: RouteStatus;
-}) {
-  if (route === null) {
-    return (
-      <View style={styles.screenStack}>
-        <View style={styles.pageHeader}>
-          <Text style={styles.pageTitle}>Home</Text>
-          <Text style={styles.helperText}>Your active route cockpit will appear here after you select an assigned route.</Text>
-        </View>
-        <EmptyState title="No active route selected" body="Open Routes to choose the nearest current or upcoming route." />
-        <PrimaryButton label="Browse Routes" onPress={onBrowseRoutes} />
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.screenStack}>
-      <View style={styles.pageHeader}>
-        <Text style={styles.pageTitle}>Home</Text>
-        <Text style={styles.helperText}>This is your current route cockpit.</Text>
-      </View>
-
-      <View style={styles.selectedRouteCard}>
-        <View style={styles.routeCardHeader}>
-          <View style={styles.routeInitialBadge}>
-            <Text style={styles.routeInitialText}>{getInitials(company?.companyDisplayName ?? route.name)}</Text>
-          </View>
-          <View style={styles.routeHeaderText}>
-            <Text numberOfLines={1} style={styles.cardTitle}>{company?.companyDisplayName ?? route.name}</Text>
-            <Text numberOfLines={1} style={styles.helperText}>{route.name}</Text>
-          </View>
-          <StatusChip tone={getChipTone(routeStatus)} label={formatRouteStatus(routeStatus)} />
-        </View>
-
-        <DataRow label="Date" value={route.deliveryDate} />
-        <DataRow label="Region" value={getRouteRegion(route)} />
-        <DataRow label="Stops" value={`${completedStopIds.length}/${route.stops.length} completed`} />
-        <ProgressBar value={route.stops.length === 0 ? 0 : completedStopIds.length / route.stops.length} />
-
-        {routeStatus === 'completed' ? (
-          <View style={styles.buttonColumn}>
-            <StatusBanner tone="green" text={allStopsCompleted ? 'Route completed. Add a review or tip for your next run.' : 'Route marked completed for this session.'} />
-            <LabeledInput
-              label="Post-route review / tip"
-              multiline
-              onChangeText={onReviewNoteChange}
-              placeholder="Write a local note or tip for this route. Server sync is not connected yet."
-              value={routeReviewNote}
-            />
-          </View>
-        ) : (
-          <View style={styles.buttonColumn}>
-            <PrimaryButton disabled={isStartingRoute} label={routeStatus === 'active' ? 'Continue Session' : 'Start Session'} loading={isStartingRoute} onPress={routeStatus === 'active' ? onContinueRoute : onStartRoute} />
-            <SecondaryButton label="Route Details" onPress={onOpenRoutePreview} />
-          </View>
-        )}
-      </View>
-    </View>
-  );
-}
-
-function RoutesPage({
-  isRefreshingRoutes,
+function MyRoutesPage({
   isStartingRoute,
   onOpenCompletedDeliveries,
   onOpenRoutePreview,
   onContinueRoute,
-  onRefreshRoutes,
+  onOpenSettings,
   onSelectRoute,
-  onSelectTab,
   onStartRoute,
   routeSessions,
   routeStatus,
   selectedRouteId,
-  selectedTab,
-  tabs,
 }: {
-  isRefreshingRoutes: boolean;
   isStartingRoute: boolean;
   onOpenCompletedDeliveries(): void;
   onOpenRoutePreview(routeId: string): void;
   onContinueRoute(routeId: string): void;
-  onRefreshRoutes(): void;
+  onOpenSettings(): void;
   onSelectRoute(routeId: string): void;
-  onSelectTab(tab: RouteTabId): void;
   onStartRoute(routeId: string): void;
   routeSessions: RouteSession[];
   routeStatus: RouteStatus;
   selectedRouteId: string | null;
-  selectedTab: RouteTabId;
-  tabs: ReturnType<typeof getMvpRouteTabs>;
 }) {
   const classificationNow = new Date();
-  const visibleRouteSessions = filterVisibleAssignedRouteSessions(routeSessions, {
-    now: classificationNow,
-    selectedRouteId,
-    selectedRouteStatus: routeStatus,
-    selectedTab,
-  });
+  const visibleRouteSessions = routeSessions;
   const activeSession = visibleRouteSessions.find((session) => session.route.id === selectedRouteId) ?? visibleRouteSessions[0] ?? null;
   const activeIndex = activeSession === null ? -1 : visibleRouteSessions.findIndex((session) => session.route.id === activeSession.route.id);
-  const activeRouteStatusForTabs = activeSession === null
+  const activeRouteStatus = activeSession === null
     ? null
     : classifyAssignedRouteSession({
       now: classificationNow,
@@ -2147,7 +2155,7 @@ function RoutesPage({
       selectedRouteStatus: routeStatus,
     });
   const [collapsedRouteKey, setCollapsedRouteKey] = useState<string | null>(null);
-  const activeRouteCollapseKey = activeSession === null ? null : `${selectedTab}:${activeSession.route.id}`;
+  const activeRouteCollapseKey = activeSession?.route.id ?? null;
   const isRouteCardExpanded = activeRouteCollapseKey === null || collapsedRouteKey !== activeRouteCollapseKey;
 
   function selectRelativeRoute(offset: number) {
@@ -2160,16 +2168,25 @@ function RoutesPage({
   }
 
   return (
-    <View style={styles.screenStack}>
-      <View style={styles.pageHeader}>
-        <Text style={styles.pageTitle}>Routes</Text>
-        <Text style={styles.helperText}>View current and upcoming routes first.</Text>
+    <View style={styles.myRoutesPage}>
+      <View style={styles.myRoutesHeader}>
+        <Text style={styles.pageTitle}>My Routes</Text>
+        <Pressable
+          accessibilityLabel="Settings"
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={onOpenSettings}
+          style={styles.settingsIconButton}
+        >
+          <Ionicons
+            accessibilityElementsHidden
+            color="#111827"
+            importantForAccessibility="no-hide-descendants"
+            name="settings"
+            size={30}
+          />
+        </Pressable>
       </View>
-      <SecondaryButton disabled={isRefreshingRoutes} label="Refresh routes" loading={isRefreshingRoutes} onPress={onRefreshRoutes} />
-      <SegmentedTabs onSelectTab={onSelectTab} selectedTab={selectedTab} tabs={tabs} />
-      {selectedTab === 'completed' ? (
-        <InfoPanel tone="green" title="Current-session completion only" body={getDriverPlaceholderCopy('routeHistory')} />
-      ) : null}
 
       {activeSession !== null ? (
         <View style={styles.selectedRouteCard}>
@@ -2190,8 +2207,8 @@ function RoutesPage({
             </View>
             <View style={styles.routeCardStatusGroup}>
               <StatusChip
-                tone={getChipTone(activeRouteStatusForTabs ?? 'upcoming')}
-                label={formatRouteStatus(activeRouteStatusForTabs ?? 'upcoming')}
+                tone={getChipTone(activeRouteStatus ?? 'upcoming')}
+                label={formatRouteStatus(activeRouteStatus ?? 'upcoming')}
               />
               <Text style={styles.routeToggleText}>{isRouteCardExpanded ? '−' : '+'}</Text>
             </View>
@@ -2213,9 +2230,9 @@ function RoutesPage({
                 </View>
               ) : null}
 
-              {selectedTab === 'completed' ? (
+              {activeRouteStatus === 'completed' ? (
                 <PrimaryButton label="View Completed Deliveries" onPress={onOpenCompletedDeliveries} />
-              ) : selectedTab === 'active' ? (
+              ) : activeRouteStatus === 'active' ? (
                 <PrimaryButton label="Continue Session" onPress={() => onContinueRoute(activeSession.route.id)} />
               ) : (
                 <View style={styles.buttonColumn}>
@@ -2228,67 +2245,179 @@ function RoutesPage({
         </View>
       ) : (
         <EmptyState
-          title="No assigned route"
-          body={selectedTab === 'completed' ? getDriverPlaceholderCopy('routeHistory') : 'No assigned route is available for this status.'}
+          body="When dispatch assigns you a route, it’ll appear here."
+          minimal
+          title="No routes assigned yet"
         />
       )}
     </View>
   );
 }
 
-function EarningsPage() {
-  return (
-    <View style={styles.screenStack}>
-      <View style={styles.pageHeader}>
-        <Text style={styles.pageTitle}>Earnings</Text>
-        <Text style={styles.helperText}>Payouts and route earnings will appear here after the business rules and API are ready.</Text>
-      </View>
-      <EmptyState title="Coming soon" body={getDriverPlaceholderCopy('earnings')} />
-    </View>
-  );
-}
-
-function ProfilePage({
+function SettingsPage({
   acceptedLocation,
   acceptedPrivacy,
+  accountName,
   appVersion,
+  isLoadingAccountProfile,
+  onBack,
+  onEditName,
   onLogout,
-  onRequestAccountDeletionInfo,
   phoneE164,
 }: {
   acceptedLocation: boolean;
   acceptedPrivacy: boolean;
+  accountName: string | null;
   appVersion: string;
+  isLoadingAccountProfile: boolean;
+  onBack(): void;
+  onEditName(): void;
   onLogout(): void;
-  onRequestAccountDeletionInfo(): void;
   phoneE164: string | null;
 }) {
   return (
-    <View style={styles.screenStack}>
-      <View style={styles.pageHeader}>
-        <Text style={styles.pageTitle}>Profile</Text>
-        <Text style={styles.helperText}>Local driver session, consent, and app information.</Text>
+    <View style={styles.settingsScreen}>
+      <View style={styles.settingsHeader}>
+        <Pressable
+          accessibilityLabel="Back"
+          accessibilityRole="button"
+          onPress={onBack}
+          style={({ pressed }) => [
+            styles.settingsBackButton,
+            pressed && styles.settingsBackButtonPressed,
+          ]}
+        >
+          <Ionicons color="#111827" name="chevron-back" size={30} />
+        </Pressable>
+        <Text style={styles.settingsHeaderTitle}>Settings</Text>
       </View>
 
-      <View style={styles.summaryCard}>
-        <Text style={styles.cardTitle}>Driver information</Text>
-        <DataRow label="Phone" value={phoneE164 ?? 'Saved phone unavailable'} />
-        <DataRow label="App Version" value={`${appVersion} (package/app config)`} />
-        <InfoPanel tone="green" title="Profile editing" body={getDriverPlaceholderCopy('profileUpdate')} />
+      <View style={styles.settingsSection}>
+        <Text style={styles.settingsSectionLabel}>ACCOUNT</Text>
+        <View style={styles.settingsGroup}>
+          <Pressable
+            accessibilityLabel="Change Name"
+            accessibilityRole="button"
+            disabled={isLoadingAccountProfile}
+            onPress={onEditName}
+            style={({ pressed }) => [
+              styles.settingsRow,
+              styles.settingsRowSeparated,
+              pressed && styles.settingsRowPressed,
+            ]}
+          >
+            <Text style={styles.settingsRowLabel}>Name</Text>
+            <View style={styles.settingsRowValueGroup}>
+              <Text numberOfLines={1} style={styles.settingsRowValue}>
+                {isLoadingAccountProfile ? 'Loading…' : accountName ?? 'Not set'}
+              </Text>
+              <Ionicons color="#a1a7b0" name="chevron-forward" size={20} />
+            </View>
+          </Pressable>
+          <View style={styles.settingsRow}>
+            <Text style={styles.settingsRowLabel}>Phone Number</Text>
+            <Text numberOfLines={1} style={styles.settingsRowValue}>
+              {phoneE164 ?? 'Unavailable'}
+            </Text>
+          </View>
+        </View>
       </View>
 
-      <View style={styles.summaryCard}>
-        <Text style={styles.cardTitle}>Permissions & consent</Text>
-        <DataRow label="Privacy consent" value={acceptedPrivacy ? `Accepted · v${CONSENT_COPY_VERSIONS.personalInformation}` : `Needs review · v${CONSENT_COPY_VERSIONS.personalInformation}`} />
-        <DataRow label="Location consent" value={acceptedLocation ? `Accepted · v${CONSENT_COPY_VERSIONS.locationInformation}` : `Needs review · v${CONSENT_COPY_VERSIONS.locationInformation}`} />
-        <Text style={styles.helperText}>OS location permission is requested when delivery starts. This page reviews the app consent versions accepted during login.</Text>
+      <View style={styles.settingsSection}>
+        <Text style={styles.settingsSectionLabel}>CONSENT</Text>
+        <View style={styles.settingsGroup}>
+          <View style={[styles.settingsRow, styles.settingsRowSeparated]}>
+            <Text style={styles.settingsRowLabel}>Privacy</Text>
+            <Text numberOfLines={1} style={styles.settingsRowValue}>
+              {acceptedPrivacy ? 'Accepted' : 'Needs Review'}
+            </Text>
+          </View>
+          <View style={styles.settingsRow}>
+            <Text style={styles.settingsRowLabel}>Location</Text>
+            <Text numberOfLines={1} style={styles.settingsRowValue}>
+              {acceptedLocation ? 'Accepted' : 'Needs Review'}
+            </Text>
+          </View>
+        </View>
       </View>
 
-      <View style={styles.summaryCard}>
-        <Text style={styles.cardTitle}>Account</Text>
-        <SecondaryButton label="Logout and reset this device" onPress={onLogout} />
-        <SecondaryButton label="Account deletion information" onPress={onRequestAccountDeletionInfo} />
-        <Text style={styles.helperText}>{getDriverPlaceholderCopy('accountDeletion')}</Text>
+      <View style={styles.settingsSection}>
+        <Text style={styles.settingsSectionLabel}>ABOUT</Text>
+        <View style={styles.settingsGroup}>
+          <View style={styles.settingsRow}>
+            <Text style={styles.settingsRowLabel}>Version</Text>
+            <Text style={styles.settingsRowValue}>{appVersion}</Text>
+          </View>
+        </View>
+      </View>
+
+      <Pressable
+        accessibilityLabel="Sign Out"
+        accessibilityRole="button"
+        onPress={onLogout}
+        style={({ pressed }) => [
+          styles.settingsGroup,
+          styles.settingsSignOutButton,
+          pressed && styles.settingsSignOutButtonPressed,
+        ]}
+      >
+        <Text style={styles.settingsSignOutText}>Sign Out</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function AccountNamePage({
+  isSaving,
+  nameDraft,
+  onBack,
+  onChangeName,
+  onSave,
+}: {
+  isSaving: boolean;
+  nameDraft: string;
+  onBack(): void;
+  onChangeName(value: string): void;
+  onSave(): void;
+}) {
+  return (
+    <View style={styles.settingsScreen}>
+      <View style={styles.settingsHeader}>
+        <Pressable
+          accessibilityLabel="Back"
+          accessibilityRole="button"
+          onPress={onBack}
+          style={({ pressed }) => [
+            styles.settingsBackButton,
+            pressed && styles.settingsBackButtonPressed,
+          ]}
+        >
+          <Ionicons color="#111827" name="chevron-back" size={30} />
+        </Pressable>
+        <Text style={styles.settingsHeaderTitle}>Name</Text>
+      </View>
+
+      <View style={styles.settingsSection}>
+        <Text style={styles.settingsSectionLabel}>ACCOUNT</Text>
+        <View style={styles.settingsNameEditor}>
+          <LabeledInput
+            autoCapitalize="words"
+            label="Name"
+            maxLength={80}
+            onChangeText={onChangeName}
+            onSubmitEditing={onSave}
+            placeholder="Your name"
+            returnKeyType="done"
+            value={nameDraft}
+          />
+          <Text style={styles.helperText}>This is your name in Clever Driver. Store display names can be different.</Text>
+          <PrimaryButton
+            disabled={isSaving || nameDraft.trim().length === 0}
+            label="Save"
+            loading={isSaving}
+            onPress={onSave}
+          />
+        </View>
       </View>
     </View>
   );
@@ -2879,18 +3008,6 @@ function ScreenHeader({
   );
 }
 
-function SegmentedTabs({ onSelectTab, selectedTab, tabs }: { onSelectTab(tab: RouteTabId): void; selectedTab: RouteTabId; tabs: ReturnType<typeof getMvpRouteTabs> }) {
-  return (
-    <View style={styles.tabs}>
-      {tabs.map((tab) => (
-        <Pressable accessibilityRole="button" key={tab.id} onPress={() => onSelectTab(tab.id)} style={[styles.tab, selectedTab === tab.id && styles.tabActive]}>
-          <Text style={[styles.tabText, selectedTab === tab.id && styles.tabTextActive]}>{tab.label}</Text>
-        </Pressable>
-      ))}
-    </View>
-  );
-}
-
 function CountrySelectorButton({
   onPress,
   selectedCountry,
@@ -3011,6 +3128,7 @@ function PhoneNumberInput({
 }
 
 function LabeledInput({
+  autoCapitalize,
   blurOnSubmit,
   inputAccessoryViewID,
   inputRef,
@@ -3028,6 +3146,7 @@ function LabeledInput({
   secureTextEntry,
   value,
 }: {
+  autoCapitalize?: 'none' | 'sentences' | 'words';
   blurOnSubmit?: boolean;
   inputAccessoryViewID?: string;
   inputRef?: (input: TextInput | null) => void;
@@ -3050,7 +3169,7 @@ function LabeledInput({
       <Text style={styles.inputLabel}>{label}</Text>
       <View style={[styles.inputShell, multiline === true && styles.multilineInput]}>
         <TextInput
-          autoCapitalize="none"
+          autoCapitalize={autoCapitalize ?? 'none'}
           autoCorrect={false}
           blurOnSubmit={blurOnSubmit}
           inputAccessoryViewID={inputAccessoryViewID}
@@ -3488,41 +3607,11 @@ function ProgressBar({ value }: { value: number }) {
   );
 }
 
-function EmptyState({ body, title }: { body: string; title: string }) {
+function EmptyState({ body, minimal = false, title }: { body: string; minimal?: boolean; title: string }) {
   return (
-    <View style={styles.emptyCard}>
+    <View style={[styles.emptyCard, minimal && styles.emptyCardMinimal]}>
       <Text style={styles.emptyTitle}>{title}</Text>
       <Text style={styles.bodyText}>{body}</Text>
-    </View>
-  );
-}
-
-function BottomNavigation({
-  items,
-  onSelect,
-  selected,
-}: {
-  items: ReturnType<typeof getDriverMainTabs>;
-  onSelect(tab: DriverMainTabId): void;
-  selected: DriverMainTabId;
-}) {
-  return (
-    <View style={styles.bottomNav}>
-      {items.map((item) => {
-        const isSelected = item.id === selected;
-        return (
-          <Pressable
-            accessibilityLabel={item.accessibilityLabel}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: isSelected }}
-            key={item.id}
-            onPress={() => onSelect(item.id)}
-            style={[styles.bottomNavItem, isSelected && styles.bottomNavItemSelected]}
-          >
-            <Text style={[styles.bottomNavLabel, isSelected && styles.bottomNavLabelSelected]}>{item.label}</Text>
-          </Pressable>
-        );
-      })}
     </View>
   );
 }
@@ -3855,6 +3944,9 @@ const shadow = Platform.select({
 });
 
 const styles = StyleSheet.create({
+  gestureRoot: {
+    flex: 1,
+  },
   safeArea: {
     backgroundColor: '#f7f9fc',
     flex: 1,
@@ -3862,6 +3954,42 @@ const styles = StyleSheet.create({
   },
   keyboardArea: {
     flex: 1,
+  },
+  scrollStage: {
+    flex: 1,
+    overflow: 'hidden',
+  },
+  scrollSurface: {
+    backgroundColor: '#f7f9fc',
+    flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  pullRefreshReveal: {
+    alignItems: 'center',
+    height: PULL_REFRESH_REVEAL_HEIGHT,
+    justifyContent: 'center',
+    left: 0,
+    position: 'absolute',
+    right: 0,
+  },
+  pullRefreshContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  pullRefreshUpdatedAt: {
+    color: '#667085',
+    fontSize: 13,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '700',
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  pullRefreshIcon: {
+    position: 'absolute',
+    right: -28,
   },
   container: {
     flexGrow: 1,
@@ -3874,6 +4002,18 @@ const styles = StyleSheet.create({
     gap: 22,
     overflow: 'visible',
   },
+  myRoutesPage: {
+    gap: 8,
+    overflow: 'visible',
+  },
+  myRoutesHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 16,
+    minHeight: 76,
+    paddingHorizontal: 56,
+  },
   pageHeader: {
     gap: 6,
     paddingTop: 8,
@@ -3883,6 +4023,17 @@ const styles = StyleSheet.create({
     fontSize: 30,
     fontWeight: '800',
     letterSpacing: -0.5,
+    textAlign: 'center',
+  },
+  settingsIconButton: {
+    alignItems: 'center',
+    borderRadius: 22,
+    height: 44,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 8,
+    top: 16,
+    width: 44,
   },
   pageTitleSmall: {
     color: '#111827',
@@ -4133,37 +4284,6 @@ const styles = StyleSheet.create({
   trackingButtonColumn: {
     gap: 12,
   },
-  tabs: {
-    backgroundColor: '#ffffff',
-    borderColor: '#d9dee8',
-    borderRadius: 14,
-    borderWidth: 1,
-    flexDirection: 'row',
-    padding: 4,
-  },
-  tab: {
-    alignItems: 'center',
-    borderRadius: 11,
-    flex: 1,
-    minHeight: 40,
-    justifyContent: 'center',
-    paddingHorizontal: 8,
-  },
-  tabActive: {
-    backgroundColor: '#eef6ff',
-    borderColor: '#bfdbfe',
-    borderWidth: 1,
-  },
-  tabText: {
-    color: '#475467',
-    fontSize: 13,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  tabTextActive: {
-    color: '#0b57d0',
-    fontWeight: '800',
-  },
   selectedRouteCard: {
     backgroundColor: '#ffffff',
     borderColor: '#0b57d0',
@@ -4281,46 +4401,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
   },
-  bottomNavArea: {
-    backgroundColor: '#f7f9fc',
-    paddingBottom: 8,
-    paddingHorizontal: 18,
-    paddingTop: 8,
-  },
-  bottomNav: {
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderColor: '#dbeafe',
-    borderRadius: 22,
-    borderWidth: 1.4,
-    flexDirection: 'row',
-    gap: 8,
-    justifyContent: 'space-between',
-    minHeight: 68,
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    ...shadow,
-  },
-  bottomNavItem: {
-    alignItems: 'center',
-    borderRadius: 16,
-    flex: 1,
-    justifyContent: 'center',
-    minHeight: 50,
-    paddingHorizontal: 8,
-  },
-  bottomNavItemSelected: {
-    backgroundColor: '#0b57d0',
-  },
-  bottomNavLabel: {
-    color: '#667085',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  bottomNavLabelSelected: {
-    color: '#ffffff',
-    fontWeight: '900',
-  },
   screenHeader: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -4342,6 +4422,107 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
     textAlign: 'center',
+  },
+  settingsScreen: {
+    gap: 28,
+    paddingBottom: 12,
+  },
+  settingsHeader: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 64,
+    position: 'relative',
+  },
+  settingsBackButton: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderColor: '#e4e7ec',
+    borderRadius: 24,
+    borderWidth: 1,
+    height: 48,
+    justifyContent: 'center',
+    left: 0,
+    position: 'absolute',
+    width: 48,
+  },
+  settingsBackButtonPressed: {
+    backgroundColor: '#eef2f6',
+  },
+  settingsHeaderTitle: {
+    color: '#111827',
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+    textAlign: 'center',
+  },
+  settingsSection: {
+    gap: 10,
+  },
+  settingsSectionLabel: {
+    color: '#7a8089',
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+    marginLeft: 16,
+  },
+  settingsGroup: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  settingsRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 16,
+    justifyContent: 'space-between',
+    minHeight: 58,
+    paddingHorizontal: 18,
+  },
+  settingsRowSeparated: {
+    borderBottomColor: '#e9ecf1',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  settingsRowPressed: {
+    backgroundColor: '#f4f6f8',
+  },
+  settingsRowLabel: {
+    color: '#24272c',
+    flexShrink: 0,
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  settingsRowValue: {
+    color: '#7a8089',
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    textAlign: 'right',
+  },
+  settingsRowValueGroup: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6,
+    justifyContent: 'flex-end',
+  },
+  settingsNameEditor: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    gap: 14,
+    padding: 18,
+  },
+  settingsSignOutButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 58,
+  },
+  settingsSignOutButtonPressed: {
+    backgroundColor: '#fef2f2',
+  },
+  settingsSignOutText: {
+    color: '#e11d48',
+    fontSize: 16,
+    fontWeight: '700',
   },
   summaryCard: {
     backgroundColor: '#ffffff',
@@ -5290,6 +5471,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: 8,
     padding: 18,
+  },
+  emptyCardMinimal: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    elevation: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 20,
+    shadowOpacity: 0,
   },
   emptyTitle: {
     color: '#111827',

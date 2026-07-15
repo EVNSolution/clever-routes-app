@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import {
   scheduleTransientToastDismiss,
   TRANSIENT_TOAST_ANDROID_ELEVATION,
-  TRANSIENT_TOAST_ANDROID_TOP_OFFSET,
-  TRANSIENT_TOAST_BORDER_ALPHA,
+  TRANSIENT_TOAST_BOTTOM_GAP,
   TRANSIENT_TOAST_DISMISS_DELAY_MS,
-  TRANSIENT_TOAST_SURFACE_ALPHA,
   TRANSIENT_TOAST_Z_INDEX,
 } from './transientToastBehavior';
+
+const toastComponentPath = join(dirname(fileURLToPath(import.meta.url)), 'TransientToast.tsx');
 
 describe('transient toast dismissal', () => {
   it('dismisses a visible toast after two seconds', () => {
@@ -77,12 +80,21 @@ describe('transient toast dismissal', () => {
     assert.deepEqual(clearedTimers, ['toast-1']);
   });
 
-  it('uses an Android-safe lower offset and a softer transparent surface', () => {
-    assert.equal(TRANSIENT_TOAST_ANDROID_TOP_OFFSET, 54);
-    assert.equal(TRANSIENT_TOAST_ANDROID_ELEVATION, 24);
+  it('uses a safe-area anchored opaque global notification surface', () => {
+    const source = readFileSync(toastComponentPath, 'utf8');
+
+    assert.equal(TRANSIENT_TOAST_BOTTOM_GAP, 16);
+    assert.equal(TRANSIENT_TOAST_ANDROID_ELEVATION, 12);
     assert.equal(TRANSIENT_TOAST_Z_INDEX, 10_000);
-    assert.equal(TRANSIENT_TOAST_SURFACE_ALPHA, 0.58);
-    assert.equal(TRANSIENT_TOAST_BORDER_ALPHA, 0.42);
+    assert.match(source, /const \{ bottom: bottomInset \} = useSafeAreaInsets\(\)/u);
+    assert.match(source, /bottom: bottomInset \+ TRANSIENT_TOAST_BOTTOM_GAP/u);
+    assert.match(source, /backgroundColor: '#111827'/u);
+    assert.match(source, /color: '#ffffff'/u);
+    assert.match(source, /fontSize: 14/u);
+    assert.match(source, /fontWeight: '600'/u);
+    assert.match(source, /textAlign: 'left'/u);
+    assert.match(source, /borderRadius: 14/u);
+    assert.doesNotMatch(source, /rgba\(|borderRadius: 999|textAlign: 'center'|top: topInset/u);
   });
 
 });

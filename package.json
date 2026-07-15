@@ -20,11 +20,13 @@
     "check:source-layout": "tsx src/release/preflight/sourceLayoutPreflightCli.ts"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
     "@maplibre/maplibre-react-native": "^11.3.4",
     "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~56.0.15",
     "expo-camera": "~56.0.8",
     "expo-dev-client": "~56.0.22",
+    "expo-font": "~56.0.7",
     "expo-image-picker": "~56.0.20",
     "expo-location": "~56.0.20",
     "expo-notifications": "~56.0.20",
@@ -35,7 +37,10 @@
     "libphonenumber-js": "1.13.6",
     "react": "19.2.3",
     "react-native": "0.85.3",
-    "react-native-safe-area-context": "~5.7.0"
+    "react-native-gesture-handler": "~2.31.1",
+    "react-native-reanimated": "4.3.1",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-worklets": "0.8.3"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

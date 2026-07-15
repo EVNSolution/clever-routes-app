@@ -24,10 +24,20 @@ export type RefreshDriverAuthSessionInput = {
   refreshToken: string;
 };
 
+export type DriverAccountProfile = {
+  name: string | null;
+  phone: string;
+};
+
 export type DriverAuthService = {
+  getAccountProfile(input: { accountAccessToken: string }): Promise<{ account: DriverAccountProfile }>;
   login(input: LoginDriverAccountInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
   refreshSession(input: RefreshDriverAuthSessionInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
   register(input: RegisterDriverAccountInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
+  updateAccountProfile(input: {
+    accountAccessToken: string;
+    name: string;
+  }): Promise<{ account: DriverAccountProfile }>;
 };
 
 export type FetchLike = (
@@ -66,7 +76,32 @@ export function createDriverAuthApiClient(input: {
     return { accountAccess: readDriverAuthEnvelope(payload) };
   }
 
+  async function requestAccountProfile(input: {
+    accountAccessToken: string;
+    method: 'GET' | 'PATCH';
+    name?: string;
+  }): Promise<{ account: DriverAccountProfile }> {
+    const response = await fetchImpl(`${baseUrl}/driver/account/profile`, withNoStoreDriverApiRequest({
+      ...(input.name === undefined ? {} : { body: JSON.stringify({ name: input.name.trim() }) }),
+      headers: {
+        Authorization: `Bearer ${input.accountAccessToken.trim()}`,
+        ...(input.name === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      method: input.method,
+    }));
+    const payload = await response.json();
+    if (!response.ok) {
+      throw createDriverApiHttpError({ endpoint: 'Driver account profile', status: response.status });
+    }
+
+    return { account: readDriverAccountProfileEnvelope(payload) };
+  }
+
   return {
+    getAccountProfile: (request) => requestAccountProfile({
+      accountAccessToken: request.accountAccessToken,
+      method: 'GET',
+    }),
     login: (request) => postAuth('/driver/auth/login', {
       phone: request.phoneE164.trim(),
       pin: request.pin.trim(),
@@ -79,6 +114,11 @@ export function createDriverAuthApiClient(input: {
       inviteCode: request.inviteCode.trim().toUpperCase(),
       pin: request.pin.trim(),
     }, 'Register Driver Account'),
+    updateAccountProfile: (request) => requestAccountProfile({
+      accountAccessToken: request.accountAccessToken,
+      method: 'PATCH',
+      name: request.name,
+    }),
   };
 }
 
@@ -90,12 +130,45 @@ export function createMockDriverAuthService(accountAccess: DriverAccountAccessTo
   tokenType: 'Bearer',
   ttlSeconds: 900,
   use: 'driver_account',
+}, accountProfile: DriverAccountProfile = {
+  name: null,
+  phone: '+14165550123',
 }): DriverAuthService {
+  let currentProfile = accountProfile;
   return {
+    getAccountProfile: async () => ({ account: currentProfile }),
     login: async () => ({ accountAccess }),
     refreshSession: async () => ({ accountAccess }),
     register: async () => ({ accountAccess }),
+    updateAccountProfile: async (request) => {
+      currentProfile = { ...currentProfile, name: request.name.trim() };
+      return { account: currentProfile };
+    },
   };
+}
+
+function readDriverAccountProfileEnvelope(payload: unknown): DriverAccountProfile {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new Error('Invalid driver account profile response');
+  }
+  const data = (payload as { data?: unknown }).data;
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    throw new Error('Invalid driver account profile response');
+  }
+  const account = (data as { account?: unknown }).account;
+  if (typeof account !== 'object' || account === null || Array.isArray(account)) {
+    throw new Error('Invalid driver account profile response');
+  }
+  const record = account as Record<string, unknown>;
+  const name = record.name;
+  if (
+    typeof record.phone !== 'string' || !/^\+[1-9]\d{7,14}$/u.test(record.phone) ||
+    (name !== null && (typeof name !== 'string' || name.trim().length === 0 || name.trim().length > 80))
+  ) {
+    throw new Error('Invalid driver account profile response');
+  }
+
+  return { name: typeof name === 'string' ? name.trim() : null, phone: record.phone };
 }
 
 function readDriverAuthEnvelope(payload: unknown): DriverAccountAccessToken {
