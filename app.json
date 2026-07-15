@@ -58,7 +58,8 @@
         }
       ],
       "@maplibre/maplibre-react-native",
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-font"
     ],
     "icon": "./assets/icon.png"
   }

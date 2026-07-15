@@ -1967,3 +1967,70 @@ Both images must:
 - Avoid captions outside the devices
 - Feel like one unified production app
 ```
+
+---
+
+# Current Product Override — My Routes Shell (2026-07-15)
+
+This section supersedes older navigation, icon, and route-list guidance where they conflict.
+
+## Information Architecture
+
+- Remove the persistent bottom navigation and the Home, Routes, Earnings, and Profile tab shell.
+- Use `My Routes` as the first signed-in screen.
+- Keep Settings reachable from one gear-only button in the upper-right corner.
+- The Settings gear and native pull-to-refresh activity indicator are the explicit user-approved exceptions to the older no-icon direction; the gear must expose the accessibility label `Settings`.
+
+## My Routes Layout
+
+- Keep the page title and route content visually close; do not place the title inside a separate dashboard card.
+- Remove current-status summaries and status-filter tabs from the page header.
+- Preserve the existing assigned-route card details and route session actions for this first overhaul slice.
+- When no route is assigned, show:
+  - Title: `No routes assigned yet`
+  - Body: `When dispatch assigns you a route, it’ll appear here.`
+
+## Refresh Behavior
+
+- Pulling from the top translates the entire My Routes surface downward and reveals a refresh area behind it.
+- Position the revealed refresh content below the device top safe-area inset, then center it visually in the whitespace between the system status area and the translated My Routes content.
+- Keep `Last updated YYYY.MM.DD HH:mm:ss` horizontally centered and never render it as persistent footer content.
+- Place a native loading indicator immediately to the right of the centered timestamp. Do not use a Unicode refresh glyph or a hand-authored rotation loop.
+- Release after the threshold to refresh; do not add a separate refresh button.
+- After authoritative route data is processed, update the revealed area with the latest local time.
+- If the server removes an assignment, remove it from My Routes while keeping the driver account signed in.
+
+## Constraints
+
+- Retain phone/PIN authentication, route details, active delivery, consent, proof, and server assignment semantics.
+- Reuse the existing React Native `StyleSheet`, route card, and controls. Use Expo-compatible React Native Gesture Handler and Reanimated primitives for the custom pull interaction, spring settling, and reduced-motion behavior; use React Native `ActivityIndicator` for the loading icon.
+- Treat this section as the current source of truth for the signed-in shell.
+
+## Global Notifications
+
+- Render transient app messages as a compact snackbar 16px above the device bottom safe-area inset so page headers and Settings remain unobstructed.
+- Use an opaque dark-neutral surface, white left-aligned 14px semibold text, 14px corner radius, and a subtle functional shadow.
+- Keep the banner inset 16px from both screen edges and allow up to three text lines.
+- Do not use translucent blue surfaces, blue text, centered copy, or pill-shaped notification containers.
+
+## Settings — Phase 1
+
+- Use a quiet iOS-style inset-grouped list: light neutral page background, small uppercase gray section labels, white rounded groups, and thin inset separators.
+- Keep a centered `Settings` title with a circular icon-only back control. The back control must expose the accessibility label `Back`.
+- Show only settings backed by current app state:
+  - `ACCOUNT`: read-only phone number.
+  - `CONSENT`: privacy and location status as short values such as `Accepted` or `Needs Review`.
+  - `ABOUT`: app version.
+  - A standalone destructive `Sign Out` row.
+- Keep labels and values terse. Do not append consent versions, middle-dot metadata, or explanatory phrases to rows.
+- Do not use dashboard-card borders, elevated shadows, placeholder panels, or explanatory helper paragraphs on this page.
+- Do not add navigation preferences, profile editing, account deletion, legal links, support links, or diagnostic actions until those behaviors and destinations exist.
+
+## Driver Naming — Phase 2
+
+- Show `Name` in the `ACCOUNT` group and open a dedicated name editor from that row.
+- Load and update the self-chosen name through the phone-account bearer contract at `/driver/account/profile`.
+- Limit the trimmed name to 1–80 characters and keep the server response as the displayed source of truth.
+- Explain only on the editor page that the Clever Driver account name may differ from store display names.
+- Each Shopify store's driver `displayName` remains store-scoped and independent from the account name and other stores' aliases.
+- Do not copy, backfill, or synchronize Shopify store aliases into the phone-account name.

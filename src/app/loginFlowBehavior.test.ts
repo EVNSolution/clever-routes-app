@@ -11,7 +11,7 @@ describe('driver login flow', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const loginDetailScreen = source.slice(
       source.indexOf('function LoginDetailScreen'),
-      source.indexOf('function HomePage'),
+      source.indexOf('function MyRoutesPage'),
     );
 
     assert.match(loginDetailScreen, /label="6-digit PIN"/u);

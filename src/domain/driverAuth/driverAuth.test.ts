@@ -4,6 +4,65 @@ import { describe, it } from 'node:test';
 import { createDriverAuthApiClient, createMockDriverAuthService } from './driverAuth';
 
 describe('DriverAuthService', () => {
+  it('reads and updates the phone-account profile with the account bearer', async () => {
+    const requests: { body?: string; headers?: Record<string, string>; method?: string; url: string }[] = [];
+    const client = createDriverAuthApiClient({
+      baseUrl: 'https://test-api.com/',
+      fetchImpl: async (url, init) => {
+        requests.push({
+          ...(init?.body === undefined ? {} : { body: init.body }),
+          headers: init?.headers,
+          method: init?.method,
+          url,
+        });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              account: {
+                name: init?.method === 'PATCH' ? '임 지인' : null,
+                phone: '+821089216198',
+              },
+            },
+            error: null,
+          }),
+        };
+      },
+    });
+
+    const loaded = await client.getAccountProfile({ accountAccessToken: ' account-token ' });
+    const updated = await client.updateAccountProfile({
+      accountAccessToken: ' account-token ',
+      name: '  임 지인  ',
+    });
+
+    assert.deepEqual(loaded.account, { name: null, phone: '+821089216198' });
+    assert.deepEqual(updated.account, { name: '임 지인', phone: '+821089216198' });
+    assert.deepEqual(requests, [
+      {
+        headers: {
+          Authorization: 'Bearer account-token',
+          'Cache-Control': 'no-store',
+          Pragma: 'no-cache',
+        },
+        method: 'GET',
+        url: 'https://test-api.com/driver/account/profile',
+      },
+      {
+        body: JSON.stringify({ name: '임 지인' }),
+        headers: {
+          Authorization: 'Bearer account-token',
+          'Cache-Control': 'no-store',
+          'Content-Type': 'application/json',
+          Pragma: 'no-cache',
+        },
+        method: 'PATCH',
+        url: 'https://test-api.com/driver/account/profile',
+      },
+    ]);
+  });
+
   it('registers with invite and PIN and parses account tokens', async () => {
     let requestBody: any;
     const client = createDriverAuthApiClient({

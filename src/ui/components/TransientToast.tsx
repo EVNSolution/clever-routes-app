@@ -1,17 +1,20 @@
 import { Platform, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   TRANSIENT_TOAST_ANDROID_ELEVATION,
-  TRANSIENT_TOAST_ANDROID_TOP_OFFSET,
-  TRANSIENT_TOAST_BORDER_ALPHA,
-  TRANSIENT_TOAST_SURFACE_ALPHA,
+  TRANSIENT_TOAST_BOTTOM_GAP,
   TRANSIENT_TOAST_Z_INDEX,
 } from './transientToastBehavior';
 
 export function TransientToast({ text }: { text: string }) {
+  const { bottom: bottomInset } = useSafeAreaInsets();
+
   return (
-    <View pointerEvents="none" style={styles.toastOverlay}>
-      <Text numberOfLines={3} style={styles.toastText}>{text}</Text>
+    <View pointerEvents="none" style={[styles.toastOverlay, { bottom: bottomInset + TRANSIENT_TOAST_BOTTOM_GAP }]}>
+      <View accessibilityLiveRegion="polite" accessibilityRole="alert" style={styles.toastSurface}>
+        <Text numberOfLines={3} style={styles.toastText}>{text}</Text>
+      </View>
     </View>
   );
 }
@@ -22,34 +25,34 @@ const shadow = Platform.select({
   },
   ios: {
     shadowColor: '#0f172a',
-    shadowOffset: { height: 8, width: 0 },
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
+    shadowOffset: { height: 6, width: 0 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
   },
   default: {},
 });
 
 const styles = StyleSheet.create({
   toastOverlay: {
-    left: 22,
+    left: 16,
     position: 'absolute',
-    right: 22,
-    top: Platform.select({ android: TRANSIENT_TOAST_ANDROID_TOP_OFFSET, default: 32, ios: 18 }),
+    right: 16,
     zIndex: TRANSIENT_TOAST_Z_INDEX,
+  },
+  toastSurface: {
+    backgroundColor: '#111827',
+    borderRadius: 14,
+    justifyContent: 'center',
+    minHeight: 48,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
     ...shadow,
   },
   toastText: {
-    backgroundColor: `rgba(239, 246, 255, ${TRANSIENT_TOAST_SURFACE_ALPHA})`,
-    borderColor: `rgba(191, 219, 254, ${TRANSIENT_TOAST_BORDER_ALPHA})`,
-    borderRadius: 999,
-    borderWidth: 1,
-    color: '#1d4ed8',
+    color: '#ffffff',
     fontSize: 14,
-    fontWeight: '800',
+    fontWeight: '600',
     lineHeight: 20,
-    overflow: 'hidden',
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    textAlign: 'center',
+    textAlign: 'left',
   },
 });

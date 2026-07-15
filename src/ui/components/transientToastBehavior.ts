@@ -1,9 +1,7 @@
 export const TRANSIENT_TOAST_DISMISS_DELAY_MS = 2_000;
-export const TRANSIENT_TOAST_ANDROID_TOP_OFFSET = 54;
-export const TRANSIENT_TOAST_ANDROID_ELEVATION = 24;
+export const TRANSIENT_TOAST_BOTTOM_GAP = 16;
+export const TRANSIENT_TOAST_ANDROID_ELEVATION = 12;
 export const TRANSIENT_TOAST_Z_INDEX = 10_000;
-export const TRANSIENT_TOAST_BORDER_ALPHA = 0.42;
-export const TRANSIENT_TOAST_SURFACE_ALPHA = 0.58;
 
 export type TransientToastScheduler<TTimer = unknown> = {
   clearTimeout(timer: TTimer): void;
