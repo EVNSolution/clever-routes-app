@@ -24,6 +24,8 @@ export type PersistedDriverAccess = {
 export type PersistedActiveRouteSession = {
   navigationStepIndex: number;
   routePlanId: string;
+  routeStartedRecordedAt?: string;
+  startedAt?: string;
   status: 'active';
   updatedAt: string;
 };
@@ -45,20 +47,22 @@ type StoredDriverAccessPayload = PersistedDriverAccess & {
 
 export type DriverAccessTokenStore = {
   clear(): Promise<void>;
-  clearActiveRouteSession(): Promise<void>;
-  clearCachedRouteAccess(): Promise<void>;
+  clearActiveRouteSession(routePlanId?: string, startedAt?: string): Promise<boolean>;
+  clearCachedRouteAccess(routePlanId?: string): Promise<boolean>;
   loadActiveDriverAccess(): Promise<DriverAccessRestoreResult>;
+  markActiveRouteStarted(routePlanId: string, startedAt: string): Promise<boolean>;
   saveActiveRouteSession(input: {
     navigationStepIndex: number;
     routePlanId: string;
-  }): Promise<void>;
+    startedAt?: string;
+  }): Promise<boolean>;
   saveAuthenticatedDriver(input: {
     accountAccess: DriverAccountAccessToken;
     phoneE164: string;
   }): Promise<void>;
   saveFromInvitedRouteAccess(
     routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>,
-  ): Promise<void>;
+  ): Promise<boolean>;
   saveRefreshedAccountAccess(accountAccess: DriverAccountAccessToken): Promise<void>;
 };
 
@@ -67,8 +71,15 @@ export function createDriverAccessTokenStore(input: {
   storage: SecureTokenStorage;
 }): DriverAccessTokenStore {
   const now = input.now ?? (() => new Date());
+  let operationQueue = Promise.resolve();
 
-  async function clear(): Promise<void> {
+  function runSerialized<T>(operation: () => Promise<T>): Promise<T> {
+    const result = operationQueue.catch(() => undefined).then(operation);
+    operationQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  async function clearStoredPayload(): Promise<void> {
     await input.storage.deleteItemAsync(DRIVER_ACCESS_TOKEN_STORAGE_KEY);
   }
 
@@ -78,39 +89,59 @@ export function createDriverAccessTokenStore(input: {
   }
 
   async function updateStoredPayload(
-    updater: (payload: StoredDriverAccessPayload) => StoredDriverAccessPayload,
-  ): Promise<void> {
+    updater: (payload: StoredDriverAccessPayload) => StoredDriverAccessPayload | null,
+  ): Promise<boolean> {
     const storedPayload = await loadStoredPayload();
     if (storedPayload === null) {
-      return;
+      return false;
+    }
+    const updatedPayload = updater(storedPayload);
+    if (updatedPayload === null) {
+      return false;
     }
 
     await input.storage.setItemAsync(
       DRIVER_ACCESS_TOKEN_STORAGE_KEY,
-      JSON.stringify(updater(storedPayload)),
+      JSON.stringify(updatedPayload),
     );
+    return true;
   }
 
   return {
-    clear,
-    clearActiveRouteSession: async () => {
-      await updateStoredPayload((payload) => {
-        const { activeRouteSession: _activeRouteSession, ...rest } = payload;
-        return { ...rest, savedAt: now().toISOString() };
-      });
-    },
-    clearCachedRouteAccess: async () => {
-      await updateStoredPayload((payload) => {
-        const {
-          activeRouteSession: _activeRouteSession,
-          driverAccess: _driverAccess,
-          routeAccess: _routeAccess,
-          ...rest
-        } = payload;
-        return { ...rest, savedAt: now().toISOString() };
-      });
-    },
-    loadActiveDriverAccess: async () => {
+    clear: () => runSerialized(clearStoredPayload),
+    clearActiveRouteSession: (routePlanId, startedAt) => runSerialized(() => updateStoredPayload((payload) => {
+      const persistedStartedAt = payload.activeRouteSession?.startedAt ?? payload.activeRouteSession?.updatedAt;
+      if (
+        routePlanId !== undefined
+        && (
+          payload.activeRouteSession?.routePlanId !== routePlanId
+          || (startedAt !== undefined && persistedStartedAt !== startedAt)
+        )
+      ) {
+        return null;
+      }
+      const { activeRouteSession: _activeRouteSession, ...rest } = payload;
+      return { ...rest, savedAt: now().toISOString() };
+    })),
+    clearCachedRouteAccess: (routePlanId) => runSerialized(() => updateStoredPayload((payload) => {
+      if (
+        routePlanId !== undefined
+        && (
+          payload.activeRouteSession !== undefined
+          || payload.routeAccess?.routePlanId !== routePlanId
+        )
+      ) {
+        return null;
+      }
+      const {
+        activeRouteSession: _activeRouteSession,
+        driverAccess: _driverAccess,
+        routeAccess: _routeAccess,
+        ...rest
+      } = payload;
+      return { ...rest, savedAt: now().toISOString() };
+    })),
+    loadActiveDriverAccess: () => runSerialized(async () => {
       const rawPayload = await input.storage.getItemAsync(DRIVER_ACCESS_TOKEN_STORAGE_KEY);
       if (rawPayload === null) {
         return { kind: 'missing' };
@@ -118,7 +149,7 @@ export function createDriverAccessTokenStore(input: {
 
       const payload = parseStoredDriverAccessPayload(rawPayload);
       if (payload === null) {
-        await clear();
+        await clearStoredPayload();
         return { kind: 'invalid' };
       }
 
@@ -127,30 +158,67 @@ export function createDriverAccessTokenStore(input: {
           return buildDriverAccessRestoreResult('refresh_required', payload);
         }
 
-        await clear();
+        await clearStoredPayload();
         return { kind: 'expired', driverProfile: payload.driverProfile };
       }
 
       return buildDriverAccessRestoreResult('active', payload);
-    },
-    saveActiveRouteSession: async (activeRouteSession) => {
+    }),
+    markActiveRouteStarted: (routePlanId, startedAt) => runSerialized(() => updateStoredPayload((payload) => {
+      const activeRouteSession = payload.activeRouteSession;
+      const persistedStartedAt = activeRouteSession?.startedAt ?? activeRouteSession?.updatedAt;
+      if (
+        activeRouteSession?.routePlanId !== routePlanId
+        || persistedStartedAt !== startedAt
+      ) {
+        return null;
+      }
+      return {
+        ...payload,
+        activeRouteSession: {
+          ...activeRouteSession,
+          routeStartedRecordedAt: now().toISOString(),
+        },
+        savedAt: now().toISOString(),
+      };
+    })),
+    saveActiveRouteSession: (activeRouteSession) => {
       const navigationStepIndex = Number.isInteger(activeRouteSession.navigationStepIndex) &&
         activeRouteSession.navigationStepIndex >= 0
         ? activeRouteSession.navigationStepIndex
         : 0;
 
-      await updateStoredPayload((payload) => ({
-        ...payload,
-        savedAt: now().toISOString(),
-        activeRouteSession: {
-          navigationStepIndex,
-          routePlanId: activeRouteSession.routePlanId,
-          status: 'active',
-          updatedAt: now().toISOString(),
-        },
+      return runSerialized(() => updateStoredPayload((payload) => {
+        if (
+          payload.driverAccess === undefined
+          || payload.routeAccess?.routePlanId !== activeRouteSession.routePlanId
+        ) {
+          return null;
+        }
+        const currentSession = payload.activeRouteSession?.routePlanId === activeRouteSession.routePlanId
+          ? payload.activeRouteSession
+          : undefined;
+        const requestedStartedAt = activeRouteSession.startedAt !== undefined
+          && Number.isFinite(Date.parse(activeRouteSession.startedAt))
+          ? activeRouteSession.startedAt
+          : undefined;
+        return {
+          ...payload,
+          savedAt: now().toISOString(),
+          activeRouteSession: {
+            navigationStepIndex,
+            routePlanId: activeRouteSession.routePlanId,
+            ...(currentSession?.routeStartedRecordedAt === undefined
+              ? {}
+              : { routeStartedRecordedAt: currentSession.routeStartedRecordedAt }),
+            startedAt: currentSession?.startedAt ?? currentSession?.updatedAt ?? requestedStartedAt ?? now().toISOString(),
+            status: 'active',
+            updatedAt: now().toISOString(),
+          },
+        };
       }));
     },
-    saveAuthenticatedDriver: async (driver) => {
+    saveAuthenticatedDriver: (driver) => runSerialized(async () => {
       const payload: StoredDriverAccessPayload = {
         accountAccess: driver.accountAccess,
         driverProfile: { phoneE164: driver.phoneE164.trim() },
@@ -162,21 +230,24 @@ export function createDriverAccessTokenStore(input: {
         DRIVER_ACCESS_TOKEN_STORAGE_KEY,
         JSON.stringify(payload),
       );
-    },
-    saveFromInvitedRouteAccess: async (routeAccess) => {
-      await updateStoredPayload((payload) => ({
-        ...payload,
-        driverAccess: routeAccess.driverAccess,
-        routeAccess: routeAccess.routeAccess,
-        savedAt: now().toISOString(),
-      }));
-    },
+    }),
+    saveFromInvitedRouteAccess: (routeAccess) => runSerialized(() => updateStoredPayload((payload) => (
+      payload.activeRouteSession !== undefined
+      && payload.activeRouteSession.routePlanId !== routeAccess.routeAccess.routePlanId
+        ? null
+        : {
+            ...payload,
+            driverAccess: routeAccess.driverAccess,
+            routeAccess: routeAccess.routeAccess,
+            savedAt: now().toISOString(),
+          }
+    ))),
     saveRefreshedAccountAccess: async (accountAccess) => {
-      await updateStoredPayload((payload) => ({
+      await runSerialized(() => updateStoredPayload((payload) => ({
         ...payload,
         accountAccess,
         savedAt: now().toISOString(),
-      }));
+      })));
     },
   };
 }
@@ -280,6 +351,12 @@ function isPersistedActiveRouteSession(value: unknown): value is PersistedActive
     session.status === 'active' &&
     typeof session.routePlanId === 'string' && session.routePlanId.trim() !== '' &&
     Number.isInteger(session.navigationStepIndex) && (session.navigationStepIndex as number) >= 0 &&
+    (session.startedAt === undefined || (
+      typeof session.startedAt === 'string' && Number.isFinite(Date.parse(session.startedAt))
+    )) &&
+    (session.routeStartedRecordedAt === undefined || (
+      typeof session.routeStartedRecordedAt === 'string' && Number.isFinite(Date.parse(session.routeStartedRecordedAt))
+    )) &&
     typeof session.updatedAt === 'string' && Number.isFinite(Date.parse(session.updatedAt))
   );
 }
