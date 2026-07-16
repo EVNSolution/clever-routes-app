@@ -7,6 +7,7 @@ import {
 } from '../proof/proofMediaUpload';
 
 export const OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY = '@clever-driver/offline-submission-queue-v1';
+export const OFFLINE_SUBMISSION_QUEUE_MAX_ITEMS = 4_000;
 export const OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY = {
   maxAgeMs: 72 * 60 * 60 * 1000,
   maxAttempts: 5,
@@ -42,6 +43,7 @@ export type OfflineSubmissionQueue = {
   discard(queueItemId: string): boolean;
   discardRouteSubmissions(routePlanId: string): number;
   enqueueDriverEvent(event: DriverEventInput): OfflineDriverEventQueueItem;
+  enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
   enqueueProofMediaUpload(request: ProofMediaUploadRequest): OfflineProofMediaQueueItem;
   listPending(): OfflineSubmissionQueueItem[];
   recordRetryFailure(queueItemId: string, lastError: string): boolean;
@@ -64,23 +66,45 @@ export type OfflineSubmissionRetryResult = {
 
 export function createInMemoryOfflineSubmissionQueue(input?: {
   initialItems?: OfflineSubmissionQueueItem[];
+  maxItems?: number;
   now?: () => Date;
   onChange?: (items: OfflineSubmissionQueueItem[]) => void;
 }): OfflineSubmissionQueue {
   const items = new Map((input?.initialItems ?? []).map((item) => [item.queueItemId, item]));
   const now = input?.now ?? (() => new Date());
+  const maxItems = normalizeMaxItems(input?.maxItems);
 
   function emitChange() {
     input?.onChange?.(Array.from(items.values()));
   }
 
-  return {
+  function upsertDriverEvent(event: DriverEventInput): {
+    inserted: boolean;
+    item: OfflineDriverEventQueueItem;
+  } {
+    const queueItemId = getDriverEventQueueItemId(event);
+    const existing = items.get(queueItemId);
+    if (existing?.kind === 'driver_event') {
+      return { inserted: false, item: existing };
+    }
+
+    const item: OfflineDriverEventQueueItem = {
+      attempts: 0,
+      enqueuedAt: now().toISOString(),
+      event,
+      kind: 'driver_event',
+      queueItemId,
+    };
+    items.set(queueItemId, item);
+    return { inserted: true, item };
+  }
+
+  const initialDiscarded = trimOfflineSubmissionQueue(items, maxItems);
+  const queue: OfflineSubmissionQueue = {
     clear: () => {
       const count = items.size;
-      if (count > 0) {
-        items.clear();
-        emitChange();
-      }
+      items.clear();
+      emitChange();
       return count;
     },
     discard: (queueItemId) => {
@@ -104,22 +128,20 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       return queueItemIds.length;
     },
     enqueueDriverEvent: (event) => {
-      const queueItemId = getDriverEventQueueItemId(event);
-      const existing = items.get(queueItemId);
-      if (existing?.kind === 'driver_event') {
-        return existing;
+      const result = upsertDriverEvent(event);
+      if (result.inserted) {
+        trimOfflineSubmissionQueue(items, maxItems);
+        emitChange();
       }
-
-      const item: OfflineDriverEventQueueItem = {
-        attempts: 0,
-        enqueuedAt: now().toISOString(),
-        event,
-        kind: 'driver_event',
-        queueItemId,
-      };
-      items.set(queueItemId, item);
-      emitChange();
-      return item;
+      return result.item;
+    },
+    enqueueDriverEvents: (events) => {
+      const results = events.map(upsertDriverEvent);
+      if (results.some((result) => result.inserted)) {
+        trimOfflineSubmissionQueue(items, maxItems);
+        emitChange();
+      }
+      return results.map((result) => result.item);
     },
     enqueueProofMediaUpload: (request) => {
       const queueItemId = getProofMediaQueueItemId(request);
@@ -136,6 +158,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
         request,
       };
       items.set(queueItemId, item);
+      trimOfflineSubmissionQueue(items, maxItems);
       emitChange();
       return item;
     },
@@ -153,9 +176,15 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
     },
     whenPersisted: async () => undefined,
   };
+
+  if (initialDiscarded > 0) {
+    emitChange();
+  }
+  return queue;
 }
 
 export async function createPersistentOfflineSubmissionQueue(input: {
+  maxItems?: number;
   now?: () => Date;
   storage: OfflineSubmissionQueueStorage;
   storageKey?: string;
@@ -169,13 +198,16 @@ export async function createPersistentOfflineSubmissionQueue(input: {
 
   const queue = createInMemoryOfflineSubmissionQueue({
     initialItems,
+    maxItems: input.maxItems,
     now: input.now,
     onChange: (items) => {
       const payload = JSON.stringify(toPersistedEnvelope(items));
       persistQueue = persistQueue
         .catch(() => undefined)
-        .then(() => input.storage.setItem(storageKey, payload))
-        .catch(() => undefined);
+        .then(() => items.length === 0
+          ? input.storage.removeItem(storageKey)
+          : input.storage.setItem(storageKey, payload));
+      void persistQueue.catch(() => undefined);
     },
   });
 
@@ -190,17 +222,32 @@ export async function retryOfflineSubmissions(input: {
   now?: () => Date;
   proofMediaUploadService: ProofMediaUploadService;
   queue: OfflineSubmissionQueue;
+  routePlanId?: string;
   retryPolicy?: OfflineSubmissionQueueRetryPolicy;
 }): Promise<OfflineSubmissionRetryResult> {
   let discarded = 0;
   let failed = 0;
   let requiresRouteLookup: true | undefined;
+  let retried = 0;
   let succeeded = 0;
-  const pending = input.queue.listPending();
+  const pending = input.queue.listPending().filter((item) => (
+    input.routePlanId === undefined || getQueueItemRoutePlanId(item) === input.routePlanId
+  ));
   const retryPolicy = input.retryPolicy ?? OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY;
   const now = input.now ?? (() => new Date());
+  const completedRoutePlanIds = new Set<string>();
 
   for (const item of pending) {
+    const routePlanId = getQueueItemRoutePlanId(item);
+    if (
+      routePlanId !== undefined
+      && completedRoutePlanIds.has(routePlanId)
+      && !isTerminalStopDriverEvent(item)
+    ) {
+      continue;
+    }
+    retried += 1;
+
     if (shouldDiscardOfflineSubmission(item, retryPolicy, now())) {
       if (input.queue.discard(item.queueItemId)) {
         discarded += 1;
@@ -216,6 +263,15 @@ export async function retryOfflineSubmissions(input: {
       }
       input.queue.discard(item.queueItemId);
       succeeded += 1;
+      if (
+        item.kind === 'driver_event'
+        && item.event.eventType === 'ROUTE_COMPLETED'
+        && item.event.routePlanId !== null
+        && item.event.routePlanId !== undefined
+      ) {
+        completedRoutePlanIds.add(item.event.routePlanId);
+        discarded += input.queue.discardRouteSubmissions(item.event.routePlanId);
+      }
     } catch (error) {
       if (item.kind === 'proof_media' && isProofMediaRejectedError(error)) {
         if (input.queue.discard(item.queueItemId)) {
@@ -240,9 +296,34 @@ export async function retryOfflineSubmissions(input: {
     discarded,
     failed,
     ...(requiresRouteLookup === undefined ? {} : { requiresRouteLookup }),
-    retried: pending.length,
+    retried,
     succeeded,
   };
+}
+
+function normalizeMaxItems(maxItems: number | undefined): number {
+  return maxItems !== undefined && Number.isInteger(maxItems) && maxItems > 0
+    ? maxItems
+    : OFFLINE_SUBMISSION_QUEUE_MAX_ITEMS;
+}
+
+function trimOfflineSubmissionQueue(
+  items: Map<string, OfflineSubmissionQueueItem>,
+  maxItems: number,
+): number {
+  let discarded = 0;
+  while (items.size > maxItems) {
+    const oldestLocation = Array.from(items.values()).find((item) => (
+      item.kind === 'driver_event' && item.event.eventType === 'LOCATION_UPDATED'
+    ));
+    const oldest = oldestLocation ?? items.values().next().value as OfflineSubmissionQueueItem | undefined;
+    if (oldest === undefined) {
+      break;
+    }
+    items.delete(oldest.queueItemId);
+    discarded += 1;
+  }
+  return discarded;
 }
 
 function getDriverEventQueueItemId(event: DriverEventInput): string {

@@ -1,4 +1,5 @@
 import type { DeliveryStartResult } from '../delivery/deliveryStart';
+import type { DriverAccessTokenStore } from '../driver/driverAccessTokenStore';
 import type { DriverEventInput, DriverEventService } from '../events/driverEvents';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 
@@ -7,6 +8,10 @@ export const CONTINUOUS_LOCATION_TASK_NAME = 'clever-driver-continuous-location'
 export type BackgroundPermissionResult = 'denied' | 'granted';
 
 export type ContinuousLocationStreamService = {
+  ensureLocationUpdatesStarted?(input: {
+    routePlanId: string | null;
+    taskName: string;
+  }): Promise<{ alreadyStarted: boolean }>;
   getBackgroundAvailability(): Promise<boolean>;
   hasStartedLocationUpdates(taskName: string): Promise<boolean>;
   requestBackgroundPermission(): Promise<BackgroundPermissionResult>;
@@ -45,6 +50,11 @@ export type ContinuousLocationStopResult = {
   taskName: string;
 };
 
+export type ContinuousLocationSessionCleanupResult = ContinuousLocationStopResult | {
+  kind: 'unchanged';
+  taskName: string;
+};
+
 export async function startContinuousLocationUpdatesAfterDeliveryStart(input: {
   deliveryStart: DeliveryStartResult;
   routePlanId: string | null;
@@ -78,8 +88,13 @@ export async function startContinuousLocationUpdatesAfterDeliveryStart(input: {
     };
   }
 
-  const alreadyStarted = await input.streamService.hasStartedLocationUpdates(taskName);
-  if (!alreadyStarted) {
+  const alreadyStarted = input.streamService.ensureLocationUpdatesStarted === undefined
+    ? await input.streamService.hasStartedLocationUpdates(taskName)
+    : (await input.streamService.ensureLocationUpdatesStarted({
+        routePlanId: input.routePlanId,
+        taskName,
+      })).alreadyStarted;
+  if (!alreadyStarted && input.streamService.ensureLocationUpdatesStarted === undefined) {
     await input.streamService.startLocationUpdates({
       routePlanId: input.routePlanId,
       taskName,
@@ -97,14 +112,19 @@ export async function startContinuousLocationUpdatesAfterDeliveryStart(input: {
 
 export async function recordContinuousLocationUpdateBatch(input: {
   driverEventService: DriverEventService;
+  isSessionCurrent?: () => Promise<boolean>;
   locations: ContinuousLocationBatchItem[];
   offlineQueue?: OfflineSubmissionQueue;
   routePlanId: string | null;
 }): Promise<ContinuousLocationBatchRecordResult> {
   let queuedCount = 0;
   let recordedCount = 0;
+  const queuedEvents: DriverEventInput[] = [];
 
   for (const [index, location] of input.locations.entries()) {
+    if (input.isSessionCurrent !== undefined && !(await input.isSessionCurrent())) {
+      break;
+    }
     const event: DriverEventInput = {
       clientEventId: createContinuousLocationClientEventId(location, index),
       eventType: 'LOCATION_UPDATED',
@@ -122,10 +142,20 @@ export async function recordContinuousLocationUpdateBatch(input: {
       if (input.offlineQueue === undefined) {
         throw error;
       }
+      if (input.isSessionCurrent !== undefined && !(await input.isSessionCurrent())) {
+        break;
+      }
 
-      input.offlineQueue.enqueueDriverEvent(event);
-      queuedCount += 1;
+      queuedEvents.push(event);
     }
+  }
+
+  if (
+    queuedEvents.length > 0
+    && (input.isSessionCurrent === undefined || await input.isSessionCurrent())
+  ) {
+    input.offlineQueue?.enqueueDriverEvents(queuedEvents);
+    queuedCount = queuedEvents.length;
   }
 
   return queuedCount > 0
@@ -140,6 +170,34 @@ export async function stopContinuousLocationUpdates(input: {
   const taskName = input.taskName ?? CONTINUOUS_LOCATION_TASK_NAME;
   await input.streamService.stopLocationUpdates(taskName);
   return { kind: 'stopped', taskName };
+}
+
+export async function clearAndStopContinuousLocationSession(input: {
+  activeRouteSessionStore: Pick<DriverAccessTokenStore, 'clearActiveRouteSession'>;
+  routePlanId?: string;
+  streamService: ContinuousLocationStreamService;
+  taskName?: string;
+}): Promise<ContinuousLocationSessionCleanupResult> {
+  let clearError: unknown;
+  let cleared = false;
+  try {
+    cleared = await input.activeRouteSessionStore.clearActiveRouteSession(input.routePlanId);
+  } catch (error) {
+    clearError = error;
+  }
+
+  const taskName = input.taskName ?? CONTINUOUS_LOCATION_TASK_NAME;
+  if (input.routePlanId !== undefined && !cleared && clearError === undefined) {
+    return { kind: 'unchanged', taskName };
+  }
+  const result = await stopContinuousLocationUpdates({
+    streamService: input.streamService,
+    taskName,
+  });
+  if (clearError !== undefined) {
+    throw clearError;
+  }
+  return result;
 }
 
 function createContinuousLocationClientEventId(location: ContinuousLocationBatchItem, index: number): string {

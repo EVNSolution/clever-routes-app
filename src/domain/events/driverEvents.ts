@@ -108,8 +108,10 @@ export function createDriverEventsApiClient(input: {
 }
 
 export async function recordRouteStartedAfterDeliveryStart(input: {
+  clientEventId?: string;
   deliveryStart: DeliveryStartResult;
   driverEventService: DriverEventService;
+  occurredAt?: Date;
   offlineQueue?: OfflineSubmissionQueue;
   routePlanId: string | null;
 }): Promise<RouteStartedRecordResult> {
@@ -121,12 +123,11 @@ export async function recordRouteStartedAfterDeliveryStart(input: {
     };
   }
 
-  const event: DriverEventInput = {
-    clientEventId: createClientEventId('route-started'),
-    eventType: 'ROUTE_STARTED',
-    occurredAt: new Date(),
+  const event = createRouteStartedDriverEvent({
+    ...(input.clientEventId === undefined ? {} : { clientEventId: input.clientEventId }),
+    occurredAt: input.occurredAt ?? new Date(),
     routePlanId: input.routePlanId,
-  };
+  });
 
   try {
     const result = await input.driverEventService.recordDriverEvent(event);
@@ -148,8 +149,21 @@ export async function recordRouteStartedAfterDeliveryStart(input: {
   }
 }
 
-function createClientEventId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}`;
+export function createRouteStartedDriverEvent(input: {
+  clientEventId?: string;
+  occurredAt: Date;
+  routePlanId: string | null;
+}): DriverEventInput {
+  return {
+    clientEventId: input.clientEventId ?? createRouteStartedClientEventId(input.occurredAt),
+    eventType: 'ROUTE_STARTED',
+    occurredAt: input.occurredAt,
+    routePlanId: input.routePlanId,
+  };
+}
+
+export function createRouteStartedClientEventId(occurredAt: Date): string {
+  return `route-started-${occurredAt.getTime().toString(36)}`;
 }
 
 function toDriverEventRequestBody(event: DriverEventInput): Record<string, unknown> {

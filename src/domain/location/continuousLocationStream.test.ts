@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import { createMockDriverEventService } from '../events/driverEvents';
 import {
+  clearAndStopContinuousLocationSession,
   recordContinuousLocationUpdateBatch,
   startContinuousLocationUpdatesAfterDeliveryStart,
   stopContinuousLocationUpdates,
@@ -181,5 +182,47 @@ describe('continuous location streaming', () => {
 
     assert.deepEqual(result, { kind: 'stopped', taskName: 'clever-driver-continuous-location' });
     assert.deepEqual(streamService.stopped, ['clever-driver-continuous-location']);
+  });
+
+  it('clears the active route marker before stopping native tracking', async () => {
+    const calls: string[] = [];
+    const streamService = createMockStreamService();
+    streamService.stopLocationUpdates = async (taskName) => {
+      calls.push(`stop:${taskName}`);
+    };
+
+    const result = await clearAndStopContinuousLocationSession({
+      activeRouteSessionStore: {
+        clearActiveRouteSession: async () => {
+          calls.push('clear-active-route');
+          return true;
+        },
+      },
+      streamService,
+    });
+
+    assert.deepEqual(result, { kind: 'stopped', taskName: 'clever-driver-continuous-location' });
+    assert.deepEqual(calls, [
+      'clear-active-route',
+      'stop:clever-driver-continuous-location',
+    ]);
+  });
+
+  it('does not stop a newer active route when stale cleanup targets another route', async () => {
+    const streamService = createMockStreamService();
+
+    const result = await clearAndStopContinuousLocationSession({
+      activeRouteSessionStore: {
+        clearActiveRouteSession: async () => false,
+      },
+      routePlanId: 'stale-route',
+      streamService,
+    });
+
+    assert.deepEqual(result, {
+      kind: 'unchanged',
+      taskName: 'clever-driver-continuous-location',
+    });
+    assert.deepEqual(streamService.stopped, []);
   });
 });

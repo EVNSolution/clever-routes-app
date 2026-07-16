@@ -54,7 +54,8 @@ import {
   ROUTE_COMPANY_STEP_INDEX,
 } from '../domain/route/routeStepProgress';
 import {
-  recordContinuousLocationUpdateBatch,
+  clearAndStopContinuousLocationSession,
+  CONTINUOUS_LOCATION_TASK_NAME,
   startContinuousLocationUpdatesAfterDeliveryStart,
   type ContinuousLocationStopResult,
   type ContinuousLocationStreamStartResult,
@@ -63,12 +64,12 @@ import { finishDeliveryAfterActive, type DeliveryFinishResult } from '../domain/
 import { startDeliveryWithForegroundPermission, type DeliveryStartResult } from '../domain/delivery/deliveryStart';
 import { createDriverApiClientsFromRouteAccess } from '../api/deliveryServer/driverApiClients';
 import { createMockDriverEventService, recordRouteStartedAfterDeliveryStart, type DriverEventService, type RouteStartedRecordResult } from '../domain/events/driverEvents';
-import { createExpoContinuousLocationStreamService, registerContinuousLocationTaskHandler } from '../platform/expo/location/expoContinuousLocationStreamService';
+import { createExpoContinuousLocationStreamService, registerContinuousLocationTaskObserver } from '../platform/expo/location/expoContinuousLocationStreamService';
 import { createExpoForegroundLocationPermissionService } from '../platform/expo/location/expoLocationPermissionService';
-import { createExpoOfflineSubmissionQueueStorage } from '../platform/expo/storage/expoOfflineSubmissionQueueStorage';
+import { getExpoOfflineSubmissionQueue } from '../platform/expo/storage/expoOfflineSubmissionQueueStorage';
 import { createExpoProofPhotoCaptureService } from '../platform/expo/camera/expoProofPhotoCaptureService';
 import { createExpoSecureDriverAccessTokenStore } from '../platform/expo/secureStore/expoSecureDriverAccessTokenStore';
-import { createPersistentOfflineSubmissionQueue, type OfflineSubmissionQueue } from '../domain/offline/offlineSubmissionQueue';
+import { retryOfflineSubmissions, type OfflineSubmissionQueue } from '../domain/offline/offlineSubmissionQueue';
 import { captureProofPhoto, type ProofPhotoCaptureResult, type ProofPhotoCaptureSource } from '../domain/proof/proofPhotoCapture';
 import {
   createMockProofMediaUploadService,
@@ -232,6 +233,7 @@ function DriverApp() {
   const [, setConsentSubmission] = useState<DriverConsentSubmissionResult | null>(null);
   const [deliveryStartResult, setDeliveryStartResult] = useState<DeliveryStartResult | null>(null);
   const [deliveryFinishResult, setDeliveryFinishResult] = useState<DeliveryFinishResult | null>(null);
+  const [activeRoutePlanId, setActiveRoutePlanId] = useState<string | null>(null);
   const [routeStartedEventResult, setRouteStartedEventResult] = useState<RouteStartedRecordResult | null>(null);
   const [continuousLocationResult, setContinuousLocationResult] = useState<ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null>(null);
   const [stopProofResults, setStopProofResults] = useState<Record<string, StopProofEventResult>>({});
@@ -263,6 +265,7 @@ function DriverApp() {
   const notifiedStopArrivalIdsRef = useRef<Set<string>>(new Set());
   const hasCheckedInitialStopArrivalNotificationRef = useRef(false);
   const hasAttemptedDriverRestoreRef = useRef(false);
+  const isRetryingOfflineSubmissionsRef = useRef(false);
 
   useEffect(() => {
     selectedRouteIdRef.current = selectedRouteId;
@@ -273,11 +276,25 @@ function DriverApp() {
   const continuousLocationStreamService = useMemo(() => createExpoContinuousLocationStreamService(), []);
   const stopArrivalNotificationService = useMemo(() => createExpoStopArrivalNotificationService(), []);
   const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
-  const offlineSubmissionQueueStorage = useMemo(() => createExpoOfflineSubmissionQueueStorage(), []);
   const mockDriverEventService = useMemo(() => createMockDriverEventService(), []);
   const mockDriverConsentService = useMemo(() => createMockDriverConsentService(), []);
   const mockAssignedRouteService = useMemo(() => createMockAssignedRouteService({ status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute }), []);
   const mockProofMediaUploadService = useMemo(() => createMockProofMediaUploadService({ mode: 'success' }), []);
+  const clearAndStopActiveLocationSession = useCallback(async (routePlanId?: string): Promise<void> => {
+    try {
+      const result = await clearAndStopContinuousLocationSession({
+        activeRouteSessionStore: driverAccessTokenStore,
+        ...(routePlanId === undefined ? {} : { routePlanId }),
+        streamService: continuousLocationStreamService,
+      });
+      if (result.kind === 'stopped') {
+        setActiveRoutePlanId(null);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+      console.warn(`[location] Active tracking cleanup failed: ${errorMessage}`);
+    }
+  }, [continuousLocationStreamService, driverAccessTokenStore]);
   const selectedPhoneCountry = findDriverPhoneCountry(selectedPhoneCountryIso2) ?? DEFAULT_DRIVER_PHONE_COUNTRY;
   const visiblePhoneCountries = useMemo(
     () => searchDriverPhoneCountries(countrySearchQuery),
@@ -408,6 +425,7 @@ function DriverApp() {
       }, routeAccessService);
       if (lookupResult.kind !== 'company_guidance' && lookupResult.kind !== 'route_choices') {
         if (lookupResult.kind === 'denied' && lookupResult.status === 'NOT_FOUND') {
+          await clearAndStopActiveLocationSession();
           await driverAccessTokenStore.clearCachedRouteAccess();
           setRouteSessions([]);
           setSubmission(null);
@@ -419,7 +437,8 @@ function DriverApp() {
         (choice) => choice.routeAccess.routePlanId === routePlanId,
       );
       if (refreshedChoice === undefined) {
-        await driverAccessTokenStore.clearCachedRouteAccess();
+        await clearAndStopActiveLocationSession(routePlanId);
+        await driverAccessTokenStore.clearCachedRouteAccess(routePlanId);
         setRouteSessions((current) => current.filter(
           (session) => session.routeAccess.routePlanId !== routePlanId,
         ));
@@ -435,9 +454,10 @@ function DriverApp() {
       setRouteSessions((current) => current.map((session) => (
         session.routeAccess.routePlanId === routePlanId ? { ...session, ...refreshedChoice } : session
       )));
-      void driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(refreshedSubmission)).catch((error) => {
+      await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(refreshedSubmission)).catch((error) => {
         const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
         console.warn(`[driver-api] Refreshed route access could not be saved: ${errorMessage}`);
+        return false;
       });
       console.info('[driver-api] Refreshed route access after expired token.');
       return refreshedSubmission.driverAccess;
@@ -446,7 +466,7 @@ function DriverApp() {
       console.warn(`[driver-api] Route access refresh failed: ${errorMessage}`);
       return null;
     }
-  }, [driverAccessTokenStore, getActiveAccountAccess, routeAccessService, runtimeConfig.mode]);
+  }, [clearAndStopActiveLocationSession, driverAccessTokenStore, getActiveAccountAccess, routeAccessService, runtimeConfig.mode]);
 
   const refreshDriverAccessForSubmission = useCallback(async (
     currentSubmission: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>,
@@ -462,7 +482,47 @@ function DriverApp() {
       : undefined
   ), [refreshDriverAccessForSubmission]);
 
-  const selectedRouteSession = routeSessions.find((session) => session.route.id === selectedRouteId) ?? routeSessions[0] ?? null;
+  const retryOfflineSubmissionsForSessions = useCallback(async (sessions: RouteSession[]): Promise<void> => {
+    if (isRetryingOfflineSubmissionsRef.current || sessions.length === 0) {
+      return;
+    }
+
+    isRetryingOfflineSubmissionsRef.current = true;
+    try {
+      const queue = await getExpoOfflineSubmissionQueue();
+      for (const session of sessions) {
+        const routeSubmission = toCompanyGuidanceSubmission(session);
+        const refreshDriverAccess = buildDriverAccessRefresh(routeSubmission);
+        await retryOfflineSubmissions({
+          driverEventService: getDriverEventServiceForCurrentSubmission({
+            fallback: mockDriverEventService,
+            refreshDriverAccess,
+            runtimeConfig,
+            submission: routeSubmission,
+          }),
+          proofMediaUploadService: getProofMediaUploadServiceForCurrentSubmission({
+            fallback: mockProofMediaUploadService,
+            refreshDriverAccess,
+            runtimeConfig,
+            submission: routeSubmission,
+          }),
+          queue,
+          routePlanId: session.route.id,
+        });
+      }
+      await queue.whenPersisted();
+      setOfflineQueueCount(queue.listPending().length);
+    } catch (error) {
+      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+      console.warn(`[offline-queue] Retry failed: ${errorMessage}`);
+    } finally {
+      isRetryingOfflineSubmissionsRef.current = false;
+    }
+  }, [buildDriverAccessRefresh, mockDriverEventService, mockProofMediaUploadService, runtimeConfig]);
+
+  const selectedRouteSession = routeSessions.find(
+    (session) => session.route.id === (activeRoutePlanId ?? selectedRouteId),
+  ) ?? routeSessions[0] ?? null;
   const selectedRoute = selectedRouteSession?.route ?? null;
   const routeStatus = getRouteStatus(deliveryStartResult, deliveryFinishResult);
   const currentStop = selectedRoute === null ? null : getCurrentRouteStop({ navigationStepIndex, route: selectedRoute });
@@ -523,7 +583,7 @@ function DriverApp() {
 
   useEffect(() => {
     let isMounted = true;
-    createPersistentOfflineSubmissionQueue({ storage: offlineSubmissionQueueStorage })
+    getExpoOfflineSubmissionQueue()
       .then((queue) => {
         if (!isMounted) {
           return;
@@ -541,7 +601,7 @@ function DriverApp() {
     return () => {
       isMounted = false;
     };
-  }, [offlineSubmissionQueueStorage]);
+  }, []);
 
   useEffect(() => scheduleTransientToastDismiss({
     dismiss: () => setMessage(null),
@@ -588,29 +648,23 @@ function DriverApp() {
 
   useEffect(() => {
     if (deliveryStartResult?.kind !== 'delivery_active' || deliveryFinishResult?.flowState === 'delivery_finished') {
-      registerContinuousLocationTaskHandler(null);
+      registerContinuousLocationTaskObserver(null);
       return;
     }
 
-    registerContinuousLocationTaskHandler(async (locations) => {
-      const queue = offlineSubmissionQueue;
-      const routePlanId = selectedRoute?.id ?? null;
-      if (queue === null || routePlanId === null) {
+    registerContinuousLocationTaskObserver(async (locations, taskResult) => {
+      if (taskResult?.kind === 'deactivated') {
+        setActiveRoutePlanId(null);
+        setDeliveryStartResult(null);
+        setContinuousLocationResult({
+          kind: 'stopped',
+          taskName: CONTINUOUS_LOCATION_TASK_NAME,
+        });
+        setScreen('mainTabs');
+        setMessage('This route is no longer assigned. Live location tracking stopped.');
         return;
       }
-
-      await recordContinuousLocationUpdateBatch({
-        driverEventService: getDriverEventServiceForCurrentSubmission({
-          fallback: mockDriverEventService,
-          refreshDriverAccess: buildDriverAccessRefresh(submission),
-          runtimeConfig,
-          submission,
-        }),
-        locations,
-        offlineQueue: queue,
-        routePlanId,
-      });
-      setOfflineQueueCount(queue.listPending().length);
+      setOfflineQueueCount(offlineSubmissionQueue?.listPending().length ?? 0);
 
       const lastLocation = locations[locations.length - 1] ?? null;
       const candidate = getStopArrivalNotificationCandidate({
@@ -628,21 +682,16 @@ function DriverApp() {
       }
     });
 
-    return () => registerContinuousLocationTaskHandler(null);
+    return () => registerContinuousLocationTaskObserver(null);
   }, [
-    buildDriverAccessRefresh,
     completedStopIds,
     deliveryFinishResult,
     deliveryStartResult,
-    mockDriverEventService,
     navigationStepIndex,
     offlineSubmissionQueue,
     routeStatus,
-    runtimeConfig,
     selectedRoute,
-    selectedRoute?.id,
     stopArrivalNotificationService,
-    submission,
   ]);
 
   function handlePhoneInputChange(value: string) {
@@ -765,13 +814,14 @@ function DriverApp() {
     setScreen('mainTabs');
   }
 
-  const openVerifiedNoAssignedRoute = useCallback(() => {
+  const openVerifiedNoAssignedRoute = useCallback(async () => {
+    await clearAndStopActiveLocationSession();
     resetRouteProgress();
     setSubmission(null);
     setLastRoutesUpdatedAt(new Date());
     setScreen('mainTabs');
     void driverAccessTokenStore.clearCachedRouteAccess().catch(() => undefined);
-  }, [driverAccessTokenStore]);
+  }, [clearAndStopActiveLocationSession, driverAccessTokenStore]);
 
   const handleLoginAndLoadRoutes = useCallback(async (
     accountAccess: DriverAccountAccessToken,
@@ -800,7 +850,7 @@ function DriverApp() {
           await driverAccessTokenStore.clearCachedRouteAccess();
         }
         if (allowVerifiedDriverNoRoute && lookupResult.kind === 'denied' && lookupResult.status === 'NOT_FOUND') {
-          openVerifiedNoAssignedRoute();
+          await openVerifiedNoAssignedRoute();
           return;
         }
 
@@ -810,7 +860,7 @@ function DriverApp() {
 
       const choices = getRouteChoicesFromSubmission(lookupResult);
       if (choices.length === 0) {
-        openVerifiedNoAssignedRoute();
+        await openVerifiedNoAssignedRoute();
         return;
       }
 
@@ -863,7 +913,7 @@ function DriverApp() {
       }
 
       if (loadedSessions.length === 0) {
-        openVerifiedNoAssignedRoute();
+        await openVerifiedNoAssignedRoute();
         return;
       }
 
@@ -875,9 +925,11 @@ function DriverApp() {
       const selectedRouteWasRemoved = currentSelectedRouteId !== null &&
         !loadedSessions.some((session) => session.route.id === currentSelectedRouteId);
       const activeRouteWasRemoved = activeRouteSession !== null && restoredActiveSession === null;
-      if (selectedRouteWasRemoved || activeRouteWasRemoved) {
+      if (activeRouteWasRemoved) {
+        await clearAndStopActiveLocationSession(activeRouteSession.routePlanId);
         resetRouteProgress();
-        await driverAccessTokenStore.clearActiveRouteSession();
+      } else if (selectedRouteWasRemoved && restoredActiveSession === null) {
+        resetRouteProgress();
       }
       setRouteSessions(loadedSessions);
       setLastRoutesUpdatedAt(new Date());
@@ -890,15 +942,40 @@ function DriverApp() {
       const selectedSession = loadedSessions.find((session) => session.route.id === nextSelectedRouteId) ?? loadedSessions[0];
       const firstSubmission = toCompanyGuidanceSubmission(selectedSession);
       setSubmission(firstSubmission);
-      void driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(firstSubmission)).catch(() => {
+      await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(firstSubmission)).catch(() => {
         runAfterUiInteractions(() => {
           setMessage('Route loaded, but session persistence failed. Sign in again if the app does not restore this route next launch.');
         });
       });
+      void retryOfflineSubmissionsForSessions(loadedSessions);
       if (restoredActiveSession !== null) {
         const restoredStepIndex = clampRouteNavigationStepIndex(activeRouteSession?.navigationStepIndex ?? COMPANY_STEP_INDEX, restoredActiveSession.route);
-        setDeliveryStartResult(getRestoredActiveDeliveryStartResult());
+        const restoredDeliveryStart = getRestoredActiveDeliveryStartResult();
+        setDeliveryStartResult(restoredDeliveryStart);
         setDeliveryFinishResult(null);
+        try {
+          const continuousResult = await startContinuousLocationUpdatesAfterDeliveryStart({
+            deliveryStart: restoredDeliveryStart,
+            routePlanId: restoredActiveSession.route.id,
+            streamService: continuousLocationStreamService,
+          });
+          setContinuousLocationResult(continuousResult);
+          if (continuousResult.kind === 'blocked') {
+            await clearAndStopActiveLocationSession(restoredActiveSession.route.id);
+            setDeliveryStartResult(null);
+            setScreen('mainTabs');
+            setMessage(continuousResult.message);
+            return;
+          }
+        } catch (error) {
+          await clearAndStopActiveLocationSession(restoredActiveSession.route.id);
+          setDeliveryStartResult(null);
+          setScreen('mainTabs');
+          const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+          setMessage(`Active route tracking could not be restored: ${errorMessage}`);
+          return;
+        }
+        setActiveRoutePlanId(restoredActiveSession.route.id);
         setNavigationStepIndex(restoredStepIndex);
         setScreen('routeSession');
         runAfterUiInteractions(() => {
@@ -921,6 +998,7 @@ function DriverApp() {
         error,
       });
       if (failure.kind === 'server_401') {
+        await clearAndStopActiveLocationSession();
         await driverAccessTokenStore.clear();
         resetRouteProgress();
         setVerifiedDriverPhoneE164(null);
@@ -934,10 +1012,13 @@ function DriverApp() {
     }
   }, [
     buildDriverAccessRefresh,
+    clearAndStopActiveLocationSession,
+    continuousLocationStreamService,
     driverAccessTokenStore,
     mockAssignedRouteService,
     mockDriverConsentService,
     openVerifiedNoAssignedRoute,
+    retryOfflineSubmissionsForSessions,
     routeAccessService,
     runtimeConfig,
   ]);
@@ -956,6 +1037,7 @@ function DriverApp() {
       const restoredAccess = await driverAccessTokenStore.loadActiveDriverAccess();
       const accountAccess = await getActiveAccountAccess();
       if (accountAccess === null) {
+        await clearAndStopActiveLocationSession();
         setMessage('Your saved login expired. Sign in with your phone number and PIN.');
         resetRouteProgress();
         setVerifiedDriverPhoneE164(null);
@@ -979,6 +1061,7 @@ function DriverApp() {
       setIsRefreshingRoutes(false);
     }
   }, [
+    clearAndStopActiveLocationSession,
     driverAccessTokenStore,
     getActiveAccountAccess,
     handleLoginAndLoadRoutes,
@@ -1013,9 +1096,16 @@ function DriverApp() {
       if (!isMounted) {
         return;
       }
-      if (result.kind === 'expired' && result.driverProfile !== undefined) {
-        setNationalPhoneInput(result.driverProfile.phoneE164);
-        setMessage('Your saved login expired. Enter your PIN to continue.');
+      if (result.kind === 'expired') {
+        await clearAndStopActiveLocationSession();
+        if (result.driverProfile !== undefined) {
+          setNationalPhoneInput(result.driverProfile.phoneE164);
+          setMessage('Your saved login expired. Enter your PIN to continue.');
+        }
+        return;
+      }
+      if (result.kind === 'invalid' || result.kind === 'missing') {
+        await clearAndStopActiveLocationSession();
         return;
       }
       if (result.kind === 'active' || result.kind === 'refresh_required') {
@@ -1041,6 +1131,7 @@ function DriverApp() {
             },
           );
         } catch {
+          await clearAndStopActiveLocationSession();
           await driverAccessTokenStore.clear();
           if (isMounted) {
             setMessage('Your saved login could not be refreshed. Sign in with your phone number and PIN.');
@@ -1050,7 +1141,7 @@ function DriverApp() {
       }
     });
     return () => { isMounted = false; };
-  }, [driverAccessTokenStore, driverAuthService, handleLoginAndLoadRoutes]);
+  }, [clearAndStopActiveLocationSession, driverAccessTokenStore, driverAuthService, handleLoginAndLoadRoutes]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
@@ -1070,6 +1161,11 @@ function DriverApp() {
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
     if (routeSession === null) {
       setMessage('No route is available to start.');
+      return;
+    }
+    if (activeRoutePlanId !== null && activeRoutePlanId !== routeSession.route.id) {
+      setSelectedRouteId(activeRoutePlanId);
+      setMessage('Finish the active route before starting another route.');
       return;
     }
 
@@ -1093,11 +1189,20 @@ function DriverApp() {
       setMessage('No route is available to start.');
       return;
     }
+    if (activeRoutePlanId !== null && activeRoutePlanId !== routeSession.route.id) {
+      setSelectedRouteId(activeRoutePlanId);
+      setMessage('Finish the active route before starting another route.');
+      return;
+    }
 
-    setSelectedRouteId(routeSession.route.id);
     const activeSubmission = toCompanyGuidanceSubmission(routeSession);
+    const routeAccessSaved = await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(activeSubmission));
+    if (!routeAccessSaved) {
+      setMessage('Another route is already active. Finish it before starting this route.');
+      return;
+    }
+    setSelectedRouteId(routeSession.route.id);
     setSubmission(activeSubmission);
-    await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(activeSubmission));
     setIsStartingRoute(true);
     setMessage(null);
 
@@ -1113,7 +1218,35 @@ function DriverApp() {
         return;
       }
 
-      const queue = offlineSubmissionQueue ?? undefined;
+      const routeStartedAt = new Date();
+      const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
+        navigationStepIndex: COMPANY_STEP_INDEX,
+        routePlanId: routeSession.route.id,
+        startedAt: routeStartedAt.toISOString(),
+      });
+      if (!activeRouteSaved) {
+        setDeliveryStartResult(null);
+        setMessage('Route access changed before tracking could start. Refresh routes and try again.');
+        return;
+      }
+      setActiveRoutePlanId(routeSession.route.id);
+      const continuousResult = await startContinuousLocationUpdatesAfterDeliveryStart({
+        deliveryStart,
+        routePlanId: routeSession.route.id,
+        streamService: continuousLocationStreamService,
+      });
+      setContinuousLocationResult(continuousResult);
+      if (continuousResult.kind === 'blocked') {
+        await clearAndStopActiveLocationSession(routeSession.route.id);
+        setDeliveryStartResult(null);
+        setMessage(continuousResult.message);
+        return;
+      }
+
+      const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      if (offlineSubmissionQueue === null) {
+        setOfflineSubmissionQueue(queue);
+      }
       const eventService = getDriverEventServiceForCurrentSubmission({
         fallback: mockDriverEventService,
         refreshDriverAccess: buildDriverAccessRefresh(activeSubmission),
@@ -1123,25 +1256,35 @@ function DriverApp() {
       const routeStartedResult = await recordRouteStartedAfterDeliveryStart({
         deliveryStart,
         driverEventService: eventService,
+        occurredAt: routeStartedAt,
         offlineQueue: queue,
         routePlanId: routeSession.route.id,
       });
       setRouteStartedEventResult(routeStartedResult);
-
-      const continuousResult = await startContinuousLocationUpdatesAfterDeliveryStart({
-        deliveryStart,
-        routePlanId: routeSession.route.id,
-        streamService: continuousLocationStreamService,
-      });
-      setContinuousLocationResult(continuousResult);
+      if (routeStartedResult.kind === 'recorded') {
+        const marked = await driverAccessTokenStore.markActiveRouteStarted(
+          routeSession.route.id,
+          routeStartedAt.toISOString(),
+        ).catch((error) => {
+          const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+          console.warn(`[location] Route start acknowledgement could not be saved: ${errorMessage}`);
+          return null;
+        });
+        if (marked === false) {
+          throw new Error('Active route changed before route start acknowledgement was saved.');
+        }
+      } else if (routeStartedResult.kind === 'queued') {
+        await queue.whenPersisted();
+      }
 
       setNavigationStepIndex(COMPANY_STEP_INDEX);
-      await driverAccessTokenStore.saveActiveRouteSession({
-        navigationStepIndex: COMPANY_STEP_INDEX,
-        routePlanId: routeSession.route.id,
-      });
       setScreen('routeSession');
       setMessage('Route session started. Continue the pickup and stop workflow in the session.');
+    } catch (error) {
+      await clearAndStopActiveLocationSession(routeSession.route.id);
+      setDeliveryStartResult(null);
+      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+      setMessage(`Route session could not start: ${errorMessage}`);
     } finally {
       setIsStartingRoute(false);
       refreshOfflineQueueCount();
@@ -1164,6 +1307,11 @@ function DriverApp() {
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
     if (routeSession === null) {
       setMessage('No route session is available to continue.');
+      return;
+    }
+    if (activeRoutePlanId !== null && activeRoutePlanId !== routeSession.route.id) {
+      setSelectedRouteId(activeRoutePlanId);
+      setMessage('Continue the active route before opening another route session.');
       return;
     }
 
@@ -1480,12 +1628,22 @@ function DriverApp() {
   }
 
   async function finishRoute(route: AssignedRoute) {
-    if (deliveryStartResult === null) {
+    if (deliveryStartResult?.kind !== 'delivery_active') {
       return;
     }
 
     setIsFinishingRoute(true);
     try {
+      const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      if (offlineSubmissionQueue === null) {
+        setOfflineSubmissionQueue(queue);
+      }
+      const activeRouteCleared = await driverAccessTokenStore.clearActiveRouteSession(route.id);
+      if (!activeRouteCleared) {
+        setMessage('This route is no longer the active tracking session. Refresh routes before finishing.');
+        return;
+      }
+      setActiveRoutePlanId(null);
       const finishResult = await finishDeliveryAfterActive({
         deliveryStart: deliveryStartResult,
         driverEventService: getDriverEventServiceForCurrentSubmission({
@@ -1494,17 +1652,20 @@ function DriverApp() {
           runtimeConfig,
           submission,
         }),
-        offlineQueue: offlineSubmissionQueue ?? undefined,
+        offlineQueue: queue,
         routePlanId: route.id,
         streamService: continuousLocationStreamService,
       });
       setDeliveryFinishResult(finishResult);
       if (finishResult.kind !== 'blocked') {
         setContinuousLocationResult({ kind: 'stopped', taskName: finishResult.stoppedTaskName });
-        await driverAccessTokenStore.clearActiveRouteSession();
       }
       setScreen('completedDeliveries');
       setMessage(finishResult.message);
+    } catch (error) {
+      await clearAndStopActiveLocationSession();
+      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+      setMessage(`Route completion could not be finalized: ${errorMessage}`);
     } finally {
       setIsFinishingRoute(false);
       refreshOfflineQueueCount();
@@ -1534,11 +1695,12 @@ function DriverApp() {
   }
 
   function resetRouteProgress() {
-    registerContinuousLocationTaskHandler(null);
+    registerContinuousLocationTaskObserver(null);
     setRouteSessions([]);
     setConsentSubmission(null);
     setDeliveryStartResult(null);
     setDeliveryFinishResult(null);
+    setActiveRoutePlanId(null);
     setRouteStartedEventResult(null);
     setContinuousLocationResult(null);
     notifiedStopArrivalIdsRef.current.clear();
@@ -1563,15 +1725,17 @@ function DriverApp() {
 
   async function handleLogout() {
     setMessage(null);
-    if (offlineSubmissionQueue !== null) {
+    await clearAndStopActiveLocationSession();
+    try {
+      const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
       const resetResult = await resetDriverSession({
         driverAccessTokenStore,
-        offlineQueue: offlineSubmissionQueue,
+        offlineQueue: queue,
       });
       setMessage(`Signed out. Cleared ${resetResult.clearedOfflineSubmissions} offline retry item${resetResult.clearedOfflineSubmissions === 1 ? '' : 's'}.`);
-    } else {
+    } catch {
       await driverAccessTokenStore.clear();
-      setMessage('Signed out. Offline retry storage was not ready.');
+      setMessage('Signed out. Offline retry storage could not be cleared.');
     }
 
     resetRouteProgress();
@@ -1828,12 +1992,17 @@ function DriverApp() {
 
           {screen === 'mainTabs' ? (
             <MyRoutesPage
+              activeRoutePlanId={activeRoutePlanId}
               isStartingRoute={isStartingRoute}
               onOpenCompletedDeliveries={() => setScreen('completedDeliveries')}
               onOpenRoutePreview={handleOpenRoutePreview}
               onContinueRoute={handleOpenRouteSession}
               onOpenSettings={handleOpenSettings}
-              onSelectRoute={setSelectedRouteId}
+              onSelectRoute={(routeId) => {
+                if (activeRoutePlanId === null) {
+                  setSelectedRouteId(routeId);
+                }
+              }}
               onStartRoute={handleStartRoute}
               routeSessions={routeSessions}
               routeStatus={routeStatus}
@@ -2130,6 +2299,7 @@ function LoginDetailScreen({
 }
 
 function MyRoutesPage({
+  activeRoutePlanId,
   isStartingRoute,
   onOpenCompletedDeliveries,
   onOpenRoutePreview,
@@ -2141,6 +2311,7 @@ function MyRoutesPage({
   routeStatus,
   selectedRouteId,
 }: {
+  activeRoutePlanId: string | null;
   isStartingRoute: boolean;
   onOpenCompletedDeliveries(): void;
   onOpenRoutePreview(routeId: string): void;
@@ -2154,14 +2325,15 @@ function MyRoutesPage({
 }) {
   const classificationNow = new Date();
   const visibleRouteSessions = routeSessions;
-  const activeSession = visibleRouteSessions.find((session) => session.route.id === selectedRouteId) ?? visibleRouteSessions[0] ?? null;
+  const effectiveSelectedRouteId = activeRoutePlanId ?? selectedRouteId;
+  const activeSession = visibleRouteSessions.find((session) => session.route.id === effectiveSelectedRouteId) ?? visibleRouteSessions[0] ?? null;
   const activeIndex = activeSession === null ? -1 : visibleRouteSessions.findIndex((session) => session.route.id === activeSession.route.id);
   const activeRouteStatus = activeSession === null
     ? null
     : classifyAssignedRouteSession({
       now: classificationNow,
       route: activeSession.route,
-      selectedRouteId,
+      selectedRouteId: effectiveSelectedRouteId,
       selectedRouteStatus: routeStatus,
     });
   const [collapsedRouteKey, setCollapsedRouteKey] = useState<string | null>(null);
@@ -2232,7 +2404,7 @@ function MyRoutesPage({
               <DataRow label="Estimated Distance" value={formatAssignedRouteDistance(activeSession.route.routeMetrics)} />
               <DataRow label="Estimated Time" value={formatAssignedRouteDuration(activeSession.route.routeMetrics)} />
 
-              {visibleRouteSessions.length > 1 ? (
+              {activeRoutePlanId === null && visibleRouteSessions.length > 1 ? (
                 <View style={styles.routePagerRow}>
                   <SecondaryButton compact label="Previous Route" onPress={() => selectRelativeRoute(-1)} />
                   <Text style={styles.routePagerText}>Route {activeIndex + 1} of {visibleRouteSessions.length}</Text>

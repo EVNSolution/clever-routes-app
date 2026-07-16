@@ -75,6 +75,31 @@ describe('offline submission queue', () => {
     assert.equal(queue.listPending()[0]?.attempts, 0);
   });
 
+  it('persists a failed location batch with one queue mutation', () => {
+    let changeCount = 0;
+    const queue = createInMemoryOfflineSubmissionQueue({
+      onChange: () => { changeCount += 1; },
+    });
+
+    queue.enqueueDriverEvents([
+      {
+        clientEventId: 'location-1',
+        eventType: 'LOCATION_UPDATED',
+        occurredAt: new Date('2026-07-16T09:00:00.000Z'),
+        routePlanId: 'route-1',
+      },
+      {
+        clientEventId: 'location-2',
+        eventType: 'LOCATION_UPDATED',
+        occurredAt: new Date('2026-07-16T09:00:30.000Z'),
+        routePlanId: 'route-1',
+      },
+    ]);
+
+    assert.equal(changeCount, 1);
+    assert.equal(queue.listPending().length, 2);
+  });
+
   it('retries queued submissions and removes successful items', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueDriverEvent({
@@ -265,10 +290,8 @@ describe('offline submission queue', () => {
     queue.discard(item.queueItemId);
     await queue.whenPersisted();
 
-    assert.deepEqual(JSON.parse(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}'), {
-      items: [],
-      version: 1,
-    });
+    assert.equal(storage.values.has(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY), false);
+    assert.deepEqual(storage.removedKeys, [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]);
   });
 
   it('persists retry success removal and retry failure attempts', async () => {
@@ -363,10 +386,45 @@ describe('offline submission queue', () => {
     release();
     await queue.whenPersisted();
 
-    assert.deepEqual(JSON.parse(values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}'), {
-      items: [],
-      version: 1,
+    assert.equal(values.has(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY), false);
+  });
+
+  it('surfaces a durable write failure and recovers on the next snapshot', async () => {
+    const storage = createMemoryStorage();
+    const baseSetItem = storage.setItem;
+    let shouldFail = true;
+    storage.setItem = async (key, value) => {
+      if (shouldFail) {
+        shouldFail = false;
+        throw new Error('storage full');
+      }
+      await baseSetItem(key, value);
+    };
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+
+    queue.enqueueDriverEvent({
+      clientEventId: 'first',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-07-16T09:00:00.000Z'),
+      routePlanId: 'route-1',
     });
+    await assert.rejects(queue.whenPersisted(), /storage full/u);
+
+    queue.enqueueDriverEvent({
+      clientEventId: 'second',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-07-16T09:01:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    await queue.whenPersisted();
+
+    const stored = JSON.parse(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
+      items: { queueItemId: string }[];
+    };
+    assert.deepEqual(stored.items.map((item) => item.queueItemId), [
+      'driver-event:first',
+      'driver-event:second',
+    ]);
   });
 
   it('discards expired queued submissions before retrying live services', async () => {
@@ -526,9 +584,145 @@ describe('offline submission queue', () => {
     await queue.whenPersisted();
 
     assert.deepEqual(queue.listPending(), []);
-    assert.deepEqual(JSON.parse(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}'), {
-      items: [],
-      version: 1,
+    assert.equal(storage.values.has(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY), false);
+    assert.deepEqual(storage.removedKeys, [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]);
+  });
+
+  it('trims oversized durable state by removing the oldest location before terminal evidence', async () => {
+    const storage = createMemoryStorage({
+      [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]: JSON.stringify({
+        items: [
+          {
+            attempts: 0,
+            enqueuedAt: '2026-07-16T09:00:00.000Z',
+            event: {
+              clientEventId: 'terminal-stop',
+              eventType: 'STOP_DELIVERED',
+              occurredAt: '2026-07-16T09:00:00.000Z',
+              routePlanId: 'route-1',
+            },
+            kind: 'driver_event',
+            queueItemId: 'driver-event:terminal-stop',
+          },
+          {
+            attempts: 0,
+            enqueuedAt: '2026-07-16T09:01:00.000Z',
+            event: {
+              clientEventId: 'old-location',
+              eventType: 'LOCATION_UPDATED',
+              occurredAt: '2026-07-16T09:01:00.000Z',
+              routePlanId: 'route-1',
+            },
+            kind: 'driver_event',
+            queueItemId: 'driver-event:old-location',
+          },
+          {
+            attempts: 0,
+            enqueuedAt: '2026-07-16T09:02:00.000Z',
+            event: {
+              clientEventId: 'new-location',
+              eventType: 'LOCATION_UPDATED',
+              occurredAt: '2026-07-16T09:02:00.000Z',
+              routePlanId: 'route-1',
+            },
+            kind: 'driver_event',
+            queueItemId: 'driver-event:new-location',
+          },
+        ],
+        version: 1,
+      }),
     });
+
+    const queue = await createPersistentOfflineSubmissionQueue({
+      maxItems: 2,
+      now: () => new Date('2026-07-16T10:00:00.000Z'),
+      storage,
+    });
+    await queue.whenPersisted();
+
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+      'driver-event:terminal-stop',
+      'driver-event:new-location',
+    ]);
+    const stored = JSON.parse(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
+      items: { queueItemId: string }[];
+    };
+    assert.deepEqual(stored.items.map((item) => item.queueItemId), [
+      'driver-event:terminal-stop',
+      'driver-event:new-location',
+    ]);
+  });
+
+  it('retries only the authenticated route without consuming attempts for another route', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-a',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-07-16T09:00:00.000Z'),
+      routePlanId: 'route-a',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-b',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-07-16T09:00:00.000Z'),
+      routePlanId: 'route-b',
+    });
+    const recorded: string[] = [];
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: {
+        recordDriverEvent: async (event) => {
+          recorded.push(event.clientEventId);
+          return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+        },
+      },
+      proofMediaUploadService: {
+        uploadProofMedia: async () => { throw new Error('unexpected proof upload'); },
+      },
+      queue,
+      routePlanId: 'route-a',
+    });
+
+    assert.deepEqual(result, { discarded: 0, failed: 0, retried: 1, succeeded: 1 });
+    assert.deepEqual(recorded, ['route-a']);
+    assert.deepEqual(queue.listPending().map((item) => ({
+      attempts: item.attempts,
+      queueItemId: item.queueItemId,
+    })), [{ attempts: 0, queueItemId: 'driver-event:route-b' }]);
+  });
+
+  it('applies route cleanup after a queued completion is recorded', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-completed',
+      eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-07-16T09:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'stale-location',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-07-16T08:59:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'stop-1',
+      fileName: 'proof.jpg',
+      routePlanId: 'route-1',
+      source: 'camera',
+      uri: 'file:///proof.jpg',
+    });
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => { throw new Error('should be cleaned before upload'); },
+      },
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(result, { discarded: 2, failed: 0, retried: 1, succeeded: 1 });
+    assert.deepEqual(queue.listPending(), []);
   });
 });
