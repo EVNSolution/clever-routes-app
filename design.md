@@ -2019,12 +2019,14 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - Keep a centered `Settings` title with a circular icon-only back control. The back control must expose the accessibility label `Back`.
 - Show only settings backed by current app state:
   - `ACCOUNT`: read-only phone number.
-  - `CONSENT`: privacy and location status as short values such as `Accepted` or `Needs Review`.
+  - `CONSENT`: privacy and location status as `Allowed` or `Denied`; each row opens the published policy document.
   - `ABOUT`: app version.
   - A standalone destructive `Sign Out` row.
+- Restore the accepted consent state with an authenticated session because that
+  session can only be created after both required login consents are accepted.
 - Keep labels and values terse. Do not append consent versions, middle-dot metadata, or explanatory phrases to rows.
 - Do not use dashboard-card borders, elevated shadows, placeholder panels, or explanatory helper paragraphs on this page.
-- Do not add navigation preferences, profile editing, account deletion, legal links, support links, or diagnostic actions until those behaviors and destinations exist.
+- Do not add navigation preferences, account deletion, support links, or diagnostic actions until those behaviors and destinations exist.
 
 ## Driver Naming — Phase 2
 

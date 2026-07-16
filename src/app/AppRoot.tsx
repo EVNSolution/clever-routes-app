@@ -173,6 +173,7 @@ type RouteLoadOptions = {
 
 const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
 const DRIVER_APP_VERSION = '1.0.0';
+const DRIVER_CONSENT_DOCUMENT_URL = 'https://clever-route-api.cleversystem.ai/privacy';
 const PULL_REFRESH_DRAG_RESISTANCE = 0.72;
 const PULL_REFRESH_MAX_DISTANCE = 120;
 const PULL_REFRESH_REVEAL_HEIGHT = 96;
@@ -345,6 +346,12 @@ function DriverApp() {
     setMessage(null);
     setScreen('settings');
     void loadAccountProfile();
+  }
+
+  function handleOpenConsentDocument(): void {
+    void Linking.openURL(DRIVER_CONSENT_DOCUMENT_URL).catch(() => {
+      setMessage('Policy document could not be opened.');
+    });
   }
 
   function handleOpenAccountName(): void {
@@ -1023,6 +1030,8 @@ function DriverApp() {
           }
           setNationalPhoneInput(result.driverProfile.phoneE164);
           setVerifiedDriverPhoneE164(result.driverProfile.phoneE164);
+          setAcceptedPrivacy(true);
+          setAcceptedLocation(true);
           await handleLoginAndLoadRoutes(
             accountAccess,
             result.driverProfile.phoneE164,
@@ -1841,6 +1850,7 @@ function DriverApp() {
               isLoadingAccountProfile={isLoadingAccountProfile}
               onBack={openHomeRoot}
               onEditName={handleOpenAccountName}
+              onOpenConsentDocument={handleOpenConsentDocument}
               onLogout={handleLogout}
               phoneE164={verifiedDriverPhoneE164 ?? phoneE164Preview}
             />
@@ -2262,6 +2272,7 @@ function SettingsPage({
   isLoadingAccountProfile,
   onBack,
   onEditName,
+  onOpenConsentDocument,
   onLogout,
   phoneE164,
 }: {
@@ -2272,6 +2283,7 @@ function SettingsPage({
   isLoadingAccountProfile: boolean;
   onBack(): void;
   onEditName(): void;
+  onOpenConsentDocument(): void;
   onLogout(): void;
   phoneE164: string | null;
 }) {
@@ -2326,18 +2338,41 @@ function SettingsPage({
       <View style={styles.settingsSection}>
         <Text style={styles.settingsSectionLabel}>CONSENT</Text>
         <View style={styles.settingsGroup}>
-          <View style={[styles.settingsRow, styles.settingsRowSeparated]}>
+          <Pressable
+            accessibilityLabel="Read Privacy Policy"
+            accessibilityRole="button"
+            onPress={onOpenConsentDocument}
+            style={({ pressed }) => [
+              styles.settingsRow,
+              styles.settingsRowSeparated,
+              pressed && styles.settingsRowPressed,
+            ]}
+          >
             <Text style={styles.settingsRowLabel}>Privacy</Text>
-            <Text numberOfLines={1} style={styles.settingsRowValue}>
-              {acceptedPrivacy ? 'Accepted' : 'Needs Review'}
-            </Text>
-          </View>
-          <View style={styles.settingsRow}>
+            <View style={styles.settingsRowValueGroup}>
+              <Text numberOfLines={1} style={styles.settingsRowValue}>
+                {acceptedPrivacy ? 'Allowed' : 'Denied'}
+              </Text>
+              <Ionicons color="#a1a7b0" name="chevron-forward" size={20} />
+            </View>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="Read Location Policy"
+            accessibilityRole="button"
+            onPress={onOpenConsentDocument}
+            style={({ pressed }) => [
+              styles.settingsRow,
+              pressed && styles.settingsRowPressed,
+            ]}
+          >
             <Text style={styles.settingsRowLabel}>Location</Text>
-            <Text numberOfLines={1} style={styles.settingsRowValue}>
-              {acceptedLocation ? 'Accepted' : 'Needs Review'}
-            </Text>
-          </View>
+            <View style={styles.settingsRowValueGroup}>
+              <Text numberOfLines={1} style={styles.settingsRowValue}>
+                {acceptedLocation ? 'Allowed' : 'Denied'}
+              </Text>
+              <Ionicons color="#a1a7b0" name="chevron-forward" size={20} />
+            </View>
+          </Pressable>
         </View>
       </View>
 

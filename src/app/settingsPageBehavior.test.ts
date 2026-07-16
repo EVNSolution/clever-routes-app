@@ -44,8 +44,11 @@ describe('Settings page behavior', () => {
     assert.match(settingsPage, />CONSENT</u);
     assert.match(settingsPage, />Privacy</u);
     assert.match(settingsPage, />Location</u);
-    assert.match(settingsPage, /acceptedPrivacy \? 'Accepted' : 'Needs Review'/u);
-    assert.match(settingsPage, /acceptedLocation \? 'Accepted' : 'Needs Review'/u);
+    assert.match(settingsPage, /accessibilityLabel="Read Privacy Policy"/u);
+    assert.match(settingsPage, /accessibilityLabel="Read Location Policy"/u);
+    assert.match(settingsPage, /onPress=\{onOpenConsentDocument\}/u);
+    assert.match(settingsPage, /acceptedPrivacy \? 'Allowed' : 'Denied'/u);
+    assert.match(settingsPage, /acceptedLocation \? 'Allowed' : 'Denied'/u);
     assert.match(settingsPage, />ABOUT</u);
     assert.match(settingsPage, />Version</u);
     assert.match(settingsPage, /accessibilityLabel="Sign Out"/u);
@@ -54,7 +57,15 @@ describe('Settings page behavior', () => {
     assert.doesNotMatch(settingsPage, /Profile editing|Display Name|Store Name/u);
     assert.doesNotMatch(settingsPage, /Account deletion|Navigation App|Navigation Mode/u);
     assert.doesNotMatch(settingsPage, /Logout and reset this device/u);
-    assert.doesNotMatch(settingsPage, /CONSENT_COPY_VERSIONS|Accepted ·|Needs Review ·/u);
+    assert.doesNotMatch(settingsPage, /Needs Review|CONSENT_COPY_VERSIONS|Allowed ·|Denied ·/u);
+  });
+
+  it('opens the published policy and restores consent for an authenticated session', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+
+    assert.match(source, /DRIVER_CONSENT_DOCUMENT_URL/u);
+    assert.match(source, /Linking\.openURL\(DRIVER_CONSENT_DOCUMENT_URL\)/u);
+    assert.match(source, /setAcceptedPrivacy\(true\);\s+setAcceptedLocation\(true\);\s+await handleLoginAndLoadRoutes/u);
   });
 
   it('edits the global Clever Driver account name on a dedicated page', () => {
