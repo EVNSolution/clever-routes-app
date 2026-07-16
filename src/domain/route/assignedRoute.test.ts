@@ -80,7 +80,7 @@ describe('driver assigned route UX flow', () => {
     assert.deepEqual(result, {
       flowState: 'consent_recorded',
       kind: 'no_assigned_route',
-      message: 'No current or upcoming route is available for this driver and route context.',
+      message: 'No ready or in-progress route is available for this driver and route context.',
     });
   });
 
@@ -330,7 +330,7 @@ describe('driver assigned route UX flow', () => {
   it('defines tab-level synthetic validation scenarios with safe coordinates and OSRM evidence expectations', () => {
     assert.deepEqual(
       assignedRouteValidationScenarios.map((scenario) => scenario.tab),
-      ['upcoming', 'active', 'completed'],
+      ['ready', 'active', 'completed'],
     );
 
     for (const scenario of assignedRouteValidationScenarios) {

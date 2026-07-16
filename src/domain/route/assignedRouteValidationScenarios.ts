@@ -1,6 +1,6 @@
 import type { AssignedRoute } from './assignedRoute';
 
-export type AssignedRouteValidationTab = 'active' | 'completed' | 'upcoming';
+export type AssignedRouteValidationTab = 'active' | 'completed' | 'ready';
 
 export type AssignedRouteValidationScenario = {
   expectedEvidence: {
@@ -23,13 +23,13 @@ export const assignedRouteValidationScenarios: AssignedRouteValidationScenario[]
       hasOsrmMetrics: true,
       safeForOperationalSmoke: true,
     },
-    id: 'validation-upcoming-osrm-ready',
-    label: 'Upcoming tab — synthetic Toronto route with OSRM geometry and route-level metrics',
+    id: 'validation-ready-osrm-route',
+    label: 'Ready tab — synthetic Toronto route with OSRM geometry and route-level metrics',
     route: buildValidationRoute({
       deliveryDate: '2026-06-04',
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
       metrics: { distanceMeters: 6120.4, durationSeconds: 1680 },
-      name: '[TEST] OSRM Upcoming Route',
+      name: '[TEST] OSRM Ready Route',
       stops: [
         validationStop({
           address1: '100 King St W',
@@ -38,7 +38,7 @@ export const assignedRouteValidationScenarios: AssignedRouteValidationScenario[]
           longitude: -79.3817,
           orderName: '#TEST-OSRM-1001',
           postalCode: 'M5X 1A9',
-          recipientName: 'TEST Recipient Upcoming 1',
+          recipientName: 'TEST Recipient Ready 1',
           sequence: 1,
         }),
         validationStop({
@@ -49,12 +49,12 @@ export const assignedRouteValidationScenarios: AssignedRouteValidationScenario[]
           longitude: -79.3909,
           orderName: '#TEST-OSRM-1002',
           postalCode: 'M5V 1Z2',
-          recipientName: 'TEST Recipient Upcoming 2',
+          recipientName: 'TEST Recipient Ready 2',
           sequence: 2,
         }),
       ],
     }),
-    tab: 'upcoming',
+    tab: 'ready',
   },
   {
     expectedEvidence: {

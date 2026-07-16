@@ -315,7 +315,7 @@ export async function loadAssignedRouteAfterConsent(
       return {
         flowState: 'consent_recorded',
         kind: 'no_assigned_route',
-        message: 'No current or upcoming route is available for this driver and route context.',
+        message: 'No ready or in-progress route is available for this driver and route context.',
       };
     }
 

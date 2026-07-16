@@ -2217,8 +2217,8 @@ function MyRoutesPage({
             </View>
             <View style={styles.routeCardStatusGroup}>
               <StatusChip
-                tone={getChipTone(activeRouteStatus ?? 'upcoming')}
-                label={formatRouteStatus(activeRouteStatus ?? 'upcoming')}
+                tone={getChipTone(activeRouteStatus ?? 'ready')}
+                label={formatRouteStatus(activeRouteStatus ?? 'ready')}
               />
               <Text style={styles.routeToggleText}>{isRouteCardExpanded ? '−' : '+'}</Text>
             </View>
@@ -2580,11 +2580,11 @@ function RouteSessionScreen({
   const depotIsProcessing = routeStatus === 'active' && currentNavigationStepIndex === COMPANY_STEP_INDEX;
   const depotMeta = depotIsProcessing ? 'Pickup' : routeStatus === 'completed' || currentNavigationStepIndex > COMPANY_STEP_INDEX ? 'Done' : undefined;
   const depotMetaTone = depotIsProcessing ? 'blue' : 'green';
-  const depotState = routeStatus === 'upcoming' || depotIsProcessing ? 'current' : 'completed';
+  const depotState = routeStatus === 'ready' || depotIsProcessing ? 'current' : 'completed';
   const currentTaskTitle = isCompanyStep ? 'Company Pickup' : stop === null ? 'Next Stop' : `Stop ${stop.sequence}`;
   const currentTaskAddress = isCompanyStep ? company?.pickupGuidance ?? 'Pickup point' : stop === null ? 'Stop address' : formatStopAddress(stop);
   const currentTaskPayment = stop === null ? null : formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
-  const primaryProgressAction = routeStatus === 'upcoming'
+  const primaryProgressAction = routeStatus === 'ready'
     ? { disabled: isStartingRoute, label: 'Start Session', loading: isStartingRoute, onPress: onStartRoute }
     : routeStatus === 'active' && allStopsCompleted
       ? { disabled: isFinishingRoute, label: 'Finish Route', loading: isFinishingRoute, onPress: onFinishRoute }
@@ -2754,7 +2754,7 @@ function LiveTrackingScreen({
         <View style={styles.trackingMetrics}>
           <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
           <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
-          <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : 'Pending'} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
+          <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : formatRouteStatus(routeStatus)} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
         </View>
         {payment !== null ? (
           <View style={styles.paymentInlineRow}>
@@ -3806,7 +3806,7 @@ function getRouteStatus(deliveryStartResult: DeliveryStartResult | null, deliver
     return 'active';
   }
 
-  return 'upcoming';
+  return 'ready';
 }
 
 function formatRouteStatus(status: RouteStatus): string {
@@ -3815,10 +3815,8 @@ function formatRouteStatus(status: RouteStatus): string {
       return 'In progress';
     case 'completed':
       return 'Completed';
-    case 'unfinished':
-      return 'Unfinished';
-    case 'upcoming':
-      return 'Pending';
+    case 'ready':
+      return 'Ready';
   }
 }
 
@@ -3923,9 +3921,7 @@ function getChipTone(status: RouteStatus): 'blue' | 'green' | 'neutral' {
       return 'blue';
     case 'completed':
       return 'green';
-    case 'unfinished':
-      return 'neutral';
-    case 'upcoming':
+    case 'ready':
       return 'neutral';
   }
 }
