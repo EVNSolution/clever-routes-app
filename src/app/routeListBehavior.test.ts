@@ -66,18 +66,26 @@ describe('routes list behavior', () => {
     );
   });
 
-  it('lets the selected route card collapse to title date and status only', () => {
+  it('starts route cards collapsed with a direct title, summary row, and visible side-by-side actions', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
     const source = getRoutesPageSource();
+    const routeActionRowStyles = appSource.slice(
+      appSource.indexOf('routeActionRow:'),
+      appSource.indexOf('selectedRouteCard:'),
+    );
 
-    assert.match(source, /const \[collapsedRouteKey, setCollapsedRouteKey\] = useState<string \| null>\(null\)/u);
-    assert.match(source, /const isRouteCardExpanded = activeRouteCollapseKey === null \|\| collapsedRouteKey !== activeRouteCollapseKey/u);
-    assert.match(source, /setCollapsedRouteKey\(\(value\) => value === activeRouteCollapseKey \? null : activeRouteCollapseKey\)/u);
+    assert.match(source, /const \[expandedRouteKey, setExpandedRouteKey\] = useState<string \| null>\(null\)/u);
+    assert.match(source, /const isRouteCardExpanded = activeRouteCollapseKey !== null && expandedRouteKey === activeRouteCollapseKey/u);
+    assert.match(source, /setExpandedRouteKey\(\(value\) => value === activeRouteCollapseKey \? null : activeRouteCollapseKey\)/u);
     assert.match(source, /<Text numberOfLines=\{1\} style=\{styles\.cardTitle\}>\{activeSession\.route\.name\}<\/Text>/u);
-    assert.match(source, /<Text numberOfLines=\{1\} style=\{styles\.helperText\}>\{activeSession\.route\.deliveryDate\}<\/Text>/u);
+    assert.match(source, /<Text numberOfLines=\{1\} style=\{styles\.routeDateText\}>\{activeSession\.route\.deliveryDate\}<\/Text>/u);
     assert.match(source, /label=\{formatRouteStatus\(activeRouteStatus \?\? 'ready'\)\}/u);
-    assert.doesNotMatch(source, /<DataRow label="Company"/u);
-    assert.doesNotMatch(source, /<DataRow label="Route"/u);
-    assert.match(source, /\{getInitials\(activeSession\.route\.name\)\}/u);
+    assert.doesNotMatch(source, /routeInitialBadge|routeInitialText|getInitials/u);
+    assert.doesNotMatch(source, /<DataRow label="Date"/u);
+    assert.match(source, /\{isRouteCardExpanded \? \([\s\S]*?<\/>[\s\S]*?\) : null\}[\s\S]*?label="Start"[\s\S]*?label="Detail"/u);
+    assert.match(source, /<View style=\{styles\.routeActionRow\}>/u);
+    assert.match(routeActionRowStyles, /flexDirection: 'row'/u);
+    assert.match(routeActionRowStyles, /routeActionButton:[\s\S]*flex: 1/u);
   });
 
   it('removes routes that are no longer assigned on the server', () => {
