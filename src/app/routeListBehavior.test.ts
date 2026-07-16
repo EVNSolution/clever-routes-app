@@ -74,7 +74,7 @@ describe('routes list behavior', () => {
     assert.match(source, /setCollapsedRouteKey\(\(value\) => value === activeRouteCollapseKey \? null : activeRouteCollapseKey\)/u);
     assert.match(source, /<Text numberOfLines=\{1\} style=\{styles\.cardTitle\}>\{activeSession\.route\.name\}<\/Text>/u);
     assert.match(source, /<Text numberOfLines=\{1\} style=\{styles\.helperText\}>\{activeSession\.route\.deliveryDate\}<\/Text>/u);
-    assert.match(source, /label=\{formatRouteStatus\(activeRouteStatus \?\? 'upcoming'\)\}/u);
+    assert.match(source, /label=\{formatRouteStatus\(activeRouteStatus \?\? 'ready'\)\}/u);
     assert.doesNotMatch(source, /<DataRow label="Company"/u);
     assert.doesNotMatch(source, /<DataRow label="Route"/u);
     assert.match(source, /\{getInitials\(activeSession\.route\.name\)\}/u);
@@ -99,7 +99,7 @@ describe('routes list behavior', () => {
     assert.match(noAssignedRouteSource, /resetRouteProgress\(\)/u);
     assert.match(noAssignedRouteSource, /clearCachedRouteAccess\(\)/u);
     assert.doesNotMatch(noAssignedRouteSource, /setMessage\(/u);
-    assert.doesNotMatch(source, /Signed in\. No current or upcoming route is assigned/u);
+    assert.doesNotMatch(source, /Signed in\. No current or ready route is assigned/u);
     assert.match(source, /assignedRouteResult\.kind !== 'no_assigned_route'/u);
     assert.match(appStateRefreshSource, /screen === 'mainTabs'/u);
     assert.doesNotMatch(appStateRefreshSource, /selectedMainTab === 'routes'/u);

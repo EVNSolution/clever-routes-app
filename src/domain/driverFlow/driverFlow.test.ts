@@ -57,7 +57,7 @@ describe('driver app MVP flow', () => {
       getMvpScenarioScreens().map((screen) => screen.title),
       [
         'Login / Driver Verification',
-        'Upcoming Routes',
+        'My Routes',
         'Route Details',
         'Route Session',
         'Live Tracking',
@@ -69,11 +69,10 @@ describe('driver app MVP flow', () => {
     );
   });
 
-  it('shows route lists by English delivery status tabs', () => {
+  it('shows route lists by lifecycle status tabs', () => {
     assert.deepEqual(getMvpRouteTabs(), [
-      { id: 'upcoming', label: 'Pending' },
-      { id: 'active', label: 'In Progress' },
-      { id: 'unfinished', label: 'Unfinished' },
+      { id: 'ready', label: 'Ready' },
+      { id: 'active', label: 'In progress' },
       { id: 'completed', label: 'Completed' },
     ]);
   });

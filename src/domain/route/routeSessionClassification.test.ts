@@ -11,7 +11,7 @@ import {
 const now = new Date('2026-06-02T13:00:00.000Z');
 
 describe('assigned route session classification', () => {
-  it('retains past assigned routes as unfinished instead of dropping them', () => {
+  it('retains past unstarted assigned routes as ready instead of a fourth unfinished state', () => {
     const sessions = [
       session('past', '2026-05-30', 'America/Toronto'),
       session('today', '2026-06-02', 'America/Toronto'),
@@ -22,19 +22,10 @@ describe('assigned route session classification', () => {
       filterVisibleAssignedRouteSessions(sessions, {
         now,
         selectedRouteId: null,
-        selectedRouteStatus: 'upcoming',
-        selectedTab: 'unfinished',
+        selectedRouteStatus: 'ready',
+        selectedTab: 'ready',
       }).map((item) => item.route.id),
-      ['past'],
-    );
-    assert.deepEqual(
-      filterVisibleAssignedRouteSessions(sessions, {
-        now,
-        selectedRouteId: null,
-        selectedRouteStatus: 'upcoming',
-        selectedTab: 'upcoming',
-      }).map((item) => item.route.id),
-      ['today', 'future'],
+      ['past', 'today', 'future'],
     );
   });
 
@@ -46,18 +37,18 @@ describe('assigned route session classification', () => {
         now: boundaryNow,
         route: route('toronto-today', '2026-06-01', 'America/Toronto'),
         selectedRouteId: null,
-        selectedRouteStatus: 'upcoming',
+        selectedRouteStatus: 'ready',
       }),
-      'upcoming',
+      'ready',
     );
     assert.equal(
       classifyAssignedRouteSession({
         now: boundaryNow,
         route: route('seoul-past', '2026-06-01', 'Asia/Seoul'),
         selectedRouteId: null,
-        selectedRouteStatus: 'upcoming',
+        selectedRouteStatus: 'ready',
       }),
-      'unfinished',
+      'ready',
     );
   });
 
@@ -73,7 +64,7 @@ describe('assigned route session classification', () => {
     );
   });
 
-  it('lets current-session completion override unfinished only for the selected route', () => {
+  it('lets current-session completion override ready only for the selected route', () => {
     assert.equal(
       classifyAssignedRouteSession({
         now,
@@ -90,17 +81,17 @@ describe('assigned route session classification', () => {
         selectedRouteId: 'selected',
         selectedRouteStatus: 'completed',
       }),
-      'unfinished',
+      'ready',
     );
   });
 
-  it('opens the first loaded past assigned route on the Unfinished tab', () => {
+  it('opens the first loaded past assigned route on the Ready tab', () => {
     assert.equal(
       getInitialAssignedRouteTab({
         now,
         route: route('past-assigned', '2026-05-30', 'America/Toronto'),
       }),
-      'unfinished',
+      'ready',
     );
   });
 });
