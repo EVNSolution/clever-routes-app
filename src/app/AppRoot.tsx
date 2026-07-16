@@ -2336,9 +2336,9 @@ function MyRoutesPage({
       selectedRouteId: effectiveSelectedRouteId,
       selectedRouteStatus: routeStatus,
     });
-  const [collapsedRouteKey, setCollapsedRouteKey] = useState<string | null>(null);
+  const [expandedRouteKey, setExpandedRouteKey] = useState<string | null>(null);
   const activeRouteCollapseKey = activeSession?.route.id ?? null;
-  const isRouteCardExpanded = activeRouteCollapseKey === null || collapsedRouteKey !== activeRouteCollapseKey;
+  const isRouteCardExpanded = activeRouteCollapseKey !== null && expandedRouteKey === activeRouteCollapseKey;
 
   function selectRelativeRoute(offset: number) {
     if (visibleRouteSessions.length === 0 || activeIndex < 0) {
@@ -2372,33 +2372,32 @@ function MyRoutesPage({
 
       {activeSession !== null ? (
         <View style={styles.selectedRouteCard}>
-          <Pressable
-            accessibilityLabel={isRouteCardExpanded ? 'Collapse route details' : 'Expand route details'}
-            accessibilityRole="button"
-            onPress={() => {
-              setCollapsedRouteKey((value) => value === activeRouteCollapseKey ? null : activeRouteCollapseKey);
-            }}
-            style={styles.routeCardHeader}
-          >
-            <View style={styles.routeInitialBadge}>
-              <Text style={styles.routeInitialText}>{getInitials(activeSession.route.name)}</Text>
+          <View style={styles.routeCardHeader}>
+            <Text numberOfLines={1} style={styles.cardTitle}>{activeSession.route.name}</Text>
+            <View style={styles.routeCardMetaRow}>
+              <Text numberOfLines={1} style={styles.routeDateText}>{activeSession.route.deliveryDate}</Text>
+              <View style={styles.routeCardStatusGroup}>
+                <StatusChip
+                  tone={getChipTone(activeRouteStatus ?? 'ready')}
+                  label={formatRouteStatus(activeRouteStatus ?? 'ready')}
+                />
+                <Pressable
+                  accessibilityLabel={isRouteCardExpanded ? 'Collapse route details' : 'Expand route details'}
+                  accessibilityRole="button"
+                  hitSlop={8}
+                  onPress={() => {
+                    setExpandedRouteKey((value) => value === activeRouteCollapseKey ? null : activeRouteCollapseKey);
+                  }}
+                  style={styles.routeToggleButton}
+                >
+                  <Text style={styles.routeToggleText}>{isRouteCardExpanded ? '−' : '+'}</Text>
+                </Pressable>
+              </View>
             </View>
-            <View style={styles.routeHeaderText}>
-              <Text numberOfLines={1} style={styles.cardTitle}>{activeSession.route.name}</Text>
-              <Text numberOfLines={1} style={styles.helperText}>{activeSession.route.deliveryDate}</Text>
-            </View>
-            <View style={styles.routeCardStatusGroup}>
-              <StatusChip
-                tone={getChipTone(activeRouteStatus ?? 'ready')}
-                label={formatRouteStatus(activeRouteStatus ?? 'ready')}
-              />
-              <Text style={styles.routeToggleText}>{isRouteCardExpanded ? '−' : '+'}</Text>
-            </View>
-          </Pressable>
+          </View>
 
           {isRouteCardExpanded ? (
             <>
-              <DataRow label="Date" value={activeSession.route.deliveryDate} />
               <DataRow label="Region" value={getRouteRegion(activeSession.route)} />
               <DataRow label="Stops" value={formatStopCount(activeSession.route.stops.length)} />
               <DataRow label="Estimated Distance" value={formatAssignedRouteDistance(activeSession.route.routeMetrics)} />
@@ -2411,19 +2410,23 @@ function MyRoutesPage({
                   <SecondaryButton compact label="Next Route" onPress={() => selectRelativeRoute(1)} />
                 </View>
               ) : null}
-
-              {activeRouteStatus === 'completed' ? (
-                <PrimaryButton label="View Completed Deliveries" onPress={onOpenCompletedDeliveries} />
-              ) : activeRouteStatus === 'active' ? (
-                <PrimaryButton label="Continue Session" onPress={() => onContinueRoute(activeSession.route.id)} />
-              ) : (
-                <View style={styles.buttonColumn}>
-                  <PrimaryButton disabled={isStartingRoute} label="Start Session" loading={isStartingRoute} onPress={() => onStartRoute(activeSession.route.id)} />
-                  <SecondaryButton label="Route Details" onPress={() => onOpenRoutePreview(activeSession.route.id)} />
-                </View>
-              )}
             </>
           ) : null}
+
+          {activeRouteStatus === 'completed' ? (
+            <PrimaryButton label="View Completed Deliveries" onPress={onOpenCompletedDeliveries} />
+          ) : activeRouteStatus === 'active' ? (
+            <PrimaryButton label="Continue Session" onPress={() => onContinueRoute(activeSession.route.id)} />
+          ) : (
+            <View style={styles.routeActionRow}>
+              <View style={styles.routeActionButton}>
+                <PrimaryButton disabled={isStartingRoute} label="Start" loading={isStartingRoute} onPress={() => onStartRoute(activeSession.route.id)} />
+              </View>
+              <View style={styles.routeActionButton}>
+                <SecondaryButton label="Detail" onPress={() => onOpenRoutePreview(activeSession.route.id)} />
+              </View>
+            </View>
+          )}
         </View>
       ) : (
         <EmptyState
@@ -4102,18 +4105,6 @@ function formatStopCount(count: number): string {
   return `${count} stop${count === 1 ? '' : 's'}`;
 }
 
-function getInitials(value: string): string {
-  const initials = value
-    .split(/[\s.-]+/u)
-    .map((part) => part.trim().charAt(0))
-    .filter(Boolean)
-    .slice(0, 2)
-    .join('')
-    .toUpperCase();
-
-  return initials || 'CD';
-}
-
 function formatLocalCompletedTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
@@ -4484,6 +4475,13 @@ const styles = StyleSheet.create({
   buttonColumn: {
     gap: 12,
   },
+  routeActionRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  routeActionButton: {
+    flex: 1,
+  },
   trackingButtonColumn: {
     gap: 12,
   },
@@ -4497,32 +4495,35 @@ const styles = StyleSheet.create({
     ...shadow,
   },
   routeCardHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
+    gap: 10,
     marginBottom: 4,
-  },
-  routeInitialBadge: {
-    alignItems: 'center',
-    backgroundColor: '#0b57d0',
-    borderRadius: 22,
-    height: 46,
-    justifyContent: 'center',
-    width: 46,
-  },
-  routeInitialText: {
-    color: '#ffffff',
-    fontSize: 17,
-    fontWeight: '900',
   },
   routeHeaderText: {
     flex: 1,
     gap: 4,
   },
+  routeCardMetaRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  routeDateText: {
+    color: '#667085',
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+  },
   routeCardStatusGroup: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
+  },
+  routeToggleButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 32,
+    minWidth: 32,
   },
   routeToggleText: {
     color: '#475467',

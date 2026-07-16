@@ -1985,7 +1985,12 @@ This section supersedes older navigation, icon, and route-list guidance where th
 
 - Keep the page title and route content visually close; do not place the title inside a separate dashboard card.
 - Remove current-status summaries and status-filter tabs from the page header.
-- Preserve the existing assigned-route card details and route session actions for this first overhaul slice.
+- Start each assigned-route card collapsed.
+- Remove the circular route-initial badge so the route title begins at the card content edge.
+- Treat the delivery date as route metadata, not helper or description copy. Place the title first, then group the date, status pill, and explicit expand/collapse control in the card header.
+- Keep the primary route actions outside the collapsible details so they remain visible while the card is collapsed.
+- For a ready route, place two equal-width actions in one horizontal row and label them `Start` and `Detail`.
+- Expansion reveals Region, Stops, Estimated Distance, Estimated Time, and multi-route paging without repeating the delivery date.
 - When no route is assigned, show:
   - Title: `No routes assigned yet`
   - Body: `When dispatch assigns you a route, it’ll appear here.`
