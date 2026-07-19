@@ -11,6 +11,7 @@ export type RouteAccessCompanyGuidance = {
   companyDisplayName: string;
   deliveryDate: string;
   driverInstructions: string[];
+  executionStatus: 'IN_PROGRESS' | 'READY';
   operatorSupportContact: string | null;
   pickupGuidance: string | null;
   routeName: string;
@@ -123,6 +124,7 @@ export const sampleInvitedRouteAccess: Extract<RouteAccessLookupResult, { status
     companyDisplayName: 'Tomatono Toronto',
     deliveryDate: '2026-05-12',
     driverInstructions: ['Bring insulated bag'],
+    executionStatus: 'READY',
     operatorSupportContact: '+14165550000',
     pickupGuidance: 'Meet at dispatch desk by 9:00 AM',
     routeName: 'Tuesday AM Route',
@@ -386,6 +388,7 @@ function isCompanyGuidance(value: unknown): value is RouteAccessCompanyGuidance 
     typeof guidance.deliveryDate === 'string' &&
     Array.isArray(guidance.driverInstructions) &&
     guidance.driverInstructions.every((item) => typeof item === 'string') &&
+    (guidance.executionStatus === 'READY' || guidance.executionStatus === 'IN_PROGRESS') &&
     nullableString(guidance.operatorSupportContact) &&
     nullableString(guidance.pickupGuidance) &&
     typeof guidance.routeName === 'string' &&

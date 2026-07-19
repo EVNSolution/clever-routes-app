@@ -18,11 +18,12 @@ The app now has an interactive phone-first driver flow:
 8. The app records required `LOCATION_INFORMATION` and `PERSONAL_INFORMATION` consent through the selected route token, then loads assigned-route detail for each route choice.
 9. Every created child route renders in `Ready` until delivery starts. Driver assignment does not change this execution state; a route card can open detail or start delivery.
 10. Delivery start requests foreground location permission, records `ROUTE_STARTED`, and moves the route to `In progress` only when permission is granted.
-11. Live tracking starts at the company/pickup step, then proceeds through ordered stops without presenting turn-by-turn instruction UI.
-12. Each stop can play a local area tip, open stop details, capture required proof photo, and record optional delivery notes, location-specific tips, and additional notes.
-13. Delivery finish stops continuous location, records or queues `ROUTE_COMPLETED`, moves the route to `Completed`, and discards route-scoped local retry items only after route completion is recorded.
-14. An authoritative empty route list, `NOT_FOUND`, or a missing prior assignment removes that route from the app and clears only route-scoped cache. Network errors retain the last safe cache.
-15. `NO_ASSIGNED_ROUTE`, `DISABLED`, `BLOCKED`, and API errors stay in safe user-visible states without exposing other tenant/driver data.
+11. Route choices carry the server execution status. If secure local progress is missing but the server reports `IN_PROGRESS`, the app restores that route as active and rebuilds completed-stop progress from assigned-route stop statuses instead of presenting another Start action.
+12. Live tracking starts at the company/pickup step, then proceeds through ordered stops without presenting turn-by-turn instruction UI.
+13. Each stop can play a local area tip, open stop details, capture required proof photo, and record optional delivery notes, location-specific tips, and additional notes.
+14. Delivery finish stops continuous location, records or queues `ROUTE_COMPLETED`, moves the route to `Completed`, and discards route-scoped local retry items only after route completion is recorded.
+15. An authoritative empty route list, `NOT_FOUND`, or a missing prior assignment removes that route from the app and clears only route-scoped cache. Network errors retain the last safe cache.
+16. `NO_ASSIGNED_ROUTE`, `DISABLED`, `BLOCKED`, and API errors stay in safe user-visible states without exposing other tenant/driver data.
 
 ## Local mock boundary
 
@@ -88,6 +89,7 @@ The expected account-authenticated success response is `ROUTES_FOUND`; `routes` 
           "shopDomain": "tomatono.myshopify.com",
           "routeName": "Tuesday AM Route",
           "deliveryDate": "2026-05-12",
+          "executionStatus": "READY",
           "timezone": "America/Toronto",
           "pickupGuidance": "Meet at dispatch desk by 9:00 AM",
           "operatorSupportContact": "+14165550000",

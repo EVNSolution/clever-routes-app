@@ -73,19 +73,25 @@ describe('routes list behavior', () => {
       appSource.indexOf('routeActionRow:'),
       appSource.indexOf('selectedRouteCard:'),
     );
+    const routeCardHeaderStyles = appSource.slice(
+      appSource.indexOf('routeCardHeader:'),
+      appSource.indexOf('routeHeaderText:'),
+    );
 
     assert.match(source, /const \[expandedRouteKey, setExpandedRouteKey\] = useState<string \| null>\(null\)/u);
     assert.match(source, /const isRouteCardExpanded = activeRouteCollapseKey !== null && expandedRouteKey === activeRouteCollapseKey/u);
     assert.match(source, /setExpandedRouteKey\(\(value\) => value === activeRouteCollapseKey \? null : activeRouteCollapseKey\)/u);
-    assert.match(source, /<Text numberOfLines=\{1\} style=\{styles\.cardTitle\}>\{activeSession\.route\.name\}<\/Text>/u);
+    assert.match(source, /<View style=\{styles\.routeCardHeader\}>[\s\S]*?<Text numberOfLines=\{1\} style=\{\[styles\.cardTitle, styles\.routeCardTitle\]\}>\{activeSession\.route\.name\}<\/Text>[\s\S]*?<Text numberOfLines=\{1\} style=\{styles\.routeDateText\}>\{activeSession\.route\.deliveryDate\}<\/Text>[\s\S]*?<StatusChip[\s\S]*?<Pressable[\s\S]*?style=\{styles\.routeToggleButton\}/u);
     assert.match(source, /<Text numberOfLines=\{1\} style=\{styles\.routeDateText\}>\{activeSession\.route\.deliveryDate\}<\/Text>/u);
     assert.match(source, /label=\{formatRouteStatus\(activeRouteStatus \?\? 'ready'\)\}/u);
-    assert.doesNotMatch(source, /routeInitialBadge|routeInitialText|getInitials/u);
+    assert.doesNotMatch(source, /routeInitialBadge|routeInitialText|getInitials|routeCardMetaRow|routeCardStatusGroup/u);
     assert.doesNotMatch(source, /<DataRow label="Date"/u);
     assert.match(source, /\{isRouteCardExpanded \? \([\s\S]*?<\/>[\s\S]*?\) : null\}[\s\S]*?label="Start"[\s\S]*?label="Detail"/u);
     assert.match(source, /<View style=\{styles\.routeActionRow\}>/u);
     assert.match(routeActionRowStyles, /flexDirection: 'row'/u);
     assert.match(routeActionRowStyles, /routeActionButton:[\s\S]*flex: 1/u);
+    assert.match(routeCardHeaderStyles, /alignItems: 'center'/u);
+    assert.match(routeCardHeaderStyles, /flexDirection: 'row'/u);
   });
 
   it('removes routes that are no longer assigned on the server', () => {
@@ -104,6 +110,8 @@ describe('routes list behavior', () => {
     );
 
     assert.match(refreshRoutesSource, /allowVerifiedDriverNoRoute: true/u);
+    assert.match(refreshRoutesSource, /setMessage\(null\)/u);
+    assert.doesNotMatch(refreshRoutesSource, /successMessagePrefix|routeLoadSuccessMessage|buildAuthSuccessMessage|getRuntimeHostLabel/u);
     assert.match(noAssignedRouteSource, /resetRouteProgress\(\)/u);
     assert.match(noAssignedRouteSource, /clearCachedRouteAccess\(\)/u);
     assert.doesNotMatch(noAssignedRouteSource, /setMessage\(/u);

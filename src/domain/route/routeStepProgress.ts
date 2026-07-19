@@ -1,6 +1,7 @@
 import type { AssignedRoute, AssignedRouteStop } from './assignedRoute';
 
 export const ROUTE_COMPANY_STEP_INDEX = 0;
+const TERMINAL_STOP_STATUSES = new Set(['CANCELLED', 'DELIVERED', 'FAILED', 'SKIPPED']);
 
 export type StopDetailsProgressState =
   | {
@@ -19,6 +20,24 @@ export function getCurrentRouteStop(input: {
   route: Pick<AssignedRoute, 'stops'>;
 }): AssignedRouteStop | null {
   return input.route.stops[input.navigationStepIndex - 1] ?? null;
+}
+
+export function getAssignedRouteServerProgress(route: Pick<AssignedRoute, 'stops'>): {
+  completedStopIds: string[];
+  navigationStepIndex: number;
+} {
+  const completedStopIds = route.stops
+    .filter((stop) => TERMINAL_STOP_STATUSES.has(stop.status))
+    .map((stop) => stop.deliveryStopId);
+  if (completedStopIds.length === 0) {
+    return { completedStopIds, navigationStepIndex: ROUTE_COMPANY_STEP_INDEX };
+  }
+
+  const nextStopIndex = route.stops.findIndex((stop) => !TERMINAL_STOP_STATUSES.has(stop.status));
+  return {
+    completedStopIds,
+    navigationStepIndex: nextStopIndex < 0 ? route.stops.length : nextStopIndex + 1,
+  };
 }
 
 export function getStopDetailsProgressState(input: {
