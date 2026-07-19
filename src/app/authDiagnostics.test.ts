@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildAuthFailureMessage, buildAuthSuccessMessage } from './authDiagnostics';
+import { buildAuthFailureMessage } from './authDiagnostics';
 import { createDriverApiHttpError } from '../api/deliveryServer/driverApiError';
 import type { AuthPhase } from './authDiagnostics';
 import type { DriverRuntimeConfig } from './config/driverRuntimeConfig';
@@ -97,19 +97,15 @@ describe('authDiagnostics', () => {
     assert.equal(result.message, 'Account registration: invite code is invalid or expired.');
   });
 
-  it('builds success message with live endpoint context', () => {
-    const message = buildAuthSuccessMessage({ runtimeConfig: liveConfig, phase: 'invite_verify' });
-
-    assert.equal(message.includes('live server https://clever-route.example'), true);
-    assert.equal(message.includes('Account registration'), true);
-  });
-
   const phaseKinds: AuthPhase[] = ['invite_verify', 'pin_login', 'route_access'];
-  it('emits non-empty messages for every auth phase', () => {
+  it('keeps the live API address out of user-facing failure messages', () => {
     phaseKinds.forEach((phase) => {
-      const message = buildAuthSuccessMessage({ runtimeConfig: liveConfig, phase });
-      assert.equal(typeof message, 'string');
-      assert.ok(message.length > 0);
+      const result = buildAuthFailureMessage({
+        runtimeConfig: liveConfig,
+        phase,
+        error: new Error('network request failed'),
+      });
+      assert.doesNotMatch(result.message, /clever-route\.example|https?:\/\//u);
     });
   });
 });

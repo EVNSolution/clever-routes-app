@@ -2,9 +2,35 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { sampleAssignedRoute } from './assignedRoute';
-import { getStopDetailsProgressState, ROUTE_COMPANY_STEP_INDEX } from './routeStepProgress';
+import {
+  getAssignedRouteServerProgress,
+  getStopDetailsProgressState,
+  ROUTE_COMPANY_STEP_INDEX,
+} from './routeStepProgress';
 
 describe('route step progress state', () => {
+  it('restores delivered stops and the next navigation step from server route state', () => {
+    const route = {
+      ...sampleAssignedRoute,
+      stops: sampleAssignedRoute.stops.map((stop, index) => ({
+        ...stop,
+        status: index === 0 ? 'DELIVERED' : 'ASSIGNED',
+      })),
+    };
+
+    assert.deepEqual(getAssignedRouteServerProgress(route), {
+      completedStopIds: [route.stops[0].deliveryStopId],
+      navigationStepIndex: 2,
+    });
+  });
+
+  it('keeps pickup current when an in-progress route has no terminal stop yet', () => {
+    assert.deepEqual(getAssignedRouteServerProgress(sampleAssignedRoute), {
+      completedStopIds: [],
+      navigationStepIndex: ROUTE_COMPANY_STEP_INDEX,
+    });
+  });
+
   it('treats route-detail stop taps as read-only previews before company pickup is explicitly confirmed', () => {
     const firstStop = sampleAssignedRoute.stops[0];
     assert.ok(firstStop);

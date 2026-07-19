@@ -20,16 +20,26 @@ function getRouteSessionComponentSource(): string {
 }
 
 describe('route session current task behavior', () => {
-  it('puts task-specific primary actions inside Current Task instead of leaving only generic route buttons', () => {
+  it('restores server in-progress routes instead of presenting them as Ready', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+
+    assert.match(appSource, /companyGuidance\.executionStatus === 'IN_PROGRESS'/u);
+    assert.match(appSource, /getAssignedRouteServerProgress/u);
+    assert.match(appSource, /setCompletedStopIds\(\(current\) => \[/u);
+    assert.match(appSource, /markActiveRouteStarted/u);
+  });
+
+  it('keeps Arrive and Navigate as equal-width Current Task actions', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
     const componentSource = getRouteSessionComponentSource();
 
-    assert.match(componentSource, /label: 'Complete Pickup'/u);
-    assert.match(componentSource, /label: 'Mark as Arrived'/u);
-    assert.match(componentSource, /showPrimaryActionInCurrentTask/u);
-    assert.match(componentSource, /styles\.currentTaskActions/u);
+    assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*<PrimaryButton compact label="Arrive" onPress=\{onArrived\} \/>[\s\S]*<SecondaryButton compact label="Navigate" onPress=\{onOpenNavigation\} \/>[\s\S]*<\/View>/u);
+    assert.match(componentSource, /styles\.routeActionButton/u);
     assert.match(componentSource, /styles\.currentTaskAddressText/u);
-    assert.match(componentSource, /<PrimaryButton[\s\S]*compact[\s\S]*label=\{primaryProgressAction\.label\}/u);
-    assert.match(componentSource, /<SecondaryButton compact label="View Stop Details"/u);
+    assert.match(appSource, /routeActionRow:[\s\S]*flexDirection: 'row'/u);
+    assert.match(appSource, /routeActionButton:[\s\S]*flex: 1/u);
+    assert.doesNotMatch(componentSource, /Complete Pickup|Mark as Arrived|View Stop Details|currentTaskActions/u);
+    assert.doesNotMatch(componentSource, /onViewCurrentStop/u);
   });
 
   it('bolds only the current Route Sequence item title', () => {
@@ -48,12 +58,18 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(componentSource, /subtitle=\{formatRouteSequenceStopSubtitle\(stop\)\}/u);
   });
 
-  it('uses the route name instead of company domain as the route session card title', () => {
+  it('keeps the route session summary compact with the route title and date on one line', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
     const componentSource = getRouteSessionComponentSource();
 
-    assert.match(componentSource, /<Text numberOfLines=\{1\} style=\{styles\.cardTitle\}>\{route\.name\}<\/Text>/u);
+    assert.match(componentSource, /<View style=\{\[styles\.summaryCard, styles\.routeSessionSummaryCard\]\}>/u);
+    assert.match(componentSource, /<Text numberOfLines=\{1\} style=\{styles\.cardTitle\}>[\s\S]*\{route\.name\}[\s\S]*<Text style=\{styles\.routeSessionSummaryDate\}> - \{route\.deliveryDate\}<\/Text>[\s\S]*<\/Text>/u);
+    assert.match(componentSource, /<View style=\{\[styles\.summaryGrid, styles\.routeSessionSummaryGrid\]\}>/u);
+    assert.doesNotMatch(componentSource, /<DataRow label="Date"/u);
     assert.doesNotMatch(componentSource, /company\?\.companyDisplayName \?\? route\.name/u);
     assert.doesNotMatch(componentSource, /route\.shopDomain/u);
+    assert.match(appSource, /routeSessionSummaryCard:[\s\S]*gap: 6,[\s\S]*paddingHorizontal: 14,[\s\S]*paddingVertical: 10,/u);
+    assert.match(appSource, /routeSessionSummaryGrid:[\s\S]*borderTopWidth: 0,[\s\S]*paddingTop: 0,/u);
   });
 
   it('passes current step context into map previews for current destination highlighting', () => {

@@ -44,12 +44,6 @@ function isNetworkError(error: unknown): boolean {
   );
 }
 
-export function getRuntimeHostLabel(runtimeConfig: DriverRuntimeConfig): string {
-  return runtimeConfig.mode === 'mock'
-    ? 'mock mode (local services)'
-    : `live server ${runtimeConfig.deliveryServerBaseUrl}`;
-}
-
 export function buildAuthFailureMessage(input: {
   runtimeConfig: DriverRuntimeConfig;
   phase: AuthPhase;
@@ -102,14 +96,6 @@ export function buildAuthFailureMessage(input: {
     kind: 'server_other_error',
     message: `${phaseLabel}: unable to complete. Contact dispatch if this continues.`,
   };
-}
-
-export function buildAuthSuccessMessage(input: {
-  runtimeConfig: DriverRuntimeConfig;
-  phase: AuthPhase;
-}): string {
-  const phaseLabel = getAuthPhaseLabel(input.phase);
-  return `${phaseLabel} succeeded via ${getRuntimeHostLabel(input.runtimeConfig)}.`;
 }
 
 function getAuthPhaseLabel(phase: AuthPhase): string {

@@ -1987,7 +1987,7 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - Remove current-status summaries and status-filter tabs from the page header.
 - Start each assigned-route card collapsed.
 - Remove the circular route-initial badge so the route title begins at the card content edge.
-- Treat the delivery date as route metadata, not helper or description copy. Place the title first, then group the date, status pill, and explicit expand/collapse control in the card header.
+- Treat the delivery date as route metadata, not helper or description copy. Place the title, date, status pill, and explicit expand/collapse control together in one horizontal card-header row.
 - Keep the primary route actions outside the collapsible details so they remain visible while the card is collapsed.
 - For a ready route, place two equal-width actions in one horizontal row and label them `Start` and `Detail`.
 - Expansion reveals Region, Stops, Estimated Distance, Estimated Time, and multi-route paging without repeating the delivery date.
@@ -2005,6 +2005,20 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - After authoritative route data is processed, update the revealed area with the latest local time.
 - If the server removes an assignment, remove it from My Routes while keeping the driver account signed in.
 
+## Route Session Summary
+
+- Keep the first Route Session card materially shorter than the standard summary card.
+- Show the route title and delivery date on one line as `<title> - <date>`; do not repeat the date in a separate `Date` row.
+- Keep Stops, Distance, and Duration in one compact metrics row directly below the title line, without an internal divider.
+- Use reduced vertical padding and spacing on this card only so other summary surfaces retain their existing density.
+
+## Current Task Actions
+
+- Place exactly two equal-width actions in one horizontal row at the bottom of an active Current Task card.
+- Use `Arrive` as the left primary action for the current pickup or delivery arrival step.
+- Use `Navigate` as the right secondary action for opening route directions from the driver's current location.
+- Do not show `View Stop Details` in Current Task or duplicate the navigation action as `Open in Map` below an active session.
+
 ## Constraints
 
 - Retain phone/PIN authentication, route details, active delivery, consent, proof, and server assignment semantics.
@@ -2014,6 +2028,8 @@ This section supersedes older navigation, icon, and route-list guidance where th
 ## Global Notifications
 
 - Render transient app messages as a compact snackbar 16px above the device bottom safe-area inset so page headers and Settings remain unobstructed.
+- Never expose API origins, endpoint names, request/response diagnostics, runtime mode, or refresh-success logs in a user-facing snackbar.
+- Indicate successful route refresh only through the pull-refresh activity state and the updated `Last updated` timestamp. Reserve refresh snackbars for actionable failures.
 - Use an opaque dark-neutral surface, white left-aligned 14px semibold text, 14px corner radius, and a subtle functional shadow.
 - Keep the banner inset 16px from both screen edges and allow up to three text lines.
 - Do not use translucent blue surfaces, blue text, centered copy, or pill-shaped notification containers.

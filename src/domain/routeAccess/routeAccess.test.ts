@@ -246,6 +246,36 @@ describe('driver route access UX flow', () => {
     assert.equal(result.routes[0].driverAccess.accessToken, 'server-issued-driver-jwt');
   });
 
+  it('keeps the server execution status attached to each route choice', async () => {
+    const client = createRouteAccessApiClient({
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ROUTES_FOUND',
+            routes: [
+              {
+                routeAccess: sampleInvitedRouteAccess.routeAccess,
+                companyGuidance: {
+                  ...sampleInvitedRouteAccess.companyGuidance,
+                  executionStatus: 'IN_PROGRESS',
+                },
+                driverAccess: sampleInvitedRouteAccess.driverAccess,
+              },
+            ],
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.lookupRouteAccess({ accountAccessToken: 'account-access-token' });
+
+    assert.equal(result.status, 'ROUTES_FOUND');
+    assert.equal(result.routes[0].companyGuidance.executionStatus, 'IN_PROGRESS');
+  });
+
   it('accepts the current server route-choice envelope with nested invited status', async () => {
     const client = createRouteAccessApiClient({
       baseUrl: 'https://delivery.example.com',

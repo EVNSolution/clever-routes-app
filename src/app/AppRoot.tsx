@@ -49,6 +49,7 @@ import {
   type RouteSessionStatus,
 } from '../domain/route/routeSessionClassification';
 import {
+  getAssignedRouteServerProgress,
   getCurrentRouteStop,
   getStopDetailsProgressState,
   ROUTE_COMPANY_STEP_INDEX,
@@ -112,11 +113,7 @@ import {
 } from '../ui/components/authFormUxBehavior';
 import { TransientToast } from '../ui/components/TransientToast';
 import { scheduleTransientToastDismiss } from '../ui/components/transientToastBehavior';
-import {
-  buildAuthFailureMessage,
-  buildAuthSuccessMessage,
-  getRuntimeHostLabel,
-} from './authDiagnostics';
+import { buildAuthFailureMessage } from './authDiagnostics';
 import { NativeRouteMapPreview } from './NativeRouteMapPreview';
 import { getBottomChromeOffset, getBottomChromePadding } from './appLayoutMetrics';
 import { formatRouteListUpdatedAt } from './routeListBehavior';
@@ -169,7 +166,6 @@ type RouteLoadOptions = {
   activeRouteSession?: PersistedActiveRouteSession | null;
   navigateOnSuccess?: boolean;
   resetProgress?: boolean;
-  successMessagePrefix?: string;
 };
 
 const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
@@ -732,7 +728,7 @@ function DriverApp() {
     setInviteCode('');
     setPin('');
     setPinConfirmation('');
-    setMessage(`Enter your 6-digit PIN. ${getRuntimeHostLabel(runtimeConfig)}.`);
+    setMessage('Enter your 6-digit PIN.');
     setScreen('loginDetail');
   }
 
@@ -769,7 +765,7 @@ function DriverApp() {
     }
 
     setIsLoggingIn(true);
-    setMessage(`${isRegistration ? 'Creating account' : 'Signing in'}... ${getRuntimeHostLabel(runtimeConfig)}.`);
+    setMessage(`${isRegistration ? 'Creating account' : 'Signing in'}...`);
     try {
       const authResult = isRegistration
         ? await driverAuthService.register({
@@ -788,10 +784,7 @@ function DriverApp() {
       setVerifiedDriverPhoneE164(phoneEntry.phoneE164);
       setPin('');
       setPinConfirmation('');
-      setMessage(buildAuthSuccessMessage({
-        runtimeConfig,
-        phase: isRegistration ? 'invite_verify' : 'pin_login',
-      }));
+      setMessage(null);
       setIsLoggingIn(false);
       await handleLoginAndLoadRoutes(
         authResult.accountAccess,
@@ -831,7 +824,6 @@ function DriverApp() {
     const allowVerifiedDriverNoRoute = options.allowVerifiedDriverNoRoute ?? false;
     const shouldResetProgress = options.resetProgress ?? true;
     const shouldNavigateOnSuccess = options.navigateOnSuccess ?? true;
-    const successMessagePrefix = options.successMessagePrefix ?? 'assigned';
     setIsLoggingIn(true);
     setMessage(null);
     setVerifiedDriverPhoneE164(phoneE164);
@@ -917,16 +909,35 @@ function DriverApp() {
         return;
       }
 
-      const activeRouteSession = options.activeRouteSession ?? null;
+      const persistedActiveRouteSession = options.activeRouteSession ?? null;
+      const serverActiveRouteSession = persistedActiveRouteSession === null
+        ? loadedSessions.find((session) => session.companyGuidance.executionStatus === 'IN_PROGRESS') ?? null
+        : null;
+      const serverActiveProgress = serverActiveRouteSession === null
+        ? null
+        : getAssignedRouteServerProgress(serverActiveRouteSession.route);
+      const serverRestoreTimestamp = new Date().toISOString();
+      const activeRouteSession: PersistedActiveRouteSession | null = persistedActiveRouteSession ?? (
+        serverActiveRouteSession === null || serverActiveProgress === null
+          ? null
+          : {
+              navigationStepIndex: serverActiveProgress.navigationStepIndex,
+              routePlanId: serverActiveRouteSession.route.id,
+              startedAt: serverRestoreTimestamp,
+              status: 'active',
+              updatedAt: serverRestoreTimestamp,
+            }
+      );
+      const restoredFromServer = persistedActiveRouteSession === null && serverActiveRouteSession !== null;
       const restoredActiveSession = activeRouteSession === null
         ? null
         : loadedSessions.find((session) => session.route.id === activeRouteSession.routePlanId) ?? null;
       const currentSelectedRouteId = selectedRouteIdRef.current;
       const selectedRouteWasRemoved = currentSelectedRouteId !== null &&
         !loadedSessions.some((session) => session.route.id === currentSelectedRouteId);
-      const activeRouteWasRemoved = activeRouteSession !== null && restoredActiveSession === null;
+      const activeRouteWasRemoved = persistedActiveRouteSession !== null && restoredActiveSession === null;
       if (activeRouteWasRemoved) {
-        await clearAndStopActiveLocationSession(activeRouteSession.routePlanId);
+        await clearAndStopActiveLocationSession(persistedActiveRouteSession.routePlanId);
         resetRouteProgress();
       } else if (selectedRouteWasRemoved && restoredActiveSession === null) {
         resetRouteProgress();
@@ -949,7 +960,30 @@ function DriverApp() {
       });
       void retryOfflineSubmissionsForSessions(loadedSessions);
       if (restoredActiveSession !== null) {
-        const restoredStepIndex = clampRouteNavigationStepIndex(activeRouteSession?.navigationStepIndex ?? COMPANY_STEP_INDEX, restoredActiveSession.route);
+        const restoredServerProgress = getAssignedRouteServerProgress(restoredActiveSession.route);
+        const restoredStepIndex = clampRouteNavigationStepIndex(
+          Math.max(activeRouteSession?.navigationStepIndex ?? COMPANY_STEP_INDEX, restoredServerProgress.navigationStepIndex),
+          restoredActiveSession.route,
+        );
+        setCompletedStopIds((current) => [
+          ...new Set([...current, ...restoredServerProgress.completedStopIds]),
+        ]);
+        if (restoredFromServer && activeRouteSession !== null) {
+          const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
+            navigationStepIndex: restoredStepIndex,
+            routePlanId: restoredActiveSession.route.id,
+            startedAt: activeRouteSession.startedAt,
+          });
+          if (!activeRouteSaved) {
+            setScreen('mainTabs');
+            setMessage('The in-progress route could not be restored locally. Refresh routes and try again.');
+            return;
+          }
+          await driverAccessTokenStore.markActiveRouteStarted(
+            restoredActiveSession.route.id,
+            activeRouteSession.startedAt ?? activeRouteSession.updatedAt,
+          );
+        }
         const restoredDeliveryStart = getRestoredActiveDeliveryStartResult();
         setDeliveryStartResult(restoredDeliveryStart);
         setDeliveryFinishResult(null);
@@ -987,10 +1021,7 @@ function DriverApp() {
       if (shouldNavigateOnSuccess) {
         setScreen('mainTabs');
       }
-      const routeLoadSuccessMessage = `${loadedSessions.length} ${successMessagePrefix} route${loadedSessions.length === 1 ? '' : 's'} loaded. ${buildAuthSuccessMessage({ runtimeConfig, phase: 'route_access' })}`;
-      runAfterUiInteractions(() => {
-        setMessage(routeLoadSuccessMessage);
-      });
+      setMessage(null);
     } catch (error) {
       const failure = buildAuthFailureMessage({
         runtimeConfig,
@@ -1032,6 +1063,7 @@ function DriverApp() {
       return;
     }
 
+    setMessage(null);
     setIsRefreshingRoutes(true);
     try {
       const restoredAccess = await driverAccessTokenStore.loadActiveDriverAccess();
@@ -1054,7 +1086,6 @@ function DriverApp() {
           allowVerifiedDriverNoRoute: true,
           navigateOnSuccess: false,
           resetProgress: false,
-          successMessagePrefix: 'refreshed assigned',
         },
       );
     } finally {
@@ -2054,7 +2085,6 @@ function DriverApp() {
               onOpenNavigation={() => handleOpenRouteNavigation(selectedRoute)}
               onOpenStop={handleOpenStopFromRouteSession}
               onStartRoute={() => handleStartRoute(selectedRoute.id)}
-              onViewCurrentStop={handleViewCurrentStop}
               route={selectedRoute}
               routeStartedEventResult={routeStartedEventResult}
               routeStatus={routeStatus}
@@ -2373,27 +2403,23 @@ function MyRoutesPage({
       {activeSession !== null ? (
         <View style={styles.selectedRouteCard}>
           <View style={styles.routeCardHeader}>
-            <Text numberOfLines={1} style={styles.cardTitle}>{activeSession.route.name}</Text>
-            <View style={styles.routeCardMetaRow}>
-              <Text numberOfLines={1} style={styles.routeDateText}>{activeSession.route.deliveryDate}</Text>
-              <View style={styles.routeCardStatusGroup}>
-                <StatusChip
-                  tone={getChipTone(activeRouteStatus ?? 'ready')}
-                  label={formatRouteStatus(activeRouteStatus ?? 'ready')}
-                />
-                <Pressable
-                  accessibilityLabel={isRouteCardExpanded ? 'Collapse route details' : 'Expand route details'}
-                  accessibilityRole="button"
-                  hitSlop={8}
-                  onPress={() => {
-                    setExpandedRouteKey((value) => value === activeRouteCollapseKey ? null : activeRouteCollapseKey);
-                  }}
-                  style={styles.routeToggleButton}
-                >
-                  <Text style={styles.routeToggleText}>{isRouteCardExpanded ? '−' : '+'}</Text>
-                </Pressable>
-              </View>
-            </View>
+            <Text numberOfLines={1} style={[styles.cardTitle, styles.routeCardTitle]}>{activeSession.route.name}</Text>
+            <Text numberOfLines={1} style={styles.routeDateText}>{activeSession.route.deliveryDate}</Text>
+            <StatusChip
+              tone={getChipTone(activeRouteStatus ?? 'ready')}
+              label={formatRouteStatus(activeRouteStatus ?? 'ready')}
+            />
+            <Pressable
+              accessibilityLabel={isRouteCardExpanded ? 'Collapse route details' : 'Expand route details'}
+              accessibilityRole="button"
+              hitSlop={8}
+              onPress={() => {
+                setExpandedRouteKey((value) => value === activeRouteCollapseKey ? null : activeRouteCollapseKey);
+              }}
+              style={styles.routeToggleButton}
+            >
+              <Text style={styles.routeToggleText}>{isRouteCardExpanded ? '−' : '+'}</Text>
+            </Pressable>
           </View>
 
           {isRouteCardExpanded ? (
@@ -2723,7 +2749,6 @@ function RouteSessionScreen({
   onOpenNavigation,
   onOpenStop,
   onStartRoute,
-  onViewCurrentStop,
   route,
   routeStartedEventResult,
   routeStatus,
@@ -2746,7 +2771,6 @@ function RouteSessionScreen({
   onOpenNavigation(): void;
   onOpenStop(stop: AssignedRouteStop): void;
   onStartRoute(): void;
-  onViewCurrentStop(): void;
   route: AssignedRoute;
   routeStartedEventResult: RouteStartedRecordResult | null;
   routeStatus: RouteStatus;
@@ -2763,20 +2787,14 @@ function RouteSessionScreen({
     ? { disabled: isStartingRoute, label: 'Start Session', loading: isStartingRoute, onPress: onStartRoute }
     : routeStatus === 'active' && allStopsCompleted
       ? { disabled: isFinishingRoute, label: 'Finish Route', loading: isFinishingRoute, onPress: onFinishRoute }
-      : routeStatus === 'active' && isCompanyStep
-        ? { disabled: false, label: 'Complete Pickup', loading: false, onPress: onArrived }
-        : routeStatus === 'active'
-          ? { disabled: false, label: 'Mark as Arrived', loading: false, onPress: onArrived }
-          : null;
-  const showPrimaryActionInCurrentTask = routeStatus === 'active' && !allStopsCompleted && primaryProgressAction !== null;
+      : null;
 
   return (
     <View style={styles.screenStack}>
       <ScreenHeader onBack={onBack} title="Route Session" />
-      <View style={styles.summaryCard}>
-        <Text numberOfLines={1} style={styles.cardTitle}>{route.name}</Text>
-        <DataRow label="Date" value={route.deliveryDate} />
-        <View style={styles.summaryGrid}>
+      <View style={[styles.summaryCard, styles.routeSessionSummaryCard]}>
+        <Text numberOfLines={1} style={styles.cardTitle}>{route.name}<Text style={styles.routeSessionSummaryDate}> - {route.deliveryDate}</Text></Text>
+        <View style={[styles.summaryGrid, styles.routeSessionSummaryGrid]}>
           <MetricBlock label="Stops" value={formatStopCount(route.stops.length)} />
           <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
           <MetricBlock label="Duration" value={formatAssignedRouteDuration(route.routeMetrics)} />
@@ -2807,19 +2825,13 @@ function RouteSessionScreen({
               <StatusChip compact label={currentTaskPayment.label} tone={currentTaskPayment.tone} />
             ) : null}
           </View>
-          <View style={styles.currentTaskActions}>
-            {showPrimaryActionInCurrentTask ? (
-              <PrimaryButton
-                compact
-                disabled={primaryProgressAction.disabled}
-                label={primaryProgressAction.label}
-                loading={primaryProgressAction.loading}
-                onPress={primaryProgressAction.onPress}
-              />
-            ) : null}
-            {routeStatus === 'active' && !isCompanyStep && stop !== null ? (
-              <SecondaryButton compact label="View Stop Details" onPress={onViewCurrentStop} />
-            ) : null}
+          <View style={styles.routeActionRow}>
+            <View style={styles.routeActionButton}>
+              <PrimaryButton compact label="Arrive" onPress={onArrived} />
+            </View>
+            <View style={styles.routeActionButton}>
+              <SecondaryButton compact label="Navigate" onPress={onOpenNavigation} />
+            </View>
           </View>
         </View>
       ) : null}
@@ -2864,7 +2876,7 @@ function RouteSessionScreen({
       {deliveryFinishResult?.flowState === 'delivery_finished' ? <StatusBanner tone="green" text={deliveryFinishResult.message} /> : null}
 
       <View style={styles.buttonColumn}>
-        {primaryProgressAction !== null && !showPrimaryActionInCurrentTask ? (
+        {primaryProgressAction !== null ? (
           <PrimaryButton
             disabled={primaryProgressAction.disabled}
             label={primaryProgressAction.label}
@@ -2873,7 +2885,7 @@ function RouteSessionScreen({
           />
         ) : null}
         {routeStatus === 'active' ? <SecondaryButton label="Map Preview" onPress={onOpenMapPreview} /> : null}
-        <SecondaryButton label="Open in Map" onPress={onOpenNavigation} />
+        {routeStatus !== 'active' ? <SecondaryButton label="Open in Map" onPress={onOpenNavigation} /> : null}
         <SecondaryButton label="Back to Routes" onPress={onBack} />
       </View>
     </View>
@@ -4495,29 +4507,24 @@ const styles = StyleSheet.create({
     ...shadow,
   },
   routeCardHeader: {
-    gap: 10,
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
     marginBottom: 4,
   },
   routeHeaderText: {
     flex: 1,
     gap: 4,
   },
-  routeCardMetaRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
-    justifyContent: 'space-between',
+  routeCardTitle: {
+    flex: 1,
+    minWidth: 0,
   },
   routeDateText: {
     color: '#667085',
-    flex: 1,
     fontSize: 14,
     fontWeight: '700',
-  },
-  routeCardStatusGroup: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
+    flexShrink: 0,
   },
   routeToggleButton: {
     alignItems: 'center',
@@ -4737,12 +4744,26 @@ const styles = StyleSheet.create({
     padding: 18,
     ...shadow,
   },
+  routeSessionSummaryCard: {
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  routeSessionSummaryDate: {
+    color: '#667085',
+    fontSize: 14,
+    fontWeight: '700',
+  },
   summaryGrid: {
     borderTopColor: '#eef2f6',
     borderTopWidth: 1,
     flexDirection: 'row',
     gap: 10,
     paddingTop: 12,
+  },
+  routeSessionSummaryGrid: {
+    borderTopWidth: 0,
+    paddingTop: 0,
   },
   metricBlock: {
     flex: 1,
@@ -4901,9 +4922,6 @@ const styles = StyleSheet.create({
     borderWidth: 1.4,
     gap: 14,
     padding: 16,
-  },
-  currentTaskActions: {
-    gap: 8,
   },
   currentTaskAddressText: {
     color: '#374151',
