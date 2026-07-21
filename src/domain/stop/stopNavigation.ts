@@ -176,8 +176,6 @@ export function formatStopNavigationAddress(address: AssignedRouteAddress): stri
     address.address2,
     address.city,
     address.province,
-    address.postalCode,
-    address.countryCode,
   ]
     .map((part) => part?.trim() ?? '')
     .filter(Boolean)

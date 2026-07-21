@@ -12,16 +12,16 @@ import {
 const firstStop = sampleAssignedRoute.stops[0]!;
 
 describe('native stop map launch', () => {
-  it('searches the original stop address without injecting a Stop label', () => {
+  it('searches with street, city, and province without postal or country fields', () => {
     assert.equal(
       buildStopNavigationUrl({ platform: 'ios', stop: firstStop }),
-      'http://maps.apple.com/?q=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
+      'http://maps.apple.com/?q=100%20King%20St%20W%2C%20Toronto%2C%20ON',
     );
     assert.equal(
       buildStopNavigationUrl({ platform: 'android', stop: firstStop }),
-      'geo:0,0?q=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
+      'geo:0,0?q=100%20King%20St%20W%2C%20Toronto%2C%20ON',
     );
-    assert.doesNotMatch(buildStopNavigationUrl({ platform: 'android', stop: firstStop })!, /Stop%20/u);
+    assert.doesNotMatch(buildStopNavigationUrl({ platform: 'android', stop: firstStop })!, /Stop%20|M5X|CA/u);
   });
 
   it('falls back to coordinates only when the address is unavailable', () => {
@@ -83,10 +83,10 @@ describe('native stop map launch', () => {
 
     assert.deepEqual(result, {
       kind: 'opened',
-      message: 'Map search opened for 100 King St W, Toronto, ON, M5X 1A9, CA.',
-      url: 'http://maps.apple.com/?q=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
+      message: 'Map search opened for 100 King St W, Toronto, ON.',
+      url: 'http://maps.apple.com/?q=100%20King%20St%20W%2C%20Toronto%2C%20ON',
     });
-    assert.deepEqual(openedUrls, ['http://maps.apple.com/?q=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA']);
+    assert.deepEqual(openedUrls, ['http://maps.apple.com/?q=100%20King%20St%20W%2C%20Toronto%2C%20ON']);
   });
 });
 
@@ -94,7 +94,7 @@ describe('route map launch', () => {
   it('builds map-app directions from stop addresses in route sequence before using coordinates', () => {
     assert.equal(
       buildRouteNavigationUrl({ route: sampleAssignedRoute }),
-      'https://www.google.com/maps/dir/?api=1&travelmode=driving&dir_action=navigate&destination=200%20Queen%20St%20W%2C%20Unit%204%2C%20Toronto%2C%20ON%2C%20M5V%201Z2%2C%20CA&waypoints=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
+      'https://www.google.com/maps/dir/?api=1&travelmode=driving&dir_action=navigate&destination=200%20Queen%20St%20W%2C%20Unit%204%2C%20Toronto%2C%20ON&waypoints=100%20King%20St%20W%2C%20Toronto%2C%20ON',
     );
   });
 
@@ -155,10 +155,10 @@ describe('route map launch', () => {
     assert.deepEqual(result, {
       kind: 'opened',
       message: 'Opened 2 stops in the map app.',
-      url: 'https://www.google.com/maps/dir/?api=1&travelmode=driving&dir_action=navigate&destination=200%20Queen%20St%20W%2C%20Unit%204%2C%20Toronto%2C%20ON%2C%20M5V%201Z2%2C%20CA&waypoints=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
+      url: 'https://www.google.com/maps/dir/?api=1&travelmode=driving&dir_action=navigate&destination=200%20Queen%20St%20W%2C%20Unit%204%2C%20Toronto%2C%20ON&waypoints=100%20King%20St%20W%2C%20Toronto%2C%20ON',
     });
     assert.deepEqual(openedUrls, [
-      'https://www.google.com/maps/dir/?api=1&travelmode=driving&dir_action=navigate&destination=200%20Queen%20St%20W%2C%20Unit%204%2C%20Toronto%2C%20ON%2C%20M5V%201Z2%2C%20CA&waypoints=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
+      'https://www.google.com/maps/dir/?api=1&travelmode=driving&dir_action=navigate&destination=200%20Queen%20St%20W%2C%20Unit%204%2C%20Toronto%2C%20ON&waypoints=100%20King%20St%20W%2C%20Toronto%2C%20ON',
     ]);
   });
 
