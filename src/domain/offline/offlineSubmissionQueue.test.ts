@@ -7,8 +7,10 @@ import { createProofMediaRejectedError } from '../proof/proofMediaUpload';
 import {
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
   OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY,
+  createRouteOrderedDriverEventService,
   createInMemoryOfflineSubmissionQueue,
   createPersistentOfflineSubmissionQueue,
+  getPendingRouteEnd,
   retryOfflineSubmissions,
   type OfflineSubmissionQueueStorage,
 } from './offlineSubmissionQueue';
@@ -73,6 +75,97 @@ describe('offline submission queue', () => {
 
     assert.equal(queue.listPending().length, 1);
     assert.equal(queue.listPending()[0]?.attempts, 0);
+  });
+
+  it('reports the newest queued terminal route transition', () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-completed',
+      eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-07-21T09:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-released',
+      eventType: 'ROUTE_PAUSED',
+      occurredAt: new Date('2026-07-21T09:01:00.000Z'),
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(getPendingRouteEnd(queue, 'route-1'), 'released');
+    assert.equal(getPendingRouteEnd(queue, 'route-2'), null);
+  });
+
+  it('queues later workflow events behind earlier pending route events', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'arrived',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_ARRIVED',
+      occurredAt: new Date('2026-07-21T09:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    const live = createMockDriverEventService();
+    const ordered = createRouteOrderedDriverEventService({
+      driverEventService: live,
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    await assert.rejects(ordered.recordDriverEvent({
+      clientEventId: 'delivered',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-07-21T09:01:00.000Z'),
+      routePlanId: 'route-1',
+    }), /Earlier route updates are waiting to sync/u);
+    assert.equal(live.recordedEvents.length, 0);
+
+    queue.enqueueDriverEvent({
+      clientEventId: 'delivered',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-07-21T09:01:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    await retryOfflineSubmissions({
+      driverEventService: live,
+      proofMediaUploadService: {
+        uploadProofMedia: async () => { throw new Error('unexpected proof upload'); },
+      },
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(live.recordedEvents.map((event) => event.eventType), [
+      'STOP_ARRIVED',
+      'STOP_DELIVERED',
+    ]);
+  });
+
+  it('does not delay location updates behind workflow submissions', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'arrived',
+      eventType: 'STOP_ARRIVED',
+      occurredAt: new Date('2026-07-21T09:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    const live = createMockDriverEventService();
+    const ordered = createRouteOrderedDriverEventService({
+      driverEventService: live,
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    await ordered.recordDriverEvent({
+      clientEventId: 'location',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-07-21T09:01:00.000Z'),
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(live.recordedEvents.map((event) => event.eventType), ['LOCATION_UPDATED']);
   });
 
   it('persists a failed location batch with one queue mutation', () => {

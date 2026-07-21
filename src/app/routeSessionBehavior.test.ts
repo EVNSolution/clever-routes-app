@@ -37,10 +37,31 @@ describe('route session current task behavior', () => {
 
     assert.match(appSource, /companyGuidance\.executionStatus === 'IN_PROGRESS'/u);
     assert.match(appSource, /getAssignedRouteServerProgress/u);
-    assert.match(appSource, /const pickupIsUnconfirmed = restoredServerProgress\.completedStopIds\.length === 0[\s\S]*activeRouteSession\?\.pickupCompletedAt === undefined/u);
+    assert.match(appSource, /const pickupIsUnconfirmed = restoredServerProgress\.navigationStepIndex === COMPANY_STEP_INDEX[\s\S]*activeRouteSession\?\.pickupCompletedAt === undefined/u);
     assert.match(appSource, /pickupIsUnconfirmed[\s\S]*\? COMPANY_STEP_INDEX/u);
     assert.match(appSource, /setCompletedStopIds\(\(current\) => \[/u);
     assert.match(appSource, /markActiveRouteStarted/u);
+  });
+
+  it('does not resurrect a server in-progress route while its local terminal event is queued', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+
+    assert.match(appSource, /pendingRouteEnd: getPendingRouteEnd\(queue, session\.route\.id\) \?\? undefined/u);
+    assert.match(appSource, /session\.companyGuidance\.executionStatus === 'IN_PROGRESS' && session\.pendingRouteEnd === undefined/u);
+    assert.match(appSource, /session\.pendingRouteEnd === 'completed'[\s\S]*'completed'[\s\S]*session\.pendingRouteEnd === 'released'[\s\S]*'ready'/u);
+  });
+
+  it('clears previous route progress before a new route starts', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const start = appSource.indexOf('async function startRouteSessionAfterConfirmed(');
+    const end = appSource.indexOf('\n\n  function handleOpenRoutePreview(', start);
+    const startSource = appSource.slice(start, end);
+
+    assert.notEqual(start, -1);
+    assert.notEqual(end, -1);
+    assert.match(startSource, /resetActiveRouteProgress\(\);/u);
+    assert.ok(startSource.indexOf('routeAccessSaved') < startSource.indexOf('resetActiveRouteProgress();'));
+    assert.ok(startSource.indexOf('resetActiveRouteProgress();') < startSource.indexOf('startDeliveryWithForegroundPermission'));
   });
 
   it('returns to My Routes after restoring an active session on app launch', () => {
@@ -157,6 +178,9 @@ describe('route session current task behavior', () => {
 
   it('opens the exact stop details screen when the foreground notification is pressed', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
+    const resetStart = appSource.indexOf('function resetActiveRouteProgress()');
+    const resetEnd = appSource.indexOf('\n\n  function refreshOfflineQueueCount()', resetStart);
+    const resetSource = appSource.slice(resetStart, resetEnd);
 
     assert.match(appSource, /Linking\.addEventListener\('url', \(\{ url \}\) => handleUrl\(url\)\)/u);
     assert.match(appSource, /parseActiveRouteNotificationUrl\(url\)/u);
@@ -164,7 +188,9 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /pendingActiveRouteNotificationTarget === null \|\| routeSessions\.length === 0 \|\| !isDriverRestoreComplete/u);
     assert.match(appSource, /setIsDriverRestoreComplete\(true\)/u);
     assert.match(appSource, /screen === 'mainTabs' &&[\s\S]*pendingActiveRouteNotificationTargetRef\.current === null/u);
+    assert.match(appSource, /isActiveRouteNotificationTargetCurrent\(\{/u);
     assert.match(appSource, /setSelectedRouteId\(routeSession\.route\.id\);[\s\S]*setSelectedStopDetailsId\(stop\.deliveryStopId\);[\s\S]*setStopDetailsBackTarget\('routeSession'\);[\s\S]*setScreen\('stopDetails'\)/u);
+    assert.doesNotMatch(resetSource, /setPendingActiveRouteNotificationTarget\(null\)/u);
   });
 
   it('records the current stop arrival before an arrival notification opens completion', () => {

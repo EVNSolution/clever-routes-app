@@ -74,6 +74,26 @@ export function parseActiveRouteNotificationUrl(value: string): ActiveRouteNotif
   }
 }
 
+export function isActiveRouteNotificationTargetCurrent(input: {
+  activeRoutePlanId: string | null;
+  completedStopIds: string[];
+  currentStepIndex: number;
+  route: Pick<AssignedRoute, 'id' | 'stops'> | null;
+  target: ActiveRouteNotificationTarget;
+}): boolean {
+  if (
+    input.route === null
+    || input.currentStepIndex <= 0
+    || input.activeRoutePlanId !== input.target.routePlanId
+    || input.route.id !== input.target.routePlanId
+    || input.completedStopIds.includes(input.target.deliveryStopId)
+  ) {
+    return false;
+  }
+
+  return input.route.stops[input.currentStepIndex - 1]?.deliveryStopId === input.target.deliveryStopId;
+}
+
 function formatItemSummary(itemTypeCount: number, itemCount: number): string {
   return `${itemTypeCount} ${itemTypeCount === 1 ? 'type' : 'types'}, ${itemCount} EA`;
 }

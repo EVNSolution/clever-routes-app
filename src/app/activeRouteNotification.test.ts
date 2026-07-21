@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 import { sampleAssignedRoute } from '../domain/route/assignedRoute';
 import {
   buildActiveRouteForegroundNotification,
+  isActiveRouteNotificationTargetCurrent,
   parseActiveRouteNotificationUrl,
 } from './activeRouteNotification';
 
@@ -75,5 +76,48 @@ describe('active route foreground notification', () => {
 
     const source = readFileSync(new URL('./activeRouteNotification.ts', import.meta.url), 'utf8');
     assert.doesNotMatch(source, /new URL\(/u);
+  });
+
+  it('opens a notification target only when it is the exact active route and current stop', () => {
+    const target = {
+      deliveryStopId: sampleAssignedRoute.stops[1]!.deliveryStopId,
+      routePlanId: sampleAssignedRoute.id,
+    };
+
+    assert.equal(isActiveRouteNotificationTargetCurrent({
+      activeRoutePlanId: sampleAssignedRoute.id,
+      completedStopIds: [],
+      currentStepIndex: 2,
+      route: sampleAssignedRoute,
+      target,
+    }), true);
+    assert.equal(isActiveRouteNotificationTargetCurrent({
+      activeRoutePlanId: 'another-route',
+      completedStopIds: [],
+      currentStepIndex: 2,
+      route: sampleAssignedRoute,
+      target,
+    }), false);
+    assert.equal(isActiveRouteNotificationTargetCurrent({
+      activeRoutePlanId: sampleAssignedRoute.id,
+      completedStopIds: [],
+      currentStepIndex: 1,
+      route: sampleAssignedRoute,
+      target,
+    }), false);
+    assert.equal(isActiveRouteNotificationTargetCurrent({
+      activeRoutePlanId: sampleAssignedRoute.id,
+      completedStopIds: [target.deliveryStopId],
+      currentStepIndex: 2,
+      route: sampleAssignedRoute,
+      target,
+    }), false);
+    assert.equal(isActiveRouteNotificationTargetCurrent({
+      activeRoutePlanId: sampleAssignedRoute.id,
+      completedStopIds: [],
+      currentStepIndex: 0,
+      route: sampleAssignedRoute,
+      target,
+    }), false);
   });
 });

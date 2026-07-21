@@ -30,9 +30,10 @@ export function getAssignedRouteServerProgress(route: Pick<AssignedRoute, 'stops
     .filter((stop) => TERMINAL_STOP_STATUSES.has(stop.status))
     .map((stop) => stop.deliveryStopId);
   if (completedStopIds.length === 0) {
+    const arrivedStopIndex = route.stops.findIndex((stop) => stop.status === 'ARRIVED');
     return {
       completedStopIds,
-      navigationStepIndex: ROUTE_COMPANY_STEP_INDEX,
+      navigationStepIndex: arrivedStopIndex < 0 ? ROUTE_COMPANY_STEP_INDEX : arrivedStopIndex + 1,
     };
   }
 

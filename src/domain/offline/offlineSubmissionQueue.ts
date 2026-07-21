@@ -64,6 +64,58 @@ export type OfflineSubmissionRetryResult = {
   succeeded: number;
 };
 
+export type PendingRouteEnd = 'completed' | 'released';
+
+const ROUTE_WORKFLOW_EVENT_TYPES = new Set<DriverEventType>([
+  'ROUTE_COMPLETED',
+  'ROUTE_PAUSED',
+  'ROUTE_STARTED',
+  'STOP_ARRIVED',
+  'STOP_DELIVERED',
+  'STOP_FAILED',
+]);
+
+export function getPendingRouteEnd(queue: OfflineSubmissionQueue, routePlanId: string): PendingRouteEnd | null {
+  const pending = queue.listPending();
+  for (let index = pending.length - 1; index >= 0; index -= 1) {
+    const item = pending[index];
+    if (item?.kind !== 'driver_event' || item.event.routePlanId !== routePlanId) {
+      continue;
+    }
+    if (item.event.eventType === 'ROUTE_COMPLETED') {
+      return 'completed';
+    }
+    if (item.event.eventType === 'ROUTE_PAUSED') {
+      return 'released';
+    }
+  }
+
+  return null;
+}
+
+export function createRouteOrderedDriverEventService(input: {
+  driverEventService: DriverEventService;
+  queue: OfflineSubmissionQueue;
+  routePlanId: string;
+}): DriverEventService {
+  return {
+    recordDriverEvent: async (event) => {
+      if (
+        ROUTE_WORKFLOW_EVENT_TYPES.has(event.eventType)
+        && input.queue.listPending().some((item) => (
+          item.kind === 'driver_event'
+          && item.event.routePlanId === input.routePlanId
+          && ROUTE_WORKFLOW_EVENT_TYPES.has(item.event.eventType)
+        ))
+      ) {
+        throw new Error('Earlier route updates are waiting to sync. This update will be queued in order.');
+      }
+
+      return input.driverEventService.recordDriverEvent(event);
+    },
+  };
+}
+
 export function createInMemoryOfflineSubmissionQueue(input?: {
   initialItems?: OfflineSubmissionQueueItem[];
   maxItems?: number;

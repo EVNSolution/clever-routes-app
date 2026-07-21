@@ -31,6 +31,21 @@ describe('route step progress state', () => {
     });
   });
 
+  it('restores the arrived stop instead of returning an in-progress route to Store Pickup', () => {
+    const route = {
+      ...sampleAssignedRoute,
+      stops: sampleAssignedRoute.stops.map((stop, index) => ({
+        ...stop,
+        status: index === 1 ? 'ARRIVED' : 'ASSIGNED',
+      })),
+    };
+
+    assert.deepEqual(getAssignedRouteServerProgress(route), {
+      completedStopIds: [],
+      navigationStepIndex: 2,
+    });
+  });
+
   it('treats route-detail stop taps as read-only previews before the route session starts', () => {
     const firstStop = sampleAssignedRoute.stops[0];
     assert.ok(firstStop);
