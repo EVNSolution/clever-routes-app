@@ -22,7 +22,6 @@ export type MvpScenarioScreenId =
   | 'routeList'
   | 'routeDetail'
   | 'routeSession'
-  | 'liveTracking'
   | 'stopDetails'
   | 'arrivalCheck'
   | 'completedDeliveries';
@@ -93,13 +92,6 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
       purpose:
         'Run the operational pickup, navigation, stop, proof, and completion workflow after Start or Continue Session.',
       primaryAction: 'Continue Session',
-    },
-    {
-      id: 'liveTracking',
-      title: 'Live Tracking',
-      purpose:
-        'Show GPS tracking status and route overview without turn-by-turn navigation.',
-      primaryAction: 'Arrived',
     },
     {
       id: 'stopDetails',

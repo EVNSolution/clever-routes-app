@@ -169,19 +169,16 @@ type AppScreen =
   | 'arrivalCheck'
   | 'completedDeliveries'
   | 'countrySelect'
-  | 'liveTracking'
-  | 'liveMapPreview'
   | 'loginPhone'
   | 'loginDetail'
   | 'mainTabs'
+  | 'mapPreview'
   | 'proofCamera'
   | 'routePreview'
   | 'routeSession'
   | 'settings'
   | 'stopDetails';
 type RouteStatus = RouteSessionStatus;
-type StopDetailsBackTarget = 'liveTracking' | 'routeSession';
-type MapPreviewBackTarget = 'liveTracking' | 'routePreview' | 'routeSession';
 
 type StopProofDraft = {
   additionalNotes: string;
@@ -249,8 +246,6 @@ function DriverApp() {
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [navigationStepIndex, setNavigationStepIndex] = useState(COMPANY_STEP_INDEX);
   const [selectedStopDetailsId, setSelectedStopDetailsId] = useState<string | null>(null);
-  const [stopDetailsBackTarget, setStopDetailsBackTarget] = useState<StopDetailsBackTarget>('liveTracking');
-  const [mapPreviewBackTarget, setMapPreviewBackTarget] = useState<MapPreviewBackTarget>('routeSession');
   const [routeSessions, setRouteSessions] = useState<RouteSession[]>([]);
   const [isDriverRestoreComplete, setIsDriverRestoreComplete] = useState(false);
   const [pendingActiveRouteNotificationTarget, setPendingActiveRouteNotificationTarget] = useState<ActiveRouteNotificationTarget | null>(null);
@@ -652,7 +647,6 @@ function DriverApp() {
       setSelectedRouteId(routeSession.route.id);
       setSubmission(toCompanyGuidanceSubmission(routeSession));
       setSelectedStopDetailsId(stop.deliveryStopId);
-      setStopDetailsBackTarget('routeSession');
       setScreen('stopDetails');
       setMessage(null);
     }, 0);
@@ -1709,9 +1703,8 @@ function DriverApp() {
     }
   }
 
-  function openMapPreviewFrom(backTarget: MapPreviewBackTarget) {
-    setMapPreviewBackTarget(backTarget);
-    setScreen('liveMapPreview');
+  function openMapPreview() {
+    setScreen('mapPreview');
   }
 
   async function handleCallStop(stop: AssignedRouteStop | null) {
@@ -1786,17 +1779,6 @@ function DriverApp() {
     }
   }
 
-  function handleViewCurrentStop() {
-    if (currentStop === null) {
-      setMessage('The current step is the company pickup. Stop details begin after pickup is confirmed.');
-      return;
-    }
-
-    setSelectedStopDetailsId(currentStop.deliveryStopId);
-    setStopDetailsBackTarget('routeSession');
-    setScreen('stopDetails');
-  }
-
   async function activateSelectedRouteStop(selectedStop: AssignedRouteStop) {
     if (
       selectedRoute === null
@@ -1825,7 +1807,6 @@ function DriverApp() {
 
     setNavigationStepIndex(selectedStopIndex + 1);
     setSelectedStopDetailsId(selectedStop.deliveryStopId);
-    setStopDetailsBackTarget('routeSession');
     setScreen('stopDetails');
     setMessage(`Stop ${selectedStop.sequence} is now the current task.`);
   }
@@ -1862,7 +1843,6 @@ function DriverApp() {
     }
 
     setSelectedStopDetailsId(selectedStop.deliveryStopId);
-    setStopDetailsBackTarget('routeSession');
     setScreen('stopDetails');
   }
 
@@ -2246,7 +2226,6 @@ function DriverApp() {
     setCompletedStopTimes({});
     setNavigationStepIndex(COMPANY_STEP_INDEX);
     setSelectedStopDetailsId(null);
-    setStopDetailsBackTarget('liveTracking');
   }
 
   function refreshOfflineQueueCount() {
@@ -2309,18 +2288,15 @@ function DriverApp() {
       case 'routeSession':
         setScreen('mainTabs');
         return true;
-      case 'liveTracking':
-        setScreen('routeSession');
-        return true;
-      case 'liveMapPreview':
-        setScreen(mapPreviewBackTarget);
+      case 'mapPreview':
+        setScreen('routePreview');
         return true;
       case 'proofCamera':
         setScreen('arrivalCheck');
         return true;
       case 'stopDetails':
         setSelectedStopDetailsId(null);
-        setScreen(stopDetailsBackTarget);
+        setScreen('routeSession');
         return true;
       case 'arrivalCheck':
         setScreen('stopDetails');
@@ -2329,7 +2305,7 @@ function DriverApp() {
         setScreen('mainTabs');
         return true;
     }
-  }, [accountName, mapPreviewBackTarget, screen, stopDetailsBackTarget]);
+  }, [accountName, screen]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
@@ -2379,7 +2355,7 @@ function DriverApp() {
     }],
   }));
   const isCountrySelectionScreen = screen === 'countrySelect';
-  const isFullMapScreen = screen === 'liveMapPreview' && selectedRoute !== null;
+  const isFullMapScreen = screen === 'mapPreview' && selectedRoute !== null;
   const isProofCameraScreen = screen === 'proofCamera';
 
   return (
@@ -2403,11 +2379,10 @@ function DriverApp() {
             selectedLocale={selectedDriverLocale}
           />
         ) : isFullMapScreen ? (
-          <LiveMapPreviewScreen
+          <MapPreviewScreen
             currentStepIndex={navigationStepIndex}
-            liveLocationEnabled={isLiveLocationEnabled}
             mapStyleUrl={driverMapStyleUrl}
-            onBack={() => setScreen(mapPreviewBackTarget)}
+            onBack={() => setScreen('routePreview')}
             route={selectedRoute}
           />
         ) : isProofCameraScreen ? (
@@ -2566,7 +2541,6 @@ function DriverApp() {
               onArrived={handleArrivedAtStep}
               onBack={openHomeRoot}
               onFinishRoute={handleManualFinishRoute}
-              onOpenMapPreview={() => openMapPreviewFrom('routeSession')}
               onOpenNavigation={() => handleOpenNavigationForStop(currentStop)}
               onOpenRouteNavigation={() => handleOpenRouteNavigation(selectedRoute)}
               onOpenStop={handleOpenStopFromRouteSession}
@@ -2578,27 +2552,11 @@ function DriverApp() {
             />
           ) : null}
 
-          {screen === 'liveTracking' && selectedRoute !== null ? (
-            <LiveTrackingScreen
-              company={currentCompany}
-              isCompanyStep={isCompanyStep}
-              isRecordingArrival={isRecordingArrival}
-              onArrived={handleArrivedAtStep}
-              onBack={() => setScreen('routeSession')}
-              onOpenMapPreview={() => openMapPreviewFrom('liveTracking')}
-              onOpenNavigation={() => handleOpenNavigationForStop(currentStop)}
-              onViewStop={handleViewCurrentStop}
-              route={selectedRoute}
-              routeStatus={routeStatus}
-              stop={currentStop}
-            />
-          ) : null}
-
           {screen === 'routePreview' && selectedRoute !== null ? (
             <RoutePreviewScreen
               mapStyleUrl={driverMapStyleUrl}
               onBack={openHomeRoot}
-              onOpenMapPreview={() => openMapPreviewFrom('routePreview')}
+              onOpenMapPreview={openMapPreview}
               route={selectedRoute}
             />
           ) : null}
@@ -3247,7 +3205,6 @@ function RouteSessionScreen({
   onArrived,
   onBack,
   onFinishRoute,
-  onOpenMapPreview,
   onOpenNavigation,
   onOpenRouteNavigation,
   onOpenStop,
@@ -3269,7 +3226,6 @@ function RouteSessionScreen({
   onArrived(): void;
   onBack(): void;
   onFinishRoute(): void;
-  onOpenMapPreview(): void;
   onOpenNavigation(): void;
   onOpenRouteNavigation(): void;
   onOpenStop(stop: AssignedRouteStop): void;
@@ -3410,93 +3366,19 @@ function RouteSessionScreen({
             onPress={primaryProgressAction.onPress}
           />
         ) : null}
-        {routeStatus === 'active' ? <SecondaryButton label="View Live" onPress={onOpenMapPreview} /> : null}
         {routeStatus !== 'active' ? <SecondaryButton label="Open Route" onPress={onOpenRouteNavigation} /> : null}
-        <SecondaryButton label="Back to Routes" onPress={onBack} />
       </View>
     </View>
   );
 }
 
-function LiveTrackingScreen({
-  company,
-  isCompanyStep,
-  isRecordingArrival,
-  onArrived,
-  onBack,
-  onOpenMapPreview,
-  onOpenNavigation,
-  onViewStop,
-  route,
-  routeStatus,
-  stop,
-}: {
-  company: RouteAccessCompanyGuidance | null;
-  isCompanyStep: boolean;
-  isRecordingArrival: boolean;
-  onArrived(): void;
-  onBack(): void;
-  onOpenMapPreview(): void;
-  onOpenNavigation(): void;
-  onViewStop(): void;
-  route: AssignedRoute;
-  routeStatus: RouteStatus;
-  stop: AssignedRouteStop | null;
-}) {
-  const stepLabel = isCompanyStep ? 'Company Pickup' : stop === null ? 'Next Stop' : `Stop ${stop.sequence}`;
-  const address = isCompanyStep ? company?.pickupGuidance ?? 'Pickup guidance' : stop === null ? 'Stop address' : formatStopAddress(stop);
-  const payment = stop === null ? null : formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
-
-  return (
-    <View style={styles.screenStack}>
-      <ScreenHeader onBack={onBack} title="Live Tracking" />
-      <View style={styles.trackingDetailsPage}>
-        <Pressable accessibilityRole="button" onPress={onOpenMapPreview} style={styles.mapPreviewInlineButton}>
-          <View style={styles.mapPreviewInlineButtonTextBlock}>
-            <Text style={styles.mapPreviewInlineButtonText}>View Live</Text>
-            <Text style={styles.mapPreviewInlineButtonSubtext}>See your location and route</Text>
-          </View>
-          <View style={styles.mapPreviewInlineButtonAction}>
-            <Text style={styles.mapPreviewInlineButtonActionText}>View</Text>
-          </View>
-        </Pressable>
-        <View style={styles.trackingCardHeader}>
-          <View style={styles.routeHeaderText}>
-            <Text style={styles.labelText}>Delivery details</Text>
-            <Text style={styles.sheetTitle}>{address}</Text>
-          </View>
-        </View>
-        <View style={styles.trackingMetrics}>
-          <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
-          <MetricBlock label="ETA" value={formatAssignedRouteDuration(route.routeMetrics)} />
-          <MetricBlock label="Status" value={routeStatus === 'active' ? 'In progress' : formatRouteStatus(routeStatus)} tone={routeStatus === 'active' ? 'green' : 'neutral'} />
-        </View>
-        {payment !== null ? (
-          <View style={styles.paymentInlineRow}>
-            <Text style={styles.labelText}>Payment</Text>
-            <StatusChip label={payment.label} tone={payment.tone} />
-          </View>
-        ) : null}
-        <View style={styles.trackingButtonColumn}>
-          <SecondaryButton label="Navigate" onPress={onOpenNavigation} />
-          <SecondaryButton disabled={isCompanyStep || stop === null} label="View Stop" onPress={onViewStop} />
-          <PrimaryButton disabled={isRecordingArrival} label={isCompanyStep ? 'Pickup & Start Route' : 'Arrive'} loading={isRecordingArrival} onPress={onArrived} />
-        </View>
-        <Text style={styles.helperText}>{stepLabel}</Text>
-      </View>
-    </View>
-  );
-}
-
-function LiveMapPreviewScreen({
+function MapPreviewScreen({
   currentStepIndex,
-  liveLocationEnabled,
   mapStyleUrl,
   onBack,
   route,
 }: {
   currentStepIndex: number;
-  liveLocationEnabled: boolean;
   mapStyleUrl: string;
   onBack(): void;
   route: AssignedRoute;
@@ -3508,10 +3390,10 @@ function LiveMapPreviewScreen({
         route={route}
         currentStepIndex={currentStepIndex}
         mapStyleUrl={mapStyleUrl}
-        showUserLocation={liveLocationEnabled}
+        showUserLocation={false}
       />
       <View style={styles.fullScreenMapHeader}>
-        <ScreenHeader hideRightAction onBack={onBack} title={liveLocationEnabled ? 'View Live' : 'Map Preview'} />
+        <ScreenHeader hideRightAction onBack={onBack} title="Map Preview" />
       </View>
     </View>
   );
@@ -5073,9 +4955,6 @@ const styles = StyleSheet.create({
   routeActionButton: {
     flex: 1,
   },
-  trackingButtonColumn: {
-    gap: 12,
-  },
   selectedRouteCard: {
     backgroundColor: '#ffffff',
     borderColor: '#0b57d0',
@@ -5346,15 +5225,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     width: '100%',
   },
-  paymentInlineRow: {
-    alignItems: 'center',
-    borderColor: '#eef2f6',
-    borderRadius: 14,
-    borderWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    padding: 12,
-  },
   timelineCard: {
     backgroundColor: '#ffffff',
     borderColor: '#e5e7eb',
@@ -5516,15 +5386,6 @@ const styles = StyleSheet.create({
   routeSequenceList: {
     borderTopColor: '#e9ecf1',
     borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  trackingDetailsPage: {
-    backgroundColor: '#ffffff',
-    borderColor: '#dbeafe',
-    borderRadius: 24,
-    borderWidth: 1,
-    gap: 16,
-    padding: 20,
-    ...shadow,
   },
   fullScreenMap: {
     flex: 1,
@@ -5961,48 +5822,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
   },
-  trackingCardHeader: {
-    alignItems: 'flex-start',
-    flexDirection: 'row',
-    gap: 14,
-    justifyContent: 'space-between',
-  },
-  mapPreviewInlineButton: {
-    alignItems: 'center',
-    backgroundColor: '#0b57d0',
-    borderRadius: 16,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    minHeight: 58,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-  },
-  mapPreviewInlineButtonTextBlock: {
-    flex: 1,
-    gap: 2,
-  },
-  mapPreviewInlineButtonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  mapPreviewInlineButtonSubtext: {
-    color: '#dbeafe',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  mapPreviewInlineButtonAction: {
-    backgroundColor: 'rgba(255, 255, 255, 0.18)',
-    borderRadius: 999,
-    marginLeft: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-  },
-  mapPreviewInlineButtonActionText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '900',
-  },
   photoActionSheetOverlay: {
     bottom: 0,
     justifyContent: 'flex-end',
@@ -6093,14 +5912,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
     lineHeight: 24,
-  },
-  trackingMetrics: {
-    borderColor: '#eef2f6',
-    borderRadius: 16,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 12,
-    padding: 12,
   },
   stopDetailsPage: {
     gap: 0,

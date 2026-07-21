@@ -112,7 +112,7 @@ describe('route preview behavior', () => {
 
     assert.match(source, /onOpenRoutePreview=\{handleOpenRoutePreview\}/u);
     assert.match(source, /onContinueRoute=\{handleOpenRouteSession\}/u);
-    assert.match(source, /onOpenMapPreview=\{\(\) => openMapPreviewFrom\('routePreview'\)\}/u);
-    assert.match(source, /onBack=\{\(\) => setScreen\(mapPreviewBackTarget\)\}/u);
+    assert.match(source, /onOpenMapPreview=\{openMapPreview\}/u);
+    assert.match(source, /<MapPreviewScreen[\s\S]*onBack=\{\(\) => setScreen\('routePreview'\)\}/u);
   });
 });

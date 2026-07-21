@@ -12,18 +12,7 @@ const routeVisualStatePath = join(dirname(fileURLToPath(import.meta.url)), 'rout
 function getRouteSessionComponentSource(): string {
   const source = readFileSync(appRootPath, 'utf8');
   const start = source.indexOf('function RouteSessionScreen(');
-  const end = source.indexOf('function LiveTrackingScreen(', start);
-
-  assert.notEqual(start, -1);
-  assert.notEqual(end, -1);
-
-  return source.slice(start, end);
-}
-
-function getLiveTrackingComponentSource(): string {
-  const source = readFileSync(appRootPath, 'utf8');
-  const start = source.indexOf('function LiveTrackingScreen(');
-  const end = source.indexOf('function LiveMapPreviewScreen(', start);
+  const end = source.indexOf('function MapPreviewScreen(', start);
 
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
@@ -111,14 +100,12 @@ describe('route session current task behavior', () => {
     assert.match(readFileSync(appRootPath, 'utf8'), /saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: 1,[\s\S]*pickupCompleted: true/u);
   });
 
-  it('uses Arrive for the same delivery arrival action on every session surface', () => {
+  it('keeps Arrive on the route session without a redundant live tracking page', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
     const routeSessionSource = getRouteSessionComponentSource();
-    const liveTrackingSource = getLiveTrackingComponentSource();
 
     assert.match(routeSessionSource, /label="Arrive"/u);
-    assert.match(liveTrackingSource, /label=\{isCompanyStep \? 'Pickup & Start Route' : 'Arrive'\}/u);
-    assert.match(liveTrackingSource, /label="Navigate"/u);
-    assert.doesNotMatch(liveTrackingSource, /label=\{[^\n]*'Arrived'|label="Find Next Stop"|label="Search Address"/u);
+    assert.doesNotMatch(appSource, /liveTracking|LiveTrackingScreen|Live Tracking/u);
   });
 
   it('opens only the current stop from Navigate and reserves whole-route directions for Open Route', () => {
@@ -128,10 +115,6 @@ describe('route session current task behavior', () => {
     assert.match(
       appSource,
       /<RouteSessionScreen[\s\S]*onOpenNavigation=\{\(\) => handleOpenNavigationForStop\(currentStop\)\}[\s\S]*onOpenRouteNavigation=\{\(\) => handleOpenRouteNavigation\(selectedRoute\)\}/u,
-    );
-    assert.match(
-      appSource,
-      /<LiveTrackingScreen[\s\S]*onOpenNavigation=\{\(\) => handleOpenNavigationForStop\(currentStop\)\}/u,
     );
     assert.match(routeSessionSource, /label="Navigate" onPress=\{onOpenNavigation\}/u);
     assert.match(routeSessionSource, /label="Open Route" onPress=\{onOpenRouteNavigation\}/u);
@@ -207,7 +190,7 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /setIsDriverRestoreComplete\(true\)/u);
     assert.match(appSource, /screen === 'mainTabs' &&[\s\S]*pendingActiveRouteNotificationTargetRef\.current === null/u);
     assert.match(appSource, /isActiveRouteNotificationTargetCurrent\(\{/u);
-    assert.match(appSource, /setSelectedRouteId\(routeSession\.route\.id\);[\s\S]*setSelectedStopDetailsId\(stop\.deliveryStopId\);[\s\S]*setStopDetailsBackTarget\('routeSession'\);[\s\S]*setScreen\('stopDetails'\)/u);
+    assert.match(appSource, /setSelectedRouteId\(routeSession\.route\.id\);[\s\S]*setSelectedStopDetailsId\(stop\.deliveryStopId\);[\s\S]*setScreen\('stopDetails'\)/u);
     assert.doesNotMatch(resetSource, /setPendingActiveRouteNotificationTarget\(null\)/u);
   });
 
@@ -372,7 +355,8 @@ describe('route session current task behavior', () => {
   it('opens the large map as a full-screen surface instead of a card', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
 
-    assert.match(appSource, /const isFullMapScreen = screen === 'liveMapPreview' && selectedRoute !== null/u);
+    assert.match(appSource, /const isFullMapScreen = screen === 'mapPreview' && selectedRoute !== null/u);
+    assert.match(appSource, /function MapPreviewScreen\(/u);
     assert.match(appSource, /style=\{styles\.fullScreenMap\}/u);
     assert.match(appSource, /paddingTop: 34/u);
     assert.match(appSource, /fullMapCanvas:[\s\S]*height: '100%'/u);
@@ -385,11 +369,9 @@ describe('route session current task behavior', () => {
     const nativeMapSource = readFileSync(nativeMapPath, 'utf8');
 
     assert.match(appSource, /const isLiveLocationEnabled = selectedRoute !== null[\s\S]*deliveryStartResult\?\.kind === 'delivery_active'[\s\S]*activeRoutePlanId === selectedRoute\.id[\s\S]*deliveryFinishResult\?\.flowState !== 'delivery_finished'/u);
-    assert.match(appSource, /routeStatus === 'active' \? <SecondaryButton label="View Live"/u);
-    assert.match(appSource, /<Text style=\{styles\.mapPreviewInlineButtonText\}>View Live<\/Text>/u);
-    assert.match(appSource, /title=\{liveLocationEnabled \? 'View Live' : 'Map Preview'\}/u);
-    assert.match(appSource, /showUserLocation=\{liveLocationEnabled\}/u);
+    assert.match(appSource, /showUserLocation=\{routeStatus === 'active'\}/u);
     assert.match(appSource, /showUserLocation \|\| \(route\.routeGeometry !== null/u);
+    assert.doesNotMatch(appSource, /View Live|Back to Routes|LiveTrackingScreen|liveMapPreview/u);
     assert.doesNotMatch(appSource, /liveLocationStatusOverlay|GPS active|Locating GPS|GPS unavailable/u);
 
     assert.doesNotMatch(nativeMapSource, /useCurrentPosition/u);
