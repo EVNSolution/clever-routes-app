@@ -84,6 +84,11 @@ const patches = [
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setSmallIcon(iconsResId)\n      .build()`,
+    after: `    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setSmallIcon(iconsResId)\n      .build()`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
     before: `  companion object {\n    private var sServiceId = 481756`,
     after: `  companion object {\n    private var sServiceId = 481756\n    private val sActiveServices = ConcurrentHashMap<String, LocationTaskService>()\n\n    fun updateNotification(taskName: String, serviceOptions: Bundle): Boolean {\n      return sActiveServices[taskName]?.updateForeground(serviceOptions) ?: false\n    }`,
   },

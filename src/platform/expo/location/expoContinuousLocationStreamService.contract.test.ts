@@ -71,7 +71,10 @@ describe('Expo continuous location wiring', () => {
     assert.match(serviceSource, /val requestCode = notificationUrl\?\.hashCode\(\) \?: 0/u);
     assert.match(serviceSource, /fun updateNotification\(taskName: String, serviceOptions: Bundle\): Boolean/u);
     assert.match(serviceSource, /sActiveServices\[taskName\]\?\.updateForeground/u);
+    assert.match(serviceSource, /\.setOngoing\(true\)/u);
+    assert.match(serviceSource, /\.setOnlyAlertOnce\(true\)/u);
     assert.match(patchSource, /updateLocationTaskNotificationAsync/u);
+    assert.match(patchSource, /\.setOngoing\(true\)/u);
     assert.doesNotMatch(moduleConfigSource, /"publication"/u);
     assert.match(mainActivitySource, /override fun onNewIntent\(intent: Intent\)/u);
     assert.match(mainActivitySource, /setIntent\(intent\)/u);
