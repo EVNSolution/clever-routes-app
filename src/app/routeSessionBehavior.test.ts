@@ -137,9 +137,9 @@ describe('route session current task behavior', () => {
     assert.match(routeSessionSource, /label="Open Route" onPress=\{onOpenRouteNavigation\}/u);
   });
 
-  it('keeps Store information out of Route Sequence and lists delivery addresses only', () => {
+  it('keeps Store information out of Stops and lists delivery addresses only', () => {
     const componentSource = getRouteSessionComponentSource();
-    const sequenceStart = componentSource.indexOf('<Text style={styles.sectionTitle}>Route Sequence</Text>');
+    const sequenceStart = componentSource.indexOf('<Text style={styles.sectionTitle}>Stops</Text>');
     const sequenceEnd = componentSource.indexOf("{routeStartedEventResult?.kind === 'recorded'", sequenceStart);
     const sequenceSource = componentSource.slice(sequenceStart, sequenceEnd);
 
@@ -149,6 +149,24 @@ describe('route session current task behavior', () => {
     assert.match(sequenceSource, /marker=\{String\(stop\.sequence\)\.padStart\(2, '0'\)\}/u);
     assert.match(sequenceSource, /title=\{formatStopStreetAddress\(stop\)\}/u);
     assert.doesNotMatch(sequenceSource, /Store Pickup|Pickup point|companyDisplayName|pickupGuidance/u);
+  });
+
+  it('lets an active driver select any incomplete stop with a warning and persisted current task', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+
+    assert.match(appSource, /buildOutOfOrderStopSelectionWarning\(\{/u);
+    assert.match(appSource, /Alert\.alert\(warning\.title, warning\.message/u);
+    assert.match(appSource, /text: 'Continue'/u);
+    assert.match(appSource, /await driverAccessTokenStore\.saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: selectedStopIndex \+ 1/u);
+    assert.match(appSource, /setNavigationStepIndex\(selectedStopIndex \+ 1\)/u);
+    assert.match(appSource, /setSelectedStopDetailsId\(selectedStop\.deliveryStopId\)/u);
+  });
+
+  it('chooses the next incomplete stop without assuming numeric sequence progression', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+
+    assert.match(appSource, /getNextIncompleteRouteStepIndex\(\{/u);
+    assert.doesNotMatch(appSource, /const nextNavigationStepIndex = navigationStepIndex \+ 1/u);
   });
 
   it('shows only the search-ready street and city in the active task address', () => {

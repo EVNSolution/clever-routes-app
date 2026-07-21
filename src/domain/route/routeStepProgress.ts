@@ -29,11 +29,17 @@ export function getAssignedRouteServerProgress(route: Pick<AssignedRoute, 'stops
   const completedStopIds = route.stops
     .filter((stop) => TERMINAL_STOP_STATUSES.has(stop.status))
     .map((stop) => stop.deliveryStopId);
-  if (completedStopIds.length === 0) {
-    const arrivedStopIndex = route.stops.findIndex((stop) => stop.status === 'ARRIVED');
+  const arrivedStopIndex = route.stops.findIndex((stop) => stop.status === 'ARRIVED');
+  if (arrivedStopIndex >= 0) {
     return {
       completedStopIds,
-      navigationStepIndex: arrivedStopIndex < 0 ? ROUTE_COMPANY_STEP_INDEX : arrivedStopIndex + 1,
+      navigationStepIndex: arrivedStopIndex + 1,
+    };
+  }
+  if (completedStopIds.length === 0) {
+    return {
+      completedStopIds,
+      navigationStepIndex: ROUTE_COMPANY_STEP_INDEX,
     };
   }
 
@@ -42,6 +48,70 @@ export function getAssignedRouteServerProgress(route: Pick<AssignedRoute, 'stops
     completedStopIds,
     navigationStepIndex: nextStopIndex < 0 ? route.stops.length : nextStopIndex + 1,
   };
+}
+
+export function buildOutOfOrderStopSelectionWarning(input: {
+  completedStopIds: string[];
+  navigationStepIndex: number;
+  route: Pick<AssignedRoute, 'stops'>;
+  selectedStopId: string;
+}): { message: string; title: string } | null {
+  if (input.navigationStepIndex === ROUTE_COMPANY_STEP_INDEX) {
+    return null;
+  }
+
+  const selectedStop = input.route.stops.find((stop) => stop.deliveryStopId === input.selectedStopId);
+  const currentStop = getCurrentRouteStop({
+    navigationStepIndex: input.navigationStepIndex,
+    route: input.route,
+  });
+  if (
+    selectedStop === undefined
+    || currentStop === null
+    || selectedStop.deliveryStopId === currentStop.deliveryStopId
+    || isStopCompleted(selectedStop, input.completedStopIds)
+  ) {
+    return null;
+  }
+
+  const incompleteBeforeSelection = input.route.stops.filter((stop) => (
+    stop.sequence < selectedStop.sequence
+    && stop.deliveryStopId !== selectedStop.deliveryStopId
+    && !isStopCompleted(stop, input.completedStopIds)
+  ));
+  if (incompleteBeforeSelection.length === 0) {
+    return null;
+  }
+  const remainingLabel = formatRemainingStopLabel(incompleteBeforeSelection.map((stop) => stop.sequence));
+  const incompleteVerb = incompleteBeforeSelection.length === 1 ? 'remains' : 'remain';
+
+  return {
+    message: `Stop ${selectedStop.sequence} is not the current planned stop. ${remainingLabel} ${incompleteVerb} incomplete. Continuing will update live ETAs and notify the administrator.`,
+    title: 'Change stop order?',
+  };
+}
+
+export function getNextIncompleteRouteStepIndex(input: {
+  completedStopIds: string[];
+  currentStopId: string;
+  route: Pick<AssignedRoute, 'stops'>;
+}): number | null {
+  const currentIndex = input.route.stops.findIndex((stop) => stop.deliveryStopId === input.currentStopId);
+  if (currentIndex < 0) {
+    return null;
+  }
+
+  const candidateIndexes = [
+    ...input.route.stops.keys(),
+  ].filter((index) => index > currentIndex).concat(
+    [...input.route.stops.keys()].filter((index) => index < currentIndex),
+  );
+  const nextIndex = candidateIndexes.find((index) => {
+    const stop = input.route.stops[index];
+    return stop !== undefined && !isStopCompleted(stop, input.completedStopIds);
+  });
+
+  return nextIndex === undefined ? null : nextIndex + 1;
 }
 
 export function getStopDetailsProgressState(input: {
@@ -75,4 +145,19 @@ export function getStopDetailsProgressState(input: {
     kind: 'preview_stop',
     stop,
   };
+}
+
+function isStopCompleted(stop: AssignedRouteStop, completedStopIds: string[]): boolean {
+  return completedStopIds.includes(stop.deliveryStopId) || TERMINAL_STOP_STATUSES.has(stop.status);
+}
+
+function formatRemainingStopLabel(sequences: number[]): string {
+  const labels = [...new Set(sequences)].sort((left, right) => left - right).map((sequence) => `Stop ${sequence}`);
+  if (labels.length === 1) {
+    return labels[0]!;
+  }
+  if (labels.length === 2) {
+    return `${labels[0]} and ${labels[1]}`;
+  }
+  return `${labels.slice(0, -1).join(', ')}, and ${labels.at(-1)}`;
 }

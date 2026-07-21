@@ -3,7 +3,9 @@ import { describe, it } from 'node:test';
 
 import { sampleAssignedRoute } from './assignedRoute';
 import {
+  buildOutOfOrderStopSelectionWarning,
   getAssignedRouteServerProgress,
+  getNextIncompleteRouteStepIndex,
   getStopDetailsProgressState,
   ROUTE_COMPANY_STEP_INDEX,
 } from './routeStepProgress';
@@ -42,6 +44,21 @@ describe('route step progress state', () => {
 
     assert.deepEqual(getAssignedRouteServerProgress(route), {
       completedStopIds: [],
+      navigationStepIndex: 2,
+    });
+  });
+
+  it('keeps an out-of-order arrived stop active even when an earlier stop is already completed', () => {
+    const route = {
+      ...sampleAssignedRoute,
+      stops: sampleAssignedRoute.stops.map((stop, index) => ({
+        ...stop,
+        status: index === 0 ? 'DELIVERED' : 'ARRIVED',
+      })),
+    };
+
+    assert.deepEqual(getAssignedRouteServerProgress(route), {
+      completedStopIds: [route.stops[0].deliveryStopId],
       navigationStepIndex: 2,
     });
   });
@@ -89,5 +106,70 @@ describe('route step progress state', () => {
     assert.equal(previewState?.kind, 'preview_stop');
     assert.equal(previewState?.canMarkArrived, false);
     assert.equal(previewState?.stop.deliveryStopId, secondStop.deliveryStopId);
+  });
+
+  it('warns before selecting an incomplete stop outside the planned current order', () => {
+    const secondStop = sampleAssignedRoute.stops[1];
+    assert.ok(secondStop);
+
+    assert.deepEqual(buildOutOfOrderStopSelectionWarning({
+      completedStopIds: [],
+      navigationStepIndex: 1,
+      route: sampleAssignedRoute,
+      selectedStopId: secondStop.deliveryStopId,
+    }), {
+      message: 'Stop 2 is not the current planned stop. Stop 1 remains incomplete. Continuing will update live ETAs and notify the administrator.',
+      title: 'Change stop order?',
+    });
+  });
+
+  it('does not warn for the current or completed stop', () => {
+    const firstStop = sampleAssignedRoute.stops[0];
+    const secondStop = sampleAssignedRoute.stops[1];
+    assert.ok(firstStop);
+    assert.ok(secondStop);
+
+    assert.equal(buildOutOfOrderStopSelectionWarning({
+      completedStopIds: [],
+      navigationStepIndex: 1,
+      route: sampleAssignedRoute,
+      selectedStopId: firstStop.deliveryStopId,
+    }), null);
+    assert.equal(buildOutOfOrderStopSelectionWarning({
+      completedStopIds: [secondStop.deliveryStopId],
+      navigationStepIndex: 1,
+      route: sampleAssignedRoute,
+      selectedStopId: secondStop.deliveryStopId,
+    }), null);
+  });
+
+  it('does not warn when returning to the earliest incomplete planned stop', () => {
+    const firstStop = sampleAssignedRoute.stops[0];
+    assert.ok(firstStop);
+
+    assert.equal(buildOutOfOrderStopSelectionWarning({
+      completedStopIds: [],
+      navigationStepIndex: 2,
+      route: sampleAssignedRoute,
+      selectedStopId: firstStop.deliveryStopId,
+    }), null);
+  });
+
+  it('continues forward after an out-of-order completion before wrapping to skipped stops', () => {
+    const firstStop = sampleAssignedRoute.stops[0];
+    const secondStop = sampleAssignedRoute.stops[1];
+    assert.ok(firstStop);
+    assert.ok(secondStop);
+
+    assert.equal(getNextIncompleteRouteStepIndex({
+      completedStopIds: [secondStop.deliveryStopId],
+      currentStopId: secondStop.deliveryStopId,
+      route: sampleAssignedRoute,
+    }), 1);
+    assert.equal(getNextIncompleteRouteStepIndex({
+      completedStopIds: [firstStop.deliveryStopId],
+      currentStopId: firstStop.deliveryStopId,
+      route: sampleAssignedRoute,
+    }), 2);
   });
 });

@@ -49,8 +49,10 @@ import {
   type RouteSessionStatus,
 } from '../domain/route/routeSessionClassification';
 import {
+  buildOutOfOrderStopSelectionWarning,
   getAssignedRouteServerProgress,
   getCurrentRouteStop,
+  getNextIncompleteRouteStepIndex,
   getStopDetailsProgressState,
   ROUTE_COMPANY_STEP_INDEX,
 } from '../domain/route/routeStepProgress';
@@ -1795,6 +1797,39 @@ function DriverApp() {
     setScreen('stopDetails');
   }
 
+  async function activateSelectedRouteStop(selectedStop: AssignedRouteStop) {
+    if (
+      selectedRoute === null
+      || activeRoutePlanId !== selectedRoute.id
+      || deliveryStartResult?.kind !== 'delivery_active'
+    ) {
+      setMessage('Start the route and complete Store Pickup before changing the stop order.');
+      return;
+    }
+    const selectedStopIndex = selectedRoute.stops.findIndex(
+      (candidate) => candidate.deliveryStopId === selectedStop.deliveryStopId,
+    );
+    if (selectedStopIndex < 0 || completedStopIds.includes(selectedStop.deliveryStopId)) {
+      setMessage('This stop is no longer available as an active delivery task.');
+      return;
+    }
+
+    const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
+      navigationStepIndex: selectedStopIndex + 1,
+      routePlanId: selectedRoute.id,
+    });
+    if (!activeRouteSaved) {
+      setMessage('The selected stop could not be saved. Refresh the route and try again.');
+      return;
+    }
+
+    setNavigationStepIndex(selectedStopIndex + 1);
+    setSelectedStopDetailsId(selectedStop.deliveryStopId);
+    setStopDetailsBackTarget('routeSession');
+    setScreen('stopDetails');
+    setMessage(`Stop ${selectedStop.sequence} is now the current task.`);
+  }
+
   function handleOpenStopFromRouteSession(stop: AssignedRouteStop) {
     if (selectedRoute === null) {
       setMessage('No route is available to review.');
@@ -1804,6 +1839,25 @@ function DriverApp() {
     const selectedStop = selectedRoute.stops.find((candidate) => candidate.deliveryStopId === stop.deliveryStopId);
     if (selectedStop === undefined) {
       setMessage('This stop is no longer available on the selected route.');
+      return;
+    }
+
+    const warning = routeStatus === 'active'
+      ? buildOutOfOrderStopSelectionWarning({
+          completedStopIds,
+          navigationStepIndex,
+          route: selectedRoute,
+          selectedStopId: selectedStop.deliveryStopId,
+        })
+      : null;
+    if (warning !== null) {
+      Alert.alert(warning.title, warning.message, [
+        { style: 'cancel', text: 'Cancel' },
+        {
+          onPress: () => { void activateSelectedRouteStop(selectedStop); },
+          text: 'Continue',
+        },
+      ]);
       return;
     }
 
@@ -2022,7 +2076,16 @@ function DriverApp() {
         return;
       }
 
-      const nextNavigationStepIndex = navigationStepIndex + 1;
+      const nextNavigationStepIndex = getNextIncompleteRouteStepIndex({
+        completedStopIds: nextCompletedStopIds,
+        currentStopId: currentStop.deliveryStopId,
+        route: selectedRoute,
+      });
+      if (nextNavigationStepIndex === null) {
+        setScreen('routeSession');
+        setMessage('Stop completed. Select the next incomplete stop from the list.');
+        return;
+      }
       const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
         navigationStepIndex: nextNavigationStepIndex,
         routePlanId: selectedRoute.id,
@@ -3312,7 +3375,7 @@ function RouteSessionScreen({
       ) : null}
 
       <View style={styles.routeSessionSection}>
-        <Text style={styles.sectionTitle}>Route Sequence</Text>
+        <Text style={styles.sectionTitle}>Stops</Text>
         <View style={styles.routeSequenceList}>
           {route.stops.map((stop, index) => {
             const completed = completedStopIds.includes(stop.deliveryStopId);
