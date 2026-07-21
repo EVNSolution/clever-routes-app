@@ -4,8 +4,8 @@ import { describe, it } from 'node:test';
 import { createDriverRuntimeServices, readDriverRuntimeConfig } from './driverRuntimeConfig';
 
 describe('driver runtime API config', () => {
-  it('keeps local mock services as the default without a delivery server base URL', async () => {
-    const config = readDriverRuntimeConfig({});
+  it('uses local mock services only when mock mode is explicit', async () => {
+    const config = readDriverRuntimeConfig({ EXPO_PUBLIC_DRIVER_RUNTIME_MODE: 'mock' });
     const services = createDriverRuntimeServices({ config });
 
     const result = await services.routeAccessService.lookupRouteAccess({
@@ -17,10 +17,28 @@ describe('driver runtime API config', () => {
     assert.equal(result.status, 'INVITED');
   });
 
+  it('fails closed when neither a live server nor explicit mock mode is configured', () => {
+    assert.throws(
+      () => readDriverRuntimeConfig({}),
+      /EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL is required unless EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock/u,
+    );
+  });
+
+  it('rejects ambiguous mock mode with a live server origin', () => {
+    assert.throws(
+      () => readDriverRuntimeConfig({
+        EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: 'https://delivery.example.com',
+        EXPO_PUBLIC_DRIVER_RUNTIME_MODE: 'mock',
+      }),
+      /Mock mode cannot include EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL/u,
+    );
+  });
+
   it('uses live route access API client when a delivery server base URL is configured', async () => {
     const requests: { body: unknown; method: string; url: string }[] = [];
     const config = readDriverRuntimeConfig({
       EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: 'https://delivery.example.com/',
+      EXPO_PUBLIC_DRIVER_RUNTIME_MODE: 'live',
     });
     const services = createDriverRuntimeServices({
       config,
@@ -50,6 +68,7 @@ describe('driver runtime API config', () => {
     const requests: { body: unknown; method: string; url: string }[] = [];
     const config = readDriverRuntimeConfig({
       EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: 'https://delivery.example.com/',
+      EXPO_PUBLIC_DRIVER_RUNTIME_MODE: 'live',
     });
     const services = createDriverRuntimeServices({
       config,

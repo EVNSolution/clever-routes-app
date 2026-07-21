@@ -71,6 +71,7 @@ import {
   type DriverEventService,
   type DriverRouteEtaUpdate,
   type RouteStartedRecordResult,
+  type StopArrivedRecordResult,
 } from '../domain/events/driverEvents';
 import { createExpoContinuousLocationStreamService, registerContinuousLocationTaskObserver } from '../platform/expo/location/expoContinuousLocationStreamService';
 import { createExpoForegroundLocationPermissionService } from '../platform/expo/location/expoLocationPermissionService';
@@ -322,6 +323,7 @@ function DriverApp() {
   const runtimeConfig = useMemo(
     () => readDriverRuntimeConfig({
       EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: process.env.EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL,
+      EXPO_PUBLIC_DRIVER_RUNTIME_MODE: process.env.EXPO_PUBLIC_DRIVER_RUNTIME_MODE,
     }),
     [],
   );
@@ -638,7 +640,59 @@ function DriverApp() {
     )));
   }
 
-  const handleStopArrivalNotificationPress = useCallback((data: StopArrivalNotificationData) => {
+  const submitStopArrivalForRouteStop = useCallback(async (
+    routeSession: RouteSession,
+    stop: AssignedRouteStop,
+  ): Promise<StopArrivedRecordResult> => {
+    if (deliveryStartResult === null) {
+      return {
+        kind: 'blocked',
+        message: 'The active delivery session could not be confirmed. Refresh the route and try again.',
+        reason: 'delivery_not_active',
+      };
+    }
+
+    const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+    if (offlineSubmissionQueue === null) {
+      setOfflineSubmissionQueue(queue);
+    }
+
+    const routeSubmission = toCompanyGuidanceSubmission(routeSession);
+    const result = await recordStopArrivedAfterDeliveryStart({
+      deliveryStart: deliveryStartResult,
+      deliveryStopId: stop.deliveryStopId,
+      driverEventService: getDriverEventServiceForCurrentSubmission({
+        fallback: mockDriverEventService,
+        refreshDriverAccess: buildDriverAccessRefresh(routeSubmission),
+        runtimeConfig,
+        submission: routeSubmission,
+      }),
+      offlineQueue: queue,
+      routePlanId: routeSession.route.id,
+    });
+
+    if (result.kind === 'recorded' && result.etaUpdate !== undefined) {
+      const etaUpdate = result.etaUpdate;
+      setRouteSessions((current) => current.map((session) => (
+        session.route.id === routeSession.route.id
+          ? { ...session, route: applyDriverRouteEtaUpdate(session.route, etaUpdate) }
+          : session
+      )));
+    }
+    if (result.kind === 'queued') {
+      await queue.whenPersisted();
+    }
+    setOfflineQueueCount(queue.listPending().length);
+    return result;
+  }, [
+    buildDriverAccessRefresh,
+    deliveryStartResult,
+    mockDriverEventService,
+    offlineSubmissionQueue,
+    runtimeConfig,
+  ]);
+
+  const handleStopArrivalNotificationPress = useCallback(async (data: StopArrivalNotificationData) => {
     const routeSession = routeSessions.find((session) => session.route.id === data.routePlanId) ?? null;
     if (routeSession === null) {
       setPendingStopArrivalNotification(data);
@@ -654,15 +708,6 @@ function DriverApp() {
       return;
     }
 
-    if (completedStopIds.includes(data.deliveryStopId)) {
-      setSelectedRouteId(routeSession.route.id);
-      setSubmission(toCompanyGuidanceSubmission(routeSession));
-      setNavigationStepIndex(stopIndex + 1);
-      setScreen('routeSession');
-      setMessage('This stop is already completed.');
-      return;
-    }
-
     if (deliveryStartResult?.kind !== 'delivery_active') {
       setSelectedRouteId(routeSession.route.id);
       setSubmission(toCompanyGuidanceSubmission(routeSession));
@@ -672,13 +717,51 @@ function DriverApp() {
       return;
     }
 
+    if (activeRoutePlanId !== routeSession.route.id || navigationStepIndex !== stopIndex + 1) {
+      setSelectedRouteId(activeRoutePlanId ?? routeSession.route.id);
+      setScreen('routeSession');
+      setMessage('This arrival alert is no longer for the current stop. The active route was kept unchanged.');
+      return;
+    }
+
+    if (completedStopIds.includes(data.deliveryStopId)) {
+      setScreen('routeSession');
+      setMessage('This stop is already completed. The active route was kept unchanged.');
+      return;
+    }
+
     setSelectedRouteId(routeSession.route.id);
     setSubmission(toCompanyGuidanceSubmission(routeSession));
     setSelectedStopDetailsId(null);
     setNavigationStepIndex(stopIndex + 1);
-    setScreen('arrivalCheck');
-    setMessage('Arrival alert opened. Add proof photo and delivery notes.');
-  }, [completedStopIds, deliveryStartResult?.kind, routeSessions]);
+    setIsRecordingArrival(true);
+    setMessage(null);
+    try {
+      const result = await submitStopArrivalForRouteStop(routeSession, routeSession.route.stops[stopIndex]);
+      if (result.kind === 'blocked') {
+        setScreen('routeSession');
+        setMessage(result.message);
+        return;
+      }
+      setScreen('arrivalCheck');
+      setMessage(result.kind === 'queued'
+        ? result.message
+        : 'Arrival confirmed by server. Add proof photo and delivery notes.');
+    } catch (error) {
+      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+      setScreen('routeSession');
+      setMessage(`Arrival could not be recorded: ${errorMessage}`);
+    } finally {
+      setIsRecordingArrival(false);
+    }
+  }, [
+    activeRoutePlanId,
+    completedStopIds,
+    deliveryStartResult?.kind,
+    navigationStepIndex,
+    routeSessions,
+    submitStopArrivalForRouteStop,
+  ]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1588,31 +1671,14 @@ function DriverApp() {
     setIsRecordingArrival(true);
     setMessage(null);
     try {
-      const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
-      if (offlineSubmissionQueue === null) {
-        setOfflineSubmissionQueue(queue);
+      if (selectedRouteSession === null) {
+        setMessage('The active route could not be confirmed. Refresh the route and try again.');
+        return;
       }
-      const result = await recordStopArrivedAfterDeliveryStart({
-        deliveryStart: deliveryStartResult,
-        deliveryStopId: currentStop.deliveryStopId,
-        driverEventService: getDriverEventServiceForCurrentSubmission({
-          fallback: mockDriverEventService,
-          refreshDriverAccess: buildDriverAccessRefresh(submission),
-          runtimeConfig,
-          submission,
-        }),
-        offlineQueue: queue,
-        routePlanId: selectedRoute.id,
-      });
+      const result = await submitStopArrivalForRouteStop(selectedRouteSession, currentStop);
       if (result.kind === 'blocked') {
         setMessage(result.message);
         return;
-      }
-      if (result.kind === 'recorded' && result.etaUpdate !== undefined) {
-        applyEtaUpdateToRoute(selectedRoute.id, result.etaUpdate);
-      }
-      if (result.kind === 'queued') {
-        await queue.whenPersisted();
       }
       setScreen('arrivalCheck');
       setMessage(result.kind === 'queued'

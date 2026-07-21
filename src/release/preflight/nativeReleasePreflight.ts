@@ -283,11 +283,14 @@ function checkEasProduction(easConfig: NativeReleasePreflightInput['easConfig'])
 }
 
 function checkRuntimeEnvExample(envExample: string): NativeReleasePreflightCheck {
-  if (!envExample.includes('EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL')) {
-    return fail('runtime.env.example', '.env.example must document EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL for live API mode.');
+  if (
+    !envExample.includes('EXPO_PUBLIC_DRIVER_RUNTIME_MODE')
+    || !envExample.includes('EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL')
+  ) {
+    return fail('runtime.env.example', '.env.example must document explicit live/mock runtime selection and the live delivery server origin.');
   }
 
-  return pass('runtime.env.example', '.env.example documents the only bundled public runtime API origin key.');
+  return pass('runtime.env.example', '.env.example documents explicit runtime selection and the bundled public API origin key.');
 }
 
 function tuplePluginConfig(plugins: unknown[], pluginName: string): Record<string, unknown> | null {

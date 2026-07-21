@@ -40,6 +40,13 @@ describe('Expo continuous location wiring', () => {
     assert.match(source, /const alreadyStarted = await Location\.hasStartedLocationUpdatesAsync\(taskName\);[\s\S]*await startExpoLocationUpdates\(taskName, notification\);[\s\S]*return \{ alreadyStarted \}/u);
     assert.match(source, /notificationBody: notification\.body/u);
     assert.match(source, /notificationTitle: notification\.title/u);
+    assert.match(source, /updateLocationTaskNotificationAsync/u);
+    const notificationUpdateStart = source.indexOf('updateLocationNotification:');
+    const notificationUpdateSource = source.slice(
+      notificationUpdateStart,
+      source.indexOf('\n    }),', notificationUpdateStart),
+    );
+    assert.doesNotMatch(notificationUpdateSource, /startExpoLocationUpdates/u);
     assert.doesNotMatch(source, /Active delivery tracking|tracking active delivery location/u);
   });
 
@@ -62,6 +69,9 @@ describe('Expo continuous location wiring', () => {
     assert.match(serviceSource, /it\.data = Uri\.parse\(url\)/u);
     assert.match(serviceSource, /it\.addCategory\(Intent\.CATEGORY_BROWSABLE\)/u);
     assert.match(serviceSource, /val requestCode = notificationUrl\?\.hashCode\(\) \?: 0/u);
+    assert.match(serviceSource, /fun updateNotification\(taskName: String, serviceOptions: Bundle\): Boolean/u);
+    assert.match(serviceSource, /sActiveServices\[taskName\]\?\.updateForeground/u);
+    assert.match(patchSource, /updateLocationTaskNotificationAsync/u);
     assert.doesNotMatch(moduleConfigSource, /"publication"/u);
     assert.match(mainActivitySource, /override fun onNewIntent\(intent: Intent\)/u);
     assert.match(mainActivitySource, /setIntent\(intent\)/u);

@@ -23,9 +23,44 @@ const patches = [
     after: `    "notificationBody" to notificationBody,\n    "notificationBigText" to notificationBigText,\n    "notificationUrl" to notificationUrl,\n    "killServiceOnDestroy" to killServiceOnDestroy,`,
   },
   {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/LocationModule.kt',
+    before: `import expo.modules.location.records.LocationTaskOptions\nimport expo.modules.location.records.MotionActivitiesRecord`,
+    after: `import expo.modules.location.records.LocationTaskOptions\nimport expo.modules.location.records.LocationTaskServiceOptions\nimport expo.modules.location.services.LocationTaskService\nimport expo.modules.location.records.MotionActivitiesRecord`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/LocationModule.kt',
+    before: `    AsyncFunction("stopLocationUpdatesAsync") { taskName: String ->\n      mTaskManager.unregisterTask(taskName, LocationTaskConsumer::class.java)\n      return@AsyncFunction\n    }`,
+    after: `    AsyncFunction("updateLocationTaskNotificationAsync") { taskName: String, options: LocationTaskServiceOptions ->\n      val serviceOptions = Bundle().apply {\n        putString("notificationTitle", options.notificationTitle)\n        putString("notificationBody", options.notificationBody)\n        putString("notificationBigText", options.notificationBigText)\n        putString("notificationUrl", options.notificationUrl)\n        putString("notificationColor", options.notificationColor)\n      }\n      return@AsyncFunction LocationTaskService.updateNotification(taskName, serviceOptions)\n    }\n\n    AsyncFunction("stopLocationUpdatesAsync") { taskName: String ->\n      mTaskManager.unregisterTask(taskName, LocationTaskConsumer::class.java)\n      return@AsyncFunction\n    }`,
+  },
+  {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
     before: `import android.content.pm.PackageManager\nimport android.graphics.Color\nimport android.os.Binder\nimport android.os.Build\nimport android.os.Bundle\nimport android.os.IBinder`,
     after: `import android.content.pm.PackageManager\nimport android.graphics.Color\nimport android.graphics.Typeface\nimport android.net.Uri\nimport android.os.Binder\nimport android.os.Build\nimport android.os.Bundle\nimport android.os.IBinder\nimport android.text.Spannable\nimport android.text.SpannableStringBuilder\nimport android.text.style.StyleSpan`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `import android.text.style.StyleSpan\n\nclass LocationTaskService`,
+    after: `import android.text.style.StyleSpan\nimport java.util.concurrent.ConcurrentHashMap\n\nclass LocationTaskService`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `  private var mChannelId: String? = null\n  private var mKillService = false`,
+    after: `  private var mChannelId: String? = null\n  private var mKillService = false\n  private var mTaskName: String? = null`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `      mChannelId = extras.getString("appId") + ":" + extras.getString("taskName")\n      mKillService = extras.getBoolean("killService", false)`,
+    after: `      mTaskName = extras.getString("taskName")\n      mChannelId = extras.getString("appId") + ":" + mTaskName\n      mKillService = extras.getBoolean("killService", false)\n      mTaskName?.let { sActiveServices[it] = this }`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `  override fun onTaskRemoved(rootIntent: Intent) {`,
+    after: `  override fun onDestroy() {\n    mTaskName?.let { sActiveServices.remove(it, this) }\n    super.onDestroy()\n  }\n\n  override fun onTaskRemoved(rootIntent: Intent) {`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `  fun startForeground(serviceOptions: Bundle) {\n    val notification = buildServiceNotification(serviceOptions)\n    startForeground(mServiceId, notification)\n  }`,
+    after: `  fun startForeground(serviceOptions: Bundle) {\n    val notification = buildServiceNotification(serviceOptions)\n    startForeground(mServiceId, notification)\n  }\n\n  private fun updateForeground(serviceOptions: Bundle): Boolean {\n    if (!::mParentContext.isInitialized || mChannelId == null) {\n      return false\n    }\n    startForeground(serviceOptions)\n    return true\n  }`,
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
@@ -47,6 +82,11 @@ const patches = [
     before: `  private fun colorStringToInteger(color: String?): Int? {`,
     after: `  private fun emphasizeNotificationLabels(text: String): CharSequence {\n    val styled = SpannableStringBuilder(text)\n    listOf("Address", "Customer note", "Items").forEach { label ->\n      val start = text.indexOf(label)\n      if (start >= 0) {\n        styled.setSpan(\n          StyleSpan(Typeface.BOLD),\n          start,\n          start + label.length,\n          Spannable.SPAN_EXCLUSIVE_EXCLUSIVE\n        )\n      }\n    }\n    return styled\n  }\n\n  private fun colorStringToInteger(color: String?): Int? {`,
   },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `  companion object {\n    private var sServiceId = 481756`,
+    after: `  companion object {\n    private var sServiceId = 481756\n    private val sActiveServices = ConcurrentHashMap<String, LocationTaskService>()\n\n    fun updateNotification(taskName: String, serviceOptions: Bundle): Boolean {\n      return sActiveServices[taskName]?.updateForeground(serviceOptions) ?: false\n    }`,
+  },
 ];
 
 const changedFiles = new Set();
@@ -64,5 +104,5 @@ for (const patch of patches) {
 }
 
 if (changedFiles.size > 0) {
-  console.log(`Patched rich foreground notifications in ${changedFiles.size} expo-location files.`);
+  console.log(`Patched foreground notification behavior in ${changedFiles.size} expo-location files.`);
 }

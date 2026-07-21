@@ -167,6 +167,21 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /setSelectedRouteId\(routeSession\.route\.id\);[\s\S]*setSelectedStopDetailsId\(stop\.deliveryStopId\);[\s\S]*setStopDetailsBackTarget\('routeSession'\);[\s\S]*setScreen\('stopDetails'\)/u);
   });
 
+  it('records the current stop arrival before an arrival notification opens completion', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const handlerStart = appSource.indexOf('const handleStopArrivalNotificationPress = useCallback(');
+    const handlerEnd = appSource.indexOf('\n\n  useEffect(() => {', handlerStart);
+    const handlerSource = appSource.slice(handlerStart, handlerEnd);
+
+    assert.notEqual(handlerStart, -1);
+    assert.notEqual(handlerEnd, -1);
+    assert.match(handlerSource, /activeRoutePlanId !== routeSession\.route\.id/u);
+    assert.match(handlerSource, /navigationStepIndex !== stopIndex \+ 1/u);
+    assert.match(handlerSource, /await submitStopArrivalForRouteStop\(routeSession, routeSession\.route\.stops\[stopIndex\]\)/u);
+    assert.ok(handlerSource.indexOf('activeRoutePlanId !== routeSession.route.id') < handlerSource.indexOf('completedStopIds.includes'));
+    assert.ok(handlerSource.indexOf('submitStopArrivalForRouteStop') < handlerSource.indexOf("setScreen('arrivalCheck')"));
+  });
+
   it('bolds only the current Route Sequence item title', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
 

@@ -42,7 +42,7 @@ export type StopArrivalNotificationRegistrationResult =
     };
 
 export type StopArrivalNotificationService = {
-  addStopArrivalResponseListener(listener: (data: StopArrivalNotificationData) => void): () => void;
+  addStopArrivalResponseListener(listener: (data: StopArrivalNotificationData) => Promise<void> | void): () => void;
   getLastStopArrivalResponse(): Promise<StopArrivalNotificationData | null>;
   registerForStopArrivalNotifications(): Promise<StopArrivalNotificationRegistrationResult>;
   scheduleStopArrivalNotification(input: StopArrivalNotificationCandidate): Promise<void>;

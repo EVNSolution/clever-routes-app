@@ -24,7 +24,7 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
       const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
         const data = parseStopArrivalNotificationData(response.notification.request.content.data);
         if (data !== null) {
-          listener(data);
+          void Promise.resolve(listener(data)).catch(() => undefined);
         }
       });
 

@@ -18,11 +18,13 @@ npm install
 npm run start
 ```
 
-Optional live API mode uses only public Expo runtime configuration:
+Live API mode uses only public Expo runtime configuration:
 
 ```bash
-EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://delivery.example.com npm run start
+EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://delivery.example.com npm run start
 ```
+
+Use `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock` only for deliberate local fixture testing. Missing runtime configuration now stops startup instead of silently loading mock routes.
 
 Do not commit `.env*` files other than `.env.example`. Keep source/docs/config files UTF-8/LF with final newlines as defined by `.editorconfig` and `.gitattributes`.
 

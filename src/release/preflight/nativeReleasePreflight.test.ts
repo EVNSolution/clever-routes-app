@@ -68,7 +68,7 @@ test('native release preflight reports release-blocking config gaps without secr
     },
     {
       id: 'runtime.env.example',
-      message: '.env.example must document EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL for live API mode.'
+      message: '.env.example must document explicit live/mock runtime selection and the live delivery server origin.'
     }
   ]);
 });

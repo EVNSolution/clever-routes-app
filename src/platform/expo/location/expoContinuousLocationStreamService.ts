@@ -1,5 +1,7 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import { requireNativeModule } from 'expo-modules-core';
+import { Platform } from 'react-native';
 
 import {
   CONTINUOUS_LOCATION_TASK_NAME,
@@ -26,11 +28,27 @@ type ExpoLocationTaskData = {
   locations?: Location.LocationObject[];
 };
 
+type ExpoLocationNotificationModule = {
+  updateLocationTaskNotificationAsync(
+    taskName: string,
+    notification: {
+      notificationBigText?: string;
+      notificationBody: string;
+      notificationTitle: string;
+      notificationUrl?: string;
+    },
+  ): Promise<boolean>;
+};
+
 const driverAccessTokenStore = createExpoSecureDriverAccessTokenStore();
 const runtimeConfig = readDriverRuntimeConfig({
   EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: process.env.EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL,
+  EXPO_PUBLIC_DRIVER_RUNTIME_MODE: process.env.EXPO_PUBLIC_DRIVER_RUNTIME_MODE,
 });
 const runtimeServices = createDriverRuntimeServices({ config: runtimeConfig });
+const expoLocationNotificationModule = Platform.OS === 'android'
+  ? requireNativeModule<ExpoLocationNotificationModule>('ExpoLocation')
+  : null;
 const activeTaskExecutions = new Set<Promise<void>>();
 let continuousLocationTaskObserver: ContinuousLocationTaskObserver | null = null;
 let locationTaskOperationQueue = Promise.resolve();
@@ -170,8 +188,19 @@ export function createExpoContinuousLocationStreamService(): ContinuousLocationS
       await runLocationTaskOperation(() => stopExpoLocationUpdates(taskName));
     },
     updateLocationNotification: ({ notification, taskName }) => runLocationTaskOperation(async () => {
-      if (await Location.hasStartedLocationUpdatesAsync(taskName)) {
-        await startExpoLocationUpdates(taskName, notification);
+      if (
+        expoLocationNotificationModule !== null
+        && await Location.hasStartedLocationUpdatesAsync(taskName)
+      ) {
+        const updated = await expoLocationNotificationModule.updateLocationTaskNotificationAsync(taskName, {
+          notificationBody: notification.body,
+          ...(notification.expandedBody === undefined ? {} : { notificationBigText: notification.expandedBody }),
+          notificationTitle: notification.title,
+          ...(notification.url === undefined ? {} : { notificationUrl: notification.url }),
+        });
+        if (!updated) {
+          throw new Error('The active Android location notification service was not found.');
+        }
       }
     }),
   };
