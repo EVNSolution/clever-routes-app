@@ -301,6 +301,22 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(nativeMapSource, /route-preview-stop-label/u);
   });
 
+  it('keeps the compact live map focused on the store and current destination at distant zoom levels', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const nativeMapSource = readFileSync(nativeMapPath, 'utf8');
+
+    assert.match(appSource, /compactRouteFocus=\{mapSize === 'session'\}/u);
+    assert.match(nativeMapSource, /const LIVE_ROUTE_DETAIL_MIN_ZOOM = 15;/u);
+    assert.match(nativeMapSource, /const ROUTE_MARKER_FOCUS_OPACITY = \[[\s\S]*'step', \['zoom'\],[\s\S]*\['==', \['get', 'markerState'\], 'current'\][\s\S]*\['==', \['get', 'kind'\], 'depot'\][\s\S]*LIVE_ROUTE_DETAIL_MIN_ZOOM,[\s\S]*1,/u);
+    assert.match(nativeMapSource, /paint=\{compactRouteFocus \? ROUTE_MARKER_FOCUSED_CIRCLE_PAINT : ROUTE_MARKER_CIRCLE_PAINT\}/u);
+    assert.match(nativeMapSource, /ROUTE_MARKER_FOCUSED_CIRCLE_PAINT = \{[\s\S]*'circle-opacity': ROUTE_MARKER_FOCUS_OPACITY,[\s\S]*'circle-stroke-opacity': ROUTE_MARKER_FOCUS_OPACITY/u);
+    assert.match(nativeMapSource, /paint=\{compactRouteFocus \? ROUTE_MARKER_FOCUSED_LABEL_PAINT : ROUTE_MARKER_LABEL_PAINT\}/u);
+    assert.match(nativeMapSource, /id="route-preview-marker-group-compact-border"[\s\S]*minzoom=\{compactRouteFocus \? LIVE_ROUTE_DETAIL_MIN_ZOOM : undefined\}/u);
+    assert.match(nativeMapSource, /focusLabel: currentStopSequence !== null && sequences\.includes\(currentStopSequence\)[\s\S]*String\(currentStopSequence\)/u);
+    assert.match(nativeMapSource, /'text-field': \['step', \['zoom'\], \['get', 'focusLabel'\], LIVE_ROUTE_DETAIL_MIN_ZOOM, \['get', 'label'\]\]/u);
+    assert.match(nativeMapSource, /id="route-preview-completed-line"[\s\S]*id="route-preview-active-leg-line"/u);
+  });
+
   it('uses gray for completed, green for current, and blue for upcoming route states', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const nativeMapSource = readFileSync(nativeMapPath, 'utf8');

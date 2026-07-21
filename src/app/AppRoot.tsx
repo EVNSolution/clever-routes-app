@@ -4025,6 +4025,7 @@ function MapOverview({
     return (
       <View style={canvasStyle}>
         <NativeRouteMapPreview
+          compactRouteFocus={mapSize === 'session'}
           currentStepIndex={currentStepIndex}
           mapStyleUrl={mapStyleUrl}
           onUnavailable={handleInteractiveMapUnavailable}
