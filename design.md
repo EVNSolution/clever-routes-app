@@ -1985,12 +1985,20 @@ This section supersedes older navigation, icon, and route-list guidance where th
 
 - Keep the page title and route content visually close; do not place the title inside a separate dashboard card.
 - Remove current-status summaries and status-filter tabs from the page header.
+- Render every authoritative active route assignment as its own card in one vertical scroll list.
+- Never hide additional route assignments behind selected-only rendering, a carousel, horizontal paging, or `Previous Route` / `Next Route` controls.
+- Place an in-progress route first. Keep the remaining ready routes in nearest delivery-date order, preserving server order when dates are equal.
+- Do not remove an operational route from My Routes only because its delivery date has passed; the server assignment and execution status remain authoritative.
 - Start each assigned-route card collapsed.
 - Remove the circular route-initial badge so the route title begins at the card content edge.
-- Treat the delivery date as route metadata, not helper or description copy. Place the title, date, status pill, and explicit expand/collapse control together in one horizontal card-header row.
+- Keep the company/shop identity visible in the collapsed card so routes with repeated names remain distinguishable. Place the compact company and route title, date, status pill, and explicit expand/collapse control together in one horizontal card-header row.
 - Keep the primary route actions outside the collapsible details so they remain visible while the card is collapsed.
 - For a ready route, place two equal-width actions in one horizontal row and label them `Start` and `Detail`.
-- Expansion reveals Region, Stops, Estimated Distance, Estimated Time, and multi-route paging without repeating the delivery date.
+- For an in-progress route, keep `Continue` and `Delete` visible in the same equal-width horizontal action structure.
+- Treat `Delete` as deleting only the driver's active session. It stops tracking, releases the session, and returns the still-assigned route to `Ready`; it must not complete the route or remove its Store assignment.
+- When another route is in progress, keep every ready route visible and its `Detail` action available, but disable `Start` until the active route is finished or deleted.
+- Expansion affects only that card and reveals Region, Stops, Estimated Distance, and Estimated Time without repeating the delivery date.
+- At most one route card may be expanded at a time; expanding another card collapses the previous card without removing either card from the list.
 - When no route is assigned, show:
   - Title: `No routes assigned yet`
   - Body: `When dispatch assigns you a route, it’ll appear here.`
@@ -2005,17 +2013,27 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - After authoritative route data is processed, update the revealed area with the latest local time.
 - If the server removes an assignment, remove it from My Routes while keeping the driver account signed in.
 
-## Route Session Summary
+## Route Session Flat Layout (2026-07-20)
 
-- Keep the first Route Session card materially shorter than the standard summary card.
-- Show the route title and delivery date on one line as `<title> - <date>`; do not repeat the date in a separate `Date` row.
-- Keep Stops, Distance, and Duration in one compact metrics row directly below the title line, without an internal divider.
-- Use reduced vertical padding and spacing on this card only so other summary surfaces retain their existing density.
+- Use the server-provided route name as the page title; do not show the generic `Route Session` title.
+- Place one centered metadata row immediately below the title with separate `<n> Stops` and `Duration <n> hr <n> min` text elements. Use spacing instead of a visible divider character, and use a darker neutral color than secondary description text.
+- Place the interactive route map immediately below that metadata line without a `Route Preview` title, helper text, card, or tap-only wrapper.
+- Let the native map renderer use its adaptive device frame rate; do not impose a fixed low frame-rate cap.
+- Keep custom route overlays lean: one primary route line, one optional progress line, one marker circle layer, and one marker label layer. Do not add separate route-shadow or marker-halo layers.
+- Emphasize the current stop with the largest orange marker, keep the depot strongly identifiable in green, render upcoming stops as smaller blue markers, and mute completed stops with lower opacity. Use white marker outlines and centered numeric labels for legibility instead of complex pin assets.
+- Remove page-level horizontal padding from Route Session so the map and section boundaries reach the screen edges.
+- Do not wrap the Route Session header, map, current task, route sequence, guidance, notes, or actions in rounded cards or elevated containers.
+- Render those components as a direct vertical sequence. Text-heavy sections may retain internal reading padding and thin separators, but not outer margins, rounded shells, or shadows.
+- Keep `View Live` as the dedicated live GPS surface while the inline Route Session map remains directly gesture-operable.
 
 ## Current Task Actions
 
-- Place exactly two equal-width actions in one horizontal row at the bottom of an active Current Task card.
-- Use `Arrive` as the left primary action for the current pickup or delivery arrival step.
+- Before a route starts, let one full-width `Start Session` primary button occupy the task area without a separate pickup task card. Starting the session transitions directly to Stop 1.
+- After the session starts, replace the generic `Current Task` heading with the active work name, such as `Stop 1`.
+- Place the stop address and its Payment status pill together directly below the work name. Keep every normalized payment state visible, including paid states.
+- Keep the displayed task address search-ready and compact: show the primary street address plus city only when the city is not already part of the street text. Omit unit/detail, province, postal code, and country from this task summary.
+- Place exactly two compact, equal-width actions in one horizontal row below the stop metadata.
+- Use `Arrive` as the left primary action for the current delivery stop.
 - Use `Navigate` as the right secondary action for opening route directions from the driver's current location.
 - Do not show `View Stop Details` in Current Task or duplicate the navigation action as `Open in Map` below an active session.
 

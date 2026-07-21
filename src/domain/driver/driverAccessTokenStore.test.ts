@@ -194,6 +194,11 @@ test('keeps a stable route-session generation and route-start acknowledgement', 
     true,
   );
   await store.saveActiveRouteSession({
+    navigationStepIndex: 1,
+    pickupCompleted: true,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  });
+  await store.saveActiveRouteSession({
     navigationStepIndex: 2,
     routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
   });
@@ -202,6 +207,7 @@ test('keeps a stable route-session generation and route-start acknowledgement', 
   assert.equal(restored.kind, 'active');
   if (restored.kind !== 'active') return;
   assert.equal(restored.activeRouteSession?.startedAt, startedAt);
+  assert.equal(restored.activeRouteSession?.pickupCompletedAt, '2026-05-12T06:45:00.000Z');
   assert.equal(restored.activeRouteSession?.routeStartedRecordedAt, '2026-05-12T06:45:00.000Z');
   assert.equal(
     await store.clearActiveRouteSession(

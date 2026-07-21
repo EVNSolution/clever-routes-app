@@ -12,26 +12,34 @@ import {
 const firstStop = sampleAssignedRoute.stops[0]!;
 
 describe('native stop map launch', () => {
-  it('builds iOS and Android map URLs from stop coordinates without committing to a provider SDK', () => {
+  it('searches the original stop address without injecting a Stop label', () => {
     assert.equal(
       buildStopNavigationUrl({ platform: 'ios', stop: firstStop }),
-      'http://maps.apple.com/?ll=43.6487,-79.3817&q=Stop%201%20%231001',
+      'http://maps.apple.com/?q=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
     );
     assert.equal(
       buildStopNavigationUrl({ platform: 'android', stop: firstStop }),
-      'geo:43.6487,-79.3817?q=43.6487%2C-79.3817(Stop%201%20%231001)',
+      'geo:0,0?q=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
     );
+    assert.doesNotMatch(buildStopNavigationUrl({ platform: 'android', stop: firstStop })!, /Stop%20/u);
   });
 
-  it('falls back to a formatted address when coordinates are unavailable', () => {
-    const stopWithoutCoordinates: AssignedRouteStop = {
+  it('falls back to coordinates only when the address is unavailable', () => {
+    const stopWithoutAddress: AssignedRouteStop = {
       ...firstStop,
-      coordinates: null,
+      address: {
+        address1: '',
+        address2: null,
+        city: '',
+        countryCode: '',
+        postalCode: '',
+        province: '',
+      },
     };
 
     assert.equal(
-      buildStopNavigationUrl({ platform: 'android', stop: stopWithoutCoordinates }),
-      'geo:0,0?q=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA(Stop%201%20%231001)',
+      buildStopNavigationUrl({ platform: 'android', stop: stopWithoutAddress }),
+      'geo:43.6487,-79.3817?q=43.6487%2C-79.3817',
     );
   });
 
@@ -75,10 +83,10 @@ describe('native stop map launch', () => {
 
     assert.deepEqual(result, {
       kind: 'opened',
-      message: 'Map opened for Stop 1 #1001.',
-      url: 'http://maps.apple.com/?ll=43.6487,-79.3817&q=Stop%201%20%231001',
+      message: 'Map search opened for 100 King St W, Toronto, ON, M5X 1A9, CA.',
+      url: 'http://maps.apple.com/?q=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
     });
-    assert.deepEqual(openedUrls, ['http://maps.apple.com/?ll=43.6487,-79.3817&q=Stop%201%20%231001']);
+    assert.deepEqual(openedUrls, ['http://maps.apple.com/?q=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA']);
   });
 });
 

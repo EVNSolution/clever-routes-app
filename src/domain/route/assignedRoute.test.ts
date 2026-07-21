@@ -6,6 +6,7 @@ import {
   createMockAssignedRouteService,
   formatAssignedRouteDistance,
   formatAssignedRouteDuration,
+  formatAssignedRouteEta,
   formatAssignedRouteItemLine,
   hasAssignedRouteGeometry,
   formatAssignedRoutePaymentStatus,
@@ -54,6 +55,7 @@ describe('driver assigned route UX flow', () => {
     assert.equal(result.route.stops.length, 2);
     assert.equal(formatAssignedRouteDistance(result.route.routeMetrics), '3.3 km');
     assert.equal(formatAssignedRouteDuration(result.route.routeMetrics), '14 min');
+    assert.equal(formatAssignedRouteEta(result.route.stops[0]?.estimatedArrivalAt, result.route.timezone), '7:08 AM');
     assert.equal(hasAssignedRouteGeometry(result.route), true);
     assert.deepEqual(
       result.route.stops.map((stop) => stop.sequence),
@@ -64,6 +66,7 @@ describe('driver assigned route UX flow', () => {
       ['CASH_COLLECT_REQUIRED', 'TRANSFER_CHECK_PENDING'],
     );
     assert.equal(result.route.stops[0]?.items[0]?.name, 'Tomato box');
+    assert.equal(result.route.stops[0]?.customerNote, null);
     assert.equal(formatAssignedRouteItemLine(result.route.stops[0]!.items[0]!), 'Tomato box (Size: Large): 2');
     assert.equal(JSON.stringify(result).includes('tomatono.myshopify.com'), true);
   });

@@ -24,14 +24,14 @@ describe('route step progress state', () => {
     });
   });
 
-  it('keeps pickup current when an in-progress route has no terminal stop yet', () => {
+  it('restores Store Pickup when an in-progress route has no terminal stop yet', () => {
     assert.deepEqual(getAssignedRouteServerProgress(sampleAssignedRoute), {
       completedStopIds: [],
       navigationStepIndex: ROUTE_COMPANY_STEP_INDEX,
     });
   });
 
-  it('treats route-detail stop taps as read-only previews before company pickup is explicitly confirmed', () => {
+  it('treats route-detail stop taps as read-only previews before the route session starts', () => {
     const firstStop = sampleAssignedRoute.stops[0];
     assert.ok(firstStop);
 

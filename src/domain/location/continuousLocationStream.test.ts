@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createMockDriverEventService } from '../events/driverEvents';
 import {
   clearAndStopContinuousLocationSession,
@@ -91,6 +92,10 @@ describe('continuous location streaming', () => {
 
     const result = await startContinuousLocationUpdatesAfterDeliveryStart({
       deliveryStart: activeDelivery,
+      notification: {
+        body: 'Items: 2x Tomato box',
+        title: 'Next stop 1  ETA 7:08 AM',
+      },
       routePlanId: 'route-1',
       streamService,
     });
@@ -102,7 +107,14 @@ describe('continuous location streaming', () => {
       routePlanId: 'route-1',
       taskName: 'clever-driver-continuous-location',
     });
-    assert.deepEqual(streamService.started, [{ routePlanId: 'route-1', taskName: 'clever-driver-continuous-location' }]);
+    assert.deepEqual(streamService.started, [{
+      notification: {
+        body: 'Items: 2x Tomato box',
+        title: 'Next stop 1  ETA 7:08 AM',
+      },
+      routePlanId: 'route-1',
+      taskName: 'clever-driver-continuous-location',
+    }]);
   });
 
   it('records each continuous location batch item as LOCATION_UPDATED', async () => {
@@ -173,6 +185,30 @@ describe('continuous location streaming', () => {
     } finally {
       Date.now = originalDateNow;
     }
+  });
+
+  it('does not queue locations after the server says the route is not in progress', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+
+    const result = await recordContinuousLocationUpdateBatch({
+      driverEventService: {
+        recordDriverEvent: async () => {
+          throw createDriverApiHttpError({
+            code: 'ROUTE_NOT_IN_PROGRESS',
+            endpoint: 'Driver event record',
+            status: 409,
+          });
+        },
+      },
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-05-12T08:45:00.000Z') },
+      ],
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(result, { kind: 'route_not_in_progress', recordedCount: 0 });
+    assert.deepEqual(queue.listPending(), []);
   });
 
   it('stops the named continuous location task', async () => {

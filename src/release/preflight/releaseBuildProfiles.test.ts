@@ -50,3 +50,17 @@ test('pins initial native build versions in app config before EAS remote version
   assert.equal(appConfig.expo?.android?.package, 'com.evns.cleverdriverapp');
   assert.equal(appConfig.expo?.android?.versionCode, 1);
 });
+
+test('keeps direct-download Android optimization isolated to the distribution APK build', () => {
+  const packageConfig = readJson<{
+    scripts?: Record<string, string>;
+  }>('package.json');
+  const command = packageConfig.scripts?.['build:android:distribution'] ?? '';
+
+  assert.match(command, /app:assembleRelease/u);
+  assert.match(command, /reactNativeArchitectures=armeabi-v7a,arm64-v8a/u);
+  assert.match(command, /android\.enableMinifyInReleaseBuilds=true/u);
+  assert.match(command, /android\.enableShrinkResourcesInReleaseBuilds=true/u);
+  assert.match(command, /expo\.useLegacyPackaging=true/u);
+  assert.doesNotMatch(command, /android\.enableBundleCompression=true/u);
+});

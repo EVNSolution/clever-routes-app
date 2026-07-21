@@ -3,9 +3,11 @@ import {
   createDriverApiHttpError,
   formatDriverApiErrorForDriver,
   getDriverApiRequiresRouteLookup,
+  readDriverApiErrorCode,
 } from '../../api/deliveryServer/driverApiError';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
+import type { AssignedRoute } from '../route/assignedRoute';
 
 export type DriverEventType =
   | 'LOCATION_UPDATED'
@@ -29,8 +31,25 @@ export type DriverEventInput = {
 
 export type DriverEventRecordResult = {
   duplicate: boolean;
+  etaUpdate?: DriverRouteEtaUpdate;
   eventId: string;
   status: 'recorded';
+};
+
+export type DriverRouteEtaStopUpdate = {
+  deliveryStopId: string;
+  estimatedArrivalAt: string | null;
+  sequence: number;
+};
+
+export type DriverRouteEtaUpdate = {
+  actualArrivalAt: string | null;
+  deliveryStopId: string | null;
+  delaySeconds: number | null;
+  previousEstimatedArrivalAt: string | null;
+  serverReceivedAt: string;
+  trigger: 'ROUTE_STARTED' | 'STOP_ARRIVED';
+  updatedStops: DriverRouteEtaStopUpdate[];
 };
 
 export type DriverEventService = {
@@ -42,6 +61,11 @@ export type MockDriverEventService = DriverEventService & {
 };
 
 export type RouteStartedRecordResult =
+  | DriverEventRecordResult & { kind: 'recorded' }
+  | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
+  | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed'; requiresRouteLookup?: true };
+
+export type StopArrivedRecordResult =
   | DriverEventRecordResult & { kind: 'recorded' }
   | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
   | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed'; requiresRouteLookup?: true };
@@ -97,6 +121,7 @@ export function createDriverEventsApiClient(input: {
       const payload = await response.json();
       if (!response.ok) {
         throw createDriverApiHttpError({
+          code: readDriverApiErrorCode(payload),
           endpoint: 'Driver event record',
           status: response.status,
         });
@@ -166,6 +191,70 @@ export function createRouteStartedClientEventId(occurredAt: Date): string {
   return `route-started-${occurredAt.getTime().toString(36)}`;
 }
 
+export async function recordStopArrivedAfterDeliveryStart(input: {
+  clientEventId?: string;
+  deliveryStart: DeliveryStartResult;
+  deliveryStopId: string;
+  driverEventService: DriverEventService;
+  occurredAt?: Date;
+  offlineQueue?: OfflineSubmissionQueue;
+  routePlanId: string;
+}): Promise<StopArrivedRecordResult> {
+  if (input.deliveryStart.kind !== 'delivery_active') {
+    return {
+      kind: 'blocked',
+      message: 'Stop arrival is recorded only while the route is active.',
+      reason: 'delivery_not_active',
+    };
+  }
+
+  const occurredAt = input.occurredAt ?? new Date();
+  const event: DriverEventInput = {
+    clientEventId: input.clientEventId ?? `stop-arrived-${input.deliveryStopId}-${occurredAt.getTime().toString(36)}`,
+    deliveryStopId: input.deliveryStopId,
+    eventType: 'STOP_ARRIVED',
+    occurredAt,
+    routePlanId: input.routePlanId,
+  };
+
+  try {
+    const result = await input.driverEventService.recordDriverEvent(event);
+    return { ...result, kind: 'recorded' };
+  } catch (error) {
+    if (input.offlineQueue === undefined) {
+      throw error;
+    }
+
+    const queued = input.offlineQueue.enqueueDriverEvent(event);
+    return {
+      kind: 'queued',
+      message: `Stop arrival queued for retry: ${formatDriverApiErrorForDriver(error)}`,
+      queueItemId: queued.queueItemId,
+      reason: 'record_failed',
+      ...(getDriverApiRequiresRouteLookup(error) === undefined ? {} : { requiresRouteLookup: true as const }),
+    };
+  }
+}
+
+export function applyDriverRouteEtaUpdate(route: AssignedRoute, etaUpdate: DriverRouteEtaUpdate): AssignedRoute {
+  const updatedEtaByStopId = new Map(
+    etaUpdate.updatedStops.map((stop) => [stop.deliveryStopId, stop.estimatedArrivalAt]),
+  );
+
+  return {
+    ...route,
+    stops: route.stops.map((stop) => ({
+      ...stop,
+      ...(updatedEtaByStopId.has(stop.deliveryStopId)
+        ? { estimatedArrivalAt: updatedEtaByStopId.get(stop.deliveryStopId) ?? null }
+        : {}),
+      ...(etaUpdate.trigger === 'STOP_ARRIVED' && stop.deliveryStopId === etaUpdate.deliveryStopId
+        ? { status: 'ARRIVED' }
+        : {}),
+    })),
+  };
+}
+
 function toDriverEventRequestBody(event: DriverEventInput): Record<string, unknown> {
   return {
     clientEventId: event.clientEventId,
@@ -191,16 +280,62 @@ function readDriverEventRecordEnvelope(payload: unknown): DriverEventRecordResul
 
   return {
     duplicate: data.duplicate,
+    ...(data.etaUpdate === undefined ? {} : { etaUpdate: data.etaUpdate }),
     eventId: data.eventId,
     status: 'recorded',
   };
 }
 
-function isDriverEventRecordData(value: unknown): value is { duplicate: boolean; eventId: string } {
+function isDriverEventRecordData(value: unknown): value is { duplicate: boolean; etaUpdate?: DriverRouteEtaUpdate; eventId: string } {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }
 
   const data = value as Record<string, unknown>;
-  return typeof data.duplicate === 'boolean' && typeof data.eventId === 'string' && data.eventId.trim() !== '';
+  return (
+    typeof data.duplicate === 'boolean'
+    && (data.etaUpdate === undefined || isDriverRouteEtaUpdate(data.etaUpdate))
+    && typeof data.eventId === 'string'
+    && data.eventId.trim() !== ''
+  );
+}
+
+function isDriverRouteEtaUpdate(value: unknown): value is DriverRouteEtaUpdate {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const update = value as Record<string, unknown>;
+  return (
+    nullableString(update.actualArrivalAt)
+    && nullableString(update.deliveryStopId)
+    && nullableFiniteNumber(update.delaySeconds)
+    && nullableString(update.previousEstimatedArrivalAt)
+    && typeof update.serverReceivedAt === 'string'
+    && (update.trigger === 'ROUTE_STARTED' || update.trigger === 'STOP_ARRIVED')
+    && Array.isArray(update.updatedStops)
+    && update.updatedStops.every(isDriverRouteEtaStopUpdate)
+  );
+}
+
+function isDriverRouteEtaStopUpdate(value: unknown): value is DriverRouteEtaStopUpdate {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const update = value as Record<string, unknown>;
+  return (
+    typeof update.deliveryStopId === 'string'
+    && nullableString(update.estimatedArrivalAt)
+    && typeof update.sequence === 'number'
+    && Number.isFinite(update.sequence)
+  );
+}
+
+function nullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function nullableFiniteNumber(value: unknown): value is number | null {
+  return value === null || (typeof value === 'number' && Number.isFinite(value));
 }

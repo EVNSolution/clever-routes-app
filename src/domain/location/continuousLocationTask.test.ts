@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createDriverAccessTokenStore } from '../driver/driverAccessTokenStore';
 import { createMockDriverAuthService } from '../driverAuth/driverAuth';
 import { createMockDriverEventService } from '../events/driverEvents';
@@ -346,6 +347,46 @@ describe('continuous location background task', () => {
       assert.equal(persisted.activeRouteSession, undefined);
       assert.equal(persisted.driverAccess, undefined);
       assert.equal(persisted.routeAccess, undefined);
+    }
+  });
+
+  it('stops the matching session without clearing reusable route access when the route is no longer in progress', async () => {
+    const store = createTokenStore();
+    await saveActiveRoute(store);
+    const queue = createInMemoryOfflineSubmissionQueue();
+
+    const result = await processContinuousLocationTaskBatch({
+      createDriverEventService: () => ({
+        recordDriverEvent: async () => {
+          throw createDriverApiHttpError({
+            code: 'ROUTE_NOT_IN_PROGRESS',
+            endpoint: 'Driver event record',
+            status: 409,
+          });
+        },
+      }),
+      driverAccessTokenStore: store,
+      driverAuthService: createMockDriverAuthService(),
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-07-16T10:01:00.000Z') },
+      ],
+      offlineQueue: queue,
+      routeAccessService: createMockRouteAccessService(),
+    });
+
+    assert.deepEqual(result, {
+      kind: 'deactivated',
+      reason: 'route_not_in_progress',
+      routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+      sessionGeneration: '2026-07-16T10:00:00.000Z',
+    });
+    assert.deepEqual(queue.listPending(), []);
+    const persisted = await store.loadActiveDriverAccess();
+    assert.equal(persisted.kind, 'active');
+    if (persisted.kind === 'active') {
+      assert.equal(persisted.activeRouteSession, undefined);
+      assert.notEqual(persisted.driverAccess, undefined);
+      assert.notEqual(persisted.routeAccess, undefined);
     }
   });
 });

@@ -2,21 +2,38 @@ import type { DeliveryStartResult } from '../delivery/deliveryStart';
 import type { DriverAccessTokenStore } from '../driver/driverAccessTokenStore';
 import type { DriverEventInput, DriverEventService } from '../events/driverEvents';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
+import { isDriverRouteNotInProgressError } from '../../api/deliveryServer/driverApiError';
 
 export const CONTINUOUS_LOCATION_TASK_NAME = 'clever-driver-continuous-location';
 
 export type BackgroundPermissionResult = 'denied' | 'granted';
 
+export type ContinuousLocationNotificationContent = {
+  body: string;
+  expandedBody?: string;
+  title: string;
+  url?: string;
+};
+
 export type ContinuousLocationStreamService = {
   ensureLocationUpdatesStarted?(input: {
+    notification?: ContinuousLocationNotificationContent;
     routePlanId: string | null;
     taskName: string;
   }): Promise<{ alreadyStarted: boolean }>;
   getBackgroundAvailability(): Promise<boolean>;
   hasStartedLocationUpdates(taskName: string): Promise<boolean>;
   requestBackgroundPermission(): Promise<BackgroundPermissionResult>;
-  startLocationUpdates(input: { routePlanId: string | null; taskName: string }): Promise<void>;
+  startLocationUpdates(input: {
+    notification?: ContinuousLocationNotificationContent;
+    routePlanId: string | null;
+    taskName: string;
+  }): Promise<void>;
   stopLocationUpdates(taskName: string): Promise<void>;
+  updateLocationNotification?(input: {
+    notification: ContinuousLocationNotificationContent;
+    taskName: string;
+  }): Promise<void>;
 };
 
 export type ContinuousLocationStreamStartResult =
@@ -39,11 +56,16 @@ export type ContinuousLocationBatchItem = {
   occurredAt: Date;
 };
 
-export type ContinuousLocationBatchRecordResult = {
-  kind: 'recorded';
-  queuedCount?: number;
-  recordedCount: number;
-};
+export type ContinuousLocationBatchRecordResult =
+  | {
+      kind: 'recorded';
+      queuedCount?: number;
+      recordedCount: number;
+    }
+  | {
+      kind: 'route_not_in_progress';
+      recordedCount: number;
+    };
 
 export type ContinuousLocationStopResult = {
   kind: 'stopped';
@@ -57,6 +79,7 @@ export type ContinuousLocationSessionCleanupResult = ContinuousLocationStopResul
 
 export async function startContinuousLocationUpdatesAfterDeliveryStart(input: {
   deliveryStart: DeliveryStartResult;
+  notification?: ContinuousLocationNotificationContent;
   routePlanId: string | null;
   streamService: ContinuousLocationStreamService;
   taskName?: string;
@@ -88,17 +111,16 @@ export async function startContinuousLocationUpdatesAfterDeliveryStart(input: {
     };
   }
 
+  const locationUpdateInput = {
+    ...(input.notification === undefined ? {} : { notification: input.notification }),
+    routePlanId: input.routePlanId,
+    taskName,
+  };
   const alreadyStarted = input.streamService.ensureLocationUpdatesStarted === undefined
     ? await input.streamService.hasStartedLocationUpdates(taskName)
-    : (await input.streamService.ensureLocationUpdatesStarted({
-        routePlanId: input.routePlanId,
-        taskName,
-      })).alreadyStarted;
+    : (await input.streamService.ensureLocationUpdatesStarted(locationUpdateInput)).alreadyStarted;
   if (!alreadyStarted && input.streamService.ensureLocationUpdatesStarted === undefined) {
-    await input.streamService.startLocationUpdates({
-      routePlanId: input.routePlanId,
-      taskName,
-    });
+    await input.streamService.startLocationUpdates(locationUpdateInput);
   }
 
   return {
@@ -139,6 +161,9 @@ export async function recordContinuousLocationUpdateBatch(input: {
       await input.driverEventService.recordDriverEvent(event);
       recordedCount += 1;
     } catch (error) {
+      if (isDriverRouteNotInProgressError(error)) {
+        return { kind: 'route_not_in_progress', recordedCount };
+      }
       if (input.offlineQueue === undefined) {
         throw error;
       }

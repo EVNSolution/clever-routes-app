@@ -105,6 +105,7 @@ describe('background location lifecycle wiring', () => {
     assert.match(refreshSource, /clearCachedRouteAccess\(routePlanId\)/u);
     assert.match(refreshSource, /await driverAccessTokenStore\.saveFromInvitedRouteAccess/u);
     assert.match(source, /activeRoutePlanId !== null && activeRoutePlanId !== routeSession\.route\.id/u);
-    assert.match(source, /activeRoutePlanId === null && visibleRouteSessions\.length > 1/u);
+    assert.match(source, /visibleRouteSessions\.map\(\(session\) =>/u);
+    assert.doesNotMatch(source, /Previous Route|Next Route/u);
   });
 });

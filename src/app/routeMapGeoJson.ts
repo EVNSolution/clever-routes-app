@@ -5,17 +5,27 @@ import type { AssignedRoute, AssignedRouteLngLat } from '../domain/route/assigne
 export const DEFAULT_DRIVER_MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 
 export type RouteDepotFeature = Feature<Point, { kind: 'depot'; label: 'D'; sequence: 0 }>;
+export type RouteLegLineFeature = Feature<LineString, { kind: 'route_leg' }>;
 export type RouteLineFeature = Feature<LineString, { kind: 'route' }>;
 export type RouteProgressLineFeature = Feature<LineString, { kind: 'route_progress' }>;
+export type RouteSnappedStopFeature = Feature<Point, { kind: 'snapped_stop'; sequence: number }>;
+export type RouteSnappedStopFeatureCollection = FeatureCollection<Point, RouteSnappedStopFeature['properties']>;
 export type RouteStopFeature = Feature<Point, { kind: 'stop'; label: string; sequence: number }>;
 export type RouteStopFeatureCollection = FeatureCollection<Point, RouteStopFeature['properties']>;
+export type RouteStopFeatureGroup = {
+  coordinates: AssignedRouteLngLat;
+  features: RouteStopFeature[];
+};
 
 export type RouteMapGeoJsonModel = {
   bounds: [west: number, south: number, east: number, north: number];
   depotFeature: RouteDepotFeature;
   routeFeature: RouteLineFeature | null;
+  snappedStopCollection: RouteSnappedStopFeatureCollection;
   stopCollection: RouteStopFeatureCollection;
 };
+
+const ROUTE_STOP_POINT_MIN_DISTANCE_METERS = 1;
 
 export function readDriverMapStyleUrl(value: string | null | undefined): string {
   const trimmed = value?.trim();
@@ -32,19 +42,35 @@ export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel
     return null;
   }
 
-  const stopCoordinatesById = new Map<string, AssignedRouteLngLat>();
-  for (const point of route.routeStopPoints) {
-    const coordinates = point.snappedCoordinates ?? point.inputCoordinates;
-    if (isRenderableLngLat(coordinates)) {
-      stopCoordinatesById.set(point.deliveryStopId, coordinates);
-    }
-  }
+  const routeStopPointsById = new Map(route.routeStopPoints.map((point) => [point.deliveryStopId, point]));
+  const snappedStopFeatures: RouteSnappedStopFeature[] = [];
 
   const stopFeatures: RouteStopFeature[] = route.stops
     .map((stop): RouteStopFeature | null => {
-      const coordinates = stopCoordinatesById.get(stop.deliveryStopId) ?? readStopLngLat(stop.coordinates);
+      const routeStopPoint = routeStopPointsById.get(stop.deliveryStopId);
+      const coordinates = readStopLngLat(stop.coordinates)
+        ?? routeStopPoint?.inputCoordinates
+        ?? routeStopPoint?.snappedCoordinates;
       if (!isRenderableLngLat(coordinates)) {
         return null;
+      }
+
+      const snappedCoordinates = routeStopPoint?.snappedCoordinates;
+      if (
+        isRenderableLngLat(snappedCoordinates)
+        && distanceBetweenCoordinatesMeters(coordinates, snappedCoordinates) >= ROUTE_STOP_POINT_MIN_DISTANCE_METERS
+      ) {
+        snappedStopFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: snappedCoordinates,
+          },
+          properties: {
+            kind: 'snapped_stop',
+            sequence: stop.sequence,
+          },
+        });
       }
 
       return {
@@ -81,6 +107,7 @@ export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel
     ...routeCoordinates,
     depotCoordinates,
     ...stopFeatures.map((feature) => feature.geometry.coordinates as AssignedRouteLngLat),
+    ...snappedStopFeatures.map((feature) => feature.geometry.coordinates as AssignedRouteLngLat),
   ]);
   if (bounds === null) {
     return null;
@@ -101,6 +128,10 @@ export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel
           },
         }
       : null,
+    snappedStopCollection: {
+      type: 'FeatureCollection',
+      features: snappedStopFeatures.sort((left, right) => left.properties.sequence - right.properties.sequence),
+    },
     stopCollection: {
       type: 'FeatureCollection',
       features: stopFeatures,
@@ -113,7 +144,9 @@ export function buildRouteProgressFeature(model: RouteMapGeoJsonModel, targetSto
     return null;
   }
 
-  const targetStop = model.stopCollection.features.find((feature) => feature.properties.sequence === targetStopSequence) ?? null;
+  const targetStop = model.snappedStopCollection.features.find((feature) => feature.properties.sequence === targetStopSequence)
+    ?? model.stopCollection.features.find((feature) => feature.properties.sequence === targetStopSequence)
+    ?? null;
   if (targetStop === null) {
     return null;
   }
@@ -141,6 +174,84 @@ export function buildRouteProgressFeature(model: RouteMapGeoJsonModel, targetSto
       kind: 'route_progress',
     },
   };
+}
+
+export function buildRouteLegFeature(
+  model: RouteMapGeoJsonModel,
+  completedStopSequence: number | null,
+  currentStopSequence: number | null,
+): RouteLegLineFeature | null {
+  if (model.routeFeature === null || currentStopSequence === null) {
+    return null;
+  }
+
+  const routeCoordinates = model.routeFeature.geometry.coordinates as AssignedRouteLngLat[];
+  const currentStop = model.snappedStopCollection.features.find((feature) => feature.properties.sequence === currentStopSequence)
+    ?? model.stopCollection.features.find((feature) => feature.properties.sequence === currentStopSequence)
+    ?? null;
+  if (currentStop === null) {
+    return null;
+  }
+
+  const currentCoordinate = currentStop.geometry.coordinates as AssignedRouteLngLat;
+  const currentRouteIndex = findNearestRouteCoordinateIndex(routeCoordinates, currentCoordinate);
+  let completedCoordinate = routeCoordinates[0];
+  let completedRouteIndex = 0;
+
+  if (completedStopSequence !== null) {
+    const completedStop = model.snappedStopCollection.features.find((feature) => feature.properties.sequence === completedStopSequence)
+      ?? model.stopCollection.features.find((feature) => feature.properties.sequence === completedStopSequence)
+      ?? null;
+    if (completedStop === null) {
+      return null;
+    }
+
+    completedCoordinate = completedStop.geometry.coordinates as AssignedRouteLngLat;
+    completedRouteIndex = findNearestRouteCoordinateIndex(routeCoordinates, completedCoordinate);
+  }
+
+  if (completedCoordinate === undefined || completedRouteIndex < 0 || currentRouteIndex <= completedRouteIndex) {
+    return null;
+  }
+
+  const legCoordinates = routeCoordinates.slice(completedRouteIndex, currentRouteIndex + 1);
+  if (!sameLngLat(legCoordinates[0], completedCoordinate)) {
+    legCoordinates.unshift(completedCoordinate);
+  }
+  const lastLegCoordinate = legCoordinates[legCoordinates.length - 1];
+  if (lastLegCoordinate !== undefined && !sameLngLat(lastLegCoordinate, currentCoordinate)) {
+    legCoordinates.push(currentCoordinate);
+  }
+
+  return {
+    type: 'Feature',
+    geometry: {
+      type: 'LineString',
+      coordinates: legCoordinates,
+    },
+    properties: {
+      kind: 'route_leg',
+    },
+  };
+}
+
+export function groupRouteStopFeaturesByCoordinate(features: RouteStopFeature[]): RouteStopFeatureGroup[] {
+  const groups: RouteStopFeatureGroup[] = [];
+
+  for (const feature of features) {
+    const coordinates = feature.geometry.coordinates as AssignedRouteLngLat;
+    const existingGroup = groups.find(
+      (group) => distanceBetweenCoordinatesMeters(group.coordinates, coordinates) < ROUTE_STOP_POINT_MIN_DISTANCE_METERS,
+    );
+    if (existingGroup === undefined) {
+      groups.push({ coordinates, features: [feature] });
+      continue;
+    }
+
+    existingGroup.features.push(feature);
+  }
+
+  return groups;
 }
 
 function hasRoadFollowingGeometry(routeCoordinates: AssignedRouteLngLat[], stopCount: number): boolean {
@@ -228,6 +339,24 @@ function findNearestRouteCoordinateIndex(routeCoordinates: AssignedRouteLngLat[]
 
 function sameLngLat(left: AssignedRouteLngLat, right: AssignedRouteLngLat): boolean {
   return left[0] === right[0] && left[1] === right[1];
+}
+
+function distanceBetweenCoordinatesMeters(left: AssignedRouteLngLat, right: AssignedRouteLngLat): number {
+  const earthRadiusMeters = 6_371_000;
+  const leftLatitude = degreesToRadians(left[1]);
+  const rightLatitude = degreesToRadians(right[1]);
+  const latitudeDelta = rightLatitude - leftLatitude;
+  const longitudeDelta = degreesToRadians(right[0] - left[0]);
+  const sinLatitude = Math.sin(latitudeDelta / 2);
+  const sinLongitude = Math.sin(longitudeDelta / 2);
+  const haversine = sinLatitude * sinLatitude
+    + Math.cos(leftLatitude) * Math.cos(rightLatitude) * sinLongitude * sinLongitude;
+
+  return 2 * earthRadiusMeters * Math.asin(Math.sqrt(haversine));
+}
+
+function degreesToRadians(value: number): number {
+  return value * Math.PI / 180;
 }
 
 function isRenderableLngLat(value: unknown): value is AssignedRouteLngLat {

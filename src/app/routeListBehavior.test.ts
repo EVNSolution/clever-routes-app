@@ -66,32 +66,73 @@ describe('routes list behavior', () => {
     );
   });
 
-  it('starts route cards collapsed with a direct title, summary row, and visible side-by-side actions', () => {
+  it('shows every assigned route as a collapsed vertical-list card with visible side-by-side actions', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const source = getRoutesPageSource();
     const routeActionRowStyles = appSource.slice(
       appSource.indexOf('routeActionRow:'),
       appSource.indexOf('selectedRouteCard:'),
     );
+    const routeCardListStyles = appSource.slice(
+      appSource.indexOf('routeCardList:'),
+      appSource.indexOf('routeActionRow:'),
+    );
     const routeCardHeaderStyles = appSource.slice(
       appSource.indexOf('routeCardHeader:'),
       appSource.indexOf('routeHeaderText:'),
     );
+    const selectedRouteCardStyles = appSource.slice(
+      appSource.indexOf('selectedRouteCard:'),
+      appSource.indexOf('routeCardHeader:'),
+    );
 
     assert.match(source, /const \[expandedRouteKey, setExpandedRouteKey\] = useState<string \| null>\(null\)/u);
-    assert.match(source, /const isRouteCardExpanded = activeRouteCollapseKey !== null && expandedRouteKey === activeRouteCollapseKey/u);
-    assert.match(source, /setExpandedRouteKey\(\(value\) => value === activeRouteCollapseKey \? null : activeRouteCollapseKey\)/u);
-    assert.match(source, /<View style=\{styles\.routeCardHeader\}>[\s\S]*?<Text numberOfLines=\{1\} style=\{\[styles\.cardTitle, styles\.routeCardTitle\]\}>\{activeSession\.route\.name\}<\/Text>[\s\S]*?<Text numberOfLines=\{1\} style=\{styles\.routeDateText\}>\{activeSession\.route\.deliveryDate\}<\/Text>[\s\S]*?<StatusChip[\s\S]*?<Pressable[\s\S]*?style=\{styles\.routeToggleButton\}/u);
-    assert.match(source, /<Text numberOfLines=\{1\} style=\{styles\.routeDateText\}>\{activeSession\.route\.deliveryDate\}<\/Text>/u);
-    assert.match(source, /label=\{formatRouteStatus\(activeRouteStatus \?\? 'ready'\)\}/u);
+    assert.match(source, /visibleRouteSessions\.map\(\(session\) =>/u);
+    assert.match(source, /key=\{session\.route\.id\}/u);
+    assert.doesNotMatch(source, /\{session\.route\.name\} · \{session\.companyGuidance\.companyDisplayName\}/u);
+    assert.match(source, /<DataRow label="Store" value=\{session\.companyGuidance\.companyDisplayName\} \/>/u);
+    assert.match(source, /const isRouteCardExpanded = expandedRouteKey === session\.route\.id/u);
+    assert.match(source, /setExpandedRouteKey\(\(value\) => value === session\.route\.id \? null : session\.route\.id\)/u);
+    assert.match(source, /<View style=\{styles\.routeCardHeader\}>[\s\S]*?<Text numberOfLines=\{1\} style=\{\[styles\.cardTitle, styles\.routeCardTitle\]\}>\s*\{session\.route\.name\}\s*<\/Text>[\s\S]*?<Text numberOfLines=\{1\} style=\{styles\.routeDateText\}>\{session\.route\.deliveryDate\}<\/Text>[\s\S]*?<StatusChip[\s\S]*?<Pressable[\s\S]*?style=\{styles\.routeToggleButton\}/u);
+    assert.match(source, /label=\{formatRouteStatus\(routeCardStatus\)\}/u);
     assert.doesNotMatch(source, /routeInitialBadge|routeInitialText|getInitials|routeCardMetaRow|routeCardStatusGroup/u);
     assert.doesNotMatch(source, /<DataRow label="Date"/u);
+    assert.doesNotMatch(source, /Previous Route|Next Route|routePager|selectRelativeRoute/u);
     assert.match(source, /\{isRouteCardExpanded \? \([\s\S]*?<\/>[\s\S]*?\) : null\}[\s\S]*?label="Start"[\s\S]*?label="Detail"/u);
+    assert.match(source, /routeCardStatus === 'active'[\s\S]*?label="Continue"[\s\S]*?label="Delete"/u);
+    assert.match(source, /<DangerButton[\s\S]*?label="Delete"/u);
+    assert.match(source, /<SecondaryButton[\s\S]*?compact[\s\S]*?label="Continue"/u);
+    assert.match(source, /<DangerButton[\s\S]*?compact[\s\S]*?label="Delete"/u);
+    assert.match(source, /<PrimaryButton[\s\S]*?compact[\s\S]*?label="Start"/u);
+    assert.match(source, /<SecondaryButton compact label="Detail"/u);
     assert.match(source, /<View style=\{styles\.routeActionRow\}>/u);
+    assert.match(routeCardListStyles, /gap: 14/u);
     assert.match(routeActionRowStyles, /flexDirection: 'row'/u);
     assert.match(routeActionRowStyles, /routeActionButton:[\s\S]*flex: 1/u);
+    assert.match(selectedRouteCardStyles, /gap: 8/u);
+    assert.match(selectedRouteCardStyles, /paddingHorizontal: 18/u);
+    assert.match(selectedRouteCardStyles, /paddingVertical: 14/u);
     assert.match(routeCardHeaderStyles, /alignItems: 'center'/u);
     assert.match(routeCardHeaderStyles, /flexDirection: 'row'/u);
+  });
+
+  it('releases Delete back to Ready instead of completing or removing the route', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const deleteSource = source.slice(
+      source.indexOf('async function deleteActiveRouteAfterConfirmed('),
+      source.indexOf('function openMapPreviewFrom(', source.indexOf('async function deleteActiveRouteAfterConfirmed(')),
+    );
+    const finishSource = source.slice(
+      source.indexOf('async function finishRoute('),
+      source.indexOf('async function handleManualFinishRoute('),
+    );
+
+    assert.match(deleteSource, /routeEnd: 'released'/u);
+    assert.match(deleteSource, /createDriverReleasedRoutePayload/u);
+    assert.match(finishSource, /routeEnd: options\?\.routeEnd/u);
+    assert.match(finishSource, /executionStatus: 'READY'/u);
+    assert.match(finishSource, /Route session deleted\. Route returned to Ready\./u);
+    assert.doesNotMatch(finishSource, /filter\(\(session\) => session\.route\.id !== route\.id\)/u);
   });
 
   it('removes routes that are no longer assigned on the server', () => {

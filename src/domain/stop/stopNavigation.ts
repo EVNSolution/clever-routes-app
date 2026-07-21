@@ -104,38 +104,35 @@ export function buildStopNavigationUrl(input: {
   platform: StopNavigationPlatform;
   stop: AssignedRouteStop;
 }): string | null {
-  const label = buildStopNavigationLabel(input.stop);
-  const encodedLabel = encodeURIComponent(label);
-  const coordinates = input.stop.coordinates;
-
-  if (coordinates !== null) {
-    const coordinatePair = formatCoordinatePair(coordinates.latitude, coordinates.longitude);
+  const address = formatStopNavigationAddress(input.stop.address);
+  if (address !== null) {
+    const encodedAddress = encodeURIComponent(address);
     if (input.platform === 'android') {
-      return `geo:${coordinatePair}?q=${encodeURIComponent(coordinatePair)}(${encodedLabel})`;
+      return `geo:0,0?q=${encodedAddress}`;
     }
 
     if (input.platform === 'ios') {
-      return `http://maps.apple.com/?ll=${coordinatePair}&q=${encodedLabel}`;
+      return `http://maps.apple.com/?q=${encodedAddress}`;
     }
 
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coordinatePair)}`;
+    return `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
   }
 
-  const address = formatStopNavigationAddress(input.stop.address);
-  if (address === null) {
+  const coordinates = input.stop.coordinates;
+  if (coordinates === null) {
     return null;
   }
 
-  const encodedAddress = encodeURIComponent(address);
+  const coordinatePair = formatCoordinatePair(coordinates.latitude, coordinates.longitude);
   if (input.platform === 'android') {
-    return `geo:0,0?q=${encodedAddress}(${encodedLabel})`;
+    return `geo:${coordinatePair}?q=${encodeURIComponent(coordinatePair)}`;
   }
 
   if (input.platform === 'ios') {
-    return `http://maps.apple.com/?q=${encodedAddress}`;
+    return `http://maps.apple.com/?ll=${coordinatePair}`;
   }
 
-  return `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coordinatePair)}`;
 }
 
 export async function openStopNavigation(input: {
@@ -154,23 +151,23 @@ export async function openStopNavigation(input: {
 
   try {
     await input.linking.openURL(url);
+    const destination = formatStopNavigationAddress(input.stop.address)
+      ?? (input.stop.coordinates === null
+        ? 'the stop location'
+        : formatCoordinatePair(input.stop.coordinates.latitude, input.stop.coordinates.longitude));
     return {
       kind: 'opened',
-      message: `Map opened for ${buildStopNavigationLabel(input.stop)}.`,
+      message: `Map search opened for ${destination}.`,
       url,
     };
   } catch {
     return {
       kind: 'failed',
-      message: `Map could not be opened for ${buildStopNavigationLabel(input.stop)}.`,
+      message: 'Map search could not be opened for this address.',
       reason: 'open_failed',
       url,
     };
   }
-}
-
-export function buildStopNavigationLabel(stop: AssignedRouteStop): string {
-  return [`Stop ${stop.sequence}`, stop.orderName.trim()].filter(Boolean).join(' ');
 }
 
 export function formatStopNavigationAddress(address: AssignedRouteAddress): string | null {
