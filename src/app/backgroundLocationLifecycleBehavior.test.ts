@@ -96,6 +96,21 @@ describe('background location lifecycle wiring', () => {
     assert.match(retrySource, /routePlanId: session\.route\.id/u);
   });
 
+  it('retries pending route submissions after confirmed network recovery', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const recoverySource = getFunctionSource(
+      source,
+      'const retryPendingSubmissionsAfterNetworkRecovery = useCallback(',
+      'useEffect(() => {\n    const previousNetworkReachability',
+    );
+
+    assert.match(source, /Network\.useNetworkState\(\)/u);
+    assert.match(source, /shouldRetryOfflineSubmissionsAfterNetworkChange\(\{/u);
+    assert.match(recoverySource, /await retryOfflineSubmissionsForSessions\(routeSessions\)/u);
+    assert.doesNotMatch(recoverySource, /handleRefreshRoutes/u);
+    assert.doesNotMatch(recoverySource, /setInterval|setTimeout/u);
+  });
+
   it('does not overwrite the active route token while retrying another route', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const refreshSource = getFunctionSource(

@@ -2,6 +2,7 @@ import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Speech from 'expo-speech';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Network from 'expo-network';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -85,6 +86,10 @@ import {
   type OfflineSubmissionQueue,
   type PendingRouteEnd,
 } from '../domain/offline/offlineSubmissionQueue';
+import {
+  getNetworkReachability,
+  shouldRetryOfflineSubmissionsAfterNetworkChange,
+} from '../domain/offline/offlineRetryTrigger';
 import { captureProofPhoto, type ProofPhotoCaptureResult, type ProofPhotoCaptureSource } from '../domain/proof/proofPhotoCapture';
 import {
   createMockProofMediaUploadService,
@@ -264,7 +269,7 @@ function DriverApp() {
   const [completedStopIds, setCompletedStopIds] = useState<string[]>([]);
   const [completedStopTimes, setCompletedStopTimes] = useState<Record<string, string>>({});
   const [offlineSubmissionQueue, setOfflineSubmissionQueue] = useState<OfflineSubmissionQueue | null>(null);
-  const [, setOfflineQueueCount] = useState(0);
+  const [offlineQueueCount, setOfflineQueueCount] = useState(0);
   const [lastRoutesUpdatedAt, setLastRoutesUpdatedAt] = useState<Date | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -288,6 +293,9 @@ function DriverApp() {
   const hasCheckedInitialStopArrivalNotificationRef = useRef(false);
   const hasAttemptedDriverRestoreRef = useRef(false);
   const isRetryingOfflineSubmissionsRef = useRef(false);
+  const networkState = Network.useNetworkState();
+  const networkReachability = getNetworkReachability(networkState);
+  const previousNetworkReachabilityRef = useRef(networkReachability);
 
   useEffect(() => {
     selectedRouteIdRef.current = selectedRouteId;
@@ -1344,6 +1352,34 @@ function DriverApp() {
     isLoggingIn,
     isRefreshingRoutes,
     verifiedDriverPhoneE164,
+  ]);
+
+  const retryPendingSubmissionsAfterNetworkRecovery = useCallback(async () => {
+    await retryOfflineSubmissionsForSessions(routeSessions);
+  }, [retryOfflineSubmissionsForSessions, routeSessions]);
+
+  useEffect(() => {
+    const previousNetworkReachability = previousNetworkReachabilityRef.current;
+    previousNetworkReachabilityRef.current = networkReachability;
+    if (
+      !isDriverRestoreComplete
+      || routeSessions.length === 0
+      || !shouldRetryOfflineSubmissionsAfterNetworkChange({
+        current: networkReachability,
+        hasPendingSubmissions: offlineQueueCount > 0,
+        previous: previousNetworkReachability,
+      })
+    ) {
+      return;
+    }
+
+    void retryPendingSubmissionsAfterNetworkRecovery();
+  }, [
+    isDriverRestoreComplete,
+    networkReachability,
+    offlineQueueCount,
+    retryPendingSubmissionsAfterNetworkRecovery,
+    routeSessions.length,
   ]);
 
   const handlePullRefresh = useCallback(async () => {
