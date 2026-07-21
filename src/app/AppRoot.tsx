@@ -1314,6 +1314,9 @@ function DriverApp() {
   }, [handleRefreshRoutes, screen, verifiedDriverPhoneE164]);
 
   function handleStartRoute(routeId?: string) {
+    if (isStartingRoute || isFinishingRoute) {
+      return;
+    }
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
     if (routeSession === null) {
       setMessage('No route is available to start.');
@@ -1340,6 +1343,9 @@ function DriverApp() {
   }
 
   async function startRouteSessionAfterConfirmed(routeId?: string) {
+    if (isStartingRoute || isFinishingRoute) {
+      return;
+    }
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
     if (routeSession === null) {
       setMessage('No route is available to start.');
@@ -1714,13 +1720,24 @@ function DriverApp() {
     }
 
     if (shouldQueueFailedProofMediaUpload(uploadResult) && captureResult.kind === 'captured') {
-      offlineSubmissionQueue?.enqueueProofMediaUpload({
-        deliveryStopId: stop.deliveryStopId,
-        fileName: getFileNameFromUri(captureResult.uri, stop.deliveryStopId),
-        routePlanId: route.id,
-        source: captureResult.source,
-        uri: captureResult.uri,
-      });
+      try {
+        const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+        if (offlineSubmissionQueue === null) {
+          setOfflineSubmissionQueue(queue);
+        }
+        queue.enqueueProofMediaUpload({
+          deliveryStopId: stop.deliveryStopId,
+          fileName: getFileNameFromUri(captureResult.uri, stop.deliveryStopId),
+          routePlanId: route.id,
+          source: captureResult.source,
+          uri: captureResult.uri,
+        });
+        await queue.whenPersisted();
+        setOfflineQueueCount(queue.listPending().length);
+      } catch {
+        setMessage('Photo upload failed and offline retry storage is unavailable. Keep the app open and try the photo again.');
+        return;
+      }
     }
 
     const photoMessage = formatPhotoResult(captureResult, uploadResult);
@@ -1802,6 +1819,10 @@ function DriverApp() {
     setMessage(null);
 
     try {
+      const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      if (offlineSubmissionQueue === null) {
+        setOfflineSubmissionQueue(queue);
+      }
       const draft = getProofDraft(proofDrafts[currentStop.deliveryStopId]);
       const result = await recordStopProofEventAfterDeliveryStart({
         deliveryStart: deliveryStartResult,
@@ -1819,7 +1840,7 @@ function DriverApp() {
           photoUris: photoResult?.kind === 'captured' ? [photoResult.uri] : [],
           routePlanId: selectedRoute.id,
         },
-        offlineQueue: offlineSubmissionQueue ?? undefined,
+        offlineQueue: queue,
       });
       setStopProofResults((current) => ({ ...current, [currentStop.deliveryStopId]: result }));
 
@@ -1841,13 +1862,21 @@ function DriverApp() {
       }
 
       const nextNavigationStepIndex = navigationStepIndex + 1;
-      setNavigationStepIndex(nextNavigationStepIndex);
-      await driverAccessTokenStore.saveActiveRouteSession({
+      const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
         navigationStepIndex: nextNavigationStepIndex,
         routePlanId: selectedRoute.id,
       });
+      if (!activeRouteSaved) {
+        setScreen('mainTabs');
+        setMessage('The active route changed before the next stop could be saved. Refresh routes before continuing.');
+        return;
+      }
+      setNavigationStepIndex(nextNavigationStepIndex);
       setScreen('routeSession');
       setMessage('Stop completed. Next stop is ready.');
+    } catch (error) {
+      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+      setMessage(`Stop completion could not be saved: ${errorMessage}`);
     } finally {
       setIsCompletingStop(false);
       refreshOfflineQueueCount();
@@ -1924,7 +1953,7 @@ function DriverApp() {
         setMessage(finishResult.message);
       }
     } catch (error) {
-      await clearAndStopActiveLocationSession();
+      await clearAndStopActiveLocationSession(route.id);
       const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
       setMessage(`Route completion could not be finalized: ${errorMessage}`);
     } finally {
@@ -2232,6 +2261,7 @@ function DriverApp() {
             <MyRoutesPage
               activeRoutePlanId={activeRoutePlanId}
               isDeletingRoute={isDeletingRoute}
+              isFinishingRoute={isFinishingRoute}
               isStartingRoute={isStartingRoute}
               onDeleteRoute={handleDeleteActiveRoute}
               onOpenCompletedDeliveries={() => setScreen('completedDeliveries')}
@@ -2528,6 +2558,7 @@ function LoginDetailScreen({
 function MyRoutesPage({
   activeRoutePlanId,
   isDeletingRoute,
+  isFinishingRoute,
   isStartingRoute,
   onDeleteRoute,
   onOpenCompletedDeliveries,
@@ -2541,6 +2572,7 @@ function MyRoutesPage({
 }: {
   activeRoutePlanId: string | null;
   isDeletingRoute: boolean;
+  isFinishingRoute: boolean;
   isStartingRoute: boolean;
   onDeleteRoute(routeId: string): void;
   onOpenCompletedDeliveries(): void;
@@ -2600,7 +2632,7 @@ function MyRoutesPage({
               selectedRouteStatus: routeStatus,
             });
             const isRouteCardExpanded = expandedRouteKey === session.route.id;
-            const isStartDisabled = isStartingRoute || activeRoutePlanId !== null;
+            const isStartDisabled = isStartingRoute || isFinishingRoute || activeRoutePlanId !== null;
 
             return (
               <View key={session.route.id} style={styles.selectedRouteCard}>
@@ -4278,7 +4310,7 @@ function formatRouteStatus(status: RouteStatus): string {
 
 function getRouteRegion(route: AssignedRoute): string {
   const cities = [...new Set(route.stops.map((stop) => stop.address.city).filter(Boolean))];
-  return cities.length === 0 ? route.timezone : `${cities.join(', ')} · ${route.timezone}`;
+  return cities.length === 0 ? route.timezone : cities.join(', ');
 }
 
 function formatStopAddress(stop: AssignedRouteStop): string {
@@ -5645,8 +5677,8 @@ const styles = StyleSheet.create({
     width: 30,
   },
   mapMarkerCurrent: {
-    backgroundColor: '#f97316',
-    borderColor: '#fed7aa',
+    backgroundColor: ROUTE_VISUAL_STATE_COLORS.current,
+    borderColor: '#ffffff',
     borderRadius: 19,
     borderWidth: 3,
     height: 38,

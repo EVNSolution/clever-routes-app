@@ -92,6 +92,7 @@ export async function finishDeliveryAfterActive(input: {
       input.offlineQueue.discardRouteSubmissions(input.routePlanId);
     }
     const queued = input.offlineQueue.enqueueDriverEvent(event);
+    await input.offlineQueue.whenPersisted();
     return {
       flowState: 'delivery_finished',
       kind: 'queued',

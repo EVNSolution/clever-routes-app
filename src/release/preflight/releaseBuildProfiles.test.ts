@@ -64,3 +64,11 @@ test('keeps direct-download Android optimization isolated to the distribution AP
   assert.match(command, /expo\.useLegacyPackaging=true/u);
   assert.doesNotMatch(command, /android\.enableBundleCompression=true/u);
 });
+
+test('keeps source-controlled native release metadata aligned and minimally privileged', () => {
+  const androidManifest = readFileSync(resolve(repoRoot, 'android/app/src/main/AndroidManifest.xml'), 'utf8');
+  const iosInfoPlist = readFileSync(resolve(repoRoot, 'ios/CleverDriver/Info.plist'), 'utf8');
+
+  assert.doesNotMatch(androidManifest, /android\.permission\.SYSTEM_ALERT_WINDOW/u);
+  assert.match(iosInfoPlist, /<key>CFBundleShortVersionString<\/key>\s*<string>\$\(MARKETING_VERSION\)<\/string>/u);
+});

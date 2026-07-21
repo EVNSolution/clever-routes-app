@@ -25,12 +25,10 @@ describe('active route foreground notification', () => {
     });
   });
 
-  it('uses Stop 1 while Store Pickup is the active app step', () => {
+  it('keeps Store Pickup distinct from Stop 1 in the foreground notification', () => {
     assert.deepEqual(buildActiveRouteForegroundNotification({ currentStepIndex: 0, route: sampleAssignedRoute }), {
-      body: '100 King St W, Toronto\nItems 1 type, 2 EA',
-      expandedBody: 'Address\n100 King St W, Toronto\nCustomer note\nNone\nItems\n1 type, 2 EA',
-      title: 'Next stop 1  ETA 7:08 AM',
-      url: 'clever-driver://route-stop?routePlanId=11111111-1111-4111-8111-111111111111&deliveryStopId=22222222-2222-4222-8222-222222222222',
+      body: 'Open Clever Driver to confirm pickup before the first delivery stop.',
+      title: 'Pickup & Start Route',
     });
   });
 

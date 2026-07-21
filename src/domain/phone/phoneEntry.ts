@@ -303,7 +303,7 @@ export function getDriverPhoneCountryLabel(
   const countryName = getDisplayName({ code: country.iso2, locale, type: 'region' });
   const languageName = getDisplayName({ code: country.primaryLanguageCode, locale, type: 'language' });
 
-  return `${countryName} · ${country.iso2} · ${country.callingCode} · ${languageName}`;
+  return `${countryName} ${country.iso2} ${country.callingCode} ${languageName}`;
 }
 
 export function findDriverPhoneCountry(countryIso2: string): DriverPhoneCountry | null {

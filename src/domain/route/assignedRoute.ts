@@ -453,7 +453,7 @@ export function hasAssignedRouteGeometry(route: AssignedRoute): boolean {
 }
 
 export function formatAssignedRouteItemOptions(item: Pick<AssignedRouteOrderItem, 'options'>): string {
-  return item.options.map((option) => `${option.key}: ${option.value}`).join(' · ');
+  return item.options.map((option) => `${option.key}: ${option.value}`).join(', ');
 }
 
 export function formatAssignedRouteItemLine(item: AssignedRouteOrderItem): string {

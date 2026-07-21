@@ -89,7 +89,7 @@ describe('routes list behavior', () => {
     assert.match(source, /const \[expandedRouteKey, setExpandedRouteKey\] = useState<string \| null>\(null\)/u);
     assert.match(source, /visibleRouteSessions\.map\(\(session\) =>/u);
     assert.match(source, /key=\{session\.route\.id\}/u);
-    assert.doesNotMatch(source, /\{session\.route\.name\} · \{session\.companyGuidance\.companyDisplayName\}/u);
+    assert.doesNotMatch(source, /\{session\.route\.name\} \u00b7 \{session\.companyGuidance\.companyDisplayName\}/u);
     assert.match(source, /<DataRow label="Store" value=\{session\.companyGuidance\.companyDisplayName\} \/>/u);
     assert.match(source, /const isRouteCardExpanded = expandedRouteKey === session\.route\.id/u);
     assert.match(source, /setExpandedRouteKey\(\(value\) => value === session\.route\.id \? null : session\.route\.id\)/u);

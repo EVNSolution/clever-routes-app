@@ -57,7 +57,7 @@ describe('Settings page behavior', () => {
     assert.doesNotMatch(settingsPage, /Profile editing|Display Name|Store Name/u);
     assert.doesNotMatch(settingsPage, /Account deletion|Navigation App|Navigation Mode/u);
     assert.doesNotMatch(settingsPage, /Logout and reset this device/u);
-    assert.doesNotMatch(settingsPage, /Needs Review|CONSENT_COPY_VERSIONS|Allowed ·|Denied ·/u);
+    assert.doesNotMatch(settingsPage, /Needs Review|CONSENT_COPY_VERSIONS|Allowed \u00b7|Denied \u00b7/u);
   });
 
   it('opens the published policy and restores consent for an authenticated session', () => {

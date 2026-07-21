@@ -58,6 +58,7 @@ export async function recordStopProofEventAfterDeliveryStart(input: {
     }
 
     const queued = input.offlineQueue.enqueueDriverEvent(event);
+    await input.offlineQueue.whenPersisted();
     return {
       kind: 'queued',
       message: `Stop proof event queued for retry: ${formatDriverApiErrorForDriver(error)}`,

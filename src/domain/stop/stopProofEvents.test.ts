@@ -164,9 +164,22 @@ describe('stop proof event flow', () => {
   });
 
   it('queues stop proof driver event when the live event submission fails', async () => {
-    const queue = createInMemoryOfflineSubmissionQueue();
+    const memoryQueue = createInMemoryOfflineSubmissionQueue();
+    let releasePersistence: () => void = () => undefined;
+    let persistenceStarted = false;
+    const persistenceGate = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const queue = {
+      ...memoryQueue,
+      whenPersisted: async () => {
+        persistenceStarted = true;
+        await persistenceGate;
+      },
+    };
 
-    const result = await recordStopProofEventAfterDeliveryStart({
+    let proofResolved = false;
+    const resultPromise = recordStopProofEventAfterDeliveryStart({
       deliveryStart: activeDelivery,
       driverEventService: {
         recordDriverEvent: async () => {
@@ -181,7 +194,16 @@ describe('stop proof event flow', () => {
         routePlanId: 'route-1',
       },
       offlineQueue: queue,
+    }).then((result) => {
+      proofResolved = true;
+      return result;
     });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(persistenceStarted, true);
+    assert.equal(proofResolved, false);
+    releasePersistence();
+    const result = await resultPromise;
 
     assert.equal(result.kind, 'queued');
     assert.equal(result.reason, 'record_failed');

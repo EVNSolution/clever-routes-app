@@ -23,8 +23,8 @@ describe('driver phone country entry', () => {
       requiredCountries,
     );
 
-    assert.equal(getDriverPhoneCountryLabel(DRIVER_PHONE_COUNTRIES.find((country) => country.iso2 === 'KR')!, { locale: 'ko-KR' }), '대한민국 · KR · +82 · 한국어');
-    assert.equal(getDriverPhoneCountryLabel(DRIVER_PHONE_COUNTRIES.find((country) => country.iso2 === 'CA')!, { locale: 'fr-CA' }), 'Canada · CA · +1 · anglais');
+    assert.equal(getDriverPhoneCountryLabel(DRIVER_PHONE_COUNTRIES.find((country) => country.iso2 === 'KR')!, { locale: 'ko-KR' }), '대한민국 KR +82 한국어');
+    assert.equal(getDriverPhoneCountryLabel(DRIVER_PHONE_COUNTRIES.find((country) => country.iso2 === 'CA')!, { locale: 'fr-CA' }), 'Canada CA +1 anglais');
   });
 
   it('searches countries by name, localized/native name, ISO code, locale, language, and calling code', () => {

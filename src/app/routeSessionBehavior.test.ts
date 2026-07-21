@@ -253,7 +253,7 @@ describe('route session current task behavior', () => {
     assert.match(nativeMapSource, /ROUTE_MARKER_GROUP_COMPACT_LAYOUT[\s\S]*'icon-text-fit-padding': \[2, 6, 2, 6\][\s\S]*'text-size': 8/u);
     assert.match(nativeMapSource, /ROUTE_MARKER_GROUP_COMPACT_BORDER_LAYOUT[\s\S]*'icon-text-fit-padding': \[3, 7, 3, 7\]/u);
     assert.match(nativeMapSource, /id="route-preview-marker-group-compact-border"[\s\S]*key="route-preview-marker-group-compact-border"[\s\S]*id="route-preview-marker-group-compact"[\s\S]*key="route-preview-marker-group-compact"/u);
-    assert.doesNotMatch(nativeMapSource, /join\('·'\)|join\("·"\)/u);
+    assert.doesNotMatch(nativeMapSource, /join\('\u00b7'\)|join\("\u00b7"\)/u);
     assert.doesNotMatch(nativeMapSource, /<Marker/u);
     assert.match(nativeMapSource, /activeLegFeature !== null/u);
     assert.doesNotMatch(nativeMapSource, /route-preview-stop-label/u);
@@ -477,12 +477,14 @@ describe('stop completion proof copy', () => {
     assert.doesNotMatch(appSource, /Photo is not uploaded yet\. Add the photo again\./u);
     assert.match(appSource, /media: mediaResult\?\.kind === 'uploaded' \? \[mediaResult\.media\] : \[\]/u);
     assert.match(appSource, /photoUris: photoResult\?\.kind === 'captured' \? \[photoResult\.uri\] : \[\]/u);
+    assert.match(appSource, /queue\.enqueueProofMediaUpload\([\s\S]*?await queue\.whenPersisted\(\)/u);
+    assert.match(appSource, /const queue = offlineSubmissionQueue \?\? await getExpoOfflineSubmissionQueue\(\)[\s\S]*?offlineQueue: queue/u);
   });
 
   it('returns directly to Route Session after completing a non-final stop', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
 
-    assert.match(appSource, /saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: nextNavigationStepIndex,[\s\S]*routePlanId: selectedRoute\.id,[\s\S]*\}\);[\s\S]*setScreen\('routeSession'\);/u);
+    assert.match(appSource, /const activeRouteSaved = await driverAccessTokenStore\.saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: nextNavigationStepIndex,[\s\S]*routePlanId: selectedRoute\.id,[\s\S]*\}\);[\s\S]*if \(!activeRouteSaved\)[\s\S]*setNavigationStepIndex\(nextNavigationStepIndex\);[\s\S]*setScreen\('routeSession'\);/u);
     assert.doesNotMatch(appSource, /stopCompleted|StopCompletedScreen|Stop Completed|Find Next Stop when ready/u);
   });
 });

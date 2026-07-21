@@ -14,6 +14,13 @@ export function buildActiveRouteForegroundNotification(input: {
   currentStepIndex: number;
   route: AssignedRoute;
 }): ContinuousLocationNotificationContent {
+  if (input.currentStepIndex <= 0) {
+    return {
+      body: 'Open Clever Driver to confirm pickup before the first delivery stop.',
+      title: 'Pickup & Start Route',
+    };
+  }
+
   const stopIndex = Math.max(0, input.currentStepIndex - 1);
   const stop = input.route.stops[stopIndex] ?? input.route.stops[0] ?? null;
   if (stop === null) {

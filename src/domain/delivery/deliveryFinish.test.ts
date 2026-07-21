@@ -175,10 +175,23 @@ describe('delivery finish route cleanup', () => {
   });
 
   it('queues route completion when live event recording fails and keeps the queued completion evidence', async () => {
-    const queue = createInMemoryOfflineSubmissionQueue();
+    const memoryQueue = createInMemoryOfflineSubmissionQueue();
+    let releasePersistence: () => void = () => undefined;
+    let persistenceStarted = false;
+    const persistenceGate = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const queue = {
+      ...memoryQueue,
+      whenPersisted: async () => {
+        persistenceStarted = true;
+        await persistenceGate;
+      },
+    };
     const stream = createMockStreamService();
 
-    const result = await finishDeliveryAfterActive({
+    let finishResolved = false;
+    const resultPromise = finishDeliveryAfterActive({
       deliveryStart: {
         flowState: 'delivery_active',
         kind: 'delivery_active',
@@ -194,7 +207,16 @@ describe('delivery finish route cleanup', () => {
       offlineQueue: queue,
       routePlanId: 'route-1',
       streamService: stream.service,
+    }).then((result) => {
+      finishResolved = true;
+      return result;
     });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(persistenceStarted, true);
+    assert.equal(finishResolved, false);
+    releasePersistence();
+    const result = await resultPromise;
 
     assert.equal(result.kind, 'queued');
     assert.equal(result.flowState, 'delivery_finished');

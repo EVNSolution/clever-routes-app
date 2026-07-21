@@ -79,6 +79,8 @@ describe('background location lifecycle wiring', () => {
     const finishIndex = finishSource.indexOf('finishDeliveryAfterActive');
 
     assert.ok(clearIndex < finishIndex);
+    assert.match(finishSource, /catch \(error\) \{[\s\S]*clearAndStopActiveLocationSession\(route\.id\)/u);
+    assert.match(source, /const isStartDisabled = isStartingRoute \|\| isFinishingRoute \|\| activeRoutePlanId !== null/u);
   });
 
   it('shares the durable queue and retries each route with its own access token', () => {
