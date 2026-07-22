@@ -134,15 +134,29 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(sequenceSource, /Store Pickup|Pickup point|companyDisplayName|pickupGuidance/u);
   });
 
-  it('lets an active driver select any incomplete stop with a warning and persisted current task', () => {
+  it('opens any stop quietly and confirms an out-of-order change only when Arrive is pressed', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
+    const openStart = appSource.indexOf('function handleOpenStopFromRouteSession(');
+    const openEnd = appSource.indexOf('\n\n  function handleArriveFromStopDetails(', openStart);
+    const openSource = appSource.slice(openStart, openEnd);
+    const arriveStart = appSource.indexOf('function handleArriveFromStopDetails(');
+    const arriveEnd = appSource.indexOf('\n\n  async function handleOpenRouteNavigation(', arriveStart);
+    const arriveSource = appSource.slice(arriveStart, arriveEnd);
 
-    assert.match(appSource, /buildOutOfOrderStopSelectionWarning\(\{/u);
-    assert.match(appSource, /Alert\.alert\(warning\.title, warning\.message/u);
-    assert.match(appSource, /text: 'Continue'/u);
+    assert.notEqual(openStart, -1);
+    assert.notEqual(openEnd, -1);
+    assert.match(openSource, /setSelectedStopDetailsId\(selectedStop\.deliveryStopId\)/u);
+    assert.match(openSource, /setScreen\('stopDetails'\)/u);
+    assert.doesNotMatch(openSource, /Alert\.alert|buildOutOfOrderStopArrivalWarning|saveActiveRouteSession/u);
+
+    assert.notEqual(arriveStart, -1);
+    assert.match(arriveSource, /buildOutOfOrderStopArrivalWarning\(\{/u);
+    assert.match(arriveSource, /Alert\.alert\(warning\.title, warning\.message/u);
+    assert.match(arriveSource, /text: 'Arrive'/u);
+    assert.match(arriveSource, /activateAndRecordStopArrival\(selectedStop\)/u);
     assert.match(appSource, /await driverAccessTokenStore\.saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: selectedStopIndex \+ 1/u);
-    assert.match(appSource, /setNavigationStepIndex\(selectedStopIndex \+ 1\)/u);
-    assert.match(appSource, /setSelectedStopDetailsId\(selectedStop\.deliveryStopId\)/u);
+    assert.match(appSource, /await recordStopArrival\(selectedStop\)/u);
+    assert.match(appSource, /await submitStopArrivalForRouteStop\(selectedRouteSession, stop\)/u);
   });
 
   it('chooses the next incomplete stop without assuming numeric sequence progression', () => {

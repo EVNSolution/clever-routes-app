@@ -49,7 +49,7 @@ import {
   type RouteSessionStatus,
 } from '../domain/route/routeSessionClassification';
 import {
-  buildOutOfOrderStopSelectionWarning,
+  buildOutOfOrderStopArrivalWarning,
   getAssignedRouteServerProgress,
   getCurrentRouteStop,
   getNextIncompleteRouteStepIndex,
@@ -649,6 +649,11 @@ function DriverApp() {
     });
   const stopDetailsStop = stopDetailsProgressState?.stop ?? null;
   const isCompanyStep = navigationStepIndex === COMPANY_STEP_INDEX;
+  const canArriveFromStopDetails = stopDetailsReturnScreen === 'routeSession'
+    && routeStatus === 'active'
+    && navigationStepIndex !== COMPANY_STEP_INDEX
+    && stopDetailsStop !== null
+    && !isStopCompleted(stopDetailsStop, completedStopIds);
   const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => completedStopIds.includes(stop.deliveryStopId));
   const currentCompany = selectedRouteSession?.companyGuidance ?? null;
 
@@ -1970,7 +1975,16 @@ function DriverApp() {
       return;
     }
 
-    if (currentStop === null || deliveryStartResult === null) {
+    if (currentStop === null) {
+      setMessage('The active delivery stop could not be confirmed. Refresh the route and try again.');
+      return;
+    }
+
+    await recordStopArrival(currentStop);
+  }
+
+  async function recordStopArrival(stop: AssignedRouteStop) {
+    if (deliveryStartResult === null) {
       setMessage('The active delivery stop could not be confirmed. Refresh the route and try again.');
       return;
     }
@@ -1982,7 +1996,7 @@ function DriverApp() {
         setMessage('The active route could not be confirmed. Refresh the route and try again.');
         return;
       }
-      const result = await submitStopArrivalForRouteStop(selectedRouteSession, currentStop);
+      const result = await submitStopArrivalForRouteStop(selectedRouteSession, stop);
       if (result.kind === 'blocked') {
         setMessage(result.message);
         return;
@@ -2000,7 +2014,7 @@ function DriverApp() {
     }
   }
 
-  async function activateSelectedRouteStop(selectedStop: AssignedRouteStop) {
+  async function activateAndRecordStopArrival(selectedStop: AssignedRouteStop) {
     if (
       selectedRoute === null
       || activeRoutePlanId !== selectedRoute.id
@@ -2012,7 +2026,7 @@ function DriverApp() {
     const selectedStopIndex = selectedRoute.stops.findIndex(
       (candidate) => candidate.deliveryStopId === selectedStop.deliveryStopId,
     );
-    if (selectedStopIndex < 0 || completedStopIds.includes(selectedStop.deliveryStopId)) {
+    if (selectedStopIndex < 0 || isStopCompleted(selectedStop, completedStopIds)) {
       setMessage('This stop is no longer available as an active delivery task.');
       return;
     }
@@ -2029,8 +2043,7 @@ function DriverApp() {
     setNavigationStepIndex(selectedStopIndex + 1);
     setSelectedStopDetailsId(selectedStop.deliveryStopId);
     setStopDetailsReturnScreen('routeSession');
-    setScreen('stopDetails');
-    setMessage(`Stop ${selectedStop.sequence} is now the current task.`);
+    await recordStopArrival(selectedStop);
   }
 
   function handleOpenStopFromRouteSession(stop: AssignedRouteStop) {
@@ -2045,28 +2058,44 @@ function DriverApp() {
       return;
     }
 
-    const warning = routeStatus === 'active'
-      ? buildOutOfOrderStopSelectionWarning({
-          completedStopIds,
-          navigationStepIndex,
-          route: selectedRoute,
-          selectedStopId: selectedStop.deliveryStopId,
-        })
-      : null;
+    setSelectedStopDetailsId(selectedStop.deliveryStopId);
+    setStopDetailsReturnScreen('routeSession');
+    setScreen('stopDetails');
+  }
+
+  function handleArriveFromStopDetails() {
+    if (selectedRoute === null || stopDetailsStop === null) {
+      setMessage('This stop is no longer available on the selected route.');
+      return;
+    }
+    if (!canArriveFromStopDetails) {
+      setMessage('Complete Store Pickup and start an active delivery before recording arrival.');
+      return;
+    }
+
+    const selectedStop = stopDetailsStop;
+    const warning = buildOutOfOrderStopArrivalWarning({
+      completedStopIds,
+      navigationStepIndex,
+      route: selectedRoute,
+      selectedStopId: selectedStop.deliveryStopId,
+    });
     if (warning !== null) {
       Alert.alert(warning.title, warning.message, [
         { style: 'cancel', text: 'Cancel' },
         {
-          onPress: () => { void activateSelectedRouteStop(selectedStop); },
-          text: 'Continue',
+          onPress: () => { void activateAndRecordStopArrival(selectedStop); },
+          text: 'Arrive',
         },
       ]);
       return;
     }
 
-    setSelectedStopDetailsId(selectedStop.deliveryStopId);
-    setStopDetailsReturnScreen('routeSession');
-    setScreen('stopDetails');
+    if (currentStop?.deliveryStopId === selectedStop.deliveryStopId) {
+      void recordStopArrival(selectedStop);
+      return;
+    }
+    void activateAndRecordStopArrival(selectedStop);
   }
 
   async function handleOpenRouteNavigation(route: AssignedRoute | null) {
@@ -2800,13 +2829,13 @@ function DriverApp() {
 
           {screen === 'stopDetails' && stopDetailsStop !== null ? (
             <StopDetailsScreen
-              canArrive={stopDetailsProgressState?.canMarkArrived === true}
+              canArrive={canArriveFromStopDetails}
               isArriving={isRecordingArrival}
               isReadOnly={stopDetailsReturnScreen === 'completedDeliveries'}
               onBack={() => {
                 handleAppBack();
               }}
-              onArrive={() => { void handleArrivedAtStep(); }}
+              onArrive={handleArriveFromStopDetails}
               onCall={() => handleCallStop(stopDetailsStop)}
               onOpenNavigation={() => handleOpenNavigationForStop(stopDetailsStop)}
               stop={stopDetailsStop}

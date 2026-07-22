@@ -50,7 +50,7 @@ export function getAssignedRouteServerProgress(route: Pick<AssignedRoute, 'stops
   };
 }
 
-export function buildOutOfOrderStopSelectionWarning(input: {
+export function buildOutOfOrderStopArrivalWarning(input: {
   completedStopIds: string[];
   navigationStepIndex: number;
   route: Pick<AssignedRoute, 'stops'>;
@@ -86,8 +86,8 @@ export function buildOutOfOrderStopSelectionWarning(input: {
   const incompleteVerb = incompleteBeforeSelection.length === 1 ? 'remains' : 'remain';
 
   return {
-    message: `Stop ${selectedStop.sequence} is not the current planned stop. ${remainingLabel} ${incompleteVerb} incomplete. Continuing will update live ETAs and notify the administrator.`,
-    title: 'Change stop order?',
+    message: `Stop ${selectedStop.sequence} is not the current planned stop. ${remainingLabel} ${incompleteVerb} incomplete. Confirming arrival will update live ETAs and notify the administrator.`,
+    title: 'Arrive out of order?',
   };
 }
 

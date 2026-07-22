@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { sampleAssignedRoute } from './assignedRoute';
 import {
-  buildOutOfOrderStopSelectionWarning,
+  buildOutOfOrderStopArrivalWarning,
   getAssignedRouteServerProgress,
   getNextIncompleteRouteStepIndex,
   getStopDetailsProgressState,
@@ -119,18 +119,18 @@ describe('route step progress state', () => {
     assert.equal(previewState?.stop.deliveryStopId, secondStop.deliveryStopId);
   });
 
-  it('warns before selecting an incomplete stop outside the planned current order', () => {
+  it('warns before arriving at an incomplete stop outside the planned current order', () => {
     const secondStop = sampleAssignedRoute.stops[1];
     assert.ok(secondStop);
 
-    assert.deepEqual(buildOutOfOrderStopSelectionWarning({
+    assert.deepEqual(buildOutOfOrderStopArrivalWarning({
       completedStopIds: [],
       navigationStepIndex: 1,
       route: sampleAssignedRoute,
       selectedStopId: secondStop.deliveryStopId,
     }), {
-      message: 'Stop 2 is not the current planned stop. Stop 1 remains incomplete. Continuing will update live ETAs and notify the administrator.',
-      title: 'Change stop order?',
+      message: 'Stop 2 is not the current planned stop. Stop 1 remains incomplete. Confirming arrival will update live ETAs and notify the administrator.',
+      title: 'Arrive out of order?',
     });
   });
 
@@ -140,13 +140,13 @@ describe('route step progress state', () => {
     assert.ok(firstStop);
     assert.ok(secondStop);
 
-    assert.equal(buildOutOfOrderStopSelectionWarning({
+    assert.equal(buildOutOfOrderStopArrivalWarning({
       completedStopIds: [],
       navigationStepIndex: 1,
       route: sampleAssignedRoute,
       selectedStopId: firstStop.deliveryStopId,
     }), null);
-    assert.equal(buildOutOfOrderStopSelectionWarning({
+    assert.equal(buildOutOfOrderStopArrivalWarning({
       completedStopIds: [secondStop.deliveryStopId],
       navigationStepIndex: 1,
       route: sampleAssignedRoute,
@@ -158,7 +158,7 @@ describe('route step progress state', () => {
     const firstStop = sampleAssignedRoute.stops[0];
     assert.ok(firstStop);
 
-    assert.equal(buildOutOfOrderStopSelectionWarning({
+    assert.equal(buildOutOfOrderStopArrivalWarning({
       completedStopIds: [],
       navigationStepIndex: 2,
       route: sampleAssignedRoute,

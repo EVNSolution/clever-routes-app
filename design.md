@@ -2047,6 +2047,9 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - Use `Arrive` as the left primary action for the current delivery stop.
 - Use `Navigate` as the right secondary action for opening route directions from the driver's current location.
 - Do not show `View Stop Details` in Current Task or duplicate the navigation action as `Open in Map` below an active session.
+- Treat Route Sequence rows as navigation into stop information only. Opening a non-current stop must not change the current task, show an order warning, update ETA, or notify the administrator.
+- Let an incomplete non-current stop expose `Arrive` inside Stop Details while the route is active. If arriving there would skip an incomplete planned stop, show the order-change confirmation only after `Arrive` is pressed.
+- After the driver confirms an out-of-order arrival, make that stop current, submit its `STOP_ARRIVED` event to the server, and let the server update ETA and administrator notification state. Cancelling the confirmation must leave the current task unchanged.
 
 ## Completed Deliveries Current Override (2026-07-22)
 
