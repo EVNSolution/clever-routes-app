@@ -296,7 +296,6 @@ function DriverApp() {
   const hasCheckedInitialStopArrivalNotificationRef = useRef(false);
   const networkState = Network.useNetworkState();
   const networkReachability = getNetworkReachability(networkState);
-  const attemptedDriverRestoreRef = useRef<number | null>(null);
   const previousDriverRestoreNetworkRef = useRef(networkReachability);
   const previousRouteSyncNetworkRef = useRef(networkReachability);
   const isRetryingOfflineSubmissionsRef = useRef(false);
@@ -1481,13 +1480,7 @@ function DriverApp() {
   }, [isDriverRestoreComplete]);
 
   useEffect(() => {
-    if (attemptedDriverRestoreRef.current === driverRestoreAttempt) {
-      return undefined;
-    }
-
-    attemptedDriverRestoreRef.current = driverRestoreAttempt;
     let isMounted = true;
-    setDriverRestoreProblem(null);
     const restoreWatchdog = setTimeout(() => {
       if (isMounted) {
         setDriverRestoreProblem('Session check is taking longer than expected. Try again.');

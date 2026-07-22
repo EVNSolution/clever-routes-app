@@ -61,6 +61,7 @@ describe('driver login flow', () => {
       /if \(result\.kind !== 'active' && result\.kind !== 'refresh_required'\) \{\s+clearTimeout\(restoreWatchdog\);\s+setScreen\('loginPhone'\);\s+setIsDriverRestoreComplete\(true\);\s+void clearAndStopActiveLocationSession\(\)/u,
     );
     assert.doesNotMatch(source, /hasAttemptedDriverRestoreRef/u);
+    assert.doesNotMatch(source, /attemptedDriverRestoreRef/u);
     assert.match(source, /routeSyncState === 'loading'[\s\S]*Loading routes/u);
     assert.match(source, /routeSyncState === 'error'[\s\S]*Routes temporarily unavailable[\s\S]*Retry/u);
     assert.match(source, /previousDriverRestoreNetworkRef[\s\S]*networkReachability === 'online'[\s\S]*retryDriverRestore/u);
