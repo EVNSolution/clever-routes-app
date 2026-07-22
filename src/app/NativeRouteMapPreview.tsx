@@ -22,7 +22,6 @@ const CAMERA_PADDING = { bottom: 58, left: 42, right: 42, top: 96 } as const;
 const CURRENT_TRIP_CAMERA_PADDING = { bottom: 72, left: 52, right: 96, top: 72 } as const;
 const CURRENT_LOCATION_ZOOM = 16;
 const DESTINATION_FOCUS_ZOOM = 13;
-const LIVE_ROUTE_DETAIL_MIN_ZOOM = 15;
 const LIVE_LOCATION_MAX_AGE_MS = 15_000;
 const LIVE_LOCATION_CACHED_REQUIRED_ACCURACY_METERS = 100;
 const LIVE_LOCATION_DISTANCE_INTERVAL_METERS = 0;
@@ -36,29 +35,12 @@ const USER_LOCATION_SOURCE_ID = 'route-preview-user-location-source';
 type RouteCoordinate = [longitude: number, latitude: number];
 
 type RouteMarkerProperties = {
-  focusLabel: string;
   kind: 'depot' | 'stop';
   groupSize: number;
   label: string;
   markerState: 'completed' | 'current' | 'upcoming';
   sequence: number;
 };
-
-const ROUTE_MARKER_FOCUS_OPACITY = [
-  'step', ['zoom'],
-  [
-    'case',
-    [
-      'any',
-      ['==', ['get', 'markerState'], 'current'],
-      ['==', ['get', 'kind'], 'depot'],
-    ],
-    1,
-    0,
-  ],
-  LIVE_ROUTE_DETAIL_MIN_ZOOM,
-  1,
-] satisfies NonNullable<CircleLayerSpecification['paint']>['circle-opacity'];
 
 const ROUTE_MARKER_CIRCLE_PAINT = {
   'circle-color': [
@@ -84,12 +66,6 @@ const ROUTE_MARKER_CIRCLE_PAINT = {
   ],
 } satisfies CircleLayerSpecification['paint'];
 
-const ROUTE_MARKER_FOCUSED_CIRCLE_PAINT = {
-  ...ROUTE_MARKER_CIRCLE_PAINT,
-  'circle-opacity': ROUTE_MARKER_FOCUS_OPACITY,
-  'circle-stroke-opacity': ROUTE_MARKER_FOCUS_OPACITY,
-} satisfies CircleLayerSpecification['paint'];
-
 const ROUTE_MARKER_LABEL_LAYOUT = {
   'text-allow-overlap': true,
   'text-anchor': 'center',
@@ -107,11 +83,6 @@ const ROUTE_MARKER_LABEL_LAYOUT = {
 const ROUTE_MARKER_LABEL_PAINT = {
   'text-color': '#ffffff',
   'text-opacity': 1,
-} satisfies SymbolLayerSpecification['paint'];
-
-const ROUTE_MARKER_FOCUSED_LABEL_PAINT = {
-  ...ROUTE_MARKER_LABEL_PAINT,
-  'text-opacity': ROUTE_MARKER_FOCUS_OPACITY,
 } satisfies SymbolLayerSpecification['paint'];
 
 const ROUTE_MARKER_GROUP_LAYOUT = {
@@ -137,16 +108,6 @@ const ROUTE_MARKER_GROUP_LAYOUT = {
 const ROUTE_MARKER_GROUP_BORDER_LAYOUT = {
   ...ROUTE_MARKER_GROUP_LAYOUT,
   'icon-text-fit-padding': [8, 11, 8, 11],
-} satisfies SymbolLayerSpecification['layout'];
-
-const ROUTE_MARKER_FOCUSED_GROUP_LAYOUT = {
-  ...ROUTE_MARKER_GROUP_LAYOUT,
-  'text-field': ['step', ['zoom'], ['get', 'focusLabel'], LIVE_ROUTE_DETAIL_MIN_ZOOM, ['get', 'label']],
-} satisfies SymbolLayerSpecification['layout'];
-
-const ROUTE_MARKER_FOCUSED_GROUP_BORDER_LAYOUT = {
-  ...ROUTE_MARKER_GROUP_BORDER_LAYOUT,
-  'text-field': ['step', ['zoom'], ['get', 'focusLabel'], LIVE_ROUTE_DETAIL_MIN_ZOOM, ['get', 'label']],
 } satisfies SymbolLayerSpecification['layout'];
 
 const ROUTE_MARKER_GROUP_COMPACT_LAYOUT = {
@@ -176,6 +137,45 @@ const ROUTE_MARKER_GROUP_PAINT = {
   'icon-opacity': 1,
   'text-color': '#ffffff',
   'text-opacity': 1,
+} satisfies SymbolLayerSpecification['paint'];
+
+const ROUTE_MARKER_SESSION_FOCUS_LAYOUT = {
+  'icon-allow-overlap': true,
+  'icon-ignore-placement': false,
+  'icon-image': ROUTE_MARKER_CAPSULE_IMAGE_ID,
+  'icon-text-fit': 'both',
+  'icon-text-fit-padding': [5, 7, 5, 7],
+  'text-allow-overlap': true,
+  'text-anchor': 'center',
+  'text-field': ['get', 'label'],
+  'text-font': ['Noto Sans Bold'],
+  'text-ignore-placement': false,
+  'text-size': 10,
+} satisfies SymbolLayerSpecification['layout'];
+
+const ROUTE_MARKER_SESSION_CONTEXT_LAYOUT = {
+  'icon-allow-overlap': false,
+  'icon-ignore-placement': false,
+  'icon-image': ROUTE_MARKER_CAPSULE_IMAGE_ID,
+  'icon-text-fit': 'both',
+  'icon-text-fit-padding': [2, 5, 2, 5],
+  'text-allow-overlap': false,
+  'text-anchor': 'center',
+  'text-field': ['get', 'label'],
+  'text-font': ['Noto Sans Bold'],
+  'text-ignore-placement': false,
+  'text-size': 8,
+} satisfies SymbolLayerSpecification['layout'];
+
+const ROUTE_MARKER_SESSION_PAINT = {
+  ...ROUTE_MARKER_GROUP_PAINT,
+  'icon-halo-color': '#ffffff',
+  'icon-halo-width': [
+    'case',
+    ['==', ['get', 'markerState'], 'current'], 1.5,
+    ['==', ['get', 'kind'], 'depot'], 1.25,
+    0.75,
+  ],
 } satisfies SymbolLayerSpecification['paint'];
 
 const SNAPPED_STOP_CIRCLE_PAINT = {
@@ -512,67 +512,96 @@ export function NativeRouteMapPreview({
         ) : null}
         {routeMarkerCollection !== null ? (
           <GeoJSONSource data={routeMarkerCollection} id={ROUTE_MARKER_SOURCE_ID} key={ROUTE_MARKER_SOURCE_ID}>
-            <Layer
-              filter={['==', ['get', 'groupSize'], 1]}
-              id="route-preview-marker-circle"
-              layout={{
-                'circle-sort-key': [
-                  'case',
-                  ['==', ['get', 'markerState'], 'current'], 3,
-                  ['==', ['get', 'kind'], 'depot'], 2,
-                  1,
-                ],
-              }}
-              paint={compactRouteFocus ? ROUTE_MARKER_FOCUSED_CIRCLE_PAINT : ROUTE_MARKER_CIRCLE_PAINT}
-              source={ROUTE_MARKER_SOURCE_ID}
-              type="circle"
-            />
-            <Layer
-              filter={['==', ['get', 'groupSize'], 1]}
-              id="route-preview-marker-label"
-              layout={ROUTE_MARKER_LABEL_LAYOUT}
-              paint={compactRouteFocus ? ROUTE_MARKER_FOCUSED_LABEL_PAINT : ROUTE_MARKER_LABEL_PAINT}
-              source={ROUTE_MARKER_SOURCE_ID}
-              type="symbol"
-            />
-            <Layer
-              filter={['all', ['>', ['get', 'groupSize'], 1], ['!=', ['get', 'markerState'], 'current']]}
-              id="route-preview-marker-group-compact-border"
-              key="route-preview-marker-group-compact-border"
-              layout={ROUTE_MARKER_GROUP_COMPACT_BORDER_LAYOUT}
-              minzoom={compactRouteFocus ? LIVE_ROUTE_DETAIL_MIN_ZOOM : undefined}
-              paint={ROUTE_MARKER_GROUP_BORDER_PAINT}
-              source={ROUTE_MARKER_SOURCE_ID}
-              type="symbol"
-            />
-            <Layer
-              filter={['all', ['>', ['get', 'groupSize'], 1], ['!=', ['get', 'markerState'], 'current']]}
-              id="route-preview-marker-group-compact"
-              key="route-preview-marker-group-compact"
-              layout={ROUTE_MARKER_GROUP_COMPACT_LAYOUT}
-              minzoom={compactRouteFocus ? LIVE_ROUTE_DETAIL_MIN_ZOOM : undefined}
-              paint={ROUTE_MARKER_GROUP_PAINT}
-              source={ROUTE_MARKER_SOURCE_ID}
-              type="symbol"
-            />
-            <Layer
-              filter={['all', ['>', ['get', 'groupSize'], 1], ['==', ['get', 'markerState'], 'current']]}
-              id="route-preview-marker-group-border"
-              key="route-preview-marker-group-border"
-              layout={compactRouteFocus ? ROUTE_MARKER_FOCUSED_GROUP_BORDER_LAYOUT : ROUTE_MARKER_GROUP_BORDER_LAYOUT}
-              paint={ROUTE_MARKER_GROUP_BORDER_PAINT}
-              source={ROUTE_MARKER_SOURCE_ID}
-              type="symbol"
-            />
-            <Layer
-              filter={['all', ['>', ['get', 'groupSize'], 1], ['==', ['get', 'markerState'], 'current']]}
-              id="route-preview-marker-group"
-              key="route-preview-marker-group"
-              layout={compactRouteFocus ? ROUTE_MARKER_FOCUSED_GROUP_LAYOUT : ROUTE_MARKER_GROUP_LAYOUT}
-              paint={ROUTE_MARKER_GROUP_PAINT}
-              source={ROUTE_MARKER_SOURCE_ID}
-              type="symbol"
-            />
+            {compactRouteFocus ? (
+              <>
+                <Layer
+                  filter={[
+                    'any',
+                    ['==', ['get', 'markerState'], 'current'],
+                    ['==', ['get', 'kind'], 'depot'],
+                  ]}
+                  id="route-preview-marker-session-focus"
+                  layout={ROUTE_MARKER_SESSION_FOCUS_LAYOUT}
+                  paint={ROUTE_MARKER_SESSION_PAINT}
+                  source={ROUTE_MARKER_SOURCE_ID}
+                  type="symbol"
+                />
+                <Layer
+                  filter={[
+                    'all',
+                    ['!=', ['get', 'markerState'], 'current'],
+                    ['!=', ['get', 'kind'], 'depot'],
+                  ]}
+                  id="route-preview-marker-session-context"
+                  layout={ROUTE_MARKER_SESSION_CONTEXT_LAYOUT}
+                  paint={ROUTE_MARKER_SESSION_PAINT}
+                  source={ROUTE_MARKER_SOURCE_ID}
+                  type="symbol"
+                />
+              </>
+            ) : (
+              <>
+                <Layer
+                  filter={['==', ['get', 'groupSize'], 1]}
+                  id="route-preview-marker-circle"
+                  layout={{
+                    'circle-sort-key': [
+                      'case',
+                      ['==', ['get', 'markerState'], 'current'], 3,
+                      ['==', ['get', 'kind'], 'depot'], 2,
+                      1,
+                    ],
+                  }}
+                  paint={ROUTE_MARKER_CIRCLE_PAINT}
+                  source={ROUTE_MARKER_SOURCE_ID}
+                  type="circle"
+                />
+                <Layer
+                  filter={['==', ['get', 'groupSize'], 1]}
+                  id="route-preview-marker-label"
+                  layout={ROUTE_MARKER_LABEL_LAYOUT}
+                  paint={ROUTE_MARKER_LABEL_PAINT}
+                  source={ROUTE_MARKER_SOURCE_ID}
+                  type="symbol"
+                />
+                <Layer
+                  filter={['all', ['>', ['get', 'groupSize'], 1], ['!=', ['get', 'markerState'], 'current']]}
+                  id="route-preview-marker-group-compact-border"
+                  key="route-preview-marker-group-compact-border"
+                  layout={ROUTE_MARKER_GROUP_COMPACT_BORDER_LAYOUT}
+                  paint={ROUTE_MARKER_GROUP_BORDER_PAINT}
+                  source={ROUTE_MARKER_SOURCE_ID}
+                  type="symbol"
+                />
+                <Layer
+                  filter={['all', ['>', ['get', 'groupSize'], 1], ['!=', ['get', 'markerState'], 'current']]}
+                  id="route-preview-marker-group-compact"
+                  key="route-preview-marker-group-compact"
+                  layout={ROUTE_MARKER_GROUP_COMPACT_LAYOUT}
+                  paint={ROUTE_MARKER_GROUP_PAINT}
+                  source={ROUTE_MARKER_SOURCE_ID}
+                  type="symbol"
+                />
+                <Layer
+                  filter={['all', ['>', ['get', 'groupSize'], 1], ['==', ['get', 'markerState'], 'current']]}
+                  id="route-preview-marker-group-border"
+                  key="route-preview-marker-group-border"
+                  layout={ROUTE_MARKER_GROUP_BORDER_LAYOUT}
+                  paint={ROUTE_MARKER_GROUP_BORDER_PAINT}
+                  source={ROUTE_MARKER_SOURCE_ID}
+                  type="symbol"
+                />
+                <Layer
+                  filter={['all', ['>', ['get', 'groupSize'], 1], ['==', ['get', 'markerState'], 'current']]}
+                  id="route-preview-marker-group"
+                  key="route-preview-marker-group"
+                  layout={ROUTE_MARKER_GROUP_LAYOUT}
+                  paint={ROUTE_MARKER_GROUP_PAINT}
+                  source={ROUTE_MARKER_SOURCE_ID}
+                  type="symbol"
+                />
+              </>
+            )}
           </GeoJSONSource>
         ) : null}
         {showUserLocation && userLocationFeature !== null ? (
@@ -639,7 +668,6 @@ function buildRouteMarkerCollection(
         ...model.depotFeature,
         properties: {
           ...model.depotFeature.properties,
-          focusLabel: model.depotFeature.properties.label,
           groupSize: 1,
           markerState: currentStepIndex > 0 ? 'completed' : 'current',
         },
@@ -659,9 +687,6 @@ function buildRouteMarkerCollection(
           },
           properties: {
             ...firstFeature.properties,
-            focusLabel: currentStopSequence !== null && sequences.includes(currentStopSequence)
-              ? String(currentStopSequence)
-              : firstFeature.properties.label,
             groupSize: group.features.length,
             label: group.features.map((feature) => feature.properties.label).join('  '),
             markerState: currentStopSequence !== null && sequences.includes(currentStopSequence)
