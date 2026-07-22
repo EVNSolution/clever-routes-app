@@ -54,6 +54,12 @@ describe('driver login flow', () => {
     assert.match(source, /setVerifiedDriverPhoneE164\(result\.driverProfile\.phoneE164\);[\s\S]*setScreen\('mainTabs'\);[\s\S]*setIsDriverRestoreComplete\(true\);[\s\S]*handleLoginAndLoadRoutes/u);
     assert.match(source, /shouldDiscardSavedLoginAfterRefreshFailure\(error\)[\s\S]*driverAccessTokenStore\.clear\(\)/u);
     assert.match(source, /setDriverRestoreProblem\('Your saved login is safe\. Check your connection and try again\.'\)/u);
+    assert.match(source, /DRIVER_RESTORE_LOADING_TIMEOUT_MS/u);
+    assert.match(source, /setDriverRestoreProblem\('Session check is taking longer than expected\. Try again\.'\)/u);
+    assert.match(
+      source,
+      /if \(result\.kind !== 'active' && result\.kind !== 'refresh_required'\) \{\s+clearTimeout\(restoreWatchdog\);\s+setScreen\('loginPhone'\);\s+setIsDriverRestoreComplete\(true\);\s+void clearAndStopActiveLocationSession\(\)/u,
+    );
     assert.doesNotMatch(source, /hasAttemptedDriverRestoreRef/u);
     assert.match(source, /routeSyncState === 'loading'[\s\S]*Loading routes/u);
     assert.match(source, /routeSyncState === 'error'[\s\S]*Routes temporarily unavailable[\s\S]*Retry/u);

@@ -203,6 +203,7 @@ type RouteLoadOptions = {
 const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
 const DRIVER_APP_VERSION = '1.0.0';
 const DRIVER_CONSENT_DOCUMENT_URL = 'https://clever-route-api.cleversystem.ai/privacy';
+const DRIVER_RESTORE_LOADING_TIMEOUT_MS = 8_000;
 const PULL_REFRESH_DRAG_RESISTANCE = 0.72;
 const PULL_REFRESH_MAX_DISTANCE = 120;
 const PULL_REFRESH_REVEAL_HEIGHT = 96;
@@ -1487,6 +1488,11 @@ function DriverApp() {
     attemptedDriverRestoreRef.current = driverRestoreAttempt;
     let isMounted = true;
     setDriverRestoreProblem(null);
+    const restoreWatchdog = setTimeout(() => {
+      if (isMounted) {
+        setDriverRestoreProblem('Session check is taking longer than expected. Try again.');
+      }
+    }, DRIVER_RESTORE_LOADING_TIMEOUT_MS);
 
     void (async () => {
       try {
@@ -1495,19 +1501,21 @@ function DriverApp() {
           return;
         }
         if (result.kind === 'expired') {
-          await clearAndStopActiveLocationSession();
+          clearTimeout(restoreWatchdog);
           if (result.driverProfile !== undefined) {
             setNationalPhoneInput(result.driverProfile.phoneE164);
             setMessage('Your saved login expired. Enter your PIN to continue.');
           }
           setScreen('loginPhone');
           setIsDriverRestoreComplete(true);
+          void clearAndStopActiveLocationSession();
           return;
         }
         if (result.kind !== 'active' && result.kind !== 'refresh_required') {
-          await clearAndStopActiveLocationSession();
+          clearTimeout(restoreWatchdog);
           setScreen('loginPhone');
           setIsDriverRestoreComplete(true);
+          void clearAndStopActiveLocationSession();
           return;
         }
 
@@ -1519,15 +1527,16 @@ function DriverApp() {
             })).accountAccess;
             await driverAccessTokenStore.saveRefreshedAccountAccess(accountAccess);
           } catch (error) {
+            clearTimeout(restoreWatchdog);
             if (shouldDiscardSavedLoginAfterRefreshFailure(error)) {
-              await clearAndStopActiveLocationSession();
-              await driverAccessTokenStore.clear();
+              void driverAccessTokenStore.clear().catch(() => undefined);
               if (isMounted) {
                 setNationalPhoneInput(result.driverProfile.phoneE164);
                 setMessage('Your saved login expired. Enter your PIN to continue.');
                 setScreen('loginPhone');
                 setIsDriverRestoreComplete(true);
               }
+              void clearAndStopActiveLocationSession();
               return;
             }
 
@@ -1542,6 +1551,7 @@ function DriverApp() {
         if (!isMounted) {
           return;
         }
+        clearTimeout(restoreWatchdog);
         setNationalPhoneInput(result.driverProfile.phoneE164);
         setVerifiedDriverPhoneE164(result.driverProfile.phoneE164);
         setAcceptedPrivacy(true);
@@ -1557,13 +1567,17 @@ function DriverApp() {
           },
         );
       } catch {
+        clearTimeout(restoreWatchdog);
         if (isMounted) {
           setDriverRestoreProblem('Your saved login is safe. Check your connection and try again.');
         }
       }
     })();
 
-    return () => { isMounted = false; };
+    return () => {
+      isMounted = false;
+      clearTimeout(restoreWatchdog);
+    };
   }, [
     clearAndStopActiveLocationSession,
     driverAccessTokenStore,
