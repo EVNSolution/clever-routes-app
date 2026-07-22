@@ -101,7 +101,7 @@ describe('background location lifecycle wiring', () => {
     const recoverySource = getFunctionSource(
       source,
       'const retryPendingSubmissionsAfterNetworkRecovery = useCallback(',
-      'useEffect(() => {\n    const previousNetworkReachability',
+      'useEffect(() => {\n    const previous = previousRouteSyncNetworkRef.current;',
     );
 
     assert.match(source, /Network\.useNetworkState\(\)/u);

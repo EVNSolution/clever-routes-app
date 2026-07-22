@@ -43,4 +43,21 @@ describe('driver login flow', () => {
     assert.match(countrySelectionScreen, /<ScrollView/u);
     assert.doesNotMatch(countrySelectionScreen, /autoFocus/u);
   });
+
+  it('restores account identity behind a loading surface and syncs routes separately', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+
+    assert.match(source, /type RouteSyncState = 'error' \| 'idle' \| 'loading' \| 'ready'/u);
+    assert.match(source, /const \[driverRestoreProblem, setDriverRestoreProblem\] = useState<string \| null>\(null\)/u);
+    assert.match(source, /!isDriverRestoreComplete \? \([\s\S]*<DriverRestoreScreen/u);
+    assert.match(source, /function DriverRestoreScreen\([\s\S]*Restoring your session[\s\S]*Try Again/u);
+    assert.match(source, /setVerifiedDriverPhoneE164\(result\.driverProfile\.phoneE164\);[\s\S]*setScreen\('mainTabs'\);[\s\S]*setIsDriverRestoreComplete\(true\);[\s\S]*handleLoginAndLoadRoutes/u);
+    assert.match(source, /shouldDiscardSavedLoginAfterRefreshFailure\(error\)[\s\S]*driverAccessTokenStore\.clear\(\)/u);
+    assert.match(source, /setDriverRestoreProblem\('Your saved login is safe\. Check your connection and try again\.'\)/u);
+    assert.doesNotMatch(source, /hasAttemptedDriverRestoreRef/u);
+    assert.match(source, /routeSyncState === 'loading'[\s\S]*Loading routes/u);
+    assert.match(source, /routeSyncState === 'error'[\s\S]*Routes temporarily unavailable[\s\S]*Retry/u);
+    assert.match(source, /previousDriverRestoreNetworkRef[\s\S]*networkReachability === 'online'[\s\S]*retryDriverRestore/u);
+    assert.match(source, /previousRouteSyncNetworkRef[\s\S]*networkReachability === 'online'[\s\S]*handleRefreshRoutes/u);
+  });
 });

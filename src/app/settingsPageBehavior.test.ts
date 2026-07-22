@@ -65,7 +65,10 @@ describe('Settings page behavior', () => {
 
     assert.match(source, /DRIVER_CONSENT_DOCUMENT_URL/u);
     assert.match(source, /Linking\.openURL\(DRIVER_CONSENT_DOCUMENT_URL\)/u);
-    assert.match(source, /setAcceptedPrivacy\(true\);\s+setAcceptedLocation\(true\);\s+await handleLoginAndLoadRoutes/u);
+    assert.match(
+      source,
+      /setAcceptedPrivacy\(true\);\s+setAcceptedLocation\(true\);\s+setScreen\('mainTabs'\);\s+setIsDriverRestoreComplete\(true\);\s+await handleLoginAndLoadRoutes/u,
+    );
   });
 
   it('edits the global Clever Driver account name on a dedicated page', () => {

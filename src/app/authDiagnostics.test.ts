@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildAuthFailureMessage } from './authDiagnostics';
+import { buildAuthFailureMessage, shouldDiscardSavedLoginAfterRefreshFailure } from './authDiagnostics';
 import { createDriverApiHttpError } from '../api/deliveryServer/driverApiError';
 import type { AuthPhase } from './authDiagnostics';
 import type { DriverRuntimeConfig } from './config/driverRuntimeConfig';
@@ -73,6 +73,17 @@ describe('authDiagnostics', () => {
 
     assert.equal(result.kind, 'server_401');
     assert.equal(result.message.includes('401'), true);
+  });
+
+  it('discards saved login only when refresh is explicitly unauthorized', () => {
+    assert.equal(shouldDiscardSavedLoginAfterRefreshFailure(
+      createDriverApiHttpError({ endpoint: 'Refresh Auth Session', status: 401 }),
+    ), true);
+    assert.equal(shouldDiscardSavedLoginAfterRefreshFailure(
+      createDriverApiHttpError({ endpoint: 'Refresh Auth Session', status: 500 }),
+    ), false);
+    assert.equal(shouldDiscardSavedLoginAfterRefreshFailure(new TypeError('fetch failed')), false);
+    assert.equal(shouldDiscardSavedLoginAfterRefreshFailure(new Error('Invalid driver auth response')), false);
   });
 
   it('explains invalid phone or PIN without exposing which credential failed', () => {
