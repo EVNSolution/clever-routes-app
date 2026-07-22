@@ -3064,8 +3064,10 @@ function MyRoutesPage({
   const visibleRouteSessions = routeSessions
     .map((session, originalIndex) => ({ originalIndex, session }))
     .sort((left, right) => {
-      const leftIsActive = left.session.route.id === activeRoutePlanId;
-      const rightIsActive = right.session.route.id === activeRoutePlanId;
+      const leftIsActive = left.session.route.id === activeRoutePlanId
+        || (left.session.companyGuidance.executionStatus === 'IN_PROGRESS' && left.session.pendingRouteEnd === undefined);
+      const rightIsActive = right.session.route.id === activeRoutePlanId
+        || (right.session.companyGuidance.executionStatus === 'IN_PROGRESS' && right.session.pendingRouteEnd === undefined);
       if (leftIsActive !== rightIsActive) {
         return leftIsActive ? -1 : 1;
       }
@@ -3150,10 +3152,15 @@ function MyRoutesPage({
               ? 'completed'
               : session.pendingRouteEnd === 'released'
                 ? 'ready'
-                : classifiedRouteCardStatus;
+                : session.companyGuidance.executionStatus === 'IN_PROGRESS'
+                  ? 'active'
+                  : classifiedRouteCardStatus;
             const isRouteCardExpanded = expandedRouteKey === session.route.id;
             const isStartDisabled = isStartingRoute || isFinishingRoute || activeRoutePlanId !== null
               || backgroundLocationPermission !== 'granted' || session.pendingRouteEnd !== undefined;
+            const isContinueDisabled = isDeletingRoute || isFinishingRoute
+              || backgroundLocationPermission !== 'granted' || activeRoutePlanId !== session.route.id;
+            const isDeleteDisabled = isDeletingRoute || activeRoutePlanId !== session.route.id;
 
             return (
               <View key={session.route.id} style={styles.selectedRouteCard}>
@@ -3194,10 +3201,10 @@ function MyRoutesPage({
                 ) : routeCardStatus === 'active' ? (
                   <View style={styles.routeActionRow}>
                     <View style={styles.routeActionButton}>
-                      <SecondaryButton compact disabled={isDeletingRoute} label="Continue" onPress={() => onContinueRoute(session.route.id)} />
+                      <SecondaryButton compact disabled={isContinueDisabled} label="Continue" onPress={() => onContinueRoute(session.route.id)} />
                     </View>
                     <View style={styles.routeActionButton}>
-                      <DangerButton compact disabled={isDeletingRoute} label="Delete" loading={isDeletingRoute} onPress={() => onDeleteRoute(session.route.id)} />
+                      <DangerButton compact disabled={isDeleteDisabled} label="Delete" loading={isDeletingRoute} onPress={() => onDeleteRoute(session.route.id)} />
                     </View>
                   </View>
                 ) : (

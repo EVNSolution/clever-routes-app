@@ -130,6 +130,15 @@ describe('routes list behavior', () => {
     assert.doesNotMatch(source, /opacity|pointerEvents="none"/u);
   });
 
+  it('keeps a server in-progress route on Continue while tracking permission is unresolved', () => {
+    const source = getRoutesPageSource();
+
+    assert.match(source, /session\.companyGuidance\.executionStatus === 'IN_PROGRESS'[\s\S]*\? 'active'/u);
+    assert.match(source, /const isContinueDisabled = [\s\S]*backgroundLocationPermission !== 'granted'[\s\S]*activeRoutePlanId !== session\.route\.id/u);
+    assert.match(source, /<SecondaryButton compact disabled=\{isContinueDisabled\} label="Continue"/u);
+    assert.match(source, /executionStatus === 'IN_PROGRESS'[\s\S]*pendingRouteEnd === undefined/u);
+  });
+
   it('releases Delete back to Ready instead of completing or removing the route', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const deleteSource = source.slice(

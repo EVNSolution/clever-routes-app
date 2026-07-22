@@ -2018,7 +2018,9 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - Show a compact warning directly below the `My Routes` header when background location is not granted.
 - Use `Allow all the time required` as the warning title, explain that background location is needed before route start, and provide one `Open Settings` action.
 - Do not dim, cover, or disable the route list. Drivers must still be able to expand cards and open `Detail` while permission is missing.
-- Disable only the `Start` action until background location is granted. Existing in-progress route recovery actions remain available.
+- A server-authoritative `IN_PROGRESS` route must remain visually `In Progress` and keep the `Continue` label even when local GPS restoration is blocked by missing permission. Never regress it to `Ready` or `Start`.
+- Disable `Start` for ready routes until background location is granted. Disable `Continue` until background permission is granted and that route's local tracking session is restored.
+- Keep route details available while permission is missing. Do not let permission state rewrite the server route lifecycle.
 - Recheck permission when My Routes opens and whenever the app returns to the foreground so the warning disappears immediately after the setting changes.
 - Keep denial non-fatal. Returning without granting permission must leave the driver signed in on My Routes.
 
