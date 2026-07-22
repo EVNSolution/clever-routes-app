@@ -54,6 +54,7 @@ import {
   getCurrentRouteStop,
   getNextIncompleteRouteStepIndex,
   getStopDetailsProgressState,
+  isStopCompleted,
   ROUTE_COMPANY_STEP_INDEX,
 } from '../domain/route/routeStepProgress';
 import {
@@ -184,6 +185,8 @@ type AppScreen =
 type RouteStatus = RouteSessionStatus;
 type RouteSyncState = 'error' | 'idle' | 'loading' | 'ready';
 type BackgroundLocationPermissionState = BackgroundPermissionResult | 'checking';
+type CompletedDeliveriesFilter = 'all' | 'delivered' | 'issues';
+type StopDetailsReturnScreen = 'completedDeliveries' | 'routeSession';
 
 type StopProofDraft = {
   additionalNotes: string;
@@ -252,6 +255,7 @@ function DriverApp() {
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [navigationStepIndex, setNavigationStepIndex] = useState(COMPANY_STEP_INDEX);
   const [selectedStopDetailsId, setSelectedStopDetailsId] = useState<string | null>(null);
+  const [stopDetailsReturnScreen, setStopDetailsReturnScreen] = useState<StopDetailsReturnScreen>('routeSession');
   const [routeSessions, setRouteSessions] = useState<RouteSession[]>([]);
   const [routeSyncState, setRouteSyncState] = useState<RouteSyncState>('idle');
   const [backgroundLocationPermission, setBackgroundLocationPermission] = useState<BackgroundLocationPermissionState>('checking');
@@ -620,8 +624,12 @@ function DriverApp() {
     }
   }, [buildDriverAccessRefresh, mockDriverEventService, mockProofMediaUploadService, runtimeConfig]);
 
+  const selectedRouteContextId = screen === 'completedDeliveries'
+    || (screen === 'stopDetails' && stopDetailsReturnScreen === 'completedDeliveries')
+    ? selectedRouteId
+    : activeRoutePlanId ?? selectedRouteId;
   const selectedRouteSession = routeSessions.find(
-    (session) => session.route.id === (activeRoutePlanId ?? selectedRouteId),
+    (session) => session.route.id === selectedRouteContextId,
   ) ?? routeSessions[0] ?? null;
   const selectedRoute = selectedRouteSession?.route ?? null;
   const routeStatus = getRouteStatus(deliveryStartResult, deliveryFinishResult);
@@ -719,6 +727,7 @@ function DriverApp() {
       setSelectedRouteId(routeSession.route.id);
       setSubmission(toCompanyGuidanceSubmission(routeSession));
       setSelectedStopDetailsId(stop.deliveryStopId);
+      setStopDetailsReturnScreen('routeSession');
       setScreen('stopDetails');
       setMessage(null);
     }, 0);
@@ -2019,6 +2028,7 @@ function DriverApp() {
 
     setNavigationStepIndex(selectedStopIndex + 1);
     setSelectedStopDetailsId(selectedStop.deliveryStopId);
+    setStopDetailsReturnScreen('routeSession');
     setScreen('stopDetails');
     setMessage(`Stop ${selectedStop.sequence} is now the current task.`);
   }
@@ -2055,6 +2065,7 @@ function DriverApp() {
     }
 
     setSelectedStopDetailsId(selectedStop.deliveryStopId);
+    setStopDetailsReturnScreen('routeSession');
     setScreen('stopDetails');
   }
 
@@ -2509,7 +2520,7 @@ function DriverApp() {
         return true;
       case 'stopDetails':
         setSelectedStopDetailsId(null);
-        setScreen('routeSession');
+        setScreen(stopDetailsReturnScreen);
         return true;
       case 'arrivalCheck':
         setScreen('stopDetails');
@@ -2518,7 +2529,7 @@ function DriverApp() {
         setScreen('mainTabs');
         return true;
     }
-  }, [accountName, screen]);
+  }, [accountName, screen, stopDetailsReturnScreen]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
@@ -2791,6 +2802,7 @@ function DriverApp() {
             <StopDetailsScreen
               canArrive={stopDetailsProgressState?.canMarkArrived === true}
               isArriving={isRecordingArrival}
+              isReadOnly={stopDetailsReturnScreen === 'completedDeliveries'}
               onBack={() => {
                 handleAppBack();
               }}
@@ -2822,7 +2834,11 @@ function DriverApp() {
               completedStopIds={completedStopIds}
               completedStopTimes={completedStopTimes}
               onBack={openHomeRoot}
-              proofMediaResults={proofMediaResults}
+              onOpenStop={(stop) => {
+                setSelectedStopDetailsId(stop.deliveryStopId);
+                setStopDetailsReturnScreen('completedDeliveries');
+                setScreen('stopDetails');
+              }}
               route={selectedRoute}
             />
           ) : null}
@@ -3714,6 +3730,7 @@ function MapPreviewScreen({
 function StopDetailsScreen({
   canArrive,
   isArriving,
+  isReadOnly = false,
   onArrive,
   onBack,
   onCall,
@@ -3722,6 +3739,7 @@ function StopDetailsScreen({
 }: {
   canArrive: boolean;
   isArriving: boolean;
+  isReadOnly?: boolean;
   onArrive(): void;
   onBack(): void;
   onCall(): void;
@@ -3778,17 +3796,19 @@ function StopDetailsScreen({
         <Text style={styles.stopDetailsSectionTitle}>Customer Note</Text>
         <Text style={styles.stopDetailsNote}>{stop.customerNote?.trim() || 'No delivery instructions provided.'}</Text>
       </View>
-      <View style={[styles.buttonRow, styles.stopDetailsActions]}>
-        <StopDetailsActionButton
-          disabled={!canArrive || isArriving}
-          label="Arrive"
-          loading={isArriving}
-          onPress={onArrive}
-          tone="arrive"
-        />
-        <StopDetailsActionButton label="Navigate" onPress={onOpenNavigation} tone="navigate" />
-        <StopDetailsActionButton label="Call" onPress={onCall} tone="call" />
-      </View>
+      {isReadOnly ? null : (
+        <View style={[styles.buttonRow, styles.stopDetailsActions]}>
+          <StopDetailsActionButton
+            disabled={!canArrive || isArriving}
+            label="Arrive"
+            loading={isArriving}
+            onPress={onArrive}
+            tone="arrive"
+          />
+          <StopDetailsActionButton label="Navigate" onPress={onOpenNavigation} tone="navigate" />
+          <StopDetailsActionButton label="Call" onPress={onCall} tone="call" />
+        </View>
+      )}
     </View>
   );
 }
@@ -3912,55 +3932,102 @@ function CompletedDeliveriesScreen({
   completedStopIds,
   completedStopTimes,
   onBack,
-  proofMediaResults,
+  onOpenStop,
   route,
 }: {
   completedStopIds: string[];
   completedStopTimes: Record<string, string>;
   onBack(): void;
-  proofMediaResults: Record<string, ProofMediaUploadResult>;
+  onOpenStop(stop: AssignedRouteStop): void;
   route: AssignedRoute;
 }) {
-  const completedStops = route.stops.filter((stop) => completedStopIds.includes(stop.deliveryStopId));
-  const issueCount = completedStops.filter((stop) => proofMediaResults[stop.deliveryStopId]?.kind !== 'uploaded').length;
+  const [selectedFilter, setSelectedFilter] = useState<CompletedDeliveriesFilter>('all');
+  const completedStops = route.stops.filter((stop) => isStopCompleted(stop, completedStopIds));
+  const deliveredCount = completedStops.filter((stop) => getCompletedDeliveryOutcome(stop) === 'delivered').length;
+  const issueCount = completedStops.length - deliveredCount;
+  const filteredStops = completedStops.filter((stop) => (
+    selectedFilter === 'all' || getCompletedDeliveryOutcome(stop) === selectedFilter
+  ));
+  const filters: { id: CompletedDeliveriesFilter; label: string }[] = [
+    { id: 'all', label: 'All' },
+    { id: 'delivered', label: 'Delivered' },
+    { id: 'issues', label: 'Issues' },
+  ];
+
   return (
-    <View style={styles.screenStack}>
-      <ScreenHeader onBack={onBack} title="Completed Deliveries" rightLabel="Filter" />
-      <View>
-        <Text style={styles.pageTitleSmall}>Current session</Text>
+    <View style={styles.completedDeliveriesPage}>
+      <ScreenHeader hideRightAction onBack={onBack} title="Completed Deliveries" />
+      <View style={styles.completedRouteHeader}>
+        <Text numberOfLines={1} style={styles.pageTitleSmall}>{route.name}</Text>
         <Text style={styles.helperText}>{route.deliveryDate}</Text>
       </View>
-      <View style={styles.completionSummaryCard}>
-        <Text style={styles.cardTitle}>Completed stops</Text>
-        <Text style={styles.bodyText}>{completedStopIds.length} / {route.stops.length}</Text>
-        <Text style={styles.cardTitleSmall}>Proof records submitted</Text>
-        <Text style={styles.bodyText}>{Math.max(completedStops.length - issueCount, 0)} / {completedStops.length}</Text>
+      <View style={styles.completedSummaryRow}>
+        <CompletedDeliveryMetric label="Completed" value={`${completedStops.length}/${route.stops.length}`} />
+        <CompletedDeliveryMetric label="Delivered" value={String(deliveredCount)} />
+        <CompletedDeliveryMetric label="Issues" value={String(issueCount)} />
       </View>
       <View style={styles.filterRow}>
-        <Text style={[styles.filterPill, styles.filterPillActive]}>All</Text>
-        <Text style={styles.filterPill}>With Issues</Text>
-        <Text style={styles.filterPill}>Proof Missing</Text>
-      </View>
-      <View style={styles.completedListCard}>
-        {completedStops.length > 0 ? completedStops.map((stop) => {
-          const proofUploaded = proofMediaResults[stop.deliveryStopId]?.kind === 'uploaded';
+        {filters.map((filter) => {
+          const selected = selectedFilter === filter.id;
           return (
-            <View key={stop.deliveryStopId} style={styles.completedRow}>
-              <View style={styles.routeHeaderText}>
+            <Pressable
+              key={filter.id}
+              accessibilityRole="tab"
+              accessibilityState={{ selected }}
+              onPress={() => setSelectedFilter(filter.id)}
+              style={[styles.completedFilterTab, selected && styles.completedFilterTabActive]}
+            >
+              <Text style={[styles.completedFilterText, selected && styles.completedFilterTextActive]}>
+                {filter.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <View style={styles.completedList}>
+        {filteredStops.length > 0 ? filteredStops.map((stop, index) => {
+          const status = formatCompletedDeliveryStatus(stop);
+          const completedTime = completedStopTimes[stop.deliveryStopId];
+          return (
+            <Pressable
+              key={stop.deliveryStopId}
+              accessibilityLabel={`Open completed Stop ${stop.sequence} details`}
+              accessibilityRole="button"
+              onPress={() => onOpenStop(stop)}
+              style={({ pressed }) => [
+                styles.completedRow,
+                index === filteredStops.length - 1 && styles.completedRowLast,
+                pressed && styles.completedRowPressed,
+              ]}
+            >
+              <View style={styles.completedRowPrimary}>
                 <Text style={styles.completedRowTitle}>Stop {stop.sequence}</Text>
                 <Text numberOfLines={1} style={styles.helperText}>{formatStopAddress(stop)}</Text>
               </View>
               <View style={styles.completedMetaColumn}>
-                <Text style={styles.helperText}>{completedStopTimes[stop.deliveryStopId] ?? 'Completed Time'}</Text>
-                <StatusChip label={proofUploaded ? 'Proof uploaded' : 'Proof pending'} tone={proofUploaded ? 'green' : 'warning'} />
+                <StatusChip compact label={status.label} tone={status.tone} />
+                {completedTime === undefined ? null : <Text style={styles.completedTimeText}>{completedTime}</Text>}
               </View>
-              <Text style={styles.textButton}>View</Text>
-            </View>
+              <Text style={styles.completedRowDetail}>Detail</Text>
+            </Pressable>
           );
         }) : (
-          <EmptyState title="No completed deliveries" body="Completed stops will appear here after proof is submitted." />
+          <EmptyState
+            minimal
+            title={completedStops.length === 0 ? 'No completed deliveries' : 'No deliveries in this filter'}
+            body={completedStops.length === 0 ? 'Completed stops will appear here.' : 'Choose another filter to review completed stops.'}
+          />
         )}
       </View>
+    </View>
+  );
+}
+
+function CompletedDeliveryMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.completedMetric}>
+      <Text style={styles.completedMetricValue}>{value}</Text>
+      <Text style={styles.completedMetricLabel}>{label}</Text>
     </View>
   );
 }
@@ -4758,6 +4825,26 @@ function formatRouteStatus(status: RouteStatus): string {
       return 'Completed';
     case 'ready':
       return 'Ready';
+  }
+}
+
+function getCompletedDeliveryOutcome(stop: AssignedRouteStop): Exclude<CompletedDeliveriesFilter, 'all'> {
+  return ['CANCELLED', 'FAILED', 'SKIPPED'].includes(stop.status.toUpperCase()) ? 'issues' : 'delivered';
+}
+
+function formatCompletedDeliveryStatus(stop: AssignedRouteStop): {
+  label: string;
+  tone: 'green' | 'warning';
+} {
+  switch (stop.status.toUpperCase()) {
+    case 'CANCELLED':
+      return { label: 'Cancelled', tone: 'warning' };
+    case 'FAILED':
+      return { label: 'Failed', tone: 'warning' };
+    case 'SKIPPED':
+      return { label: 'Skipped', tone: 'warning' };
+    default:
+      return { label: 'Delivered', tone: 'green' };
   }
 }
 
@@ -6471,51 +6558,87 @@ const styles = StyleSheet.create({
     borderColor: '#fde68a',
     color: '#92400e',
   },
-  completionSummaryCard: {
-    backgroundColor: '#ecfdf3',
-    borderColor: '#bbf7d0',
-    borderRadius: 18,
-    borderWidth: 1,
-    gap: 5,
-    padding: 18,
+  completedDeliveriesPage: {
+    gap: 18,
+    paddingBottom: 28,
+  },
+  completedRouteHeader: {
+    gap: 3,
+  },
+  completedSummaryRow: {
+    borderBottomColor: '#e5e7eb',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e5e7eb',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    paddingVertical: 14,
+  },
+  completedMetric: {
+    alignItems: 'center',
+    flex: 1,
+    gap: 3,
+  },
+  completedMetricValue: {
+    color: '#111827',
+    fontSize: 20,
+    fontWeight: '800',
+    lineHeight: 26,
+  },
+  completedMetricLabel: {
+    color: '#667085',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
   },
   filterRow: {
+    borderBottomColor: '#d9dee8',
+    borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
-    gap: 10,
   },
-  filterPill: {
-    backgroundColor: '#ffffff',
-    borderColor: '#d9dee8',
-    borderRadius: 999,
-    borderWidth: 1,
-    color: '#344054',
+  completedFilterTab: {
+    alignItems: 'center',
+    borderBottomColor: 'transparent',
+    borderBottomWidth: 3,
     flex: 1,
+    justifyContent: 'center',
+    minHeight: 44,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+  },
+  completedFilterTabActive: {
+    borderBottomColor: '#0b57d0',
+  },
+  completedFilterText: {
+    color: '#667085',
     fontSize: 13,
     fontWeight: '700',
-    overflow: 'hidden',
-    paddingHorizontal: 10,
-    paddingVertical: 10,
     textAlign: 'center',
   },
-  filterPillActive: {
-    backgroundColor: '#0b57d0',
-    borderColor: '#0b57d0',
-    color: '#ffffff',
+  completedFilterTextActive: {
+    color: '#0b57d0',
+    fontWeight: '800',
   },
-  completedListCard: {
-    backgroundColor: '#ffffff',
-    borderColor: '#e5e7eb',
-    borderRadius: 18,
-    borderWidth: 1,
-    overflow: 'hidden',
+  completedList: {
+    minHeight: 80,
   },
   completedRow: {
     alignItems: 'center',
     borderBottomColor: '#eef2f6',
-    borderBottomWidth: 1,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
-    gap: 10,
-    padding: 14,
+    gap: 12,
+    minHeight: 76,
+    paddingVertical: 13,
+  },
+  completedRowLast: {
+    borderBottomWidth: 0,
+  },
+  completedRowPressed: {
+    backgroundColor: '#f2f6fc',
+  },
+  completedRowPrimary: {
+    flex: 1,
+    gap: 3,
   },
   completedRowTitle: {
     color: '#111827',
@@ -6524,11 +6647,17 @@ const styles = StyleSheet.create({
   },
   completedMetaColumn: {
     alignItems: 'flex-end',
-    gap: 6,
+    gap: 4,
   },
-  textButton: {
+  completedTimeText: {
+    color: '#667085',
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    lineHeight: 17,
+  },
+  completedRowDetail: {
     color: '#0b57d0',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
   },
   emptyCard: {

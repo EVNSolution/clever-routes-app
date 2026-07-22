@@ -7,10 +7,21 @@ import {
   getAssignedRouteServerProgress,
   getNextIncompleteRouteStepIndex,
   getStopDetailsProgressState,
+  isStopCompleted,
   ROUTE_COMPANY_STEP_INDEX,
 } from './routeStepProgress';
 
 describe('route step progress state', () => {
+  it('recognizes both server-terminal and locally completed stops', () => {
+    const firstStop = sampleAssignedRoute.stops[0];
+    assert.ok(firstStop);
+
+    assert.equal(isStopCompleted({ ...firstStop, status: 'DELIVERED' }, []), true);
+    assert.equal(isStopCompleted({ ...firstStop, status: 'FAILED' }, []), true);
+    assert.equal(isStopCompleted({ ...firstStop, status: 'ASSIGNED' }, [firstStop.deliveryStopId]), true);
+    assert.equal(isStopCompleted({ ...firstStop, status: 'ASSIGNED' }, []), false);
+  });
+
   it('restores delivered stops and the next navigation step from server route state', () => {
     const route = {
       ...sampleAssignedRoute,

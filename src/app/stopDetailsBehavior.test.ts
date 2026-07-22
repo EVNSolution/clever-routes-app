@@ -109,7 +109,7 @@ describe('stop details simplification', () => {
     assert.match(source, /const handleAppBack = useCallback\(\(\): boolean =>/u);
     assert.match(source, /BackHandler\.addEventListener\('hardwareBackPress', handleAppBack\)/u);
     assert.doesNotMatch(source, /PanResponder|swipeBackResponder|SWIPE_BACK_|panHandlers/u);
-    assert.match(source, /case 'stopDetails':[\s\S]*setSelectedStopDetailsId\(null\);[\s\S]*setScreen\('routeSession'\);[\s\S]*return true;/u);
+    assert.match(source, /case 'stopDetails':[\s\S]*setSelectedStopDetailsId\(null\);[\s\S]*setScreen\(stopDetailsReturnScreen\);[\s\S]*return true;/u);
     assert.doesNotMatch(source, /stopDetailsBackTarget/u);
     assert.match(source, /<StopDetailsScreen[\s\S]*onBack=\{\(\) => \{[\s\S]*handleAppBack\(\);[\s\S]*\}\}/u);
     assert.doesNotMatch(source, /trackingDeckPanResponder/u);

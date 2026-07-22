@@ -2048,6 +2048,19 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - Use `Navigate` as the right secondary action for opening route directions from the driver's current location.
 - Do not show `View Stop Details` in Current Task or duplicate the navigation action as `Open in Map` below an active session.
 
+## Completed Deliveries Current Override (2026-07-22)
+
+- Treat Completed Deliveries as a compact operational record, not a dashboard. This section supersedes the older rounded summary card, pill-filter, and proof-missing guidance for this screen.
+- Keep one centered `Completed Deliveries` header with an explicit Back action. Do not show a decorative or non-functional header action.
+- Show the route name and delivery date directly below the header, followed by one flat summary row for Completed, Delivered, and Issues counts.
+- Use `All`, `Delivered`, and `Issues` as the filters. Each filter must be a real tab with selected accessibility state and must immediately filter the visible rows.
+- Do not use `Proof Missing` as a delivery issue. Delivery photos are optional, so missing photo media must not change the delivery outcome or warning state.
+- Derive completed rows from both locally completed stop ids and server terminal stop statuses. Treat `FAILED`, `SKIPPED`, and `CANCELLED` as Issues; treat locally completed stops and `DELIVERED` as Delivered.
+- Render the stop list as one flat divided list without a rounded outer card, shadows, large icons, or separate `View` controls.
+- Make the entire stop row the touch target. A row opens that stop's read-only detail and Back returns to Completed Deliveries.
+- In completed-stop detail, keep order, recipient, address, items, payment, and customer note visible, but remove active-delivery actions such as `Arrive`.
+- Omit unavailable completion time instead of displaying placeholder copy such as `Completed Time`.
+
 ## Constraints
 
 - Retain phone/PIN authentication, route details, active delivery, consent, proof, and server assignment semantics.

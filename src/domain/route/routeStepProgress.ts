@@ -147,7 +147,7 @@ export function getStopDetailsProgressState(input: {
   };
 }
 
-function isStopCompleted(stop: AssignedRouteStop, completedStopIds: string[]): boolean {
+export function isStopCompleted(stop: AssignedRouteStop, completedStopIds: string[]): boolean {
   return completedStopIds.includes(stop.deliveryStopId) || TERMINAL_STOP_STATUSES.has(stop.status);
 }
 
