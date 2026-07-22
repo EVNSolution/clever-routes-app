@@ -59,6 +59,7 @@ import {
 import {
   clearAndStopContinuousLocationSession,
   CONTINUOUS_LOCATION_TASK_NAME,
+  requestContinuousLocationBackgroundPermission,
   startContinuousLocationUpdatesAfterDeliveryStart,
   type ContinuousLocationStopResult,
   type ContinuousLocationStreamStartResult,
@@ -887,18 +888,6 @@ function DriverApp() {
 
   useEffect(() => {
     if (deliveryStartResult?.kind !== 'delivery_active' || deliveryFinishResult?.flowState === 'delivery_finished') {
-      return;
-    }
-
-    void stopArrivalNotificationService.registerForStopArrivalNotifications().then((result) => {
-      if (result.kind !== 'registered') {
-        setMessage(result.message);
-      }
-    });
-  }, [deliveryFinishResult?.flowState, deliveryStartResult?.kind, stopArrivalNotificationService]);
-
-  useEffect(() => {
-    if (deliveryStartResult?.kind !== 'delivery_active' || deliveryFinishResult?.flowState === 'delivery_finished') {
       registerContinuousLocationTaskObserver(null);
       return;
     }
@@ -1694,6 +1683,17 @@ function DriverApp() {
         return;
       }
 
+      const notificationRegistration = await stopArrivalNotificationService.registerForStopArrivalNotifications();
+      const backgroundPermission = await requestContinuousLocationBackgroundPermission({
+        streamService: continuousLocationStreamService,
+      });
+      if (backgroundPermission.kind === 'blocked') {
+        setContinuousLocationResult(backgroundPermission);
+        setDeliveryStartResult(null);
+        setMessage(backgroundPermission.message);
+        return;
+      }
+
       const routeStartedAt = new Date();
       const initialStepIndex = COMPANY_STEP_INDEX;
       const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
@@ -1764,6 +1764,9 @@ function DriverApp() {
 
       setNavigationStepIndex(initialStepIndex);
       setScreen('routeSession');
+      if (notificationRegistration.kind !== 'registered') {
+        setMessage(notificationRegistration.message);
+      }
     } catch (error) {
       await clearAndStopActiveLocationSession(routeSession.route.id);
       setDeliveryStartResult(null);

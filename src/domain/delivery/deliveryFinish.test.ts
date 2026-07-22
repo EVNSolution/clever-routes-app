@@ -12,6 +12,7 @@ function createMockStreamService() {
   const service: ContinuousLocationStreamService = {
     getBackgroundAvailability: async () => true,
     hasStartedLocationUpdates: async () => true,
+    getBackgroundPermission: async () => 'granted',
     requestBackgroundPermission: async () => 'granted',
     startLocationUpdates: async () => undefined,
     stopLocationUpdates: async (taskName) => {

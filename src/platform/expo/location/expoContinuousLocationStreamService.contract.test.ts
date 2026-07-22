@@ -37,6 +37,9 @@ describe('Expo continuous location wiring', () => {
     assert.match(source, /deferredUpdatesInterval: 10_000/u);
     assert.match(source, /distanceInterval: 0/u);
     assert.match(source, /timeInterval: 10_000/u);
+    assert.match(source, /Location\.getBackgroundPermissionsAsync\(\)/u);
+    assert.match(source, /Location\.requestBackgroundPermissionsAsync\(\)/u);
+    assert.match(source, /catch \{[\s\S]*return 'denied'/u);
     assert.match(source, /const alreadyStarted = await Location\.hasStartedLocationUpdatesAsync\(taskName\);[\s\S]*await startExpoLocationUpdates\(taskName, notification\);[\s\S]*return \{ alreadyStarted \}/u);
     assert.match(source, /notificationBody: notification\.body/u);
     assert.match(source, /notificationTitle: notification\.title/u);

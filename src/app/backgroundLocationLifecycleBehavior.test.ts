@@ -26,13 +26,20 @@ describe('background location lifecycle wiring', () => {
     );
 
     const persistIndex = startSource.indexOf('saveActiveRouteSession');
+    const foregroundPermissionIndex = startSource.indexOf('startDeliveryWithForegroundPermission');
+    const notificationPermissionIndex = startSource.indexOf('registerForStopArrivalNotifications');
+    const backgroundPermissionIndex = startSource.indexOf('requestContinuousLocationBackgroundPermission');
     const trackingIndex = startSource.indexOf('startContinuousLocationUpdatesAfterDeliveryStart');
     const routeStartedIndex = startSource.indexOf('recordRouteStartedAfterDeliveryStart');
 
+    assert.ok(foregroundPermissionIndex < notificationPermissionIndex);
+    assert.ok(notificationPermissionIndex < backgroundPermissionIndex);
+    assert.ok(backgroundPermissionIndex < persistIndex);
     assert.ok(persistIndex < trackingIndex);
     assert.ok(trackingIndex < routeStartedIndex);
     assert.match(startSource, /startedAt: routeStartedAt\.toISOString\(\)/u);
     assert.match(startSource, /markActiveRouteStarted/u);
+    assert.equal((source.match(/registerForStopArrivalNotifications\(\)/gu) ?? []).length, 1);
   });
 
   it('reconciles native tracking when restoring an active route', () => {

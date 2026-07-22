@@ -177,10 +177,22 @@ export function createExpoContinuousLocationStreamService(): ContinuousLocationS
       ]);
       return taskManagerAvailable && backgroundLocationAvailable;
     },
+    getBackgroundPermission: async (): Promise<BackgroundPermissionResult> => {
+      try {
+        const permission = await Location.getBackgroundPermissionsAsync();
+        return permission.status === 'granted' ? 'granted' : 'denied';
+      } catch {
+        return 'denied';
+      }
+    },
     hasStartedLocationUpdates: async (taskName) => Location.hasStartedLocationUpdatesAsync(taskName),
     requestBackgroundPermission: async (): Promise<BackgroundPermissionResult> => {
-      const permission = await Location.requestBackgroundPermissionsAsync();
-      return permission.status === 'granted' ? 'granted' : 'denied';
+      try {
+        const permission = await Location.requestBackgroundPermissionsAsync();
+        return permission.status === 'granted' ? 'granted' : 'denied';
+      } catch {
+        return 'denied';
+      }
     },
     startLocationUpdates: ({ notification, taskName }) => runLocationTaskOperation(() => startExpoLocationUpdates(taskName, notification)),
     stopLocationUpdates: async (taskName) => {

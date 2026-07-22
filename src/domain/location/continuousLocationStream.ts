@@ -22,6 +22,7 @@ export type ContinuousLocationStreamService = {
     taskName: string;
   }): Promise<{ alreadyStarted: boolean }>;
   getBackgroundAvailability(): Promise<boolean>;
+  getBackgroundPermission(): Promise<BackgroundPermissionResult>;
   hasStartedLocationUpdates(taskName: string): Promise<boolean>;
   requestBackgroundPermission(): Promise<BackgroundPermissionResult>;
   startLocationUpdates(input: {
@@ -35,6 +36,10 @@ export type ContinuousLocationStreamService = {
     taskName: string;
   }): Promise<void>;
 };
+
+export type ContinuousLocationPermissionResult =
+  | { kind: 'granted' }
+  | Extract<ContinuousLocationStreamStartResult, { kind: 'blocked' }>;
 
 export type ContinuousLocationStreamStartResult =
   | {
@@ -77,6 +82,37 @@ export type ContinuousLocationSessionCleanupResult = ContinuousLocationStopResul
   taskName: string;
 };
 
+export async function requestContinuousLocationBackgroundPermission(input: {
+  streamService: ContinuousLocationStreamService;
+}): Promise<ContinuousLocationPermissionResult> {
+  try {
+    if (!(await input.streamService.getBackgroundAvailability())) {
+      return {
+        kind: 'blocked',
+        message: 'Background location is unavailable on this build or device.',
+        reason: 'background_unavailable',
+      };
+    }
+
+    const permission = await input.streamService.requestBackgroundPermission();
+    if (permission !== 'granted') {
+      return {
+        kind: 'blocked',
+        message: 'Choose Allow all the time for location, then start the session again.',
+        reason: 'background_permission_denied',
+      };
+    }
+
+    return { kind: 'granted' };
+  } catch {
+    return {
+      kind: 'blocked',
+      message: 'Background location permission could not be opened. Return to the app and try again.',
+      reason: 'background_permission_denied',
+    };
+  }
+}
+
 export async function startContinuousLocationUpdatesAfterDeliveryStart(input: {
   deliveryStart: DeliveryStartResult;
   notification?: ContinuousLocationNotificationContent;
@@ -102,7 +138,7 @@ export async function startContinuousLocationUpdatesAfterDeliveryStart(input: {
     };
   }
 
-  const permission = await input.streamService.requestBackgroundPermission();
+  const permission = await input.streamService.getBackgroundPermission();
   if (permission !== 'granted') {
     return {
       kind: 'blocked',

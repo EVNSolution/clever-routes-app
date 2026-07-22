@@ -6,6 +6,7 @@ import { createMockDriverEventService } from '../events/driverEvents';
 import {
   clearAndStopContinuousLocationSession,
   recordContinuousLocationUpdateBatch,
+  requestContinuousLocationBackgroundPermission,
   startContinuousLocationUpdatesAfterDeliveryStart,
   stopContinuousLocationUpdates,
   type ContinuousLocationStreamService,
@@ -22,6 +23,7 @@ const activeDelivery = {
 function createMockStreamService(input?: {
   availability?: boolean;
   backgroundPermission?: 'denied' | 'granted';
+  backgroundPermissionError?: boolean;
   alreadyStarted?: boolean;
 }): ContinuousLocationStreamService & { started: unknown[]; stopped: string[] } {
   const started: unknown[] = [];
@@ -30,7 +32,13 @@ function createMockStreamService(input?: {
     started,
     stopped,
     getBackgroundAvailability: async () => input?.availability ?? true,
-    requestBackgroundPermission: async () => input?.backgroundPermission ?? 'granted',
+    getBackgroundPermission: async () => input?.backgroundPermission ?? 'granted',
+    requestBackgroundPermission: async () => {
+      if (input?.backgroundPermissionError === true) {
+        throw new Error('permission activity unavailable');
+      }
+      return input?.backgroundPermission ?? 'granted';
+    },
     hasStartedLocationUpdates: async () => input?.alreadyStarted ?? false,
     startLocationUpdates: async (options) => {
       started.push(options);
@@ -42,6 +50,24 @@ function createMockStreamService(input?: {
 }
 
 describe('continuous location streaming', () => {
+  it('acquires background permission before route state is persisted and contains native request failures', async () => {
+    const denied = await requestContinuousLocationBackgroundPermission({
+      streamService: createMockStreamService({ backgroundPermission: 'denied' }),
+    });
+    const failed = await requestContinuousLocationBackgroundPermission({
+      streamService: createMockStreamService({ backgroundPermissionError: true }),
+    });
+
+    assert.equal(denied.kind, 'blocked');
+    assert.equal(failed.kind, 'blocked');
+    if (denied.kind === 'blocked') {
+      assert.equal(denied.reason, 'background_permission_denied');
+    }
+    if (failed.kind === 'blocked') {
+      assert.equal(failed.reason, 'background_permission_denied');
+    }
+  });
+
   it('does not start continuous updates before delivery_active', async () => {
     const streamService = createMockStreamService();
 
@@ -73,7 +99,7 @@ describe('continuous location streaming', () => {
     assert.equal(streamService.started.length, 0);
   });
 
-  it('blocks continuous updates when background permission is denied', async () => {
+  it('blocks continuous updates when previously requested background permission is denied', async () => {
     const streamService = createMockStreamService({ backgroundPermission: 'denied' });
 
     const result = await startContinuousLocationUpdatesAfterDeliveryStart({
