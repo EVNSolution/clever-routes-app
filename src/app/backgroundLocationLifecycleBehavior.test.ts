@@ -42,6 +42,27 @@ describe('background location lifecycle wiring', () => {
     assert.equal((source.match(/registerForStopArrivalNotifications\(\)/gu) ?? []).length, 1);
   });
 
+  it('refreshes background permission on My Routes and after returning from system settings', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const settingsHandler = getFunctionSource(
+      source,
+      'const handleOpenBackgroundLocationSettings = useCallback(',
+      'const clearAndStopActiveLocationSession = useCallback(',
+    );
+    const appStateSource = getFunctionSource(
+      source,
+      "AppState.addEventListener('change'",
+      'return () => subscription.remove()',
+    );
+
+    assert.match(settingsHandler, /requestForegroundPermission\(\)/u);
+    assert.match(settingsHandler, /foregroundPermission\.status !== 'granted'[\s\S]*Linking\.openSettings\(\)/u);
+    assert.match(settingsHandler, /requestContinuousLocationBackgroundPermission/u);
+    assert.match(settingsHandler, /await refreshBackgroundLocationPermission\(\)/u);
+    assert.match(appStateSource, /state === 'active'[\s\S]*refreshBackgroundLocationPermission/u);
+    assert.match(source, /isDriverRestoreComplete && screen === 'mainTabs'[\s\S]*refreshBackgroundLocationPermission/u);
+  });
+
   it('reconciles native tracking when restoring an active route', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const loadSource = getFunctionSource(

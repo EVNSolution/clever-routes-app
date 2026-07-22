@@ -61,6 +61,7 @@ import {
   CONTINUOUS_LOCATION_TASK_NAME,
   requestContinuousLocationBackgroundPermission,
   startContinuousLocationUpdatesAfterDeliveryStart,
+  type BackgroundPermissionResult,
   type ContinuousLocationStopResult,
   type ContinuousLocationStreamStartResult,
 } from '../domain/location/continuousLocationStream';
@@ -182,6 +183,7 @@ type AppScreen =
   | 'stopDetails';
 type RouteStatus = RouteSessionStatus;
 type RouteSyncState = 'error' | 'idle' | 'loading' | 'ready';
+type BackgroundLocationPermissionState = BackgroundPermissionResult | 'checking';
 
 type StopProofDraft = {
   additionalNotes: string;
@@ -252,6 +254,7 @@ function DriverApp() {
   const [selectedStopDetailsId, setSelectedStopDetailsId] = useState<string | null>(null);
   const [routeSessions, setRouteSessions] = useState<RouteSession[]>([]);
   const [routeSyncState, setRouteSyncState] = useState<RouteSyncState>('idle');
+  const [backgroundLocationPermission, setBackgroundLocationPermission] = useState<BackgroundLocationPermissionState>('checking');
   const [isDriverRestoreComplete, setIsDriverRestoreComplete] = useState(false);
   const [driverRestoreProblem, setDriverRestoreProblem] = useState<string | null>(null);
   const [driverRestoreAttempt, setDriverRestoreAttempt] = useState(0);
@@ -281,6 +284,7 @@ function DriverApp() {
   const [isLoadingAccountProfile, setIsLoadingAccountProfile] = useState(false);
   const [isSavingAccountName, setIsSavingAccountName] = useState(false);
   const [isRefreshingRoutes, setIsRefreshingRoutes] = useState(false);
+  const [isRequestingBackgroundLocation, setIsRequestingBackgroundLocation] = useState(false);
   const [isStartingRoute, setIsStartingRoute] = useState(false);
   const [isRecordingArrival, setIsRecordingArrival] = useState(false);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
@@ -315,6 +319,44 @@ function DriverApp() {
   const mockDriverConsentService = useMemo(() => createMockDriverConsentService(), []);
   const mockAssignedRouteService = useMemo(() => createMockAssignedRouteService({ status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute }), []);
   const mockProofMediaUploadService = useMemo(() => createMockProofMediaUploadService({ mode: 'success' }), []);
+  const refreshBackgroundLocationPermission = useCallback(async (): Promise<BackgroundPermissionResult> => {
+    const permission = await continuousLocationStreamService.getBackgroundPermission();
+    setBackgroundLocationPermission(permission);
+    return permission;
+  }, [continuousLocationStreamService]);
+
+  const handleOpenBackgroundLocationSettings = useCallback(async (): Promise<void> => {
+    if (isRequestingBackgroundLocation) {
+      return;
+    }
+
+    setIsRequestingBackgroundLocation(true);
+    setMessage(null);
+    try {
+      const foregroundPermission = await foregroundLocationPermissionService.requestForegroundPermission();
+      if (foregroundPermission.status !== 'granted') {
+        setBackgroundLocationPermission('denied');
+        await Linking.openSettings();
+        return;
+      }
+
+      const result = await requestContinuousLocationBackgroundPermission({
+        streamService: continuousLocationStreamService,
+      });
+      await refreshBackgroundLocationPermission();
+      if (result.kind === 'blocked') {
+        setMessage(result.message);
+      }
+    } finally {
+      setIsRequestingBackgroundLocation(false);
+    }
+  }, [
+    continuousLocationStreamService,
+    foregroundLocationPermissionService,
+    isRequestingBackgroundLocation,
+    refreshBackgroundLocationPermission,
+  ]);
+
   const clearAndStopActiveLocationSession = useCallback(async (routePlanId?: string): Promise<void> => {
     try {
       const result = await clearAndStopContinuousLocationSession({
@@ -1583,6 +1625,9 @@ function DriverApp() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && verifiedDriverPhoneE164 !== null) {
+        void refreshBackgroundLocationPermission();
+      }
       if (state === 'active' && !isDriverRestoreComplete && driverRestoreProblem !== null) {
         retryDriverRestore();
         return;
@@ -1602,13 +1647,29 @@ function DriverApp() {
     driverRestoreProblem,
     handleRefreshRoutes,
     isDriverRestoreComplete,
+    refreshBackgroundLocationPermission,
     retryDriverRestore,
     screen,
     verifiedDriverPhoneE164,
   ]);
 
+  useEffect(() => {
+    if (isDriverRestoreComplete && screen === 'mainTabs' && verifiedDriverPhoneE164 !== null) {
+      const task = InteractionManager.runAfterInteractions(() => {
+        void refreshBackgroundLocationPermission();
+      });
+      return () => task.cancel();
+    }
+
+    return undefined;
+  }, [isDriverRestoreComplete, refreshBackgroundLocationPermission, screen, verifiedDriverPhoneE164]);
+
   function handleStartRoute(routeId?: string) {
     if (isStartingRoute || isFinishingRoute) {
+      return;
+    }
+    if (backgroundLocationPermission !== 'granted') {
+      setMessage('Choose Allow all the time before starting a route.');
       return;
     }
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
@@ -2635,9 +2696,11 @@ function DriverApp() {
           {screen === 'mainTabs' ? (
             <MyRoutesPage
               activeRoutePlanId={activeRoutePlanId}
+              backgroundLocationPermission={backgroundLocationPermission}
               isDeletingRoute={isDeletingRoute}
               isFinishingRoute={isFinishingRoute}
               isRefreshingRoutes={isRefreshingRoutes}
+              isRequestingBackgroundLocation={isRequestingBackgroundLocation}
               isStartingRoute={isStartingRoute}
               onDeleteRoute={handleDeleteActiveRoute}
               onOpenCompletedDeliveries={(routeId) => {
@@ -2653,6 +2716,7 @@ function DriverApp() {
                 setScreen('completedDeliveries');
               }}
               onOpenRoutePreview={handleOpenRoutePreview}
+              onOpenBackgroundLocationSettings={() => { void handleOpenBackgroundLocationSettings(); }}
               onContinueRoute={handleOpenRouteSession}
               onOpenSettings={handleOpenSettings}
               onRetryRouteSync={() => { void handleRefreshRoutes(); }}
@@ -2957,12 +3021,15 @@ function LoginDetailScreen({
 
 function MyRoutesPage({
   activeRoutePlanId,
+  backgroundLocationPermission,
   isDeletingRoute,
   isFinishingRoute,
   isRefreshingRoutes,
+  isRequestingBackgroundLocation,
   isStartingRoute,
   onDeleteRoute,
   onOpenCompletedDeliveries,
+  onOpenBackgroundLocationSettings,
   onOpenRoutePreview,
   onContinueRoute,
   onOpenSettings,
@@ -2974,12 +3041,15 @@ function MyRoutesPage({
   selectedRouteId,
 }: {
   activeRoutePlanId: string | null;
+  backgroundLocationPermission: BackgroundLocationPermissionState;
   isDeletingRoute: boolean;
   isFinishingRoute: boolean;
   isRefreshingRoutes: boolean;
+  isRequestingBackgroundLocation: boolean;
   isStartingRoute: boolean;
   onDeleteRoute(routeId: string): void;
   onOpenCompletedDeliveries(routeId: string): void;
+  onOpenBackgroundLocationSettings(): void;
   onOpenRoutePreview(routeId: string): void;
   onContinueRoute(routeId: string): void;
   onOpenSettings(): void;
@@ -3028,6 +3098,33 @@ function MyRoutesPage({
         </Pressable>
       </View>
 
+      {backgroundLocationPermission === 'denied' ? (
+        <View accessibilityRole="alert" style={styles.backgroundLocationWarning}>
+          <View style={styles.backgroundLocationWarningCopy}>
+            <Text style={styles.backgroundLocationWarningTitle}>Allow all the time required</Text>
+            <Text style={styles.backgroundLocationWarningBody}>
+              Enable background location before starting a route.
+            </Text>
+          </View>
+          <Pressable
+            accessibilityLabel="Open location settings"
+            accessibilityRole="button"
+            disabled={isRequestingBackgroundLocation}
+            onPress={onOpenBackgroundLocationSettings}
+            style={({ pressed }) => [
+              styles.backgroundLocationSettingsButton,
+              pressed && styles.backgroundLocationSettingsButtonPressed,
+            ]}
+          >
+            {isRequestingBackgroundLocation ? (
+              <ActivityIndicator color="#92400e" size="small" />
+            ) : (
+              <Text style={styles.backgroundLocationSettingsButtonText}>Open Settings</Text>
+            )}
+          </Pressable>
+        </View>
+      ) : null}
+
       {routeSyncState === 'loading' && visibleRouteSessions.length === 0 ? (
         <View style={styles.routeSyncState}>
           <ActivityIndicator color="#0b57d0" size="small" />
@@ -3056,7 +3153,7 @@ function MyRoutesPage({
                 : classifiedRouteCardStatus;
             const isRouteCardExpanded = expandedRouteKey === session.route.id;
             const isStartDisabled = isStartingRoute || isFinishingRoute || activeRoutePlanId !== null
-              || session.pendingRouteEnd !== undefined;
+              || backgroundLocationPermission !== 'granted' || session.pendingRouteEnd !== undefined;
 
             return (
               <View key={session.route.id} style={styles.selectedRouteCard}>
@@ -4893,6 +4990,51 @@ const styles = StyleSheet.create({
   myRoutesPage: {
     gap: 8,
     overflow: 'visible',
+  },
+  backgroundLocationWarning: {
+    alignItems: 'center',
+    backgroundColor: '#fffbeb',
+    borderColor: '#fde68a',
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  backgroundLocationWarningCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  backgroundLocationWarningTitle: {
+    color: '#78350f',
+    fontSize: 14,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  backgroundLocationWarningBody: {
+    color: '#92400e',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  backgroundLocationSettingsButton: {
+    alignItems: 'center',
+    backgroundColor: '#fef3c7',
+    borderRadius: 9,
+    justifyContent: 'center',
+    minHeight: 38,
+    minWidth: 104,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  backgroundLocationSettingsButtonPressed: {
+    backgroundColor: '#fde68a',
+  },
+  backgroundLocationSettingsButtonText: {
+    color: '#92400e',
+    fontSize: 13,
+    fontWeight: '800',
   },
   routeSyncState: {
     alignItems: 'center',

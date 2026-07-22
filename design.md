@@ -2013,6 +2013,15 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - After authoritative route data is processed, update the revealed area with the latest local time.
 - If the server removes an assignment, remove it from My Routes while keeping the driver account signed in.
 
+## Background Location Readiness (2026-07-22)
+
+- Show a compact warning directly below the `My Routes` header when background location is not granted.
+- Use `Allow all the time required` as the warning title, explain that background location is needed before route start, and provide one `Open Settings` action.
+- Do not dim, cover, or disable the route list. Drivers must still be able to expand cards and open `Detail` while permission is missing.
+- Disable only the `Start` action until background location is granted. Existing in-progress route recovery actions remain available.
+- Recheck permission when My Routes opens and whenever the app returns to the foreground so the warning disappears immediately after the setting changes.
+- Keep denial non-fatal. Returning without granting permission must leave the driver signed in on My Routes.
+
 ## Route Session Flat Layout (2026-07-20)
 
 - Use the server-provided route name as the page title; do not show the generic `Route Session` title.

@@ -116,6 +116,20 @@ describe('routes list behavior', () => {
     assert.match(routeCardHeaderStyles, /flexDirection: 'row'/u);
   });
 
+  it('keeps route details available while background location blocks only route start', () => {
+    const source = getRoutesPageSource();
+
+    assert.match(source, /backgroundLocationPermission === 'denied'/u);
+    assert.match(source, />Allow all the time required<\/Text>/u);
+    assert.match(source, />\s*Enable background location before starting a route\.\s*<\/Text>/u);
+    assert.match(source, /accessibilityLabel="Open location settings"/u);
+    assert.match(source, />Open Settings<\/Text>/u);
+    assert.match(source, /const isStartDisabled = [\s\S]*backgroundLocationPermission !== 'granted'/u);
+    assert.match(source, /<PrimaryButton[\s\S]*disabled=\{isStartDisabled\}[\s\S]*label="Start"/u);
+    assert.match(source, /<SecondaryButton compact label="Detail"/u);
+    assert.doesNotMatch(source, /opacity|pointerEvents="none"/u);
+  });
+
   it('releases Delete back to Ready instead of completing or removing the route', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const deleteSource = source.slice(
