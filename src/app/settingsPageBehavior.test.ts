@@ -57,7 +57,7 @@ describe('Settings page behavior', () => {
     assert.doesNotMatch(settingsPage, /Profile editing|Display Name|Store Name/u);
     assert.doesNotMatch(settingsPage, /Account deletion|Navigation App|Navigation Mode/u);
     assert.doesNotMatch(settingsPage, /Logout and reset this device/u);
-    assert.doesNotMatch(settingsPage, /Needs Review|CONSENT_COPY_VERSIONS|Allowed ·|Denied ·/u);
+    assert.doesNotMatch(settingsPage, /Needs Review|CONSENT_COPY_VERSIONS|Allowed \u00b7|Denied \u00b7/u);
   });
 
   it('opens the published policy and restores consent for an authenticated session', () => {
@@ -65,7 +65,10 @@ describe('Settings page behavior', () => {
 
     assert.match(source, /DRIVER_CONSENT_DOCUMENT_URL/u);
     assert.match(source, /Linking\.openURL\(DRIVER_CONSENT_DOCUMENT_URL\)/u);
-    assert.match(source, /setAcceptedPrivacy\(true\);\s+setAcceptedLocation\(true\);\s+await handleLoginAndLoadRoutes/u);
+    assert.match(
+      source,
+      /setAcceptedPrivacy\(true\);\s+setAcceptedLocation\(true\);\s+setScreen\('mainTabs'\);\s+setIsDriverRestoreComplete\(true\);\s+await handleLoginAndLoadRoutes/u,
+    );
   });
 
   it('edits the global Clever Driver account name on a dedicated page', () => {

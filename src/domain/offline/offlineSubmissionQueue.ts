@@ -1,5 +1,8 @@
 import type { DriverEventInput, DriverEventService, DriverEventType } from '../events/driverEvents';
-import { getDriverApiRequiresRouteLookup } from '../../api/deliveryServer/driverApiError';
+import {
+  getDriverApiRequiresRouteLookup,
+  getDriverApiRequiresRouteReconciliation,
+} from '../../api/deliveryServer/driverApiError';
 import {
   isProofMediaRejectedError,
   type ProofMediaUploadRequest,
@@ -18,6 +21,11 @@ export type OfflineSubmissionQueueRetryPolicy = {
   maxAttempts: number;
 };
 
+export type OfflineSubmissionReconciliation = {
+  blockedAt: string;
+  reason: 'route_not_in_progress';
+};
+
 export type OfflineDriverEventQueueItem = {
   attempts: number;
   enqueuedAt: string;
@@ -25,6 +33,7 @@ export type OfflineDriverEventQueueItem = {
   kind: 'driver_event';
   lastError?: string;
   queueItemId: string;
+  reconciliation?: OfflineSubmissionReconciliation;
 };
 
 export type OfflineProofMediaQueueItem = {
@@ -33,12 +42,14 @@ export type OfflineProofMediaQueueItem = {
   kind: 'proof_media';
   lastError?: string;
   queueItemId: string;
+  reconciliation?: OfflineSubmissionReconciliation;
   request: ProofMediaUploadRequest;
 };
 
 export type OfflineSubmissionQueueItem = OfflineDriverEventQueueItem | OfflineProofMediaQueueItem;
 
 export type OfflineSubmissionQueue = {
+  blockRouteSubmissionsForReconciliation(routePlanId: string): { blocked: number; discarded: number };
   clear(): number;
   discard(queueItemId: string): boolean;
   discardRouteSubmissions(routePlanId: string): number;
@@ -57,12 +68,74 @@ export type OfflineSubmissionQueueStorage = {
 };
 
 export type OfflineSubmissionRetryResult = {
+  blocked?: number;
   discarded: number;
   failed: number;
+  reconciliationRoutePlanIds?: string[];
   requiresRouteLookup?: true;
   retried: number;
   succeeded: number;
 };
+
+export type OfflineSubmissionQueueSummary = {
+  blockedCount: number;
+  reconciliationRoutePlanIds: string[];
+  retryableCount: number;
+  totalCount: number;
+};
+
+export type PendingRouteEnd = 'completed' | 'released';
+
+const ROUTE_WORKFLOW_EVENT_TYPES = new Set<DriverEventType>([
+  'ROUTE_COMPLETED',
+  'ROUTE_PAUSED',
+  'ROUTE_STARTED',
+  'STOP_ARRIVED',
+  'STOP_DELIVERED',
+  'STOP_FAILED',
+]);
+
+export function getPendingRouteEnd(queue: OfflineSubmissionQueue, routePlanId: string): PendingRouteEnd | null {
+  const pending = queue.listPending().filter((item) => item.reconciliation === undefined);
+  for (let index = pending.length - 1; index >= 0; index -= 1) {
+    const item = pending[index];
+    if (item?.kind !== 'driver_event' || item.event.routePlanId !== routePlanId) {
+      continue;
+    }
+    if (item.event.eventType === 'ROUTE_COMPLETED') {
+      return 'completed';
+    }
+    if (item.event.eventType === 'ROUTE_PAUSED') {
+      return 'released';
+    }
+  }
+
+  return null;
+}
+
+export function createRouteOrderedDriverEventService(input: {
+  driverEventService: DriverEventService;
+  queue: OfflineSubmissionQueue;
+  routePlanId: string;
+}): DriverEventService {
+  return {
+    recordDriverEvent: async (event) => {
+      if (
+        ROUTE_WORKFLOW_EVENT_TYPES.has(event.eventType)
+        && input.queue.listPending().some((item) => (
+          item.kind === 'driver_event'
+          && item.event.routePlanId === input.routePlanId
+          && item.reconciliation === undefined
+          && ROUTE_WORKFLOW_EVENT_TYPES.has(item.event.eventType)
+        ))
+      ) {
+        throw new Error('Earlier route updates are waiting to sync. This update will be queued in order.');
+      }
+
+      return input.driverEventService.recordDriverEvent(event);
+    },
+  };
+}
 
 export function createInMemoryOfflineSubmissionQueue(input?: {
   initialItems?: OfflineSubmissionQueueItem[];
@@ -101,6 +174,29 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
 
   const initialDiscarded = trimOfflineSubmissionQueue(items, maxItems);
   const queue: OfflineSubmissionQueue = {
+    blockRouteSubmissionsForReconciliation: (routePlanId) => {
+      const blockedAt = now().toISOString();
+      let blocked = 0;
+      let discarded = 0;
+      for (const item of Array.from(items.values())) {
+        if (getQueueItemRoutePlanId(item) !== routePlanId) {
+          continue;
+        }
+        if (isTerminalStopDriverEvent(item) || item.kind === 'proof_media') {
+          if (item.reconciliation === undefined) {
+            item.reconciliation = { blockedAt, reason: 'route_not_in_progress' };
+            blocked += 1;
+          }
+          continue;
+        }
+        items.delete(item.queueItemId);
+        discarded += 1;
+      }
+      if (blocked > 0 || discarded > 0) {
+        emitChange();
+      }
+      return { blocked, discarded };
+    },
     clear: () => {
       const count = items.size;
       items.clear();
@@ -225,20 +321,26 @@ export async function retryOfflineSubmissions(input: {
   routePlanId?: string;
   retryPolicy?: OfflineSubmissionQueueRetryPolicy;
 }): Promise<OfflineSubmissionRetryResult> {
+  let blocked = 0;
   let discarded = 0;
   let failed = 0;
   let requiresRouteLookup: true | undefined;
   let retried = 0;
   let succeeded = 0;
   const pending = input.queue.listPending().filter((item) => (
-    input.routePlanId === undefined || getQueueItemRoutePlanId(item) === input.routePlanId
+    item.reconciliation === undefined
+    && (input.routePlanId === undefined || getQueueItemRoutePlanId(item) === input.routePlanId)
   ));
   const retryPolicy = input.retryPolicy ?? OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY;
   const now = input.now ?? (() => new Date());
   const completedRoutePlanIds = new Set<string>();
+  const reconciliationRoutePlanIds = new Set<string>();
 
   for (const item of pending) {
     const routePlanId = getQueueItemRoutePlanId(item);
+    if (routePlanId !== undefined && reconciliationRoutePlanIds.has(routePlanId)) {
+      continue;
+    }
     if (
       routePlanId !== undefined
       && completedRoutePlanIds.has(routePlanId)
@@ -273,6 +375,16 @@ export async function retryOfflineSubmissions(input: {
         discarded += input.queue.discardRouteSubmissions(item.event.routePlanId);
       }
     } catch (error) {
+      if (
+        routePlanId !== undefined
+        && getDriverApiRequiresRouteReconciliation(error) === true
+      ) {
+        const recovery = input.queue.blockRouteSubmissionsForReconciliation(routePlanId);
+        blocked += recovery.blocked;
+        discarded += recovery.discarded;
+        reconciliationRoutePlanIds.add(routePlanId);
+        continue;
+      }
       if (item.kind === 'proof_media' && isProofMediaRejectedError(error)) {
         if (input.queue.discard(item.queueItemId)) {
           discarded += 1;
@@ -293,11 +405,29 @@ export async function retryOfflineSubmissions(input: {
   }
 
   return {
+    ...(blocked === 0 ? {} : { blocked }),
     discarded,
     failed,
+    ...(reconciliationRoutePlanIds.size === 0
+      ? {}
+      : { reconciliationRoutePlanIds: [...reconciliationRoutePlanIds] }),
     ...(requiresRouteLookup === undefined ? {} : { requiresRouteLookup }),
     retried,
     succeeded,
+  };
+}
+
+export function getOfflineSubmissionQueueSummary(queue: OfflineSubmissionQueue): OfflineSubmissionQueueSummary {
+  const items = queue.listPending();
+  const blockedItems = items.filter((item) => item.reconciliation !== undefined);
+  return {
+    blockedCount: blockedItems.length,
+    reconciliationRoutePlanIds: [...new Set(blockedItems.flatMap((item) => {
+      const routePlanId = getQueueItemRoutePlanId(item);
+      return routePlanId === undefined ? [] : [routePlanId];
+    }))].sort(),
+    retryableCount: items.length - blockedItems.length,
+    totalCount: items.length,
   };
 }
 
@@ -314,9 +444,12 @@ function trimOfflineSubmissionQueue(
   let discarded = 0;
   while (items.size > maxItems) {
     const oldestLocation = Array.from(items.values()).find((item) => (
-      item.kind === 'driver_event' && item.event.eventType === 'LOCATION_UPDATED'
+      item.reconciliation === undefined
+      && item.kind === 'driver_event'
+      && item.event.eventType === 'LOCATION_UPDATED'
     ));
-    const oldest = oldestLocation ?? items.values().next().value as OfflineSubmissionQueueItem | undefined;
+    const oldestRetryable = Array.from(items.values()).find((item) => item.reconciliation === undefined);
+    const oldest = oldestLocation ?? oldestRetryable;
     if (oldest === undefined) {
       break;
     }
@@ -399,6 +532,7 @@ function toPersistedQueueItem(item: OfflineSubmissionQueueItem): Record<string, 
     kind: item.kind,
     ...(item.lastError === undefined ? {} : { lastError: item.lastError }),
     queueItemId: item.queueItemId,
+    ...(item.reconciliation === undefined ? {} : { reconciliation: item.reconciliation }),
   };
 
   if (item.kind === 'driver_event') {
@@ -449,8 +583,15 @@ function readPersistedQueueItem(value: unknown): OfflineSubmissionQueueItem | nu
   const enqueuedAt = readRequiredString(data.enqueuedAt);
   const queueItemId = readRequiredString(data.queueItemId);
   const lastError = readOptionalString(data.lastError);
+  const reconciliation = readOptionalReconciliation(data.reconciliation);
 
-  if (attempts === null || enqueuedAt === null || queueItemId === null || lastError === null) {
+  if (
+    attempts === null
+    || enqueuedAt === null
+    || queueItemId === null
+    || lastError === null
+    || reconciliation === null
+  ) {
     return null;
   }
 
@@ -467,6 +608,7 @@ function readPersistedQueueItem(value: unknown): OfflineSubmissionQueueItem | nu
       kind: 'driver_event',
       ...(lastError === undefined ? {} : { lastError }),
       queueItemId,
+      ...(reconciliation === undefined ? {} : { reconciliation }),
     };
   }
 
@@ -482,11 +624,27 @@ function readPersistedQueueItem(value: unknown): OfflineSubmissionQueueItem | nu
       kind: 'proof_media',
       ...(lastError === undefined ? {} : { lastError }),
       queueItemId,
+      ...(reconciliation === undefined ? {} : { reconciliation }),
       request,
     };
   }
 
   return null;
+}
+
+function readOptionalReconciliation(value: unknown): OfflineSubmissionReconciliation | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const blockedAt = readRequiredString((value as Record<string, unknown>).blockedAt);
+  const reason = (value as Record<string, unknown>).reason;
+  if (blockedAt === null || reason !== 'route_not_in_progress') {
+    return null;
+  }
+  return { blockedAt, reason };
 }
 
 function readPersistedDriverEvent(value: unknown): DriverEventInput | null {

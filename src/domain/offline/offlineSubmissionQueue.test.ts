@@ -7,8 +7,11 @@ import { createProofMediaRejectedError } from '../proof/proofMediaUpload';
 import {
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
   OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY,
+  createRouteOrderedDriverEventService,
   createInMemoryOfflineSubmissionQueue,
   createPersistentOfflineSubmissionQueue,
+  getOfflineSubmissionQueueSummary,
+  getPendingRouteEnd,
   retryOfflineSubmissions,
   type OfflineSubmissionQueueStorage,
 } from './offlineSubmissionQueue';
@@ -73,6 +76,97 @@ describe('offline submission queue', () => {
 
     assert.equal(queue.listPending().length, 1);
     assert.equal(queue.listPending()[0]?.attempts, 0);
+  });
+
+  it('reports the newest queued terminal route transition', () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-completed',
+      eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-07-21T09:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-released',
+      eventType: 'ROUTE_PAUSED',
+      occurredAt: new Date('2026-07-21T09:01:00.000Z'),
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(getPendingRouteEnd(queue, 'route-1'), 'released');
+    assert.equal(getPendingRouteEnd(queue, 'route-2'), null);
+  });
+
+  it('queues later workflow events behind earlier pending route events', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'arrived',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_ARRIVED',
+      occurredAt: new Date('2026-07-21T09:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    const live = createMockDriverEventService();
+    const ordered = createRouteOrderedDriverEventService({
+      driverEventService: live,
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    await assert.rejects(ordered.recordDriverEvent({
+      clientEventId: 'delivered',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-07-21T09:01:00.000Z'),
+      routePlanId: 'route-1',
+    }), /Earlier route updates are waiting to sync/u);
+    assert.equal(live.recordedEvents.length, 0);
+
+    queue.enqueueDriverEvent({
+      clientEventId: 'delivered',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-07-21T09:01:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    await retryOfflineSubmissions({
+      driverEventService: live,
+      proofMediaUploadService: {
+        uploadProofMedia: async () => { throw new Error('unexpected proof upload'); },
+      },
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(live.recordedEvents.map((event) => event.eventType), [
+      'STOP_ARRIVED',
+      'STOP_DELIVERED',
+    ]);
+  });
+
+  it('does not delay location updates behind workflow submissions', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'arrived',
+      eventType: 'STOP_ARRIVED',
+      occurredAt: new Date('2026-07-21T09:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    const live = createMockDriverEventService();
+    const ordered = createRouteOrderedDriverEventService({
+      driverEventService: live,
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    await ordered.recordDriverEvent({
+      clientEventId: 'location',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-07-21T09:01:00.000Z'),
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(live.recordedEvents.map((event) => event.eventType), ['LOCATION_UPDATED']);
   });
 
   it('persists a failed location batch with one queue mutation', () => {
@@ -198,6 +292,143 @@ describe('offline submission queue', () => {
     });
     assert.equal(queue.listPending()[0]?.attempts, 1);
     assert.equal(queue.listPending()[0]?.lastError, 'Proof media upload failed with HTTP 401');
+  });
+
+  it('quarantines terminal stop evidence and proof after a route-not-in-progress retry', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue({
+      now: () => new Date('2026-07-23T10:00:00.000Z'),
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'location',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-07-23T09:59:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'delivered',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-07-23T09:59:30.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'stop-1',
+      fileName: 'proof.jpg',
+      routePlanId: 'route-1',
+      source: 'camera',
+      uri: 'file:///proof.jpg',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'other-route',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-07-23T09:59:00.000Z'),
+      routePlanId: 'route-2',
+    });
+    let attempts = 0;
+
+    const first = await retryOfflineSubmissions({
+      driverEventService: {
+        recordDriverEvent: async () => {
+          attempts += 1;
+          throw createDriverApiHttpError({
+            code: 'ROUTE_NOT_IN_PROGRESS',
+            endpoint: 'Driver event record',
+            status: 409,
+          });
+        },
+      },
+      proofMediaUploadService: {
+        uploadProofMedia: async () => { throw new Error('must not upload after terminal recovery'); },
+      },
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(first, {
+      blocked: 2,
+      discarded: 1,
+      failed: 0,
+      reconciliationRoutePlanIds: ['route-1'],
+      retried: 1,
+      succeeded: 0,
+    });
+    assert.equal(attempts, 1);
+    assert.deepEqual(getOfflineSubmissionQueueSummary(queue), {
+      blockedCount: 2,
+      reconciliationRoutePlanIds: ['route-1'],
+      retryableCount: 1,
+      totalCount: 3,
+    });
+    const blocked = queue.listPending().filter((item) => item.reconciliation !== undefined);
+    assert.deepEqual(blocked.map((item) => ({
+      attempts: item.attempts,
+      queueItemId: item.queueItemId,
+      reconciliation: item.reconciliation,
+    })), [
+      {
+        attempts: 0,
+        queueItemId: 'driver-event:delivered',
+        reconciliation: {
+          blockedAt: '2026-07-23T10:00:00.000Z',
+          reason: 'route_not_in_progress',
+        },
+      },
+      {
+        attempts: 0,
+        queueItemId: 'proof-media:route-1:stop-1:proof.jpg',
+        reconciliation: {
+          blockedAt: '2026-07-23T10:00:00.000Z',
+          reason: 'route_not_in_progress',
+        },
+      },
+    ]);
+
+    const second = await retryOfflineSubmissions({
+      driverEventService: {
+        recordDriverEvent: async () => { throw new Error('blocked evidence must not retry'); },
+      },
+      proofMediaUploadService: {
+        uploadProofMedia: async () => { throw new Error('blocked proof must not retry'); },
+      },
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(second, { discarded: 0, failed: 0, retried: 0, succeeded: 0 });
+    assert.equal(queue.listPending().filter((item) => item.reconciliation !== undefined).length, 2);
+  });
+
+  it('persists reconciliation state without aging out blocked evidence', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({
+      now: () => new Date('2026-07-23T10:00:00.000Z'),
+      storage,
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'failed',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_FAILED',
+      occurredAt: new Date('2026-07-20T10:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.blockRouteSubmissionsForReconciliation('route-1');
+    await queue.whenPersisted();
+
+    const restored = await createPersistentOfflineSubmissionQueue({
+      now: () => new Date('2026-08-23T10:00:00.000Z'),
+      storage,
+    });
+    const result = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      now: () => new Date('2026-08-23T10:00:00.000Z'),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => { throw new Error('unexpected upload'); },
+      },
+      queue: restored,
+    });
+
+    assert.deepEqual(result, { discarded: 0, failed: 0, retried: 0, succeeded: 0 });
+    assert.equal(restored.listPending()[0]?.reconciliation?.reason, 'route_not_in_progress');
   });
 
   it('discards scanner-rejected queued proof media instead of retrying it', async () => {

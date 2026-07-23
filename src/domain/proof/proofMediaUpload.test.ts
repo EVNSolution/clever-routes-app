@@ -274,6 +274,38 @@ describe('proof media upload', () => {
     });
   });
 
+  it('marks proof media for reconciliation when the server route is no longer in progress', async () => {
+    const service = createProofMediaUploadApiClient({
+      accessToken: 'driver-token',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          data: null,
+          error: { code: 'ROUTE_NOT_IN_PROGRESS', message: 'Route is not in progress' },
+        }),
+      }),
+    });
+
+    const result = await uploadCapturedProofPhoto({
+      captureResult: { kind: 'captured', source: 'camera', uri: 'file:///proof/stop-1.jpg' },
+      uploadRequest: {
+        deliveryStopId: 'stop-1',
+        fileName: 'stop-1.jpg',
+        routePlanId: 'route-1',
+      },
+      uploadService: service,
+    });
+
+    assert.deepEqual(result, {
+      kind: 'upload_failed',
+      message: 'Route ended or released on server. This photo needs reconciliation.',
+      reason: 'route_not_in_progress',
+    });
+    assert.equal(shouldQueueFailedProofMediaUpload(result), true);
+  });
+
   it('surfaces scanner-rejected proof media as a safe non-retryable upload state', async () => {
     const service = createProofMediaUploadApiClient({
       accessToken: 'driver-token',

@@ -91,7 +91,10 @@ export type AssignedRoutePaymentCopy = {
 export type AssignedRouteStop = {
   address: AssignedRouteAddress;
   coordinates: AssignedRouteCoordinates | null;
+  customerNote?: string | null;
   deliveryStopId: string;
+  durationFromPreviousSeconds?: number | null;
+  estimatedArrivalAt?: string | null;
   items: AssignedRouteOrderItem[];
   normalizedPaymentStatus: NormalizedPaymentStatus | null;
   orderName: string;
@@ -245,6 +248,8 @@ export const sampleAssignedRoute: AssignedRoute = {
         longitude: -79.3817,
       },
       deliveryStopId: '22222222-2222-4222-8222-222222222222',
+      durationFromPreviousSeconds: 480,
+      estimatedArrivalAt: '2026-05-12T11:08:00.000Z',
       items: [
         {
           name: 'Tomato box',
@@ -276,6 +281,8 @@ export const sampleAssignedRoute: AssignedRoute = {
         longitude: -79.3909,
       },
       deliveryStopId: '33333333-3333-4333-8333-333333333333',
+      durationFromPreviousSeconds: 360,
+      estimatedArrivalAt: '2026-05-12T11:19:00.000Z',
       items: [
         {
           name: 'Basil bunch',
@@ -416,12 +423,37 @@ export function formatAssignedRouteDuration(metrics: AssignedRouteMetrics | null
   return remainingMinutes === 0 ? `${hours} hr` : `${hours} hr ${remainingMinutes} min`;
 }
 
+export function formatAssignedRouteEta(estimatedArrivalAt: string | null | undefined, timezone: string): string | null {
+  if (estimatedArrivalAt === null || estimatedArrivalAt === undefined) {
+    return null;
+  }
+
+  const parsed = new Date(estimatedArrivalAt);
+  if (!Number.isFinite(parsed.getTime())) {
+    return null;
+  }
+
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: timezone,
+    }).format(parsed);
+  } catch {
+    return new Intl.DateTimeFormat('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: DEFAULT_ASSIGNED_ROUTE_TIMEZONE,
+    }).format(parsed);
+  }
+}
+
 export function hasAssignedRouteGeometry(route: AssignedRoute): boolean {
   return route.routeGeometry !== null && route.routeGeometry.coordinates.length >= 2;
 }
 
 export function formatAssignedRouteItemOptions(item: Pick<AssignedRouteOrderItem, 'options'>): string {
-  return item.options.map((option) => `${option.key}: ${option.value}`).join(' · ');
+  return item.options.map((option) => `${option.key}: ${option.value}`).join(', ');
 }
 
 export function formatAssignedRouteItemLine(item: AssignedRouteOrderItem): string {
@@ -530,6 +562,9 @@ function normalizeAssignedRoute(route: AssignedRoute): AssignedRoute {
 function normalizeAssignedRouteStop(stop: AssignedRouteStop): AssignedRouteStop {
   return {
     ...stop,
+    customerNote: stop.customerNote ?? null,
+    durationFromPreviousSeconds: stop.durationFromPreviousSeconds ?? null,
+    estimatedArrivalAt: stop.estimatedArrivalAt ?? null,
     items: stop.items.map((item) => ({
       ...item,
       options: [...item.options],
@@ -610,7 +645,10 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
   return (
     isAssignedRouteAddress(stop.address) &&
     (stop.coordinates === null || isAssignedRouteCoordinates(stop.coordinates)) &&
+    (stop.customerNote === undefined || nullableString(stop.customerNote)) &&
     typeof stop.deliveryStopId === 'string' &&
+    (stop.durationFromPreviousSeconds === undefined || nullableFiniteNumber(stop.durationFromPreviousSeconds)) &&
+    (stop.estimatedArrivalAt === undefined || nullableString(stop.estimatedArrivalAt)) &&
     Array.isArray(stop.items) &&
     stop.items.every(isAssignedRouteOrderItem) &&
     isNormalizedPaymentStatus(stop.normalizedPaymentStatus) &&

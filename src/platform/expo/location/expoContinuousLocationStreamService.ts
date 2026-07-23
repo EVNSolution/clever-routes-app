@@ -1,10 +1,13 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import { requireNativeModule } from 'expo-modules-core';
+import { Platform } from 'react-native';
 
 import {
   CONTINUOUS_LOCATION_TASK_NAME,
   type BackgroundPermissionResult,
   type ContinuousLocationBatchItem,
+  type ContinuousLocationNotificationContent,
   type ContinuousLocationStreamService,
 } from '../../../domain/location/continuousLocationStream';
 import {
@@ -25,11 +28,27 @@ type ExpoLocationTaskData = {
   locations?: Location.LocationObject[];
 };
 
+type ExpoLocationNotificationModule = {
+  updateLocationTaskNotificationAsync(
+    taskName: string,
+    notification: {
+      notificationBigText?: string;
+      notificationBody: string;
+      notificationTitle: string;
+      notificationUrl?: string;
+    },
+  ): Promise<boolean>;
+};
+
 const driverAccessTokenStore = createExpoSecureDriverAccessTokenStore();
 const runtimeConfig = readDriverRuntimeConfig({
   EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: process.env.EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL,
+  EXPO_PUBLIC_DRIVER_RUNTIME_MODE: process.env.EXPO_PUBLIC_DRIVER_RUNTIME_MODE,
 });
 const runtimeServices = createDriverRuntimeServices({ config: runtimeConfig });
+const expoLocationNotificationModule = Platform.OS === 'android'
+  ? requireNativeModule<ExpoLocationNotificationModule>('ExpoLocation')
+  : null;
 const activeTaskExecutions = new Set<Promise<void>>();
 let continuousLocationTaskObserver: ContinuousLocationTaskObserver | null = null;
 let locationTaskOperationQueue = Promise.resolve();
@@ -44,21 +63,31 @@ function runLocationTaskOperation<T>(operation: () => Promise<T>): Promise<T> {
   return result;
 }
 
-async function startExpoLocationUpdates(taskName: string): Promise<void> {
+const DEFAULT_ACTIVE_ROUTE_NOTIFICATION: ContinuousLocationNotificationContent = {
+  body: 'Next stop details are available in Clever Driver.',
+  title: 'Route in progress',
+};
+
+async function startExpoLocationUpdates(
+  taskName: string,
+  notification: ContinuousLocationNotificationContent = DEFAULT_ACTIVE_ROUTE_NOTIFICATION,
+): Promise<void> {
   await Location.startLocationUpdatesAsync(taskName, {
-    accuracy: Location.Accuracy.Balanced,
+    accuracy: Location.Accuracy.High,
     activityType: Location.ActivityType.OtherNavigation,
-    deferredUpdatesDistance: 50,
-    deferredUpdatesInterval: 30_000,
-    distanceInterval: 50,
+    deferredUpdatesDistance: 0,
+    deferredUpdatesInterval: 10_000,
+    distanceInterval: 0,
     foregroundService: {
       killServiceOnDestroy: false,
-      notificationBody: 'Clever Driver is tracking active delivery location.',
-      notificationTitle: 'Active delivery tracking',
+      notificationBody: notification.body,
+      ...(notification.expandedBody === undefined ? {} : { notificationBigText: notification.expandedBody }),
+      notificationTitle: notification.title,
+      ...(notification.url === undefined ? {} : { notificationUrl: notification.url }),
     },
     pausesUpdatesAutomatically: false,
     showsBackgroundLocationIndicator: true,
-    timeInterval: 30_000,
+    timeInterval: 10_000,
   });
 }
 
@@ -136,11 +165,9 @@ if (!TaskManager.isTaskDefined(CONTINUOUS_LOCATION_TASK_NAME)) {
 
 export function createExpoContinuousLocationStreamService(): ContinuousLocationStreamService {
   return {
-    ensureLocationUpdatesStarted: ({ taskName }) => runLocationTaskOperation(async () => {
+    ensureLocationUpdatesStarted: ({ notification, taskName }) => runLocationTaskOperation(async () => {
       const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(taskName);
-      if (!alreadyStarted) {
-        await startExpoLocationUpdates(taskName);
-      }
+      await startExpoLocationUpdates(taskName, notification);
       return { alreadyStarted };
     }),
     getBackgroundAvailability: async () => {
@@ -150,15 +177,43 @@ export function createExpoContinuousLocationStreamService(): ContinuousLocationS
       ]);
       return taskManagerAvailable && backgroundLocationAvailable;
     },
+    getBackgroundPermission: async (): Promise<BackgroundPermissionResult> => {
+      try {
+        const permission = await Location.getBackgroundPermissionsAsync();
+        return permission.status === 'granted' ? 'granted' : 'denied';
+      } catch {
+        return 'denied';
+      }
+    },
     hasStartedLocationUpdates: async (taskName) => Location.hasStartedLocationUpdatesAsync(taskName),
     requestBackgroundPermission: async (): Promise<BackgroundPermissionResult> => {
-      const permission = await Location.requestBackgroundPermissionsAsync();
-      return permission.status === 'granted' ? 'granted' : 'denied';
+      try {
+        const permission = await Location.requestBackgroundPermissionsAsync();
+        return permission.status === 'granted' ? 'granted' : 'denied';
+      } catch {
+        return 'denied';
+      }
     },
-    startLocationUpdates: ({ taskName }) => runLocationTaskOperation(() => startExpoLocationUpdates(taskName)),
+    startLocationUpdates: ({ notification, taskName }) => runLocationTaskOperation(() => startExpoLocationUpdates(taskName, notification)),
     stopLocationUpdates: async (taskName) => {
       await Promise.allSettled(Array.from(activeTaskExecutions));
       await runLocationTaskOperation(() => stopExpoLocationUpdates(taskName));
     },
+    updateLocationNotification: ({ notification, taskName }) => runLocationTaskOperation(async () => {
+      if (
+        expoLocationNotificationModule !== null
+        && await Location.hasStartedLocationUpdatesAsync(taskName)
+      ) {
+        const updated = await expoLocationNotificationModule.updateLocationTaskNotificationAsync(taskName, {
+          notificationBody: notification.body,
+          ...(notification.expandedBody === undefined ? {} : { notificationBigText: notification.expandedBody }),
+          notificationTitle: notification.title,
+          ...(notification.url === undefined ? {} : { notificationUrl: notification.url }),
+        });
+        if (!updated) {
+          throw new Error('The active Android location notification service was not found.');
+        }
+      }
+    }),
   };
 }

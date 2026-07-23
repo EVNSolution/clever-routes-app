@@ -39,7 +39,8 @@ The app includes an interactive route access screen:
 - explicit delivery start action that requests OS foreground location permission before `delivery_active`
 - route started, foreground one-shot location update, continuous background-capable location streaming, native proof photo URI capture, proof media upload references, scanner-rejected proof photo recapture guidance, signature proof capture, richer stop delivered/failed proof-event mock/API boundaries, and route-completed delivery finish cleanup for delivery-server `POST /driver/events` after delivery_active succeeds
 - safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
-- live `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switch for account authentication and route lookup, native secure storage with account and route credentials kept separate, account refresh plus one route-token retry on downstream `401`, and authoritative removal of cached routes when assignments disappear; durable app-side offline queue/retry for pending driver events and proof media using AsyncStorage-backed non-secret queue metadata, with explicit reset and cleanup behavior
+- fail-closed live runtime selection with `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live` and `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` for account authentication and route lookup; local mocks require an explicit `mock` mode, preventing a misconfigured release from silently presenting fixture data
+- native secure storage with account and route credentials kept separate, account refresh plus one route-token retry on downstream `401`, and authoritative removal of cached routes when assignments disappear; durable app-side offline queue/retry for pending driver events and proof media using AsyncStorage-backed non-secret queue metadata, with explicit reset and cleanup behavior
 
 See `docs/route-access-flow.md` for the app-side route access, consent, assigned-route, native map handoff, and delivery evidence boundary.
 
@@ -62,10 +63,16 @@ npm install
 npm run start
 ```
 
-Optional live API mode (account login/registration stores server-issued account access and refresh credentials separately from route-scoped driver access; expired route access is reacquired through account refresh and route lookup, while an expired account session returns to phone + PIN login; see `.env.example`):
+Live API mode (account login/registration stores server-issued account access and refresh credentials separately from route-scoped driver access; expired route access is reacquired through account refresh and route lookup, while an expired account session returns to phone + PIN login; see `.env.example`):
 
 ```bash
-EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://delivery.example.com npm run start
+EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://delivery.example.com npm run start
+```
+
+Local fixture mode must be explicit:
+
+```bash
+EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock npm run start
 ```
 
 Native launch helpers:

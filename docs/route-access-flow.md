@@ -27,7 +27,7 @@ The app now has an interactive phone-first driver flow:
 
 ## Local mock boundary
 
-`src/app/AppRoot.tsx` uses mock account-auth, route-access, consent, and assigned-route services when no live delivery-server base URL is configured. The default mock runs the same phone + PIN → account-authenticated route choice → route details → live tracking → stop proof/completion flow without a live server. It never pretends that an SMS was sent.
+`src/app/AppRoot.tsx` uses mock account-auth, route-access, consent, and assigned-route services only when `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock` is explicitly configured. The mock runs the same phone + PIN → account-authenticated route choice → route details → live tracking → stop proof/completion flow without a live server. It never pretends that an SMS was sent. Missing live API configuration stops startup instead of silently showing fixture routes.
 
 Mock services are for local UX smoke only and do not replace backend integration tests.
 
@@ -214,7 +214,7 @@ The app includes only successfully uploaded media references in `STOP_DELIVERED`
 
 If the live server returns `422` with the Driver API error code `PROOF_MEDIA_REJECTED`, the app maps it to a safe driver-facing message: "Proof photo was rejected by the safety scan. Capture another proof photo." The app does not expose scanner internals, does not create a durable media reference, and does not queue that photo for offline retry. The same non-retryable discard applies when an already queued proof media upload receives the scanner rejection during offline retry.
 
-For physical-device smoke runs without a deployed scanner backend, local mock mode exposes a `Local proof media upload mock` selector with `success`, `failure`, and `scan_rejected`. This selector is only used when `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` is unset and the app is running on local mock services; live delivery-server mode ignores it.
+For physical-device smoke runs without a deployed scanner backend, local mock mode exposes a `Local proof media upload mock` selector with `success`, `failure`, and `scan_rejected`. This selector is only used when `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock` and the server URL is unset; live delivery-server mode ignores it.
 
 ## Signature proof boundary
 
@@ -222,7 +222,7 @@ For physical-device smoke runs without a deployed scanner backend, local mock mo
 
 ## Runtime API mode
 
-By default the app uses local mock services. Setting `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` switches account login/registration/refresh and route lookup to the live delivery server. SecureStore schema v4 keeps required account access separate from optional selected-route access and invalidates legacy phone-only payloads. PINs and invitation codes are never persisted.
+Runtime selection is fail-closed. Set `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live` with `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` for the delivery server, or set the mode to `mock` with no server URL for deliberate local fixture testing. Omitting both settings is a configuration error. SecureStore schema v4 keeps required account access separate from optional selected-route access and invalidates legacy phone-only payloads. PINs and invitation codes are never persisted.
 
 When a downstream consent, assigned-route, driver-event, proof-media, or offline retry request returns `401`, the app refreshes the account session if necessary, performs account-authenticated route lookup, and retries once with the new route token. If account refresh or account-authenticated lookup is unauthorized, the app clears the account session and returns to phone + PIN login. Authoritative empty/deleted assignment results clear route access while keeping the account signed in.
 

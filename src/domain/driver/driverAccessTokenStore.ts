@@ -23,6 +23,7 @@ export type PersistedDriverAccess = {
 
 export type PersistedActiveRouteSession = {
   navigationStepIndex: number;
+  pickupCompletedAt?: string;
   routePlanId: string;
   routeStartedRecordedAt?: string;
   startedAt?: string;
@@ -53,6 +54,7 @@ export type DriverAccessTokenStore = {
   markActiveRouteStarted(routePlanId: string, startedAt: string): Promise<boolean>;
   saveActiveRouteSession(input: {
     navigationStepIndex: number;
+    pickupCompleted?: boolean;
     routePlanId: string;
     startedAt?: string;
   }): Promise<boolean>;
@@ -207,6 +209,9 @@ export function createDriverAccessTokenStore(input: {
           savedAt: now().toISOString(),
           activeRouteSession: {
             navigationStepIndex,
+            ...(currentSession?.pickupCompletedAt === undefined && activeRouteSession.pickupCompleted !== true
+              ? {}
+              : { pickupCompletedAt: currentSession?.pickupCompletedAt ?? now().toISOString() }),
             routePlanId: activeRouteSession.routePlanId,
             ...(currentSession?.routeStartedRecordedAt === undefined
               ? {}
@@ -351,6 +356,9 @@ function isPersistedActiveRouteSession(value: unknown): value is PersistedActive
     session.status === 'active' &&
     typeof session.routePlanId === 'string' && session.routePlanId.trim() !== '' &&
     Number.isInteger(session.navigationStepIndex) && (session.navigationStepIndex as number) >= 0 &&
+    (session.pickupCompletedAt === undefined || (
+      typeof session.pickupCompletedAt === 'string' && Number.isFinite(Date.parse(session.pickupCompletedAt))
+    )) &&
     (session.startedAt === undefined || (
       typeof session.startedAt === 'string' && Number.isFinite(Date.parse(session.startedAt))
     )) &&

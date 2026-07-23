@@ -164,9 +164,22 @@ describe('stop proof event flow', () => {
   });
 
   it('queues stop proof driver event when the live event submission fails', async () => {
-    const queue = createInMemoryOfflineSubmissionQueue();
+    const memoryQueue = createInMemoryOfflineSubmissionQueue();
+    let releasePersistence: () => void = () => undefined;
+    let persistenceStarted = false;
+    const persistenceGate = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const queue = {
+      ...memoryQueue,
+      whenPersisted: async () => {
+        persistenceStarted = true;
+        await persistenceGate;
+      },
+    };
 
-    const result = await recordStopProofEventAfterDeliveryStart({
+    let proofResolved = false;
+    const resultPromise = recordStopProofEventAfterDeliveryStart({
       deliveryStart: activeDelivery,
       driverEventService: {
         recordDriverEvent: async () => {
@@ -181,7 +194,16 @@ describe('stop proof event flow', () => {
         routePlanId: 'route-1',
       },
       offlineQueue: queue,
+    }).then((result) => {
+      proofResolved = true;
+      return result;
     });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(persistenceStarted, true);
+    assert.equal(proofResolved, false);
+    releasePersistence();
+    const result = await resultPromise;
 
     assert.equal(result.kind, 'queued');
     assert.equal(result.reason, 'record_failed');
@@ -212,5 +234,50 @@ describe('stop proof event flow', () => {
     assert.equal(result.requiresRouteLookup, true);
     assert.match(result.message, /Driver session expired/iu);
     assert.match(result.message, /HTTP 401/iu);
+  });
+
+  it('blocks terminal stop proof for reconciliation when the server route is no longer in progress', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'location-before-terminal',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-05-12T11:04:00.000Z'),
+      routePlanId: 'route-1',
+    });
+
+    const result = await recordStopProofEventAfterDeliveryStart({
+      deliveryStart: activeDelivery,
+      driverEventService: {
+        recordDriverEvent: async () => {
+          throw createDriverApiHttpError({
+            code: 'ROUTE_NOT_IN_PROGRESS',
+            endpoint: 'Driver event record',
+            status: 409,
+          });
+        },
+      },
+      input: {
+        action: 'failed',
+        deliveryStopId: 'stop-1',
+        note: 'Customer unavailable',
+        routePlanId: 'route-1',
+      },
+      offlineQueue: queue,
+    });
+
+    assert.equal(result.kind, 'queued');
+    assert.equal(result.requiresRouteLookup, undefined);
+    assert.equal(result.requiresRouteReconciliation, true);
+    assert.match(result.message, /ended or released/iu);
+    assert.deepEqual(queue.listPending().map((item) => ({
+      kind: item.kind,
+      reconciliation: item.reconciliation,
+    })), [{
+      kind: 'driver_event',
+      reconciliation: {
+        blockedAt: queue.listPending()[0]?.reconciliation?.blockedAt,
+        reason: 'route_not_in_progress',
+      },
+    }]);
   });
 });

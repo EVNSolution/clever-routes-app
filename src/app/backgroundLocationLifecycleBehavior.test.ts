@@ -26,13 +26,41 @@ describe('background location lifecycle wiring', () => {
     );
 
     const persistIndex = startSource.indexOf('saveActiveRouteSession');
+    const foregroundPermissionIndex = startSource.indexOf('startDeliveryWithForegroundPermission');
+    const notificationPermissionIndex = startSource.indexOf('registerForStopArrivalNotifications');
+    const backgroundPermissionIndex = startSource.indexOf('requestContinuousLocationBackgroundPermission');
     const trackingIndex = startSource.indexOf('startContinuousLocationUpdatesAfterDeliveryStart');
     const routeStartedIndex = startSource.indexOf('recordRouteStartedAfterDeliveryStart');
 
+    assert.ok(foregroundPermissionIndex < notificationPermissionIndex);
+    assert.ok(notificationPermissionIndex < backgroundPermissionIndex);
+    assert.ok(backgroundPermissionIndex < persistIndex);
     assert.ok(persistIndex < trackingIndex);
     assert.ok(trackingIndex < routeStartedIndex);
     assert.match(startSource, /startedAt: routeStartedAt\.toISOString\(\)/u);
     assert.match(startSource, /markActiveRouteStarted/u);
+    assert.equal((source.match(/registerForStopArrivalNotifications\(\)/gu) ?? []).length, 1);
+  });
+
+  it('refreshes background permission on My Routes and after returning from system settings', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const settingsHandler = getFunctionSource(
+      source,
+      'const handleOpenBackgroundLocationSettings = useCallback(',
+      'const clearAndStopActiveLocationSession = useCallback(',
+    );
+    const appStateSource = getFunctionSource(
+      source,
+      "AppState.addEventListener('change'",
+      'return () => subscription.remove()',
+    );
+
+    assert.match(settingsHandler, /requestForegroundPermission\(\)/u);
+    assert.match(settingsHandler, /foregroundPermission\.status !== 'granted'[\s\S]*Linking\.openSettings\(\)/u);
+    assert.match(settingsHandler, /requestContinuousLocationBackgroundPermission/u);
+    assert.match(settingsHandler, /await refreshBackgroundLocationPermission\(\)/u);
+    assert.match(appStateSource, /state === 'active'[\s\S]*refreshBackgroundLocationPermission/u);
+    assert.match(source, /isDriverRestoreComplete && screen === 'mainTabs'[\s\S]*refreshBackgroundLocationPermission/u);
   });
 
   it('reconciles native tracking when restoring an active route', () => {
@@ -79,6 +107,8 @@ describe('background location lifecycle wiring', () => {
     const finishIndex = finishSource.indexOf('finishDeliveryAfterActive');
 
     assert.ok(clearIndex < finishIndex);
+    assert.match(finishSource, /catch \(error\) \{[\s\S]*clearAndStopActiveLocationSession\(route\.id\)/u);
+    assert.match(source, /const isStartDisabled = isStartingRoute \|\| isFinishingRoute \|\| activeRoutePlanId !== null/u);
   });
 
   it('shares the durable queue and retries each route with its own access token', () => {
@@ -94,6 +124,23 @@ describe('background location lifecycle wiring', () => {
     assert.match(retrySource, /routePlanId: session\.route\.id/u);
   });
 
+  it('retries pending route submissions after confirmed network recovery', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const recoverySource = getFunctionSource(
+      source,
+      'const retryPendingSubmissionsAfterNetworkRecovery = useCallback(',
+      'useEffect(() => {\n    const previous = previousRouteSyncNetworkRef.current;',
+    );
+
+    assert.match(source, /Network\.useNetworkState\(\)/u);
+    assert.match(source, /shouldRetryOfflineSubmissionsAfterNetworkChange\(\{/u);
+    assert.match(recoverySource, /await retryOfflineSubmissionsForSessions\(routeSessions\)/u);
+    assert.match(source, /requiresRouteReconciliation/u);
+    assert.match(source, /setRouteRecoveryRefreshReason\('route_not_in_progress'\)/u);
+    assert.match(source, /Route ended or released on server/u);
+    assert.doesNotMatch(recoverySource, /setInterval|setTimeout/u);
+  });
+
   it('does not overwrite the active route token while retrying another route', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const refreshSource = getFunctionSource(
@@ -105,6 +152,7 @@ describe('background location lifecycle wiring', () => {
     assert.match(refreshSource, /clearCachedRouteAccess\(routePlanId\)/u);
     assert.match(refreshSource, /await driverAccessTokenStore\.saveFromInvitedRouteAccess/u);
     assert.match(source, /activeRoutePlanId !== null && activeRoutePlanId !== routeSession\.route\.id/u);
-    assert.match(source, /activeRoutePlanId === null && visibleRouteSessions\.length > 1/u);
+    assert.match(source, /visibleRouteSessions\.map\(\(session\) =>/u);
+    assert.doesNotMatch(source, /Previous Route|Next Route/u);
   });
 });

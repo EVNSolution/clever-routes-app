@@ -22,8 +22,8 @@ export function getCountrySelectorRowText(
   options: { locale?: string } = {},
 ): { subtitle: string; title: string } {
   return {
-    title: `${getLocalizedCountryName(country, options.locale)} · ${country.callingCode}`,
-    subtitle: `${country.iso2} · ${country.defaultLocale} · ${country.nativeLanguageName}`,
+    title: `${getLocalizedCountryName(country, options.locale)} ${country.callingCode}`,
+    subtitle: `${country.iso2} ${country.defaultLocale} ${country.nativeLanguageName}`,
   };
 }
 

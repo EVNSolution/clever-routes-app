@@ -1,4 +1,4 @@
-import { DriverApiHttpError } from '../api/deliveryServer/driverApiError';
+import { DriverApiHttpError, isDriverApiUnauthorizedError } from '../api/deliveryServer/driverApiError';
 import type { DriverRuntimeConfig } from './config/driverRuntimeConfig';
 
 export type AuthPhase = 'route_access' | 'invite_verify' | 'pin_login';
@@ -22,6 +22,10 @@ export function isStaleClientContractError(error: unknown): boolean {
     error instanceof Error &&
     ['Invalid route access response', 'Invalid driver auth response'].some((pattern) => error.message.includes(pattern))
   );
+}
+
+export function shouldDiscardSavedLoginAfterRefreshFailure(error: unknown): boolean {
+  return isDriverApiUnauthorizedError(error);
 }
 
 function isRequestNotSentError(error: unknown): boolean {

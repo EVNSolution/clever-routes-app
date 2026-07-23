@@ -22,10 +22,8 @@ export type MvpScenarioScreenId =
   | 'routeList'
   | 'routeDetail'
   | 'routeSession'
-  | 'liveTracking'
   | 'stopDetails'
   | 'arrivalCheck'
-  | 'stopCompleted'
   | 'completedDeliveries';
 
 export type MvpScenarioScreen = {
@@ -96,13 +94,6 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
       primaryAction: 'Continue Session',
     },
     {
-      id: 'liveTracking',
-      title: 'Live Tracking',
-      purpose:
-        'Show GPS tracking status and route overview without turn-by-turn navigation.',
-      primaryAction: 'Arrived',
-    },
-    {
       id: 'stopDetails',
       title: 'Stop Details',
       purpose:
@@ -113,15 +104,8 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
       id: 'arrivalCheck',
       title: 'Arrival Check',
       purpose:
-        'Collect required photo proof, delivery notes, location tips, and optional notes at the stop.',
+        'Optionally add a delivery photo, result, location tip, or note before completing the stop.',
       primaryAction: 'Complete Stop',
-    },
-    {
-      id: 'stopCompleted',
-      title: 'Stop Completed',
-      purpose:
-        'Confirm stop completion and guide the driver to the next stop or route summary.',
-      primaryAction: 'Find Next Stop',
     },
     {
       id: 'completedDeliveries',
@@ -143,7 +127,7 @@ export function getMvpRouteTabs(): MvpRouteTab[] {
 
 export function getStopCompletionProofFields(): StopCompletionProofField[] {
   return [
-    { id: 'photo', label: 'Photo Proof', required: true },
+    { id: 'photo', label: 'Photo Proof', required: false },
     { id: 'todayNote', label: 'Delivery Result', required: false },
     { id: 'locationTip', label: 'Location Tip', required: false },
     { id: 'additionalNotes', label: 'Other Notes', required: false },

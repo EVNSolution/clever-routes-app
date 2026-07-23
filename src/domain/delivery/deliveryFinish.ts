@@ -1,6 +1,10 @@
 import { CONTINUOUS_LOCATION_TASK_NAME, type ContinuousLocationStreamService } from '../location/continuousLocationStream';
 import type { DeliveryStartResult } from './deliveryStart';
-import { formatDriverApiErrorForDriver, getDriverApiRequiresRouteLookup } from '../../api/deliveryServer/driverApiError';
+import {
+  formatDriverApiErrorForDriver,
+  getDriverApiRequiresRouteLookup,
+  getDriverApiRequiresRouteReconciliation,
+} from '../../api/deliveryServer/driverApiError';
 import type { DriverEventService } from '../events/driverEvents';
 import type { DriverFlowState } from '../driverFlow/driverFlow';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
@@ -28,14 +32,17 @@ export type DeliveryFinishResult =
       queueItemId: string;
       reason: 'record_failed';
       requiresRouteLookup?: true;
+      requiresRouteReconciliation?: true;
       stoppedTaskName: string;
     };
 
 export async function finishDeliveryAfterActive(input: {
   deliveryStart: DeliveryStartResult;
   driverEventService: DriverEventService;
+  eventPayload?: Record<string, unknown>;
   now?: Date;
   offlineQueue?: OfflineSubmissionQueue;
+  routeEnd?: 'completed' | 'released';
   routePlanId: string | null;
   streamService: ContinuousLocationStreamService;
   taskName?: string;
@@ -53,10 +60,12 @@ export async function finishDeliveryAfterActive(input: {
   await input.streamService.stopLocationUpdates(taskName);
 
   const occurredAt = input.now ?? new Date();
+  const routeReleased = input.routeEnd === 'released';
   const event = {
-    clientEventId: createRouteCompletedClientEventId(occurredAt),
-    eventType: 'ROUTE_COMPLETED' as const,
+    clientEventId: createRouteEndClientEventId(occurredAt, routeReleased),
+    eventType: routeReleased ? 'ROUTE_PAUSED' as const : 'ROUTE_COMPLETED' as const,
     occurredAt,
+    ...(input.eventPayload === undefined ? {} : { payload: input.eventPayload }),
     routePlanId: input.routePlanId,
   };
 
@@ -72,7 +81,9 @@ export async function finishDeliveryAfterActive(input: {
       eventId: result.eventId,
       flowState: 'delivery_finished',
       kind: 'recorded',
-      message: discardedQueuedItems > 0
+      message: routeReleased
+        ? 'Route session ended and the route returned to Ready.'
+        : discardedQueuedItems > 0
         ? `Delivery finished. ${discardedQueuedItems} queued route submission${discardedQueuedItems === 1 ? '' : 's'} discarded after route completion was recorded.`
         : 'Delivery finished and route completion was recorded.',
       stoppedTaskName: taskName,
@@ -82,19 +93,32 @@ export async function finishDeliveryAfterActive(input: {
       throw error;
     }
 
+    const requiresRouteReconciliation = getDriverApiRequiresRouteReconciliation(error);
+    if (routeReleased && input.routePlanId !== null && requiresRouteReconciliation === undefined) {
+      input.offlineQueue.discardRouteSubmissions(input.routePlanId);
+    }
     const queued = input.offlineQueue.enqueueDriverEvent(event);
+    if (input.routePlanId !== null && requiresRouteReconciliation === true) {
+      input.offlineQueue.blockRouteSubmissionsForReconciliation(input.routePlanId);
+    }
+    await input.offlineQueue.whenPersisted();
     return {
       flowState: 'delivery_finished',
       kind: 'queued',
-      message: `Delivery finished locally and route completion was queued for retry: ${formatDriverApiErrorForDriver(error)}`,
+      message: routeReleased
+        ? `Route session ended locally and returning the route to Ready was queued for retry: ${formatDriverApiErrorForDriver(error)}`
+        : `Delivery finished locally and route completion was queued for retry: ${formatDriverApiErrorForDriver(error)}`,
       queueItemId: queued.queueItemId,
       reason: 'record_failed',
       ...(getDriverApiRequiresRouteLookup(error) === undefined ? {} : { requiresRouteLookup: true as const }),
+      ...(requiresRouteReconciliation === undefined
+        ? {}
+        : { requiresRouteReconciliation: true as const }),
       stoppedTaskName: taskName,
     };
   }
 }
 
-function createRouteCompletedClientEventId(occurredAt: Date): string {
-  return `route-completed-${occurredAt.getTime().toString(36)}`;
+function createRouteEndClientEventId(occurredAt: Date, released: boolean): string {
+  return `route-${released ? 'released' : 'completed'}-${occurredAt.getTime().toString(36)}`;
 }

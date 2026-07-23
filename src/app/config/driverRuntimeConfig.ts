@@ -15,10 +15,28 @@ export type DriverRuntimeServices = {
   routeAccessService: RouteAccessService;
 };
 
-export function readDriverRuntimeConfig(env: Partial<Record<'EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL', string>>): DriverRuntimeConfig {
+type DriverRuntimeEnv = Partial<Record<
+  'EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL' | 'EXPO_PUBLIC_DRIVER_RUNTIME_MODE',
+  string
+>>;
+
+export function readDriverRuntimeConfig(env: DriverRuntimeEnv): DriverRuntimeConfig {
   const deliveryServerBaseUrl = env.EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL?.trim();
-  if (deliveryServerBaseUrl === undefined || deliveryServerBaseUrl === '') {
+  const runtimeMode = env.EXPO_PUBLIC_DRIVER_RUNTIME_MODE?.trim().toLowerCase();
+
+  if (runtimeMode !== undefined && runtimeMode !== '' && runtimeMode !== 'live' && runtimeMode !== 'mock') {
+    throw new Error('EXPO_PUBLIC_DRIVER_RUNTIME_MODE must be live or mock.');
+  }
+
+  if (runtimeMode === 'mock') {
+    if (deliveryServerBaseUrl !== undefined && deliveryServerBaseUrl !== '') {
+      throw new Error('Mock mode cannot include EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL.');
+    }
     return { mode: 'mock' };
+  }
+
+  if (deliveryServerBaseUrl === undefined || deliveryServerBaseUrl === '') {
+    throw new Error('EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL is required unless EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock.');
   }
 
   return {

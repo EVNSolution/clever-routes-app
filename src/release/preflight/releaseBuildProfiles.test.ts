@@ -50,3 +50,27 @@ test('pins initial native build versions in app config before EAS remote version
   assert.equal(appConfig.expo?.android?.package, 'com.evns.cleverdriverapp');
   assert.equal(appConfig.expo?.android?.versionCode, 1);
 });
+
+test('keeps direct-download Android optimization isolated to the distribution APK build', () => {
+  const packageConfig = readJson<{
+    scripts?: Record<string, string>;
+  }>('package.json');
+  const command = packageConfig.scripts?.['build:android:distribution'] ?? '';
+  const preflight = packageConfig.scripts?.['prebuild:android:distribution'] ?? '';
+
+  assert.match(preflight, /verify-distribution-source\.mjs/u);
+  assert.match(command, /app:assembleRelease/u);
+  assert.match(command, /reactNativeArchitectures=armeabi-v7a,arm64-v8a/u);
+  assert.match(command, /android\.enableMinifyInReleaseBuilds=true/u);
+  assert.match(command, /android\.enableShrinkResourcesInReleaseBuilds=true/u);
+  assert.match(command, /expo\.useLegacyPackaging=true/u);
+  assert.doesNotMatch(command, /android\.enableBundleCompression=true/u);
+});
+
+test('keeps source-controlled native release metadata aligned and minimally privileged', () => {
+  const androidManifest = readFileSync(resolve(repoRoot, 'android/app/src/main/AndroidManifest.xml'), 'utf8');
+  const iosInfoPlist = readFileSync(resolve(repoRoot, 'ios/CleverDriver/Info.plist'), 'utf8');
+
+  assert.doesNotMatch(androidManifest, /android\.permission\.SYSTEM_ALERT_WINDOW/u);
+  assert.match(iosInfoPlist, /<key>CFBundleShortVersionString<\/key>\s*<string>\$\(MARKETING_VERSION\)<\/string>/u);
+});

@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createMockDriverEventService } from '../events/driverEvents';
 import {
   clearAndStopContinuousLocationSession,
   recordContinuousLocationUpdateBatch,
+  requestContinuousLocationBackgroundPermission,
   startContinuousLocationUpdatesAfterDeliveryStart,
   stopContinuousLocationUpdates,
   type ContinuousLocationStreamService,
@@ -21,6 +23,7 @@ const activeDelivery = {
 function createMockStreamService(input?: {
   availability?: boolean;
   backgroundPermission?: 'denied' | 'granted';
+  backgroundPermissionError?: boolean;
   alreadyStarted?: boolean;
 }): ContinuousLocationStreamService & { started: unknown[]; stopped: string[] } {
   const started: unknown[] = [];
@@ -29,7 +32,13 @@ function createMockStreamService(input?: {
     started,
     stopped,
     getBackgroundAvailability: async () => input?.availability ?? true,
-    requestBackgroundPermission: async () => input?.backgroundPermission ?? 'granted',
+    getBackgroundPermission: async () => input?.backgroundPermission ?? 'granted',
+    requestBackgroundPermission: async () => {
+      if (input?.backgroundPermissionError === true) {
+        throw new Error('permission activity unavailable');
+      }
+      return input?.backgroundPermission ?? 'granted';
+    },
     hasStartedLocationUpdates: async () => input?.alreadyStarted ?? false,
     startLocationUpdates: async (options) => {
       started.push(options);
@@ -41,6 +50,24 @@ function createMockStreamService(input?: {
 }
 
 describe('continuous location streaming', () => {
+  it('acquires background permission before route state is persisted and contains native request failures', async () => {
+    const denied = await requestContinuousLocationBackgroundPermission({
+      streamService: createMockStreamService({ backgroundPermission: 'denied' }),
+    });
+    const failed = await requestContinuousLocationBackgroundPermission({
+      streamService: createMockStreamService({ backgroundPermissionError: true }),
+    });
+
+    assert.equal(denied.kind, 'blocked');
+    assert.equal(failed.kind, 'blocked');
+    if (denied.kind === 'blocked') {
+      assert.equal(denied.reason, 'background_permission_denied');
+    }
+    if (failed.kind === 'blocked') {
+      assert.equal(failed.reason, 'background_permission_denied');
+    }
+  });
+
   it('does not start continuous updates before delivery_active', async () => {
     const streamService = createMockStreamService();
 
@@ -72,7 +99,7 @@ describe('continuous location streaming', () => {
     assert.equal(streamService.started.length, 0);
   });
 
-  it('blocks continuous updates when background permission is denied', async () => {
+  it('blocks continuous updates when previously requested background permission is denied', async () => {
     const streamService = createMockStreamService({ backgroundPermission: 'denied' });
 
     const result = await startContinuousLocationUpdatesAfterDeliveryStart({
@@ -91,6 +118,10 @@ describe('continuous location streaming', () => {
 
     const result = await startContinuousLocationUpdatesAfterDeliveryStart({
       deliveryStart: activeDelivery,
+      notification: {
+        body: 'Items: 2x Tomato box',
+        title: 'Next stop 1  ETA 7:08 AM',
+      },
       routePlanId: 'route-1',
       streamService,
     });
@@ -102,7 +133,14 @@ describe('continuous location streaming', () => {
       routePlanId: 'route-1',
       taskName: 'clever-driver-continuous-location',
     });
-    assert.deepEqual(streamService.started, [{ routePlanId: 'route-1', taskName: 'clever-driver-continuous-location' }]);
+    assert.deepEqual(streamService.started, [{
+      notification: {
+        body: 'Items: 2x Tomato box',
+        title: 'Next stop 1  ETA 7:08 AM',
+      },
+      routePlanId: 'route-1',
+      taskName: 'clever-driver-continuous-location',
+    }]);
   });
 
   it('records each continuous location batch item as LOCATION_UPDATED', async () => {
@@ -173,6 +211,30 @@ describe('continuous location streaming', () => {
     } finally {
       Date.now = originalDateNow;
     }
+  });
+
+  it('does not queue locations after the server says the route is not in progress', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+
+    const result = await recordContinuousLocationUpdateBatch({
+      driverEventService: {
+        recordDriverEvent: async () => {
+          throw createDriverApiHttpError({
+            code: 'ROUTE_NOT_IN_PROGRESS',
+            endpoint: 'Driver event record',
+            status: 409,
+          });
+        },
+      },
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-05-12T08:45:00.000Z') },
+      ],
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(result, { kind: 'route_not_in_progress', recordedCount: 0 });
+    assert.deepEqual(queue.listPending(), []);
   });
 
   it('stops the named continuous location task', async () => {

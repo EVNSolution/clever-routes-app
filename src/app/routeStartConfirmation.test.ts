@@ -10,7 +10,7 @@ import {
 const today = new Date('2026-06-15T03:00:00.000Z');
 
 describe('route start session confirmation', () => {
-  it('asks to enter the selected route session without treating it as pickup completion', () => {
+  it('makes Start Session the explicit transition to the first delivery stop', () => {
     let confirmed = false;
     let alertPayload: Parameters<
       Parameters<
@@ -34,8 +34,10 @@ describe('route start session confirmation', () => {
     assert.notEqual(alertPayload, null);
     const [title, message, buttons, options] = alertPayload!;
     assert.equal(title, ROUTE_START_SESSION_CONFIRMATION.title);
-    assert.match(message, /opens the route session/i);
-    assert.match(message, /Pickup completion stays inside the session workflow/i);
+    assert.match(message, /at Store Pickup/i);
+    assert.match(message, /GPS tracking begins/i);
+    assert.match(message, /pickup is confirmed/i);
+    assert.match(message, /Stop 1 becomes the active task/i);
     assert.doesNotMatch(message, /inside Route Details/i);
     assert.doesNotMatch(message, /Start pickup/i);
     assert.doesNotMatch(message, /Warning:/i);

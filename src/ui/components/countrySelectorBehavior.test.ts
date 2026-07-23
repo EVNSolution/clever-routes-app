@@ -26,8 +26,8 @@ describe('country selector UI behavior', () => {
     const korea = DRIVER_PHONE_COUNTRIES.find((country) => country.iso2 === 'KR')!;
 
     assert.deepEqual(getCountrySelectorRowText(korea, { locale: 'ko-KR' }), {
-      title: '대한민국 · +82',
-      subtitle: 'KR · ko-KR · 한국어',
+      title: '대한민국 +82',
+      subtitle: 'KR ko-KR 한국어',
     });
   });
 });

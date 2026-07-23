@@ -59,6 +59,7 @@ copy after verification.
 | Field | Value |
 | --- | --- |
 | Delivery server environment | pending |
+| `EXPO_PUBLIC_DRIVER_RUNTIME_MODE` source | EAS `preview` / EAS `production` / other |
 | `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` source | EAS `preview` / EAS `production` / other |
 | Driver route fixture reference | pending |
 | Shop/company fixture reference | pending |

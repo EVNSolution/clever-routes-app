@@ -27,6 +27,7 @@ type DriverEventServiceFactoryInput = {
 export type ContinuousLocationTaskResult =
   | {
       kind: 'deactivated';
+      reason: 'route_not_in_progress' | 'route_revoked';
       routePlanId: string;
       sessionGeneration: string;
     }
@@ -130,13 +131,33 @@ export async function processContinuousLocationTaskBatch(input: {
     offlineQueue: input.offlineQueue,
     routePlanId,
   });
+
+  if (recorded.kind === 'route_not_in_progress') {
+    const cleared = await input.driverAccessTokenStore.clearActiveRouteSession(routePlanId, sessionGeneration);
+    if (cleared) {
+      input.offlineQueue.blockRouteSubmissionsForReconciliation(routePlanId);
+      await input.offlineQueue.whenPersisted();
+      return {
+        kind: 'deactivated',
+        reason: 'route_not_in_progress',
+        routePlanId,
+        sessionGeneration,
+      };
+    }
+
+    return {
+      kind: 'processed',
+      recordedCount: recorded.recordedCount,
+      routePlanId,
+    };
+  }
   await input.offlineQueue.whenPersisted();
 
   if (routeRevoked) {
     const cleared = await input.driverAccessTokenStore.clearActiveRouteSession(routePlanId, sessionGeneration);
     if (cleared) {
       await input.driverAccessTokenStore.clearCachedRouteAccess(routePlanId);
-      return { kind: 'deactivated', routePlanId, sessionGeneration };
+      return { kind: 'deactivated', reason: 'route_revoked', routePlanId, sessionGeneration };
     }
   }
 

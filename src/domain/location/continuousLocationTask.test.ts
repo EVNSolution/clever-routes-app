@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createDriverAccessTokenStore } from '../driver/driverAccessTokenStore';
 import { createMockDriverAuthService } from '../driverAuth/driverAuth';
 import { createMockDriverEventService } from '../events/driverEvents';
@@ -346,6 +347,83 @@ describe('continuous location background task', () => {
       assert.equal(persisted.activeRouteSession, undefined);
       assert.equal(persisted.driverAccess, undefined);
       assert.equal(persisted.routeAccess, undefined);
+    }
+  });
+
+  it('stops the matching session without clearing reusable route access when the route is no longer in progress', async () => {
+    const store = createTokenStore();
+    await saveActiveRoute(store);
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'stale-location',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-07-16T10:00:30.000Z'),
+      routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'unsynced-delivery',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-07-16T10:00:40.000Z'),
+      routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+    });
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'stop-1',
+      fileName: 'proof.jpg',
+      routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+      source: 'camera',
+      uri: 'file:///proof.jpg',
+    });
+
+    const result = await processContinuousLocationTaskBatch({
+      createDriverEventService: () => ({
+        recordDriverEvent: async () => {
+          throw createDriverApiHttpError({
+            code: 'ROUTE_NOT_IN_PROGRESS',
+            endpoint: 'Driver event record',
+            status: 409,
+          });
+        },
+      }),
+      driverAccessTokenStore: store,
+      driverAuthService: createMockDriverAuthService(),
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-07-16T10:01:00.000Z') },
+      ],
+      offlineQueue: queue,
+      routeAccessService: createMockRouteAccessService(),
+    });
+
+    assert.deepEqual(result, {
+      kind: 'deactivated',
+      reason: 'route_not_in_progress',
+      routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+      sessionGeneration: '2026-07-16T10:00:00.000Z',
+    });
+    const reconciledItems = queue.listPending();
+    assert.deepEqual(reconciledItems.map((item) => ({
+      attempts: item.attempts,
+      kind: item.kind,
+      reason: item.reconciliation?.reason,
+    })), [
+      {
+        attempts: 0,
+        kind: 'driver_event',
+        reason: 'route_not_in_progress',
+      },
+      {
+        attempts: 0,
+        kind: 'proof_media',
+        reason: 'route_not_in_progress',
+      },
+    ]);
+    assert.equal(reconciledItems.every((item) => Date.parse(item.reconciliation?.blockedAt ?? '') > 0), true);
+    const persisted = await store.loadActiveDriverAccess();
+    assert.equal(persisted.kind, 'active');
+    if (persisted.kind === 'active') {
+      assert.equal(persisted.activeRouteSession, undefined);
+      assert.notEqual(persisted.driverAccess, undefined);
+      assert.notEqual(persisted.routeAccess, undefined);
     }
   });
 });

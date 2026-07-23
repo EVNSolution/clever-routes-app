@@ -45,10 +45,8 @@ describe('driver app MVP flow', () => {
         'routeList',
         'routeDetail',
         'routeSession',
-        'liveTracking',
         'stopDetails',
         'arrivalCheck',
-        'stopCompleted',
         'completedDeliveries',
       ],
     );
@@ -60,10 +58,8 @@ describe('driver app MVP flow', () => {
         'My Routes',
         'Route Details',
         'Route Session',
-        'Live Tracking',
         'Stop Details',
         'Arrival Check',
-        'Stop Completed',
         'Completed Deliveries',
       ],
     );
@@ -77,9 +73,9 @@ describe('driver app MVP flow', () => {
     ]);
   });
 
-  it('keeps proof and optional stop inputs aligned to the English arrival check design', () => {
+  it('keeps all stop completion proof inputs optional', () => {
     assert.deepEqual(getStopCompletionProofFields(), [
-      { id: 'photo', label: 'Photo Proof', required: true },
+      { id: 'photo', label: 'Photo Proof', required: false },
       { id: 'todayNote', label: 'Delivery Result', required: false },
       { id: 'locationTip', label: 'Location Tip', required: false },
       { id: 'additionalNotes', label: 'Other Notes', required: false },
