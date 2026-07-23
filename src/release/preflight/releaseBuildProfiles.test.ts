@@ -56,7 +56,9 @@ test('keeps direct-download Android optimization isolated to the distribution AP
     scripts?: Record<string, string>;
   }>('package.json');
   const command = packageConfig.scripts?.['build:android:distribution'] ?? '';
+  const preflight = packageConfig.scripts?.['prebuild:android:distribution'] ?? '';
 
+  assert.match(preflight, /verify-distribution-source\.mjs/u);
   assert.match(command, /app:assembleRelease/u);
   assert.match(command, /reactNativeArchitectures=armeabi-v7a,arm64-v8a/u);
   assert.match(command, /android\.enableMinifyInReleaseBuilds=true/u);

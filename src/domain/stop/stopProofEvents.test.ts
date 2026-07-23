@@ -235,4 +235,49 @@ describe('stop proof event flow', () => {
     assert.match(result.message, /Driver session expired/iu);
     assert.match(result.message, /HTTP 401/iu);
   });
+
+  it('blocks terminal stop proof for reconciliation when the server route is no longer in progress', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'location-before-terminal',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-05-12T11:04:00.000Z'),
+      routePlanId: 'route-1',
+    });
+
+    const result = await recordStopProofEventAfterDeliveryStart({
+      deliveryStart: activeDelivery,
+      driverEventService: {
+        recordDriverEvent: async () => {
+          throw createDriverApiHttpError({
+            code: 'ROUTE_NOT_IN_PROGRESS',
+            endpoint: 'Driver event record',
+            status: 409,
+          });
+        },
+      },
+      input: {
+        action: 'failed',
+        deliveryStopId: 'stop-1',
+        note: 'Customer unavailable',
+        routePlanId: 'route-1',
+      },
+      offlineQueue: queue,
+    });
+
+    assert.equal(result.kind, 'queued');
+    assert.equal(result.requiresRouteLookup, undefined);
+    assert.equal(result.requiresRouteReconciliation, true);
+    assert.match(result.message, /ended or released/iu);
+    assert.deepEqual(queue.listPending().map((item) => ({
+      kind: item.kind,
+      reconciliation: item.reconciliation,
+    })), [{
+      kind: 'driver_event',
+      reconciliation: {
+        blockedAt: queue.listPending()[0]?.reconciliation?.blockedAt,
+        reason: 'route_not_in_progress',
+      },
+    }]);
+  });
 });

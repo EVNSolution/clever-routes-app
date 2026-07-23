@@ -35,7 +35,11 @@ export type ProofMediaUploadMockMode = 'failure' | 'scan_rejected' | 'success';
 
 export type ProofMediaUploadResult =
   | { kind: 'skipped'; message: string; reason: 'photo_not_captured' }
-  | { kind: 'upload_failed'; message: string; reason?: 'driver_access_expired' | 'proof_media_rejected' }
+  | {
+    kind: 'upload_failed';
+    message: string;
+    reason?: 'driver_access_expired' | 'proof_media_rejected' | 'route_not_in_progress';
+  }
   | { kind: 'uploaded'; media: ProofMediaReference };
 
 export const PROOF_MEDIA_REJECTED_MESSAGE =
@@ -142,6 +146,7 @@ export function createProofMediaUploadApiClient(input: {
         }
 
         throw createDriverApiHttpError({
+          ...(apiError.code === undefined ? {} : { code: apiError.code }),
           endpoint: 'Proof media upload',
           status: response.status,
         });
@@ -223,6 +228,9 @@ function formatProofMediaUploadFailure(error: unknown): string {
   const recoveryReason = getDriverApiRecoveryReason(error);
   if (recoveryReason === 'driver_access_expired') {
     return 'Session expired. Sign in again to sync this photo.';
+  }
+  if (recoveryReason === 'route_not_in_progress') {
+    return 'Route ended or released on server. This photo needs reconciliation.';
   }
 
   if (error instanceof DriverApiHttpError) {

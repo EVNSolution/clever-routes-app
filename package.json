@@ -17,6 +17,7 @@
     "check:workspace": "npm run check:source-layout && npm run typecheck && npm run test",
     "build": "npm run build:android && npm run build:ios",
     "build:android": "expo export -p android --output-dir dist/android",
+    "prebuild:android:distribution": "node scripts/verify-distribution-source.mjs",
     "build:android:distribution": "cd android && ./gradlew app:assembleRelease -PreactNativeArchitectures=armeabi-v7a,arm64-v8a -Pandroid.enableMinifyInReleaseBuilds=true -Pandroid.enableShrinkResourcesInReleaseBuilds=true -Pexpo.useLegacyPackaging=true",
     "build:ios": "expo export -p ios --output-dir dist/ios",
     "check:source-layout": "tsx src/release/preflight/sourceLayoutPreflightCli.ts"

@@ -1,5 +1,9 @@
 import type { DeliveryStartResult } from '../delivery/deliveryStart';
-import { formatDriverApiErrorForDriver, getDriverApiRequiresRouteLookup } from '../../api/deliveryServer/driverApiError';
+import {
+  formatDriverApiErrorForDriver,
+  getDriverApiRequiresRouteLookup,
+  getDriverApiRequiresRouteReconciliation,
+} from '../../api/deliveryServer/driverApiError';
 import type { DriverEventRecordResult, DriverEventService, DriverEventType } from '../events/driverEvents';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 import type { ProofMediaReference } from '../proof/proofMediaUpload';
@@ -23,7 +27,14 @@ export type StopProofEventInput = {
 export type StopProofEventResult =
   | (DriverEventRecordResult & { kind: 'recorded' })
   | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
-  | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed'; requiresRouteLookup?: true };
+  | {
+    kind: 'queued';
+    message: string;
+    queueItemId: string;
+    reason: 'record_failed';
+    requiresRouteLookup?: true;
+    requiresRouteReconciliation?: true;
+  };
 
 export async function recordStopProofEventAfterDeliveryStart(input: {
   deliveryStart: DeliveryStartResult;
@@ -58,6 +69,10 @@ export async function recordStopProofEventAfterDeliveryStart(input: {
     }
 
     const queued = input.offlineQueue.enqueueDriverEvent(event);
+    const requiresRouteReconciliation = getDriverApiRequiresRouteReconciliation(error);
+    if (requiresRouteReconciliation === true) {
+      input.offlineQueue.blockRouteSubmissionsForReconciliation(input.input.routePlanId);
+    }
     await input.offlineQueue.whenPersisted();
     return {
       kind: 'queued',
@@ -65,6 +80,9 @@ export async function recordStopProofEventAfterDeliveryStart(input: {
       queueItemId: queued.queueItemId,
       reason: 'record_failed',
       ...(getDriverApiRequiresRouteLookup(error) === undefined ? {} : { requiresRouteLookup: true as const }),
+      ...(requiresRouteReconciliation === undefined
+        ? {}
+        : { requiresRouteReconciliation: true as const }),
     };
   }
 }

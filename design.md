@@ -1,3 +1,101 @@
+# Design
+
+## Source of truth
+
+- Status: Active
+- Last refreshed: 2026-07-23
+- Primary product surfaces: authentication, My Routes, route session, stop details, completed deliveries, settings
+- Evidence reviewed: `src/app/AppRoot.tsx`, `src/app/routeVisualState.ts`, existing screen contracts in this file
+
+## Brand
+
+- Personality: operational, calm, direct, trustworthy
+- Trust signals: explicit server state, preserved delivery evidence, clear recovery actions
+- Avoid: decorative noise, unexplained disappearance of data, alarmist copy, ambiguous state changes
+
+## Product goals
+
+- Goals: fast route scanning, confident stop actions, durable offline operation, visible recovery from server conflicts
+- Non-goals: exposing internal API terminology or asking drivers to diagnose synchronization internals
+- Success signals: a driver can distinguish expired access from a server-ended route and understand whether evidence is preserved
+
+## Personas and jobs
+
+- Primary personas: delivery drivers working one-handed in time-sensitive conditions
+- User jobs: start or continue a route, navigate, record arrival and outcome, understand sync state
+- Key contexts of use: unreliable networks, background operation, route reassignment while the app is active
+
+## Information architecture
+
+- Primary navigation: My Routes, Completed Deliveries, Settings
+- Core routes/screens: route list, route session, stop details, proof capture
+- Content hierarchy: current route and action first, route status second, recovery and permission blockers before optional detail
+
+## Design principles
+
+- Make server truth explicit without discarding local evidence.
+- Keep recovery actions singular and concrete.
+- Tradeoffs: persistent operational warnings take priority over compactness until reconciliation is resolved.
+
+## Visual language
+
+- Color: blue for primary action, green for current/success, warm amber for recoverable operational blockers
+- Typography: concise high-contrast titles with short supporting copy
+- Spacing/layout rhythm: compact mobile rows and touch-safe controls
+- Shape/radius/elevation: existing native card and warning styles; no new design-system layer
+- Motion: existing restrained interaction feedback only
+- Imagery/iconography: text-first operational UI; use existing icon conventions only
+
+## Components
+
+- Existing components to reuse: route cards, warning banners, primary and secondary buttons, status chips
+- New/changed components: persistent route reconciliation warning on My Routes
+- Variants and states: 401 access refresh, 409 route reconciliation, offline retryable, blocked evidence
+- Token/component ownership: `AppRoot.tsx` and existing route visual-state constants
+
+## Accessibility
+
+- Target standard: touch-safe mobile controls with readable contrast
+- Keyboard/focus behavior: native focus order follows visual order
+- Contrast/readability: warning text and action must remain legible without relying on color alone
+- Screen-reader semantics: terminal recovery warning uses alert semantics and a named refresh action
+- Reduced motion and sensory considerations: no animated urgency for reconciliation
+
+## Responsive behavior
+
+- Supported breakpoints/devices: Android and iOS phone layouts
+- Layout adaptations: recovery copy may wrap while the action remains touchable
+- Touch/hover differences: touch-only primary interaction
+
+## Interaction states
+
+- Loading: show route retrieval without implying logout
+- Empty: distinguish no assignments from failed retrieval
+- Error: keep 401 access recovery separate from 409 route reconciliation
+- Success: remove recovery state only when its preserved evidence is explicitly reconciled
+- Disabled: prevent route-start actions when required permissions or active-route constraints fail
+- Offline/slow network: retry normal queue entries; never auto-retry or silently age-delete 409-blocked stop outcomes and proof
+
+## Content voice
+
+- Tone: factual, concise, non-accusatory
+- Terminology: “Driver access expired” for 401; “Route ended or released on server” and “preserved for reconciliation” for 409
+- Microcopy rules: state what happened, what was preserved, and the single next action
+
+## Implementation constraints
+
+- Framework/styling system: React Native and the existing `StyleSheet` patterns
+- Design-token constraints: reuse existing palette and surface conventions
+- Performance constraints: no polling or animation for reconciliation status
+- Compatibility constraints: background GPS must stop immediately on terminal route state
+- Test/screenshot expectations: source behavior tests plus queue and lifecycle tests; visual screenshot matching is not required for this operational banner
+
+## Open questions
+
+- [ ] Define the later administrator reconciliation workflow and the explicit condition that clears preserved blocked evidence.
+
+---
+
 # Clever Driver App UI Design Prompt
 
 ## 0. Global Design Direction

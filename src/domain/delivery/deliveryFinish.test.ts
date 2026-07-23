@@ -175,6 +175,56 @@ describe('delivery finish route cleanup', () => {
       : null, 'ROUTE_PAUSED');
   });
 
+  it('preserves terminal stop evidence and proof when route release returns terminal 409', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'stop-delivered-before-release',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-07-20T03:04:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'stop-1',
+      fileName: 'stop-1.jpg',
+      routePlanId: 'route-1',
+      source: 'camera',
+      uri: 'file:///proof/stop-1.jpg',
+    });
+    const stream = createMockStreamService();
+
+    const result = await finishDeliveryAfterActive({
+      deliveryStart: {
+        flowState: 'delivery_active',
+        kind: 'delivery_active',
+        locationPermission: 'foreground',
+        message: 'active',
+      },
+      driverEventService: {
+        recordDriverEvent: async () => {
+          throw createDriverApiHttpError({
+            code: 'ROUTE_NOT_IN_PROGRESS',
+            endpoint: 'Driver event record',
+            status: 409,
+          });
+        },
+      },
+      now: new Date('2026-07-20T03:05:00.000Z'),
+      offlineQueue: queue,
+      routeEnd: 'released',
+      routePlanId: 'route-1',
+      streamService: stream.service,
+    });
+
+    assert.equal(result.kind, 'queued');
+    assert.equal(result.requiresRouteLookup, undefined);
+    assert.equal(result.requiresRouteReconciliation, true);
+    assert.equal(queue.listPending().length, 2);
+    assert.equal(queue.listPending().every((item) => (
+      item.reconciliation?.reason === 'route_not_in_progress'
+    )), true);
+  });
+
   it('queues route completion when live event recording fails and keeps the queued completion evidence', async () => {
     const memoryQueue = createInMemoryOfflineSubmissionQueue();
     let releasePersistence: () => void = () => undefined;

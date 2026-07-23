@@ -46,20 +46,34 @@ export function isDriverApiUnauthorizedError(error: unknown): boolean {
 }
 
 export function isDriverRouteNotInProgressError(error: unknown): boolean {
-  return error instanceof DriverApiHttpError && error.code === 'ROUTE_NOT_IN_PROGRESS';
+  return error instanceof DriverApiHttpError
+    && error.status === 409
+    && error.code === 'ROUTE_NOT_IN_PROGRESS';
 }
 
-export function getDriverApiRecoveryReason(error: unknown): 'driver_access_expired' | undefined {
-  return isDriverApiUnauthorizedError(error) ? 'driver_access_expired' : undefined;
+export function getDriverApiRecoveryReason(
+  error: unknown,
+): 'driver_access_expired' | 'route_not_in_progress' | undefined {
+  if (isDriverApiUnauthorizedError(error)) {
+    return 'driver_access_expired';
+  }
+  return isDriverRouteNotInProgressError(error) ? 'route_not_in_progress' : undefined;
 }
 
 export function getDriverApiRequiresRouteLookup(error: unknown): true | undefined {
-  return getDriverApiRecoveryReason(error) === undefined ? undefined : true;
+  return getDriverApiRecoveryReason(error) === 'driver_access_expired' ? true : undefined;
+}
+
+export function getDriverApiRequiresRouteReconciliation(error: unknown): true | undefined {
+  return getDriverApiRecoveryReason(error) === 'route_not_in_progress' ? true : undefined;
 }
 
 export function formatDriverApiErrorForDriver(error: unknown): string {
   if (isDriverApiUnauthorizedError(error)) {
     return `${DRIVER_ACCESS_EXPIRED_MESSAGE} (HTTP 401)`;
+  }
+  if (isDriverRouteNotInProgressError(error)) {
+    return 'This route was ended or released by the server and needs reconciliation. (HTTP 409)';
   }
 
   return error instanceof Error ? error.message : 'unknown error';

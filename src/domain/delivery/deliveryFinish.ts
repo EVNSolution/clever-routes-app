@@ -1,6 +1,10 @@
 import { CONTINUOUS_LOCATION_TASK_NAME, type ContinuousLocationStreamService } from '../location/continuousLocationStream';
 import type { DeliveryStartResult } from './deliveryStart';
-import { formatDriverApiErrorForDriver, getDriverApiRequiresRouteLookup } from '../../api/deliveryServer/driverApiError';
+import {
+  formatDriverApiErrorForDriver,
+  getDriverApiRequiresRouteLookup,
+  getDriverApiRequiresRouteReconciliation,
+} from '../../api/deliveryServer/driverApiError';
 import type { DriverEventService } from '../events/driverEvents';
 import type { DriverFlowState } from '../driverFlow/driverFlow';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
@@ -28,6 +32,7 @@ export type DeliveryFinishResult =
       queueItemId: string;
       reason: 'record_failed';
       requiresRouteLookup?: true;
+      requiresRouteReconciliation?: true;
       stoppedTaskName: string;
     };
 
@@ -88,10 +93,14 @@ export async function finishDeliveryAfterActive(input: {
       throw error;
     }
 
-    if (routeReleased && input.routePlanId !== null) {
+    const requiresRouteReconciliation = getDriverApiRequiresRouteReconciliation(error);
+    if (routeReleased && input.routePlanId !== null && requiresRouteReconciliation === undefined) {
       input.offlineQueue.discardRouteSubmissions(input.routePlanId);
     }
     const queued = input.offlineQueue.enqueueDriverEvent(event);
+    if (input.routePlanId !== null && requiresRouteReconciliation === true) {
+      input.offlineQueue.blockRouteSubmissionsForReconciliation(input.routePlanId);
+    }
     await input.offlineQueue.whenPersisted();
     return {
       flowState: 'delivery_finished',
@@ -102,6 +111,9 @@ export async function finishDeliveryAfterActive(input: {
       queueItemId: queued.queueItemId,
       reason: 'record_failed',
       ...(getDriverApiRequiresRouteLookup(error) === undefined ? {} : { requiresRouteLookup: true as const }),
+      ...(requiresRouteReconciliation === undefined
+        ? {}
+        : { requiresRouteReconciliation: true as const }),
       stoppedTaskName: taskName,
     };
   }

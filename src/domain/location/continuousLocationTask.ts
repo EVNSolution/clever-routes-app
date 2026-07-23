@@ -135,7 +135,7 @@ export async function processContinuousLocationTaskBatch(input: {
   if (recorded.kind === 'route_not_in_progress') {
     const cleared = await input.driverAccessTokenStore.clearActiveRouteSession(routePlanId, sessionGeneration);
     if (cleared) {
-      input.offlineQueue.discardRouteSubmissions(routePlanId);
+      input.offlineQueue.blockRouteSubmissionsForReconciliation(routePlanId);
       await input.offlineQueue.whenPersisted();
       return {
         kind: 'deactivated',
