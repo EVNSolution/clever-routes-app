@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 const patches = [
   {
     file: 'node_modules/expo-location/expo-module.config.json',
-    before: `  "android": {\n    "modules": ["expo.modules.location.LocationModule"],\n    "publication": {\n      "groupId": "host.exp.exponent",\n      "artifactId": "expo.modules.location",\n      "version": "56.0.21",\n      "repository": "local-maven-repo"\n    }\n  }`,
+    before: `  "android": {\n    "modules": ["expo.modules.location.LocationModule"],\n    "publication": {\n      "groupId": "host.exp.exponent",\n      "artifactId": "expo.modules.location",\n      "version": "56.0.22",\n      "repository": "local-maven-repo"\n    }\n  }`,
     after: `  "android": {\n    "modules": ["expo.modules.location.LocationModule"]\n  }`,
   },
   {

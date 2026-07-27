@@ -26,18 +26,18 @@
     "@expo/vector-icons": "^15.0.2",
     "@maplibre/maplibre-react-native": "^11.3.4",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "expo": "~56.0.16",
+    "expo": "~56.0.17",
     "expo-camera": "~56.0.8",
-    "expo-dev-client": "~56.0.23",
+    "expo-dev-client": "~56.0.24",
     "expo-font": "~56.0.7",
-    "expo-image-picker": "~56.0.21",
-    "expo-location": "~56.0.21",
+    "expo-image-picker": "~56.0.22",
+    "expo-location": "~56.0.22",
     "expo-network": "~56.0.5",
-    "expo-notifications": "~56.0.21",
+    "expo-notifications": "~56.0.22",
     "expo-secure-store": "~56.0.4",
     "expo-speech": "~56.0.3",
     "expo-status-bar": "~56.0.4",
-    "expo-task-manager": "~56.0.22",
+    "expo-task-manager": "~56.0.23",
     "libphonenumber-js": "1.13.6",
     "react": "19.2.3",
     "react-native": "0.85.3",
@@ -58,7 +58,10 @@
     "node": ">=20.19.4"
   },
   "overrides": {
-    "postcss": "8.5.10",
+    "postcss": "8.5.23",
+    "minimatch@10.2.5": {
+      "brace-expansion": "5.0.8"
+    },
     "uuid": "11.1.1",
     "ws": "8.21.0",
     "shell-quote": "1.10.0"
