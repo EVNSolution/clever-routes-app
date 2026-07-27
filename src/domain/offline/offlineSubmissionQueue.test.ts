@@ -340,6 +340,7 @@ describe('offline submission queue', () => {
       proofMediaUploadService: {
         uploadProofMedia: async () => { throw new Error('must not upload after terminal recovery'); },
       },
+      now: () => new Date('2026-07-23T10:00:00.000Z'),
       queue,
       routePlanId: 'route-1',
     });

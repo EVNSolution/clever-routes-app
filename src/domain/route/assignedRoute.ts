@@ -88,9 +88,18 @@ export type AssignedRoutePaymentCopy = {
   tone: 'green' | 'neutral' | 'warning';
 };
 
+export type AssignedRoutePaymentSummary = {
+  amountLabel: string;
+  detail: string;
+  methodLabel: string;
+  notificationLabel: string;
+  status: AssignedRoutePaymentCopy;
+};
+
 export type AssignedRouteStop = {
   address: AssignedRouteAddress;
   coordinates: AssignedRouteCoordinates | null;
+  currencyCode?: string | null;
   customerNote?: string | null;
   deliveryStopId: string;
   durationFromPreviousSeconds?: number | null;
@@ -98,10 +107,12 @@ export type AssignedRouteStop = {
   items: AssignedRouteOrderItem[];
   normalizedPaymentStatus: NormalizedPaymentStatus | null;
   orderName: string;
+  paymentMethodTitle?: string | null;
   phone: string | null;
   recipientName: string | null;
   sequence: number;
   status: string;
+  totalPriceAmount?: string | null;
 };
 
 export type AssignedRouteStopPoint = {
@@ -247,6 +258,7 @@ export const sampleAssignedRoute: AssignedRoute = {
         latitude: 43.6487,
         longitude: -79.3817,
       },
+      currencyCode: 'CAD',
       deliveryStopId: '22222222-2222-4222-8222-222222222222',
       durationFromPreviousSeconds: 480,
       estimatedArrivalAt: '2026-05-12T11:08:00.000Z',
@@ -262,10 +274,12 @@ export const sampleAssignedRoute: AssignedRoute = {
       ],
       normalizedPaymentStatus: 'CASH_COLLECT_REQUIRED',
       orderName: '#1001',
+      paymentMethodTitle: 'Cash on delivery',
       phone: '+14165550123',
       recipientName: 'Recipient One',
       sequence: 1,
       status: 'ASSIGNED',
+      totalPriceAmount: '84.50',
     },
     {
       address: {
@@ -280,6 +294,7 @@ export const sampleAssignedRoute: AssignedRoute = {
         latitude: 43.6509,
         longitude: -79.3909,
       },
+      currencyCode: 'CAD',
       deliveryStopId: '33333333-3333-4333-8333-333333333333',
       durationFromPreviousSeconds: 360,
       estimatedArrivalAt: '2026-05-12T11:19:00.000Z',
@@ -295,10 +310,12 @@ export const sampleAssignedRoute: AssignedRoute = {
       ],
       normalizedPaymentStatus: 'TRANSFER_CHECK_PENDING',
       orderName: '#1002',
+      paymentMethodTitle: 'eTransfer',
       phone: '+14165550124',
       recipientName: 'Recipient Two',
       sequence: 2,
       status: 'ASSIGNED',
+      totalPriceAmount: '52.00',
     },
   ],
   timezone: 'America/Toronto',
@@ -645,6 +662,7 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
   return (
     isAssignedRouteAddress(stop.address) &&
     (stop.coordinates === null || isAssignedRouteCoordinates(stop.coordinates)) &&
+    (stop.currencyCode === undefined || nullableString(stop.currencyCode)) &&
     (stop.customerNote === undefined || nullableString(stop.customerNote)) &&
     typeof stop.deliveryStopId === 'string' &&
     (stop.durationFromPreviousSeconds === undefined || nullableFiniteNumber(stop.durationFromPreviousSeconds)) &&
@@ -653,10 +671,12 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
     stop.items.every(isAssignedRouteOrderItem) &&
     isNormalizedPaymentStatus(stop.normalizedPaymentStatus) &&
     typeof stop.orderName === 'string' &&
+    (stop.paymentMethodTitle === undefined || nullableString(stop.paymentMethodTitle)) &&
     nullableString(stop.phone) &&
     nullableString(stop.recipientName) &&
     typeof stop.sequence === 'number' &&
-    typeof stop.status === 'string'
+    typeof stop.status === 'string' &&
+    (stop.totalPriceAmount === undefined || nullableMoneyString(stop.totalPriceAmount))
   );
 }
 
@@ -746,6 +766,13 @@ function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
 }
 
+function nullableMoneyString(value: unknown): value is string | null {
+  return value === null || (
+    typeof value === 'string'
+    && /^-?\d+(?:\.\d+)?$/u.test(value.trim())
+  );
+}
+
 export function formatAssignedRoutePaymentStatus(
   status: NormalizedPaymentStatus | null,
 ): AssignedRoutePaymentCopy {
@@ -792,5 +819,91 @@ export function formatAssignedRoutePaymentStatus(
         label: 'Payment unavailable',
         tone: 'neutral',
       };
+  }
+}
+
+export function formatAssignedRoutePaymentSummary(
+  stop: Pick<
+    AssignedRouteStop,
+    'currencyCode' | 'normalizedPaymentStatus' | 'paymentMethodTitle' | 'totalPriceAmount'
+  >,
+): AssignedRoutePaymentSummary {
+  const status = formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
+  const amountLabel = formatAssignedRoutePaymentAmount(
+    stop.totalPriceAmount ?? null,
+    stop.currencyCode ?? null,
+  );
+  const methodLabel = stop.paymentMethodTitle?.trim()
+    || getFallbackPaymentMethodLabel(stop.normalizedPaymentStatus);
+  const displayStatus = stop.normalizedPaymentStatus === 'CASH_COLLECT_REQUIRED'
+    && amountLabel === 'Amount unavailable'
+    ? {
+      detail: 'The exact cash total is missing from the server response.',
+      label: 'Amount unavailable',
+      tone: 'warning' as const,
+    }
+    : status;
+
+  let detail = displayStatus.detail;
+  if (stop.normalizedPaymentStatus === 'CASH_COLLECT_REQUIRED') {
+    detail = amountLabel === 'Amount unavailable'
+      ? 'Do not request cash until dispatch provides the exact total.'
+      : `Collect exactly ${amountLabel} from the customer.`;
+  } else if (stop.normalizedPaymentStatus === 'TRANSFER_CHECK_PENDING') {
+    detail = 'Transfer is not confirmed. Ask the customer only when dispatch requires collection.';
+  } else if (stop.normalizedPaymentStatus === 'PAID_CONFIRMED') {
+    detail = 'Payment is confirmed. Do not request payment from the customer.';
+  }
+
+  return {
+    amountLabel,
+    detail,
+    methodLabel,
+    notificationLabel: displayStatus.label === amountLabel
+      ? `${methodLabel}, ${amountLabel}`
+      : `${methodLabel}, ${displayStatus.label}, ${amountLabel}`,
+    status: displayStatus,
+  };
+}
+
+function formatAssignedRoutePaymentAmount(
+  amount: string | null,
+  currencyCode: string | null,
+): string {
+  const normalizedAmount = amount?.trim() ?? '';
+  const normalizedCurrency = currencyCode?.trim().toUpperCase() ?? '';
+  if (
+    !/^-?\d+(?:\.\d+)?$/u.test(normalizedAmount)
+    || !/^[A-Z]{3}$/u.test(normalizedCurrency)
+  ) {
+    return 'Amount unavailable';
+  }
+
+  const numericAmount = Number(normalizedAmount);
+  if (!Number.isFinite(numericAmount)) {
+    return 'Amount unavailable';
+  }
+
+  try {
+    return new Intl.NumberFormat('en-CA', {
+      currency: normalizedCurrency,
+      currencyDisplay: 'code',
+      style: 'currency',
+    }).format(numericAmount).replace(/\s+/gu, ' ');
+  } catch {
+    return 'Amount unavailable';
+  }
+}
+
+function getFallbackPaymentMethodLabel(status: NormalizedPaymentStatus | null): string {
+  switch (status) {
+    case 'CASH_COLLECT_REQUIRED':
+      return 'Cash';
+    case 'TRANSFER_CHECK_PENDING':
+      return 'eTransfer';
+    case 'ONLINE_PAYMENT_PENDING_OR_FAILED':
+      return 'Online payment';
+    default:
+      return 'Payment';
   }
 }

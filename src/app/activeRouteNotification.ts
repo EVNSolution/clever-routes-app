@@ -1,4 +1,10 @@
-import { formatAssignedRouteEta, type AssignedRoute, type AssignedRouteStop } from '../domain/route/assignedRoute';
+import {
+  formatAssignedRouteEta,
+  formatAssignedRoutePaymentSummary,
+  type AssignedRoute,
+  type AssignedRoutePaymentSummary,
+  type AssignedRouteStop,
+} from '../domain/route/assignedRoute';
 import type { ContinuousLocationNotificationContent } from '../domain/location/continuousLocationStream';
 
 const ACTIVE_ROUTE_NOTIFICATION_URL_PREFIX = 'clever-driver://route-stop?';
@@ -36,15 +42,23 @@ export function buildActiveRouteForegroundNotification(input: {
   const itemCount = stop.items.reduce((total, item) => total + item.quantity, 0);
   const itemSummary = formatItemSummary(itemTypeCount, itemCount);
   const customerNote = truncateNotificationText(stop.customerNote);
+  const payment = formatAssignedRoutePaymentSummary(stop);
   const body = [
     address,
+    `Payment: ${payment.notificationLabel}`,
     customerNote === null ? null : `Note: ${customerNote}`,
     `Items ${itemSummary}`,
   ].filter((value): value is string => value !== null).join('\n');
 
   return {
     body,
-    expandedBody: formatExpandedNotificationBody({ address, customerNote: stop.customerNote, itemCount, itemTypeCount }),
+    expandedBody: formatExpandedNotificationBody({
+      address,
+      customerNote: stop.customerNote,
+      itemCount,
+      itemTypeCount,
+      payment,
+    }),
     title: `Next stop ${stop.sequence}${eta === null ? '' : `  ETA ${eta}`}`,
     url: buildActiveRouteNotificationUrl({
       deliveryStopId: stop.deliveryStopId,
@@ -115,9 +129,16 @@ function formatExpandedNotificationBody(input: {
   customerNote: string | null | undefined;
   itemCount: number;
   itemTypeCount: number;
+  payment: AssignedRoutePaymentSummary;
 }): string {
   const note = truncateNotificationText(input.customerNote, EXPANDED_CUSTOMER_NOTE_MAX_LENGTH) ?? 'None';
   return [
+    'Payment',
+    input.payment.methodLabel,
+    'Status',
+    input.payment.status.label,
+    'Total',
+    input.payment.amountLabel,
     'Address',
     input.address,
     'Customer note',

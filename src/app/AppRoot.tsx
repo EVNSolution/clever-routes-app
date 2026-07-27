@@ -36,6 +36,7 @@ import {
   formatAssignedRouteDistance,
   formatAssignedRouteDuration,
   formatAssignedRouteEta,
+  formatAssignedRoutePaymentSummary,
   formatAssignedRoutePaymentStatus,
   loadAssignedRouteAfterConsent,
   resolveRouteMapPreviewState,
@@ -3929,7 +3930,7 @@ function StopDetailsScreen({
   onOpenNavigation(): void;
   stop: AssignedRouteStop;
 }) {
-  const payment = formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
+  const payment = formatAssignedRoutePaymentSummary(stop);
   return (
     <View style={styles.stopDetailsPage}>
       <ScreenHeader hideRightAction onBack={onBack} title={`Stop ${stop.sequence}`} />
@@ -3943,7 +3944,15 @@ function StopDetailsScreen({
       </View>
 
       <View style={[styles.stopDetailsSection, styles.stopDetailsPaymentSection]}>
-        <StatusChip label={payment.label} tone={payment.tone} />
+        <Text style={styles.stopDetailsSectionTitle}>Payment</Text>
+        <View style={styles.stopDetailsPaymentRow}>
+          <View style={styles.stopDetailsPaymentCopy}>
+            <Text style={styles.stopDetailsPaymentMethod}>{payment.methodLabel}</Text>
+            <Text style={styles.stopDetailsPaymentAmount}>{payment.amountLabel}</Text>
+          </View>
+          <StatusChip label={payment.status.label} tone={payment.status.tone} />
+        </View>
+        <Text style={styles.stopDetailsPaymentDetail}>{payment.detail}</Text>
       </View>
 
       <View style={styles.stopDetailsSection}>
@@ -6663,7 +6672,35 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   stopDetailsPaymentSection: {
-    alignItems: 'flex-start',
+    alignItems: 'stretch',
+  },
+  stopDetailsPaymentRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  stopDetailsPaymentCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  stopDetailsPaymentMethod: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '800',
+    lineHeight: 22,
+  },
+  stopDetailsPaymentAmount: {
+    color: '#111827',
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+    lineHeight: 30,
+  },
+  stopDetailsPaymentDetail: {
+    color: '#475467',
+    fontSize: 13,
+    lineHeight: 19,
   },
   stopDetailsItemHeader: {
     flexDirection: 'row',

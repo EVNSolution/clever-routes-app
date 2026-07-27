@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-07-23
+- Last refreshed: 2026-07-27
 - Primary product surfaces: authentication, My Routes, route session, stop details, completed deliveries, settings
 - Evidence reviewed: `src/app/AppRoot.tsx`, `src/app/routeVisualState.ts`, existing screen contracts in this file
 
@@ -15,7 +15,7 @@
 
 ## Product goals
 
-- Goals: fast route scanning, confident stop actions, durable offline operation, visible recovery from server conflicts
+- Goals: fast route scanning, confident stop and payment-collection actions, durable offline operation, visible recovery from server conflicts
 - Non-goals: exposing internal API terminology or asking drivers to diagnose synchronization internals
 - Success signals: a driver can distinguish expired access from a server-ended route and understand whether evidence is preserved
 
@@ -49,7 +49,7 @@
 ## Components
 
 - Existing components to reuse: route cards, warning banners, primary and secondary buttons, status chips
-- New/changed components: persistent route reconciliation warning on My Routes
+- New/changed components: persistent route reconciliation warning on My Routes; shared stop payment summary for Stop Detail and foreground notifications
 - Variants and states: 401 access refresh, 409 route reconciliation, offline retryable, blocked evidence
 - Token/component ownership: `AppRoot.tsx` and existing route visual-state constants
 
@@ -2148,6 +2148,17 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - Treat Route Sequence rows as navigation into stop information only. Opening a non-current stop must not change the current task, show an order warning, update ETA, or notify the administrator.
 - Let an incomplete non-current stop expose `Arrive` inside Stop Details while the route is active. If arriving there would skip an incomplete planned stop, show the order-change confirmation only after `Arrive` is pressed.
 - After the driver confirms an out-of-order arrival, make that stop current, submit its `STOP_ARRIVED` event to the server, and let the server update ETA and administrator notification state. Cancelling the confirmation must leave the current task unchanged.
+
+## Stop Payment Context (2026-07-27)
+
+- Treat the server-provided normalized payment status as authoritative for whether payment is confirmed, collectible, pending, or exceptional.
+- Show payment method, exact order total with ISO currency, status, and short operational guidance together in Stop Detail.
+- Keep the Payment section flat and divided like the rest of Stop Detail. Do not introduce a payment card or decorative icon.
+- For cash collection, display the exact server total prominently. If amount or currency is unavailable, show `Amount unavailable` and explicitly tell the driver not to request cash until dispatch supplies the exact total.
+- For eTransfer and other transfer methods, show whether payment is confirmed or pending. A pending transfer must not be presented as paid.
+- Add the same method, status, and total to both compact and expanded foreground next-stop notifications.
+- Use comma-separated compact notification copy. Do not use middle-dot separators.
+- Never calculate an order total from item rows in the Driver app and never let the Driver app mutate payment status.
 
 ## Completed Deliveries Current Override (2026-07-22)
 
