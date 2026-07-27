@@ -12,9 +12,13 @@
       }
     },
     "production": {
+      "credentialsSource": "remote",
       "distribution": "store",
       "environment": "production",
-      "autoIncrement": true
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      }
     }
   },
   "submit": {
