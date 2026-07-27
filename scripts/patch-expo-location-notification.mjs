@@ -89,6 +89,16 @@ const patches = [
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setSmallIcon(iconsResId)\n      .build()`,
+    after: `    val publicNotification = Notification.Builder(this, mChannelId)\n      .setCategory(Notification.CATEGORY_SERVICE)\n      .setContentTitle("Clever Driver")\n      .setContentText("Active route in progress")\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setSmallIcon(iconsResId)\n      .build()\n\n    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setPublicVersion(publicNotification)\n      .setSmallIcon(iconsResId)\n      .setVisibility(Notification.VISIBILITY_PRIVATE)\n      .build()`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `    if (channel == null) {\n      channel = NotificationChannel(id, appName, NotificationManager.IMPORTANCE_LOW)\n      channel.description = "Background location notification channel"\n      notificationManager.createNotificationChannel(channel)\n    }`,
+    after: `    if (channel == null) {\n      channel = NotificationChannel(id, appName, NotificationManager.IMPORTANCE_LOW)\n      channel.description = "Background location notification channel"\n    }\n    channel.lockscreenVisibility = Notification.VISIBILITY_PRIVATE\n    notificationManager.createNotificationChannel(channel)`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
     before: `  companion object {\n    private var sServiceId = 481756`,
     after: `  companion object {\n    private var sServiceId = 481756\n    private val sActiveServices = ConcurrentHashMap<String, LocationTaskService>()\n\n    fun updateNotification(taskName: String, serviceOptions: Bundle): Boolean {\n      return sActiveServices[taskName]?.updateForeground(serviceOptions) ?: false\n    }`,
   },

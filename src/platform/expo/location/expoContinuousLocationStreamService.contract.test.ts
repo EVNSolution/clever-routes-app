@@ -14,6 +14,7 @@ const patchScriptPath = join(currentDirectory, '..', '..', '..', '..', 'scripts'
 const mainActivityPath = join(currentDirectory, '..', '..', '..', '..', 'android', 'app', 'src', 'main', 'java', 'com', 'evns', 'cleverdriverapp', 'MainActivity.kt');
 const queueStoragePath = join(currentDirectory, '..', 'storage', 'expoOfflineSubmissionQueueStorage.ts');
 const secureStorePath = join(currentDirectory, '..', 'secureStore', 'expoSecureDriverAccessTokenStore.ts');
+const stopArrivalNotificationServicePath = join(currentDirectory, '..', 'notifications', 'expoStopArrivalNotificationService.ts');
 const appRootPath = join(currentDirectory, '..', '..', '..', 'app', 'AppRoot.tsx');
 
 describe('Expo continuous location wiring', () => {
@@ -59,6 +60,7 @@ describe('Expo continuous location wiring', () => {
     const mainActivitySource = readFileSync(mainActivityPath, 'utf8');
     const patchSource = readFileSync(patchScriptPath, 'utf8');
     const serviceSource = readFileSync(locationTaskServicePath, 'utf8');
+    const stopArrivalNotificationSource = readFileSync(stopArrivalNotificationServicePath, 'utf8');
     const typesSource = readFileSync(locationTypesPath, 'utf8');
 
     assert.match(typesSource, /notificationBigText\?: string/u);
@@ -76,8 +78,14 @@ describe('Expo continuous location wiring', () => {
     assert.match(serviceSource, /sActiveServices\[taskName\]\?\.updateForeground/u);
     assert.match(serviceSource, /\.setOngoing\(true\)/u);
     assert.match(serviceSource, /\.setOnlyAlertOnce\(true\)/u);
+    assert.match(serviceSource, /\.setVisibility\(Notification\.VISIBILITY_PRIVATE\)/u);
+    assert.match(serviceSource, /\.setPublicVersion\(publicNotification\)/u);
+    assert.match(serviceSource, /\.setContentText\("Active route in progress"\)/u);
+    assert.match(serviceSource, /channel\.lockscreenVisibility = Notification\.VISIBILITY_PRIVATE/u);
     assert.match(patchSource, /updateLocationTaskNotificationAsync/u);
     assert.match(patchSource, /\.setOngoing\(true\)/u);
+    assert.match(patchSource, /\.setVisibility\(Notification\.VISIBILITY_PRIVATE\)/u);
+    assert.match(stopArrivalNotificationSource, /lockscreenVisibility: Notifications\.AndroidNotificationVisibility\.PRIVATE/u);
     assert.doesNotMatch(moduleConfigSource, /"publication"/u);
     assert.match(mainActivitySource, /override fun onNewIntent\(intent: Intent\)/u);
     assert.match(mainActivitySource, /setIntent\(intent\)/u);
