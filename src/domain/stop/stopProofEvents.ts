@@ -10,7 +10,12 @@ import type { ProofMediaReference } from '../proof/proofMediaUpload';
 import type { ProofSignatureReference } from '../proof/proofSignatureCapture';
 
 export type StopProofAction = 'delivered' | 'failed';
-export type StopProofFailureReason = 'CUSTOMER_UNAVAILABLE' | 'DAMAGED' | 'INACCESSIBLE' | 'OTHER';
+export type StopProofFailureReason =
+  | 'ADMIN_ROUTE_ASSIGNMENT_ERROR'
+  | 'CUSTOMER_UNAVAILABLE'
+  | 'DAMAGED'
+  | 'INACCESSIBLE'
+  | 'OTHER';
 
 export type StopProofEventInput = {
   action: StopProofAction;

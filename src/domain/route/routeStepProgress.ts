@@ -126,7 +126,7 @@ export function getStopDetailsProgressState(input: {
   const selectedStop = input.selectedStopDetailsId === null
     ? null
     : input.route.stops.find((stop) => stop.deliveryStopId === input.selectedStopDetailsId) ?? null;
-  const stop = selectedStop ?? currentStop;
+  const stop = input.selectedStopDetailsId === null ? currentStop : selectedStop;
 
   if (stop === null) {
     return null;

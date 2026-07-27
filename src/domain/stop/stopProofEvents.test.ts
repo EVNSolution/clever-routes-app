@@ -96,6 +96,32 @@ describe('stop proof event flow', () => {
     });
   });
 
+  it('records an administrator assignment error when a pickup stop is skipped', async () => {
+    const driverEventService = createMockDriverEventService();
+
+    await recordStopProofEventAfterDeliveryStart({
+      deliveryStart: activeDelivery,
+      driverEventService,
+      input: {
+        action: 'failed',
+        deliveryStopId: 'stop-pickup',
+        note: 'Pickup order was incorrectly included in the delivery route.',
+        reason: 'ADMIN_ROUTE_ASSIGNMENT_ERROR',
+        routePlanId: 'route-1',
+      },
+    });
+
+    assert.equal(driverEventService.recordedEvents[0]?.eventType, 'STOP_FAILED');
+    assert.deepEqual(driverEventService.recordedEvents[0]?.payload, {
+      proof: {
+        note: 'Pickup order was incorrectly included in the delivery route.',
+        reason: 'ADMIN_ROUTE_ASSIGNMENT_ERROR',
+        source: 'driver-app-mvp',
+        type: 'FAILED_REASON',
+      },
+    });
+  });
+
   it('records uploaded media and signature proof references after delivery_active', async () => {
     const driverEventService = createMockDriverEventService();
 

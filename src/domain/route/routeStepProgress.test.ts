@@ -119,6 +119,17 @@ describe('route step progress state', () => {
     assert.equal(previewState?.stop.deliveryStopId, secondStop.deliveryStopId);
   });
 
+  it('does not replace a missing selected stop with the current stop', () => {
+    assert.equal(
+      getStopDetailsProgressState({
+        navigationStepIndex: 1,
+        route: sampleAssignedRoute,
+        selectedStopDetailsId: 'removed-stop',
+      }),
+      null,
+    );
+  });
+
   it('warns before arriving at an incomplete stop outside the planned current order', () => {
     const secondStop = sampleAssignedRoute.stops[1];
     assert.ok(secondStop);

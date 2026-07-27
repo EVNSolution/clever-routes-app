@@ -44,10 +44,10 @@ describe('background location lifecycle wiring', () => {
 
   it('refreshes background permission on My Routes and after returning from system settings', () => {
     const source = readFileSync(appRootPath, 'utf8');
-    const settingsHandler = getFunctionSource(
+    const permissionHandler = getFunctionSource(
       source,
+      'const requestBackgroundLocationPermissionAfterDisclosure = useCallback(',
       'const handleOpenBackgroundLocationSettings = useCallback(',
-      'const clearAndStopActiveLocationSession = useCallback(',
     );
     const appStateSource = getFunctionSource(
       source,
@@ -55,15 +55,63 @@ describe('background location lifecycle wiring', () => {
       'return () => subscription.remove()',
     );
 
-    assert.match(settingsHandler, /requestForegroundPermission\(\)/u);
-    assert.match(settingsHandler, /foregroundPermission\.status !== 'granted'[\s\S]*Linking\.openSettings\(\)/u);
-    assert.match(settingsHandler, /requestContinuousLocationBackgroundPermission/u);
-    assert.match(settingsHandler, /await refreshBackgroundLocationPermission\(\)/u);
+    assert.match(permissionHandler, /requestForegroundPermission\(\)/u);
+    assert.match(permissionHandler, /foregroundPermission\.status !== 'granted'[\s\S]*Linking\.openSettings\(\)/u);
+    assert.match(permissionHandler, /requestContinuousLocationBackgroundPermission/u);
+    assert.match(permissionHandler, /await refreshBackgroundLocationPermission\(\)/u);
     assert.match(appStateSource, /state === 'active'[\s\S]*refreshBackgroundLocationPermission/u);
+    assert.match(appStateSource, /state === 'active'[\s\S]*!isStartingRoute[\s\S]*screen === 'mainTabs'[\s\S]*handleRefreshRoutes/u);
     assert.match(source, /isDriverRestoreComplete && screen === 'mainTabs'[\s\S]*refreshBackgroundLocationPermission/u);
   });
 
-  it('reconciles native tracking when restoring an active route', () => {
+  it('shows the Play background-location disclosure immediately before the OS permission request', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const permissionFlow = getFunctionSource(
+      source,
+      'const requestBackgroundLocationPermissionAfterDisclosure = useCallback(',
+      'const clearAndStopActiveLocationSession = useCallback(',
+    );
+
+    assert.match(
+      permissionFlow,
+      /collects your precise location while a delivery route is in progress, even when the app is closed or not in use/u,
+    );
+    assert.match(permissionFlow, /live route progress and arrival records/u);
+    assert.match(permissionFlow, /Location tracking stops when the route ends/u);
+    assert.match(permissionFlow, /text: 'Not Now'/u);
+    assert.match(permissionFlow, /text: 'Continue'/u);
+    assert.match(permissionFlow, /onPress: requestBackgroundLocationPermissionAfterDisclosure/u);
+    assert.match(
+      permissionFlow,
+      /requestBackgroundLocationPermissionAfterDisclosure[\s\S]*requestContinuousLocationBackgroundPermission/u,
+    );
+  });
+
+  it('preserves the server-active route while native tracking restoration is deferred or blocked', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const loadSource = getFunctionSource(
+      source,
+      'const handleLoginAndLoadRoutes = useCallback(',
+      'const handleRefreshRoutes = useCallback(',
+    );
+    const restoreSource = getFunctionSource(
+      loadSource,
+      'if (restoredActiveSession !== null) {',
+      'if (shouldNavigateOnSuccess) {',
+    );
+
+    assert.match(restoreSource, /setActiveRoutePlanId\(restoredActiveSession\.route\.id\)/u);
+    assert.match(restoreSource, /AppState\.currentState !== 'active'[\s\S]*return/u);
+    assert.match(restoreSource, /startContinuousLocationUpdatesAfterDeliveryStart/u);
+    assert.match(restoreSource, /continuousResult\.kind === 'blocked'[\s\S]*server route remains active/u);
+    assert.match(restoreSource, /catch \(error\)[\s\S]*server route remains active/u);
+    assert.doesNotMatch(restoreSource, /clearAndStopActiveLocationSession/u);
+    assert.doesNotMatch(restoreSource, /setDeliveryStartResult\(null\)/u);
+    assert.match(loadSource, /if \(activeRouteWasRemoved\) \{[\s\S]*clearAndStopActiveLocationSession/u);
+    assert.doesNotMatch(loadSource, /if \(selectedRouteWasRemoved \|\| activeRouteWasRemoved\)/u);
+  });
+
+  it('does not delete a persisted active route from a partial server refresh', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const loadSource = getFunctionSource(
       source,
@@ -71,10 +119,20 @@ describe('background location lifecycle wiring', () => {
       'const handleRefreshRoutes = useCallback(',
     );
 
-    assert.match(loadSource, /if \(restoredActiveSession !== null\)[\s\S]*startContinuousLocationUpdatesAfterDeliveryStart/u);
-    assert.match(loadSource, /continuousResult\.kind === 'blocked'[\s\S]*clearAndStopActiveLocationSession/u);
-    assert.match(loadSource, /if \(activeRouteWasRemoved\) \{[\s\S]*clearAndStopActiveLocationSession/u);
-    assert.doesNotMatch(loadSource, /if \(selectedRouteWasRemoved \|\| activeRouteWasRemoved\)/u);
+    const unresolvedIndex = loadSource.indexOf('const activeRouteLoadIsUnresolved');
+    const removedIndex = loadSource.indexOf('const activeRouteWasRemoved');
+    const clearRemovedIndex = loadSource.indexOf('if (activeRouteWasRemoved)');
+
+    assert.ok(unresolvedIndex < removedIndex);
+    assert.ok(removedIndex < clearRemovedIndex);
+    assert.match(
+      loadSource,
+      /activeRouteLoadIsUnresolved = persistedActiveRouteSession !== null[\s\S]*restoredActiveSession === null[\s\S]*routeLoadFailed/u,
+    );
+    assert.match(
+      loadSource,
+      /if \(activeRouteLoadIsUnresolved\) \{[\s\S]*server state was kept[\s\S]*return/u,
+    );
   });
 
   it('uses one terminal cleanup path for logout, assignment loss, and expired auth', () => {

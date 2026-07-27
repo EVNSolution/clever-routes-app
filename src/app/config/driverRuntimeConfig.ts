@@ -38,6 +38,9 @@ export function readDriverRuntimeConfig(env: DriverRuntimeEnv): DriverRuntimeCon
   if (deliveryServerBaseUrl === undefined || deliveryServerBaseUrl === '') {
     throw new Error('EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL is required unless EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock.');
   }
+  if (!deliveryServerBaseUrl.toLowerCase().startsWith('https://')) {
+    throw new Error('EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL must use HTTPS in live mode.');
+  }
 
   return {
     deliveryServerBaseUrl,

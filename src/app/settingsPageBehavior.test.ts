@@ -88,6 +88,18 @@ describe('Settings page behavior', () => {
     assert.match(source, /const accountAccess = await getActiveAccountAccess\(\)/u);
   });
 
+  it('does not let a completed name save override Back navigation', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const saveStart = source.indexOf('async function handleSaveAccountName()');
+    const saveEnd = source.indexOf('\n\n  const refreshRouteAccessLookupForSubmission', saveStart);
+    const saveSource = source.slice(saveStart, saveEnd);
+
+    assert.notEqual(saveStart, -1);
+    assert.notEqual(saveEnd, -1);
+    assert.match(saveSource, /const requestScreen = screenRef\.current/u);
+    assert.match(saveSource, /if \(screenRef\.current === requestScreen\) \{[\s\S]*setScreen\('settings'\);[\s\S]*\}/u);
+  });
+
   it('uses quiet grouped-list styling instead of dashboard cards', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const settingsStyles = source.slice(

@@ -121,9 +121,12 @@ describe('routes list behavior', () => {
 
     assert.match(source, /backgroundLocationPermission === 'denied'/u);
     assert.match(source, />Allow all the time required<\/Text>/u);
-    assert.match(source, />\s*Enable background location before starting a route\.\s*<\/Text>/u);
-    assert.match(source, /accessibilityLabel="Open location settings"/u);
-    assert.match(source, />Open Settings<\/Text>/u);
+    assert.match(
+      source,
+      /Clever Driver collects your precise location during an active route, even when the app is closed or not in use\./u,
+    );
+    assert.match(source, /accessibilityLabel="Review background location access"/u);
+    assert.match(source, />Review & Allow<\/Text>/u);
     assert.match(source, /const isStartDisabled = [\s\S]*backgroundLocationPermission !== 'granted'/u);
     assert.match(source, /<PrimaryButton[\s\S]*disabled=\{isStartDisabled\}[\s\S]*label="Start"/u);
     assert.match(source, /<SecondaryButton compact label="Detail"/u);

@@ -30,7 +30,9 @@ policy, third-party SDK inventory, and the approved EVNSolution privacy notice.
 ## Current runtime summary
 
 The current app is a driver-only delivery app. It does not include advertising,
-tracking, analytics SDKs, social login, or third-party map SDKs in this repo.
+tracking, analytics SDKs, or social login. It does include MapLibre React Native
+for route maps; owner review must include the production map style, tile, and
+glyph providers in the final third-party data-flow inventory.
 The app can transmit driver workflow data to `clever-delivery-server` only after E.164 phone + PIN account authentication (or one-time invitation registration) establishes an account boundary, followed by account-authenticated route lookup. Local mock mode is
 for development only and is not a production disclosure basis.
 
@@ -69,7 +71,8 @@ Runtime source anchors for this worksheet:
 - Tracking / advertising: no tracking, advertising, data broker, or cross-app
   analytics use is evident in the current repository.
 - Third-party SDKs: current runtime uses Expo/React Native libraries for
-  location, task manager, image picker/camera proof photos, secure storage, and status bar.
+  location, task manager, image picker/camera proof photos, secure storage, and
+  status bar, plus MapLibre React Native for route maps.
   Owner must verify SDK privacy manifests / Play SDK disclosures before
   submission.
 - Sharing: current code sends driver data to EVNSolution-owned delivery server

@@ -33,6 +33,24 @@ describe('active route foreground notification', () => {
     });
   });
 
+  it('labels an incorrectly assigned pickup order without showing a payment review warning', () => {
+    const route = {
+      ...sampleAssignedRoute,
+      stops: [{
+        ...sampleAssignedRoute.stops[0]!,
+        deliverySession: 'PICKUP',
+        normalizedPaymentStatus: 'UNKNOWN_REVIEW' as const,
+        serviceType: 'PICKUP',
+      }],
+    };
+
+    const notification = buildActiveRouteForegroundNotification({ currentStepIndex: 1, route });
+
+    assert.match(notification.body, /Order type: Pickup/u);
+    assert.doesNotMatch(notification.body, /Review payment|Payment:/u);
+    assert.match(notification.expandedBody ?? '', /^Order type\nPickup\n/u);
+  });
+
   it('shows item type and total quantity counts without product names', () => {
     const route = {
       ...sampleAssignedRoute,
