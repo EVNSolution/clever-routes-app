@@ -10,6 +10,7 @@ import {
   formatAssignedRouteItemLine,
   hasAssignedRouteGeometry,
   formatAssignedRoutePaymentStatus,
+  formatAssignedRoutePaymentSummary,
   loadAssignedRouteAfterConsent,
   resolveRouteMapPreviewState,
   sampleAssignedRoute,
@@ -513,5 +514,56 @@ describe('driver assigned route UX flow', () => {
     assert.equal(formatAssignedRoutePaymentStatus('UNKNOWN_REVIEW').label, 'Review payment');
     assert.equal(formatAssignedRoutePaymentStatus('NOT_DELIVERABLE_OR_EXCEPTION').label, 'Payment exception');
     assert.equal(formatAssignedRoutePaymentStatus(null).label, 'Payment unavailable');
+  });
+
+  it('formats actionable cash and eTransfer totals without guessing missing amounts', () => {
+    assert.deepEqual(formatAssignedRoutePaymentSummary({
+      currencyCode: 'CAD',
+      normalizedPaymentStatus: 'CASH_COLLECT_REQUIRED',
+      paymentMethodTitle: 'Cash on delivery',
+      totalPriceAmount: '84.5',
+    }), {
+      amountLabel: 'CAD 84.50',
+      detail: 'Collect exactly CAD 84.50 from the customer.',
+      methodLabel: 'Cash on delivery',
+      notificationLabel: 'Cash on delivery, Collect cash, CAD 84.50',
+      status: {
+        detail: 'Cash was selected. Collect payment directly at delivery.',
+        label: 'Collect cash',
+        tone: 'warning',
+      },
+    });
+    assert.deepEqual(formatAssignedRoutePaymentSummary({
+      currencyCode: 'CAD',
+      normalizedPaymentStatus: 'TRANSFER_CHECK_PENDING',
+      paymentMethodTitle: 'eTransfer',
+      totalPriceAmount: '52.00',
+    }), {
+      amountLabel: 'CAD 52.00',
+      detail: 'Transfer is not confirmed. Ask the customer only when dispatch requires collection.',
+      methodLabel: 'eTransfer',
+      notificationLabel: 'eTransfer, Transfer pending, CAD 52.00',
+      status: {
+        detail: 'E-mail/bank transfer still needs WooCommerce/admin confirmation. Do not ask again until confirmed by dispatch.',
+        label: 'Transfer pending',
+        tone: 'warning',
+      },
+    });
+    assert.deepEqual(formatAssignedRoutePaymentSummary({
+      currencyCode: null,
+      normalizedPaymentStatus: 'CASH_COLLECT_REQUIRED',
+      paymentMethodTitle: null,
+      totalPriceAmount: null,
+    }), {
+      amountLabel: 'Amount unavailable',
+      detail: 'Do not request cash until dispatch provides the exact total.',
+      methodLabel: 'Cash',
+      notificationLabel: 'Cash, Amount unavailable',
+      status: {
+        detail: 'The exact cash total is missing from the server response.',
+        label: 'Amount unavailable',
+        tone: 'warning',
+      },
+    });
   });
 });

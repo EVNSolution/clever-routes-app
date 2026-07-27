@@ -33,7 +33,11 @@ describe('stop details simplification', () => {
     assert.match(componentSource, /<DataRow label="Order" value=\{stop\.orderName\}/u);
     assert.match(componentSource, /<DataRow label="Recipient" value=\{stop\.recipientName/u);
     assert.match(componentSource, /<DataRow label="Phone" value=\{stop\.phone/u);
-    assert.match(componentSource, /StatusChip label=\{payment\.label\} tone=\{payment\.tone\}/u);
+    assert.match(componentSource, /formatAssignedRoutePaymentSummary\(stop\)/u);
+    assert.match(componentSource, /payment\.methodLabel/u);
+    assert.match(componentSource, /payment\.amountLabel/u);
+    assert.match(componentSource, /StatusChip label=\{payment\.status\.label\} tone=\{payment\.status\.tone\}/u);
+    assert.match(componentSource, /payment\.detail/u);
     assert.match(componentSource, />Qty<\/Text>/u);
     assert.match(componentSource, />Item<\/Text>/u);
     assert.match(componentSource, /\{item\.quantity\} EA/u);
@@ -51,7 +55,6 @@ describe('stop details simplification', () => {
 
     assert.doesNotMatch(componentSource, /Location Tips/u);
     assert.doesNotMatch(componentSource, /No location tips provided\./u);
-    assert.doesNotMatch(componentSource, /payment\.detail/u);
     assert.doesNotMatch(componentSource, /Delivery instructions are provided by dispatch/u);
     assert.doesNotMatch(componentSource, /getNavigationTip/u);
     assert.doesNotMatch(componentSource, /label="Arrived"/u);
@@ -60,7 +63,7 @@ describe('stop details simplification', () => {
     assert.doesNotMatch(componentSource, /onAnnounceTip/u);
     assert.doesNotMatch(componentSource, /label="Complete"|label="Search Address"|label="Message"|onMessage/u);
     assert.doesNotMatch(componentSource, /Stop Details|stopSummaryCard|stopBadge|listPanel|paymentBadgeOnlyPanel|stopItemsPanel|TextCard/u);
-    assert.doesNotMatch(componentSource, />Payment<\/Text>|Items to drop|formatAssignedRouteItemLine/u);
+    assert.doesNotMatch(componentSource, /Items to drop|formatAssignedRouteItemLine/u);
   });
 
   it('uses a clear arrival, navigation, and call action hierarchy', () => {
