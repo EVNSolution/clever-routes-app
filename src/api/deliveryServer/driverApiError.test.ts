@@ -7,6 +7,7 @@ import {
   getDriverApiRecoveryReason,
   getDriverApiRequiresRouteLookup,
   getDriverApiRequiresRouteReconciliation,
+  isDriverAccountDeletionActiveRouteError,
 } from './driverApiError';
 
 describe('driver API recovery classification', () => {
@@ -26,5 +27,13 @@ describe('driver API recovery classification', () => {
     assert.equal(getDriverApiRequiresRouteLookup(routeEnded), undefined);
     assert.equal(getDriverApiRequiresRouteReconciliation(routeEnded), true);
     assert.match(formatDriverApiErrorForDriver(routeEnded), /ended or released by the server/u);
+
+    const activeRouteDeletion = createDriverApiHttpError({
+      code: 'ACCOUNT_DELETION_ACTIVE_ROUTE',
+      endpoint: 'Driver account deletion request',
+      status: 409,
+    });
+    assert.equal(isDriverAccountDeletionActiveRouteError(activeRouteDeletion), true);
+    assert.equal(getDriverApiRecoveryReason(activeRouteDeletion), undefined);
   });
 });

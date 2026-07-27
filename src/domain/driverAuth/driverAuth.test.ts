@@ -137,6 +137,54 @@ describe('DriverAuthService', () => {
     assert.equal(result.accountAccess.use, 'driver_account');
   });
 
+  it('requests global account deletion with the account bearer and explicit confirmation', async () => {
+    const requests: { body?: string; headers?: Record<string, string>; method?: string; url: string }[] = [];
+    const client = createDriverAuthApiClient({
+      baseUrl: 'https://test-api.com/',
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body,
+          headers: init?.headers,
+          method: init?.method,
+          url,
+        });
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({
+            data: {
+              duplicate: false,
+              requestId: 'deletion-request-id',
+              status: 'REQUESTED',
+            },
+            error: null,
+          }),
+        };
+      },
+    });
+
+    const result = await client.requestAccountDeletion({
+      accountAccessToken: ' account-token ',
+    });
+
+    assert.deepEqual(result.request, {
+      duplicate: false,
+      requestId: 'deletion-request-id',
+      status: 'REQUESTED',
+    });
+    assert.deepEqual(requests, [{
+      body: JSON.stringify({ confirmation: 'DELETE' }),
+      headers: {
+        Authorization: 'Bearer account-token',
+        'Cache-Control': 'no-store',
+        'Content-Type': 'application/json',
+        Pragma: 'no-cache',
+      },
+      method: 'POST',
+      url: 'https://test-api.com/driver/account-deletion-requests',
+    }]);
+  });
+
   it('provides a local mock PIN login without pretending to send SMS', async () => {
     const client = createMockDriverAuthService();
 

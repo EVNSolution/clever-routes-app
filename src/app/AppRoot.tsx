@@ -71,7 +71,10 @@ import {
 import { finishDeliveryAfterActive, type DeliveryFinishResult } from '../domain/delivery/deliveryFinish';
 import { startDeliveryWithForegroundPermission, type DeliveryStartResult } from '../domain/delivery/deliveryStart';
 import { createDriverApiClientsFromRouteAccess } from '../api/deliveryServer/driverApiClients';
-import { isDriverApiUnauthorizedError } from '../api/deliveryServer/driverApiError';
+import {
+  isDriverAccountDeletionActiveRouteError,
+  isDriverApiUnauthorizedError,
+} from '../api/deliveryServer/driverApiError';
 import {
   applyDriverRouteEtaUpdate,
   createMockDriverEventService,
@@ -299,6 +302,7 @@ function DriverApp() {
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isLoadingAccountProfile, setIsLoadingAccountProfile] = useState(false);
+  const [isRequestingAccountDeletion, setIsRequestingAccountDeletion] = useState(false);
   const [isSavingAccountName, setIsSavingAccountName] = useState(false);
   const [isRefreshingRoutes, setIsRefreshingRoutes] = useState(false);
   const [isRequestingBackgroundLocation, setIsRequestingBackgroundLocation] = useState(false);
@@ -564,6 +568,60 @@ function DriverApp() {
       setMessage('Name could not be updated. Check your connection and try again.');
     } finally {
       setIsSavingAccountName(false);
+    }
+  }
+
+  function handleRequestAccountDeletion(): void {
+    if (isRequestingAccountDeletion) {
+      return;
+    }
+
+    Alert.alert(
+      'Delete Clever Driver account?',
+      'This sends an account deletion request and signs you out. Delivery records that the store must retain are reviewed separately.',
+      [
+        { style: 'cancel', text: 'Cancel' },
+        {
+          onPress: () => { void submitAccountDeletionRequest(); },
+          style: 'destructive',
+          text: 'Request Deletion',
+        },
+      ],
+    );
+  }
+
+  async function submitAccountDeletionRequest(): Promise<void> {
+    setIsRequestingAccountDeletion(true);
+    setMessage(null);
+    try {
+      const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      if (offlineSubmissionQueue === null) {
+        setOfflineSubmissionQueue(queue);
+      }
+      const queueSummary = getOfflineSubmissionQueueSummary(queue);
+      if (queueSummary.totalCount > 0) {
+        setMessage('Account deletion cannot be requested while delivery updates are waiting to sync or reconcile.');
+        return;
+      }
+
+      const accountAccess = await getActiveAccountAccess();
+      if (accountAccess === null) {
+        setMessage('Your saved login expired. Sign in again to request account deletion.');
+        return;
+      }
+      await driverAuthService.requestAccountDeletion({
+        accountAccessToken: accountAccess.accessToken,
+      });
+      await handleLogout();
+      setMessage('Account deletion request received. You have been signed out.');
+    } catch (error) {
+      setMessage(
+        isDriverAccountDeletionActiveRouteError(error)
+          ? 'Finish or release the active route before requesting account deletion.'
+          : 'Account deletion could not be requested. Check your connection and try again.',
+      );
+    } finally {
+      setIsRequestingAccountDeletion(false);
     }
   }
 
@@ -3135,10 +3193,12 @@ function DriverApp() {
               accountName={accountName}
               appVersion={DRIVER_APP_VERSION}
               isLoadingAccountProfile={isLoadingAccountProfile}
+              isRequestingAccountDeletion={isRequestingAccountDeletion}
               onBack={openHomeRoot}
               onEditName={handleOpenAccountName}
               onOpenConsentDocument={handleOpenConsentDocument}
               onLogout={handleLogout}
+              onRequestAccountDeletion={handleRequestAccountDeletion}
               phoneE164={verifiedDriverPhoneE164 ?? phoneE164Preview}
             />
           ) : null}
@@ -3683,10 +3743,12 @@ function SettingsPage({
   accountName,
   appVersion,
   isLoadingAccountProfile,
+  isRequestingAccountDeletion,
   onBack,
   onEditName,
   onOpenConsentDocument,
   onLogout,
+  onRequestAccountDeletion,
   phoneE164,
 }: {
   acceptedLocation: boolean;
@@ -3694,10 +3756,12 @@ function SettingsPage({
   accountName: string | null;
   appVersion: string;
   isLoadingAccountProfile: boolean;
+  isRequestingAccountDeletion: boolean;
   onBack(): void;
   onEditName(): void;
   onOpenConsentDocument(): void;
   onLogout(): void;
+  onRequestAccountDeletion(): void;
   phoneE164: string | null;
 }) {
   return (
@@ -3797,6 +3861,27 @@ function SettingsPage({
             <Text style={styles.settingsRowValue}>{appVersion}</Text>
           </View>
         </View>
+      </View>
+
+      <View style={styles.settingsSection}>
+        <Text style={styles.settingsSectionLabel}>ACCOUNT ACTIONS</Text>
+        <Pressable
+          accessibilityLabel="Delete Account"
+          accessibilityRole="button"
+          disabled={isRequestingAccountDeletion}
+          onPress={onRequestAccountDeletion}
+          style={({ pressed }) => [
+            styles.settingsGroup,
+            styles.settingsAccountActionButton,
+            pressed && styles.settingsSignOutButtonPressed,
+          ]}
+        >
+          {isRequestingAccountDeletion ? (
+            <ActivityIndicator color="#e11d48" />
+          ) : (
+            <Text style={styles.settingsDeleteAccountText}>Delete Account</Text>
+          )}
+        </Pressable>
       </View>
 
       <Pressable
@@ -6195,6 +6280,16 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     gap: 14,
     padding: 18,
+  },
+  settingsAccountActionButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 58,
+  },
+  settingsDeleteAccountText: {
+    color: '#e11d48',
+    fontSize: 16,
+    fontWeight: '700',
   },
   settingsSignOutButton: {
     alignItems: 'center',
