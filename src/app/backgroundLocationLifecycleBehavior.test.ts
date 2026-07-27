@@ -153,7 +153,7 @@ describe('background location lifecycle wiring', () => {
     assert.match(source, /failure\.kind === 'server_401'[\s\S]*await clearAndStopActiveLocationSession\(\)/u);
   });
 
-  it('marks the route inactive before waiting for native stop and route completion', () => {
+  it('delegates the active-session guard to the durable route finish flow', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const finishSource = getFunctionSource(
       source,
@@ -161,11 +161,8 @@ describe('background location lifecycle wiring', () => {
       'async function handleManualFinishRoute(',
     );
 
-    const clearIndex = finishSource.indexOf('clearActiveRouteSession(route.id)');
-    const finishIndex = finishSource.indexOf('finishDeliveryAfterActive');
-
-    assert.ok(clearIndex < finishIndex);
-    assert.match(finishSource, /catch \(error\) \{[\s\S]*clearAndStopActiveLocationSession\(route\.id\)/u);
+    assert.match(finishSource, /deactivateActiveRouteSession: async \(\) => \{[\s\S]*clearActiveRouteSession\(route\.id\)/u);
+    assert.doesNotMatch(finishSource, /catch \(error\) \{[\s\S]*clearAndStopActiveLocationSession\(route\.id\)/u);
     assert.match(source, /const isStartDisabled = isStartingRoute \|\| isFinishingRoute \|\| activeRoutePlanId !== null/u);
   });
 

@@ -125,6 +125,7 @@ export function createRouteOrderedDriverEventService(input: {
         && input.queue.listPending().some((item) => (
           item.kind === 'driver_event'
           && item.event.routePlanId === input.routePlanId
+          && item.event.clientEventId !== event.clientEventId
           && item.reconciliation === undefined
           && ROUTE_WORKFLOW_EVENT_TYPES.has(item.event.eventType)
         ))

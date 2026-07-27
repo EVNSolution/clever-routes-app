@@ -1431,7 +1431,10 @@ function DriverApp() {
       const restoredFromServer = persistedActiveRouteSession === null && serverActiveRouteSession !== null;
       const restoredActiveSession = activeRouteSession === null
         ? null
-        : loadedSessionsWithPendingEnds.find((session) => session.route.id === activeRouteSession.routePlanId) ?? null;
+        : loadedSessionsWithPendingEnds.find((session) => (
+            session.route.id === activeRouteSession.routePlanId
+            && session.pendingRouteEnd === undefined
+          )) ?? null;
       const activeRouteLoadIsUnresolved = persistedActiveRouteSession !== null
         && restoredActiveSession === null
         && routeLoadFailed;
@@ -2679,19 +2682,22 @@ function DriverApp() {
       return;
     }
 
+    let routeSessionDeactivated = false;
     setIsFinishingRoute(true);
     try {
       const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
       if (offlineSubmissionQueue === null) {
         setOfflineSubmissionQueue(queue);
       }
-      const activeRouteCleared = await driverAccessTokenStore.clearActiveRouteSession(route.id);
-      if (!activeRouteCleared) {
-        setMessage('This route is no longer the active tracking session. Refresh routes before finishing.');
-        return;
-      }
-      setActiveRoutePlanId(null);
       const finishResult = await finishDeliveryAfterActive({
+        deactivateActiveRouteSession: async () => {
+          const cleared = await driverAccessTokenStore.clearActiveRouteSession(route.id);
+          if (cleared) {
+            routeSessionDeactivated = true;
+            setActiveRoutePlanId(null);
+          }
+          return cleared;
+        },
         deliveryStart: deliveryStartResult,
         driverEventService: createRouteOrderedDriverEventService({
           driverEventService: getDriverEventServiceForCurrentSubmission({
@@ -2711,6 +2717,10 @@ function DriverApp() {
         streamService: continuousLocationStreamService,
       });
       setDeliveryFinishResult(finishResult);
+      if (finishResult.kind === 'blocked') {
+        setMessage(finishResult.message);
+        return;
+      }
       if (finishResult.kind === 'queued' && finishResult.requiresRouteReconciliation === true) {
         syncOfflineQueueState(queue);
         setDeliveryStartResult(null);
@@ -2727,10 +2737,8 @@ function DriverApp() {
             }
           : session));
       }
-      if (finishResult.kind !== 'blocked') {
-        setContinuousLocationResult({ kind: 'stopped', taskName: finishResult.stoppedTaskName });
-      }
-      if (options?.returnToRoutes === true && finishResult.kind !== 'blocked') {
+      setContinuousLocationResult({ kind: 'stopped', taskName: finishResult.stoppedTaskName });
+      if (options?.returnToRoutes === true) {
         const readyRouteSessions = routeSessions.map((session): RouteSession => session.route.id === route.id
           ? {
               ...session,
@@ -2759,7 +2767,15 @@ function DriverApp() {
         setMessage(finishResult.message);
       }
     } catch (error) {
-      await clearAndStopActiveLocationSession(route.id);
+      if (routeSessionDeactivated) {
+        try {
+          await continuousLocationStreamService.stopLocationUpdates(CONTINUOUS_LOCATION_TASK_NAME);
+        } catch {
+          // The durable route-end event remains queued for recovery.
+        }
+        setDeliveryStartResult(null);
+        setScreen('mainTabs');
+      }
       const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
       setMessage(`Route completion could not be finalized: ${errorMessage}`);
     } finally {
