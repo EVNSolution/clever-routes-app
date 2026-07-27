@@ -361,7 +361,7 @@ function DriverApp() {
     return permission;
   }, [continuousLocationStreamService]);
 
-  const handleOpenBackgroundLocationSettings = useCallback(async (): Promise<void> => {
+  const requestBackgroundLocationPermissionAfterDisclosure = useCallback(async (): Promise<void> => {
     if (isRequestingBackgroundLocation) {
       return;
     }
@@ -392,6 +392,24 @@ function DriverApp() {
     isRequestingBackgroundLocation,
     refreshBackgroundLocationPermission,
   ]);
+
+  const handleOpenBackgroundLocationSettings = useCallback((): void => {
+    if (isRequestingBackgroundLocation) {
+      return;
+    }
+
+    Alert.alert(
+      'Allow background location',
+      'Clever Driver collects your precise location while a delivery route is in progress, even when the app is closed or not in use. This keeps the store’s live route progress and arrival records up to date. Location tracking stops when the route ends.',
+      [
+        { style: 'cancel', text: 'Not Now' },
+        {
+          onPress: requestBackgroundLocationPermissionAfterDisclosure,
+          text: 'Continue',
+        },
+      ],
+    );
+  }, [isRequestingBackgroundLocation, requestBackgroundLocationPermissionAfterDisclosure]);
 
   const clearAndStopActiveLocationSession = useCallback(async (routePlanId?: string): Promise<void> => {
     try {
@@ -721,6 +739,7 @@ function DriverApp() {
     && stopDetailsStop !== null
     && !isStopCompleted(stopDetailsStop, completedStopIds);
   const canSkipFromStopDetails = canArriveFromStopDetails
+    && currentStop?.deliveryStopId === stopDetailsStop?.deliveryStopId
     && !isCompletingStop
     && !isRecordingArrival;
   const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => completedStopIds.includes(stop.deliveryStopId));
@@ -3509,11 +3528,11 @@ function MyRoutesPage({
           <View style={styles.backgroundLocationWarningCopy}>
             <Text style={styles.backgroundLocationWarningTitle}>Allow all the time required</Text>
             <Text style={styles.backgroundLocationWarningBody}>
-              Enable background location before starting a route.
+              Clever Driver collects your precise location during an active route, even when the app is closed or not in use.
             </Text>
           </View>
           <Pressable
-            accessibilityLabel="Open location settings"
+            accessibilityLabel="Review background location access"
             accessibilityRole="button"
             disabled={isRequestingBackgroundLocation}
             onPress={onOpenBackgroundLocationSettings}
@@ -3525,7 +3544,7 @@ function MyRoutesPage({
             {isRequestingBackgroundLocation ? (
               <ActivityIndicator color="#92400e" size="small" />
             ) : (
-              <Text style={styles.backgroundLocationSettingsButtonText}>Open Settings</Text>
+              <Text style={styles.backgroundLocationSettingsButtonText}>Review & Allow</Text>
             )}
           </Pressable>
         </View>

@@ -118,6 +118,10 @@ describe('stop details simplification', () => {
   it('confirms Skip Stop and records the administrator assignment error before advancing', () => {
     const source = getAppRootSource();
 
+    assert.match(
+      source,
+      /const canSkipFromStopDetails = canArriveFromStopDetails[\s\S]*currentStop\?\.deliveryStopId === stopDetailsStop\?\.deliveryStopId/u,
+    );
     assert.match(source, /Alert\.alert\(\s*'Skip this stop\?'/u);
     assert.match(source, /text: 'Skip Stop'/u);
     assert.match(source, /handleTerminalStop\(selectedStop, 'failed'\)/u);

@@ -34,6 +34,16 @@ describe('driver runtime API config', () => {
     );
   });
 
+  it('rejects an insecure live server origin', () => {
+    assert.throws(
+      () => readDriverRuntimeConfig({
+        EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: 'http://delivery.example.com',
+        EXPO_PUBLIC_DRIVER_RUNTIME_MODE: 'live',
+      }),
+      /must use HTTPS/u,
+    );
+  });
+
   it('uses live route access API client when a delivery server base URL is configured', async () => {
     const requests: { body: unknown; method: string; url: string }[] = [];
     const config = readDriverRuntimeConfig({
