@@ -8,9 +8,11 @@ import {
   formatAssignedRouteDuration,
   formatAssignedRouteEta,
   formatAssignedRouteItemLine,
+  formatAssignedRouteCompactPaymentAmount,
   hasAssignedRouteGeometry,
   formatAssignedRoutePaymentStatus,
   formatAssignedRoutePaymentSummary,
+  isAssignedRoutePickupStop,
   loadAssignedRouteAfterConsent,
   resolveRouteMapPreviewState,
   sampleAssignedRoute,
@@ -562,6 +564,53 @@ describe('driver assigned route UX flow', () => {
       status: {
         detail: 'The exact cash total is missing from the server response.',
         label: 'Amount unavailable',
+        tone: 'warning',
+      },
+    });
+  });
+
+  it('formats compact route totals with a narrow currency sign', () => {
+    assert.equal(formatAssignedRouteCompactPaymentAmount('84.5', 'CAD'), '$84.50');
+    assert.equal(formatAssignedRouteCompactPaymentAmount(null, 'CAD'), 'Amount unavailable');
+    assert.equal(formatAssignedRouteCompactPaymentAmount('84.5', null), 'Amount unavailable');
+  });
+
+  it('identifies pickup orders from the server route classification', () => {
+    const stop = sampleAssignedRoute.stops[0]!;
+
+    assert.equal(isAssignedRoutePickupStop({
+      ...stop,
+      deliverySession: 'PICKUP',
+      serviceType: 'DELIVERY',
+    }), true);
+    assert.equal(isAssignedRoutePickupStop({
+      ...stop,
+      deliverySession: 'DELIVERY',
+      serviceType: 'pickup',
+    }), true);
+    assert.equal(isAssignedRoutePickupStop({
+      ...stop,
+      deliverySession: 'DELIVERY',
+      serviceType: 'DELIVERY',
+    }), false);
+  });
+
+  it('shows Pickup instead of an unknown payment warning for pickup orders', () => {
+    assert.deepEqual(formatAssignedRoutePaymentSummary({
+      currencyCode: 'CAD',
+      deliverySession: 'PICKUP',
+      normalizedPaymentStatus: 'UNKNOWN_REVIEW',
+      paymentMethodTitle: null,
+      serviceType: 'PICKUP',
+      totalPriceAmount: '40.00',
+    }), {
+      amountLabel: 'CAD 40.00',
+      detail: '',
+      methodLabel: 'Pickup',
+      notificationLabel: 'Pickup',
+      status: {
+        detail: '',
+        label: 'Pickup',
         tone: 'warning',
       },
     });

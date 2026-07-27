@@ -62,6 +62,7 @@ describe('driver login flow', () => {
     );
     assert.doesNotMatch(source, /hasAttemptedDriverRestoreRef/u);
     assert.doesNotMatch(source, /attemptedDriverRestoreRef/u);
+    assert.match(source, /useEffect\(\(\) => \{\s+if \(isDriverRestoreComplete\) \{\s+return undefined;\s+\}\s+let isMounted = true;\s+const restoreWatchdog/u);
     assert.match(source, /routeSyncState === 'loading'[\s\S]*Loading routes/u);
     assert.match(source, /routeSyncState === 'error'[\s\S]*Routes temporarily unavailable[\s\S]*Retry/u);
     assert.match(source, /previousDriverRestoreNetworkRef[\s\S]*networkReachability === 'online'[\s\S]*retryDriverRestore/u);

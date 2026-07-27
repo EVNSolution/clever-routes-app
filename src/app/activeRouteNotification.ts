@@ -1,6 +1,7 @@
 import {
   formatAssignedRouteEta,
   formatAssignedRoutePaymentSummary,
+  isAssignedRoutePickupStop,
   type AssignedRoute,
   type AssignedRoutePaymentSummary,
   type AssignedRouteStop,
@@ -43,9 +44,10 @@ export function buildActiveRouteForegroundNotification(input: {
   const itemSummary = formatItemSummary(itemTypeCount, itemCount);
   const customerNote = truncateNotificationText(stop.customerNote);
   const payment = formatAssignedRoutePaymentSummary(stop);
+  const isPickupStop = isAssignedRoutePickupStop(stop);
   const body = [
     address,
-    `Payment: ${payment.notificationLabel}`,
+    isPickupStop ? 'Order type: Pickup' : `Payment: ${payment.notificationLabel}`,
     customerNote === null ? null : `Note: ${customerNote}`,
     `Items ${itemSummary}`,
   ].filter((value): value is string => value !== null).join('\n');
@@ -57,6 +59,7 @@ export function buildActiveRouteForegroundNotification(input: {
       customerNote: stop.customerNote,
       itemCount,
       itemTypeCount,
+      isPickupStop,
       payment,
     }),
     title: `Next stop ${stop.sequence}${eta === null ? '' : `  ETA ${eta}`}`,
@@ -129,16 +132,21 @@ function formatExpandedNotificationBody(input: {
   customerNote: string | null | undefined;
   itemCount: number;
   itemTypeCount: number;
+  isPickupStop: boolean;
   payment: AssignedRoutePaymentSummary;
 }): string {
   const note = truncateNotificationText(input.customerNote, EXPANDED_CUSTOMER_NOTE_MAX_LENGTH) ?? 'None';
   return [
-    'Payment',
-    input.payment.methodLabel,
-    'Status',
-    input.payment.status.label,
-    'Total',
-    input.payment.amountLabel,
+    ...(input.isPickupStop
+      ? ['Order type', 'Pickup']
+      : [
+        'Payment',
+        input.payment.methodLabel,
+        'Status',
+        input.payment.status.label,
+        'Total',
+        input.payment.amountLabel,
+      ]),
     'Address',
     input.address,
     'Customer note',

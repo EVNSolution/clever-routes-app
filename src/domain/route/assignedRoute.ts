@@ -101,6 +101,7 @@ export type AssignedRouteStop = {
   coordinates: AssignedRouteCoordinates | null;
   currencyCode?: string | null;
   customerNote?: string | null;
+  deliverySession?: string | null;
   deliveryStopId: string;
   durationFromPreviousSeconds?: number | null;
   estimatedArrivalAt?: string | null;
@@ -111,6 +112,7 @@ export type AssignedRouteStop = {
   phone: string | null;
   recipientName: string | null;
   sequence: number;
+  serviceType?: string | null;
   status: string;
   totalPriceAmount?: string | null;
 };
@@ -664,6 +666,7 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
     (stop.coordinates === null || isAssignedRouteCoordinates(stop.coordinates)) &&
     (stop.currencyCode === undefined || nullableString(stop.currencyCode)) &&
     (stop.customerNote === undefined || nullableString(stop.customerNote)) &&
+    (stop.deliverySession === undefined || nullableString(stop.deliverySession)) &&
     typeof stop.deliveryStopId === 'string' &&
     (stop.durationFromPreviousSeconds === undefined || nullableFiniteNumber(stop.durationFromPreviousSeconds)) &&
     (stop.estimatedArrivalAt === undefined || nullableString(stop.estimatedArrivalAt)) &&
@@ -675,6 +678,7 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
     nullableString(stop.phone) &&
     nullableString(stop.recipientName) &&
     typeof stop.sequence === 'number' &&
+    (stop.serviceType === undefined || nullableString(stop.serviceType)) &&
     typeof stop.status === 'string' &&
     (stop.totalPriceAmount === undefined || nullableMoneyString(stop.totalPriceAmount))
   );
@@ -825,14 +829,33 @@ export function formatAssignedRoutePaymentStatus(
 export function formatAssignedRoutePaymentSummary(
   stop: Pick<
     AssignedRouteStop,
-    'currencyCode' | 'normalizedPaymentStatus' | 'paymentMethodTitle' | 'totalPriceAmount'
+    'currencyCode'
+    | 'deliverySession'
+    | 'normalizedPaymentStatus'
+    | 'paymentMethodTitle'
+    | 'serviceType'
+    | 'totalPriceAmount'
   >,
 ): AssignedRoutePaymentSummary {
-  const status = formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
   const amountLabel = formatAssignedRoutePaymentAmount(
     stop.totalPriceAmount ?? null,
     stop.currencyCode ?? null,
   );
+  if (isAssignedRoutePickupStop(stop)) {
+    return {
+      amountLabel,
+      detail: '',
+      methodLabel: 'Pickup',
+      notificationLabel: 'Pickup',
+      status: {
+        detail: '',
+        label: 'Pickup',
+        tone: 'warning',
+      },
+    };
+  }
+
+  const status = formatAssignedRoutePaymentStatus(stop.normalizedPaymentStatus);
   const methodLabel = stop.paymentMethodTitle?.trim()
     || getFallbackPaymentMethodLabel(stop.normalizedPaymentStatus);
   const displayStatus = stop.normalizedPaymentStatus === 'CASH_COLLECT_REQUIRED'
@@ -866,9 +889,25 @@ export function formatAssignedRoutePaymentSummary(
   };
 }
 
+export function formatAssignedRouteCompactPaymentAmount(
+  amount: string | null | undefined,
+  currencyCode: string | null | undefined,
+): string {
+  return formatAssignedRoutePaymentAmount(amount ?? null, currencyCode ?? null, 'narrowSymbol');
+}
+
+export function isAssignedRoutePickupStop(
+  stop: Pick<AssignedRouteStop, 'deliverySession' | 'serviceType'>,
+): boolean {
+  return [stop.deliverySession, stop.serviceType].some(
+    (value) => value?.trim().toUpperCase() === 'PICKUP',
+  );
+}
+
 function formatAssignedRoutePaymentAmount(
   amount: string | null,
   currencyCode: string | null,
+  currencyDisplay: 'code' | 'narrowSymbol' = 'code',
 ): string {
   const normalizedAmount = amount?.trim() ?? '';
   const normalizedCurrency = currencyCode?.trim().toUpperCase() ?? '';
@@ -887,7 +926,7 @@ function formatAssignedRoutePaymentAmount(
   try {
     return new Intl.NumberFormat('en-CA', {
       currency: normalizedCurrency,
-      currencyDisplay: 'code',
+      currencyDisplay,
       style: 'currency',
     }).format(numericAmount).replace(/\s+/gu, ' ');
   } catch {

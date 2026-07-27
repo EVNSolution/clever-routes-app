@@ -411,6 +411,7 @@ export function NativeRouteMapPreview({
   return (
     <View style={styles.container}>
       <Map
+        androidView="texture"
         attribution={false}
         attributionPosition={{ bottom: 10, right: 10 }}
         compass={false}
