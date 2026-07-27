@@ -44,6 +44,8 @@ export type NativeReleasePreflightInput = {
     build?: Record<string, {
       android?: Record<string, unknown>;
       autoIncrement?: boolean;
+      credentialsSource?: string;
+      developmentClient?: boolean;
       distribution?: string;
       environment?: string;
     }>;
@@ -274,6 +276,18 @@ function checkEasProduction(easConfig: NativeReleasePreflightInput['easConfig'])
   }
   if (production?.autoIncrement !== true) {
     return fail('eas.production', 'EAS production profile must autoIncrement native build numbers.');
+  }
+  if (production?.credentialsSource !== 'remote') {
+    return fail('eas.production', 'EAS production profile must explicitly use remote store-signing credentials.');
+  }
+  if (production.developmentClient === true) {
+    return fail('eas.production', 'EAS production profile must not enable the development client.');
+  }
+  if (
+    production.android?.buildType !== 'app-bundle'
+    || production.android?.withoutCredentials === true
+  ) {
+    return fail('eas.production', 'EAS production Android must build a credentialed app-bundle for Google Play.');
   }
   if (!isPlainRecord(easConfig.submit?.production)) {
     return fail('eas.production', 'EAS submit.production must exist as an object, even if owner-controlled submit details stay external.');

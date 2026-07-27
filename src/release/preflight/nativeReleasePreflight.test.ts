@@ -111,6 +111,50 @@ test('native release preflight rejects accidental iOS Contacts usage description
   ]);
 });
 
+test('native release preflight rejects production signing, bundle, and dev-client drift', () => {
+  const input = currentInput();
+  const cases = [
+    {
+      expected: 'EAS production profile must explicitly use remote store-signing credentials.',
+      patch: { credentialsSource: 'local' },
+    },
+    {
+      expected: 'EAS production profile must not enable the development client.',
+      patch: { developmentClient: true },
+    },
+    {
+      expected: 'EAS production Android must build a credentialed app-bundle for Google Play.',
+      patch: { android: { buildType: 'apk' } },
+    },
+    {
+      expected: 'EAS production Android must build a credentialed app-bundle for Google Play.',
+      patch: { android: { buildType: 'app-bundle', withoutCredentials: true } },
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    const result = runNativeReleasePreflight({
+      ...input,
+      easConfig: {
+        ...input.easConfig,
+        build: {
+          ...input.easConfig.build,
+          production: {
+            ...input.easConfig.build?.production,
+            ...testCase.patch,
+          },
+        },
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.failures, [{
+      id: 'eas.production',
+      message: testCase.expected,
+    }]);
+  }
+});
+
 
 test('native release preflight validates a source-controlled iOS project when present', () => {
   const input = currentInput();

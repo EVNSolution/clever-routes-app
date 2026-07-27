@@ -13,6 +13,8 @@ function readJson<T>(relativePath: string): T {
 type EasBuildProfile = {
   android?: Record<string, unknown>;
   autoIncrement?: boolean;
+  credentialsSource?: string;
+  developmentClient?: boolean;
   distribution?: string;
   environment?: string;
 };
@@ -34,6 +36,10 @@ test('defines native EAS build profiles for preview and production evidence', ()
   assert.equal(eas.build?.production?.distribution, 'store');
   assert.equal(eas.build?.production?.environment, 'production');
   assert.equal(eas.build?.production?.autoIncrement, true);
+  assert.equal(eas.build?.production?.credentialsSource, 'remote');
+  assert.equal(eas.build?.production?.developmentClient, undefined);
+  assert.equal(eas.build?.production?.android?.buildType, 'app-bundle');
+  assert.notEqual(eas.build?.production?.android?.withoutCredentials, true);
   assert.deepEqual(eas.submit?.production, {});
 });
 
