@@ -1,4 +1,7 @@
-import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
+import {
+  createDriverApiHttpError,
+  readDriverApiErrorCode,
+} from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
 
 export type DriverAccountAccessToken = {
@@ -29,11 +32,21 @@ export type DriverAccountProfile = {
   phone: string;
 };
 
+export type DriverAccountDeletionRequest = {
+  duplicate: boolean;
+  requestId: string;
+  status: 'REQUESTED';
+};
+
 export type DriverAuthService = {
   getAccountProfile(input: { accountAccessToken: string }): Promise<{ account: DriverAccountProfile }>;
   login(input: LoginDriverAccountInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
   refreshSession(input: RefreshDriverAuthSessionInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
   register(input: RegisterDriverAccountInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
+  requestAccountDeletion(input: {
+    accountAccessToken: string;
+    reason?: string;
+  }): Promise<{ request: DriverAccountDeletionRequest }>;
   updateAccountProfile(input: {
     accountAccessToken: string;
     name: string;
@@ -97,6 +110,33 @@ export function createDriverAuthApiClient(input: {
     return { account: readDriverAccountProfileEnvelope(payload) };
   }
 
+  async function requestAccountDeletion(input: {
+    accountAccessToken: string;
+    reason?: string;
+  }): Promise<{ request: DriverAccountDeletionRequest }> {
+    const response = await fetchImpl(`${baseUrl}/driver/account-deletion-requests`, withNoStoreDriverApiRequest({
+      body: JSON.stringify({
+        confirmation: 'DELETE',
+        ...(input.reason?.trim() ? { reason: input.reason.trim() } : {}),
+      }),
+      headers: {
+        Authorization: `Bearer ${input.accountAccessToken.trim()}`,
+        'Content-Type': 'application/json',
+      },
+      method: 'POST',
+    }));
+    const payload = await response.json();
+    if (!response.ok) {
+      throw createDriverApiHttpError({
+        code: readDriverApiErrorCode(payload),
+        endpoint: 'Driver account deletion request',
+        status: response.status,
+      });
+    }
+
+    return { request: readDriverAccountDeletionEnvelope(payload) };
+  }
+
   return {
     getAccountProfile: (request) => requestAccountProfile({
       accountAccessToken: request.accountAccessToken,
@@ -114,6 +154,7 @@ export function createDriverAuthApiClient(input: {
       inviteCode: request.inviteCode.trim().toUpperCase(),
       pin: request.pin.trim(),
     }, 'Register Driver Account'),
+    requestAccountDeletion,
     updateAccountProfile: (request) => requestAccountProfile({
       accountAccessToken: request.accountAccessToken,
       method: 'PATCH',
@@ -140,10 +181,42 @@ export function createMockDriverAuthService(accountAccess: DriverAccountAccessTo
     login: async () => ({ accountAccess }),
     refreshSession: async () => ({ accountAccess }),
     register: async () => ({ accountAccess }),
+    requestAccountDeletion: async () => ({
+      request: {
+        duplicate: false,
+        requestId: 'fixture-driver-account-deletion-request-id',
+        status: 'REQUESTED',
+      },
+    }),
     updateAccountProfile: async (request) => {
       currentProfile = { ...currentProfile, name: request.name.trim() };
       return { account: currentProfile };
     },
+  };
+}
+
+function readDriverAccountDeletionEnvelope(payload: unknown): DriverAccountDeletionRequest {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new Error('Invalid driver account deletion response');
+  }
+  const data = (payload as { data?: unknown }).data;
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    throw new Error('Invalid driver account deletion response');
+  }
+  const record = data as Record<string, unknown>;
+  if (
+    typeof record.duplicate !== 'boolean'
+    || typeof record.requestId !== 'string'
+    || record.requestId.trim() === ''
+    || record.status !== 'REQUESTED'
+  ) {
+    throw new Error('Invalid driver account deletion response');
+  }
+
+  return {
+    duplicate: record.duplicate,
+    requestId: record.requestId,
+    status: 'REQUESTED',
   };
 }
 

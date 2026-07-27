@@ -240,9 +240,14 @@ describe('delivery finish route cleanup', () => {
       },
     };
     const stream = createMockStreamService();
+    let routeSessionDeactivated = false;
 
     let finishResolved = false;
     const resultPromise = finishDeliveryAfterActive({
+      deactivateActiveRouteSession: async () => {
+        routeSessionDeactivated = true;
+        return true;
+      },
       deliveryStart: {
         flowState: 'delivery_active',
         kind: 'delivery_active',
@@ -265,10 +270,12 @@ describe('delivery finish route cleanup', () => {
 
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(persistenceStarted, true);
+    assert.equal(routeSessionDeactivated, false);
     assert.equal(finishResolved, false);
     releasePersistence();
     const result = await resultPromise;
 
+    assert.equal(routeSessionDeactivated, true);
     assert.equal(result.kind, 'queued');
     assert.equal(result.flowState, 'delivery_finished');
     assert.deepEqual(stream.stoppedTasks, ['clever-driver-continuous-location']);
@@ -277,6 +284,33 @@ describe('delivery finish route cleanup', () => {
     assert.equal(pending[0]?.kind, 'driver_event');
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'ROUTE_COMPLETED');
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.routePlanId : null, 'route-1');
+  });
+
+  it('removes the prepared route end when the active session changed', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const stream = createMockStreamService();
+    const driverEvents = createMockDriverEventService();
+
+    const result = await finishDeliveryAfterActive({
+      deactivateActiveRouteSession: async () => false,
+      deliveryStart: {
+        flowState: 'delivery_active',
+        kind: 'delivery_active',
+        locationPermission: 'foreground',
+        message: 'active',
+      },
+      driverEventService: driverEvents,
+      now: new Date('2026-05-12T08:35:00.000Z'),
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+      streamService: stream.service,
+    });
+
+    assert.equal(result.kind, 'blocked');
+    assert.equal(result.kind === 'blocked' ? result.reason : null, 'active_session_changed');
+    assert.equal(queue.listPending().length, 0);
+    assert.deepEqual(stream.stoppedTasks, []);
+    assert.deepEqual(driverEvents.recordedEvents, []);
   });
 
   it('marks queued route completion as requiring route lookup when live event returns unauthorized', async () => {

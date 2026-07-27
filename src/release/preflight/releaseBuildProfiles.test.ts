@@ -69,8 +69,11 @@ test('keeps direct-download Android optimization isolated to the distribution AP
 
 test('keeps source-controlled native release metadata aligned and minimally privileged', () => {
   const androidManifest = readFileSync(resolve(repoRoot, 'android/app/src/main/AndroidManifest.xml'), 'utf8');
+  const androidGradleProperties = readFileSync(resolve(repoRoot, 'android/gradle.properties'), 'utf8');
   const iosInfoPlist = readFileSync(resolve(repoRoot, 'ios/CleverDriver/Info.plist'), 'utf8');
 
   assert.doesNotMatch(androidManifest, /android\.permission\.SYSTEM_ALERT_WINDOW/u);
+  assert.doesNotMatch(androidGradleProperties, /^expo\.devlauncher\.configureInRelease\s*=\s*true\s*$/mu);
+  assert.doesNotMatch(androidGradleProperties, /^expo\.devmenu\.configureInRelease\s*=\s*true\s*$/mu);
   assert.match(iosInfoPlist, /<key>CFBundleShortVersionString<\/key>\s*<string>\$\(MARKETING_VERSION\)<\/string>/u);
 });

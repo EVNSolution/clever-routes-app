@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 const patches = [
   {
     file: 'node_modules/expo-location/expo-module.config.json',
-    before: `  "android": {\n    "modules": ["expo.modules.location.LocationModule"],\n    "publication": {\n      "groupId": "host.exp.exponent",\n      "artifactId": "expo.modules.location",\n      "version": "56.0.21",\n      "repository": "local-maven-repo"\n    }\n  }`,
+    before: `  "android": {\n    "modules": ["expo.modules.location.LocationModule"],\n    "publication": {\n      "groupId": "host.exp.exponent",\n      "artifactId": "expo.modules.location",\n      "version": "56.0.22",\n      "repository": "local-maven-repo"\n    }\n  }`,
     after: `  "android": {\n    "modules": ["expo.modules.location.LocationModule"]\n  }`,
   },
   {
@@ -86,6 +86,16 @@ const patches = [
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
     before: `    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setSmallIcon(iconsResId)\n      .build()`,
     after: `    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setSmallIcon(iconsResId)\n      .build()`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setSmallIcon(iconsResId)\n      .build()`,
+    after: `    val publicNotification = Notification.Builder(this, mChannelId)\n      .setCategory(Notification.CATEGORY_SERVICE)\n      .setContentTitle("Clever Driver")\n      .setContentText("Active route in progress")\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setSmallIcon(iconsResId)\n      .build()\n\n    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setPublicVersion(publicNotification)\n      .setSmallIcon(iconsResId)\n      .setVisibility(Notification.VISIBILITY_PRIVATE)\n      .build()`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `    if (channel == null) {\n      channel = NotificationChannel(id, appName, NotificationManager.IMPORTANCE_LOW)\n      channel.description = "Background location notification channel"\n      notificationManager.createNotificationChannel(channel)\n    }`,
+    after: `    if (channel == null) {\n      channel = NotificationChannel(id, appName, NotificationManager.IMPORTANCE_LOW)\n      channel.description = "Background location notification channel"\n    }\n    channel.lockscreenVisibility = Notification.VISIBILITY_PRIVATE\n    notificationManager.createNotificationChannel(channel)`,
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',

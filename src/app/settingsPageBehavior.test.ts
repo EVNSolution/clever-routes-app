@@ -51,11 +51,14 @@ describe('Settings page behavior', () => {
     assert.match(settingsPage, /acceptedLocation \? 'Allowed' : 'Denied'/u);
     assert.match(settingsPage, />ABOUT</u);
     assert.match(settingsPage, />Version</u);
+    assert.match(settingsPage, />ACCOUNT ACTIONS</u);
+    assert.match(settingsPage, /accessibilityLabel="Delete Account"/u);
+    assert.match(settingsPage, /onPress=\{onRequestAccountDeletion\}/u);
     assert.match(settingsPage, /accessibilityLabel="Sign Out"/u);
     assert.match(settingsPage, /onPress=\{onLogout\}/u);
 
     assert.doesNotMatch(settingsPage, /Profile editing|Display Name|Store Name/u);
-    assert.doesNotMatch(settingsPage, /Account deletion|Navigation App|Navigation Mode/u);
+    assert.doesNotMatch(settingsPage, /Navigation App|Navigation Mode/u);
     assert.doesNotMatch(settingsPage, /Logout and reset this device/u);
     assert.doesNotMatch(settingsPage, /Needs Review|CONSENT_COPY_VERSIONS|Allowed \u00b7|Denied \u00b7/u);
   });
@@ -100,6 +103,23 @@ describe('Settings page behavior', () => {
     assert.match(saveSource, /if \(screenRef\.current === requestScreen\) \{[\s\S]*setScreen\('settings'\);[\s\S]*\}/u);
   });
 
+  it('requires confirmation and preserves unsynced delivery evidence before requesting deletion', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const handlerStart = source.indexOf('function handleRequestAccountDeletion()');
+    const handlerEnd = source.indexOf('\n\n  const refreshRouteAccessLookupForSubmission', handlerStart);
+    const handlerSource = source.slice(handlerStart, handlerEnd);
+
+    assert.notEqual(handlerStart, -1);
+    assert.notEqual(handlerEnd, -1);
+    assert.match(handlerSource, /Alert\.alert\(\s*'Delete Clever Driver account\?'/u);
+    assert.match(handlerSource, /style: 'destructive'/u);
+    assert.match(handlerSource, /getOfflineSubmissionQueueSummary\(queue\)/u);
+    assert.match(handlerSource, /queueSummary\.totalCount > 0/u);
+    assert.match(handlerSource, /driverAuthService\.requestAccountDeletion/u);
+    assert.match(handlerSource, /await handleLogout\(\)/u);
+    assert.match(handlerSource, /isDriverAccountDeletionActiveRouteError/u);
+  });
+
   it('uses quiet grouped-list styling instead of dashboard cards', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const settingsStyles = source.slice(
@@ -113,6 +133,7 @@ describe('Settings page behavior', () => {
     assert.match(settingsStyles, /settingsGroup:/u);
     assert.match(settingsStyles, /settingsRow:/u);
     assert.match(settingsStyles, /settingsRowSeparated:/u);
+    assert.match(settingsStyles, /settingsDeleteAccountText:/u);
     assert.match(settingsStyles, /settingsSignOutText:/u);
     assert.doesNotMatch(settingsStyles, /\.\.\.shadow/u);
   });

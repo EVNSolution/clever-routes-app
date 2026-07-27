@@ -144,6 +144,27 @@ describe('offline submission queue', () => {
     ]);
   });
 
+  it('allows the durable copy of the same workflow event to reach the live service', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const event = {
+      clientEventId: 'route-completed',
+      eventType: 'ROUTE_COMPLETED' as const,
+      occurredAt: new Date('2026-07-21T09:01:00.000Z'),
+      routePlanId: 'route-1',
+    };
+    queue.enqueueDriverEvent(event);
+    const live = createMockDriverEventService();
+    const ordered = createRouteOrderedDriverEventService({
+      driverEventService: live,
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    await ordered.recordDriverEvent(event);
+
+    assert.deepEqual(live.recordedEvents, [event]);
+  });
+
   it('does not delay location updates behind workflow submissions', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueDriverEvent({

@@ -14,7 +14,7 @@ export type DeliveryFinishResult =
       flowState: Exclude<DriverFlowState, 'delivery_finished'>;
       kind: 'blocked';
       message: string;
-      reason: 'delivery_not_active';
+      reason: 'active_session_changed' | 'delivery_not_active';
     }
   | {
       discardedQueuedItems: number;
@@ -37,6 +37,7 @@ export type DeliveryFinishResult =
     };
 
 export async function finishDeliveryAfterActive(input: {
+  deactivateActiveRouteSession?: () => Promise<boolean>;
   deliveryStart: DeliveryStartResult;
   driverEventService: DriverEventService;
   eventPayload?: Record<string, unknown>;
@@ -56,9 +57,6 @@ export async function finishDeliveryAfterActive(input: {
     };
   }
 
-  const taskName = input.taskName ?? CONTINUOUS_LOCATION_TASK_NAME;
-  await input.streamService.stopLocationUpdates(taskName);
-
   const occurredAt = input.now ?? new Date();
   const routeReleased = input.routeEnd === 'released';
   const event = {
@@ -68,12 +66,39 @@ export async function finishDeliveryAfterActive(input: {
     ...(input.eventPayload === undefined ? {} : { payload: input.eventPayload }),
     routePlanId: input.routePlanId,
   };
+  const preparedQueueItem = input.offlineQueue?.enqueueDriverEvent(event);
+  if (preparedQueueItem !== undefined) {
+    await input.offlineQueue?.whenPersisted();
+  }
+
+  if (
+    input.deactivateActiveRouteSession !== undefined
+    && !await input.deactivateActiveRouteSession()
+  ) {
+    if (preparedQueueItem !== undefined) {
+      input.offlineQueue?.discard(preparedQueueItem.queueItemId);
+      await input.offlineQueue?.whenPersisted();
+    }
+    return {
+      flowState: input.deliveryStart.flowState,
+      kind: 'blocked',
+      message: 'This route is no longer the active tracking session. Refresh routes before finishing.',
+      reason: 'active_session_changed',
+    };
+  }
+
+  const taskName = input.taskName ?? CONTINUOUS_LOCATION_TASK_NAME;
+  await input.streamService.stopLocationUpdates(taskName);
 
   try {
     const result = await input.driverEventService.recordDriverEvent(event);
+    if (preparedQueueItem !== undefined) {
+      input.offlineQueue?.discard(preparedQueueItem.queueItemId);
+    }
     const discardedQueuedItems = input.routePlanId === null || input.offlineQueue === undefined
       ? 0
       : input.offlineQueue.discardRouteSubmissions(input.routePlanId);
+    await input.offlineQueue?.whenPersisted();
 
     return {
       discardedQueuedItems,

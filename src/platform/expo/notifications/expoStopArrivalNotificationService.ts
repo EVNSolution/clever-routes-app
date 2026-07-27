@@ -86,6 +86,7 @@ async function ensureStopArrivalNotificationChannel(): Promise<void> {
 
   await Notifications.setNotificationChannelAsync(STOP_ARRIVAL_CHANNEL_ID, {
     importance: Notifications.AndroidImportance.HIGH,
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
     name: 'Stop arrival alerts',
     vibrationPattern: [0, 250, 250, 250],
   });

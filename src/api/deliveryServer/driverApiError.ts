@@ -51,6 +51,12 @@ export function isDriverRouteNotInProgressError(error: unknown): boolean {
     && error.code === 'ROUTE_NOT_IN_PROGRESS';
 }
 
+export function isDriverAccountDeletionActiveRouteError(error: unknown): boolean {
+  return error instanceof DriverApiHttpError
+    && error.status === 409
+    && error.code === 'ACCOUNT_DELETION_ACTIVE_ROUTE';
+}
+
 export function getDriverApiRecoveryReason(
   error: unknown,
 ): 'driver_access_expired' | 'route_not_in_progress' | undefined {
