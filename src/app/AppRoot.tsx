@@ -163,6 +163,7 @@ import {
 } from '../domain/notifications/stopArrivalNotifications';
 import { createExpoStopArrivalNotificationService } from '../platform/expo/notifications/expoStopArrivalNotificationService';
 import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
+import { requestRouteReconciliationClearConfirmation } from './routeReconciliationClearConfirmation';
 import {
   createDriverReleasedRoutePayload,
   requestActiveRouteDeletionConfirmation,
@@ -622,6 +623,40 @@ function DriverApp() {
       );
     } finally {
       setIsRequestingAccountDeletion(false);
+    }
+  }
+
+  function handleRequestRouteReconciliationClear(): void {
+    if (routeReconciliationCount <= 0) {
+      return;
+    }
+
+    requestRouteReconciliationClearConfirmation({
+      alertApi: {
+        alert: (title, message, buttons, options) => Alert.alert(title, message, buttons, options),
+      },
+      count: routeReconciliationCount,
+      onConfirm: () => {
+        void clearRouteReconciliationRecords();
+      },
+    });
+  }
+
+  async function clearRouteReconciliationRecords(): Promise<void> {
+    try {
+      const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      if (offlineSubmissionQueue === null) {
+        setOfflineSubmissionQueue(queue);
+      }
+      const discarded = queue.discardReconciliationRecords();
+      await queue.whenPersisted();
+      syncOfflineQueueState(queue);
+      setRouteRecoveryRefreshReason(null);
+      setMessage(discarded === 0
+        ? 'No saved reconciliation records remain.'
+        : `${discarded} saved reconciliation record${discarded === 1 ? '' : 's'} cleared. Ready routes can be started again.`);
+    } catch {
+      setMessage('Saved reconciliation records could not be cleared. Try again.');
     }
   }
 
@@ -3176,6 +3211,7 @@ function DriverApp() {
               onOpenBackgroundLocationSettings={() => { void handleOpenBackgroundLocationSettings(); }}
               onContinueRoute={handleOpenRouteSession}
               onOpenSettings={handleOpenSettings}
+              onClearRouteReconciliation={handleRequestRouteReconciliationClear}
               onRetryRouteSync={() => { void handleRefreshRoutes(); }}
               onStartRoute={handleStartRoute}
               routeSessions={routeSessions}
@@ -3502,6 +3538,7 @@ function MyRoutesPage({
   onOpenBackgroundLocationSettings,
   onOpenRoutePreview,
   onContinueRoute,
+  onClearRouteReconciliation,
   onOpenSettings,
   onRetryRouteSync,
   onStartRoute,
@@ -3523,6 +3560,7 @@ function MyRoutesPage({
   onOpenBackgroundLocationSettings(): void;
   onOpenRoutePreview(routeId: string): void;
   onContinueRoute(routeId: string): void;
+  onClearRouteReconciliation(): void;
   onOpenSettings(): void;
   onRetryRouteSync(): void;
   onStartRoute(routeId: string): void;
@@ -3575,26 +3613,21 @@ function MyRoutesPage({
       {routeReconciliationCount > 0 ? (
         <View accessibilityRole="alert" style={styles.routeReconciliationWarning}>
           <View style={styles.routeReconciliationWarningCopy}>
-            <Text style={styles.routeReconciliationWarningTitle}>Route ended or released on server</Text>
+            <Text style={styles.routeReconciliationWarningTitle}>Unsynced delivery record</Text>
             <Text style={styles.routeReconciliationWarningBody}>
-              {`${routeReconciliationCount} unsynced delivery result${routeReconciliationCount === 1 ? '' : 's'} or proof item${routeReconciliationCount === 1 ? '' : 's'} preserved for reconciliation.`}
+              {`${routeReconciliationCount} saved result${routeReconciliationCount === 1 ? '' : 's'} or proof item${routeReconciliationCount === 1 ? '' : 's'} must be cleared before starting again.`}
             </Text>
           </View>
           <Pressable
-            accessibilityLabel="Refresh routes after server route ended"
+            accessibilityLabel="Clear saved reconciliation record"
             accessibilityRole="button"
-            disabled={isRefreshingRoutes}
-            onPress={onRetryRouteSync}
+            onPress={onClearRouteReconciliation}
             style={({ pressed }) => [
-              styles.routeReconciliationRefreshButton,
-              pressed && styles.routeReconciliationRefreshButtonPressed,
+              styles.routeReconciliationActionButton,
+              pressed && styles.routeReconciliationActionButtonPressed,
             ]}
           >
-            {isRefreshingRoutes ? (
-              <ActivityIndicator color="#9a3412" size="small" />
-            ) : (
-              <Text style={styles.routeReconciliationRefreshButtonText}>Refresh Routes</Text>
-            )}
+            <Text style={styles.routeReconciliationActionButtonText}>Clear Record</Text>
           </Pressable>
         </View>
       ) : null}
@@ -5690,7 +5723,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
   },
-  routeReconciliationRefreshButton: {
+  routeReconciliationActionButton: {
     alignItems: 'center',
     backgroundColor: '#ffedd5',
     borderRadius: 9,
@@ -5700,10 +5733,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  routeReconciliationRefreshButtonPressed: {
+  routeReconciliationActionButtonPressed: {
     backgroundColor: '#fed7aa',
   },
-  routeReconciliationRefreshButtonText: {
+  routeReconciliationActionButtonText: {
     color: '#9a3412',
     fontSize: 13,
     fontWeight: '800',
