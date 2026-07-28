@@ -43,18 +43,23 @@ test('defines native EAS build profiles for preview and production evidence', ()
   assert.deepEqual(eas.submit?.production, {});
 });
 
-test('pins initial native build versions in app config before EAS remote version sync', () => {
+test('keeps source-controlled Android versions aligned across Expo and Gradle', () => {
   const appConfig = readJson<{
     expo?: {
+      version?: string;
       ios?: { buildNumber?: string; bundleIdentifier?: string };
       android?: { package?: string; versionCode?: number };
     };
   }>('app.json');
+  const androidBuildGradle = readFileSync(resolve(repoRoot, 'android/app/build.gradle'), 'utf8');
+  const versionCode = Number(androidBuildGradle.match(/\bversionCode\s+(\d+)/u)?.[1]);
+  const versionName = androidBuildGradle.match(/\bversionName\s+"([^"]+)"/u)?.[1];
 
   assert.equal(appConfig.expo?.ios?.bundleIdentifier, 'com.evns.cleverdriverapp');
   assert.equal(appConfig.expo?.ios?.buildNumber, '1');
   assert.equal(appConfig.expo?.android?.package, 'com.evns.cleverdriverapp');
-  assert.equal(appConfig.expo?.android?.versionCode, 1);
+  assert.equal(appConfig.expo?.android?.versionCode, versionCode);
+  assert.equal(appConfig.expo?.version, versionName);
 });
 
 test('keeps direct-download Android optimization isolated to the distribution APK build', () => {

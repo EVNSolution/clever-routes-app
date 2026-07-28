@@ -71,6 +71,7 @@ import {
 import { finishDeliveryAfterActive, type DeliveryFinishResult } from '../domain/delivery/deliveryFinish';
 import { startDeliveryWithForegroundPermission, type DeliveryStartResult } from '../domain/delivery/deliveryStart';
 import { createDriverApiClientsFromRouteAccess } from '../api/deliveryServer/driverApiClients';
+import { createDriverAppReleaseApiClient } from '../api/deliveryServer/driverAppReleaseApi';
 import {
   isDriverAccountDeletionActiveRouteError,
   isDriverApiUnauthorizedError,
@@ -91,6 +92,7 @@ import { createExpoForegroundLocationPermissionService } from '../platform/expo/
 import { getExpoOfflineSubmissionQueue } from '../platform/expo/storage/expoOfflineSubmissionQueueStorage';
 import { createExpoProofPhotoCaptureService } from '../platform/expo/camera/expoProofPhotoCaptureService';
 import { createExpoSecureDriverAccessTokenStore } from '../platform/expo/secureStore/expoSecureDriverAccessTokenStore';
+import { readInstalledDriverAppVersion } from '../platform/expo/application/expoAppVersionService';
 import {
   createRouteOrderedDriverEventService,
   getOfflineSubmissionQueueSummary,
@@ -143,8 +145,14 @@ import {
 import {
   getConsentCheckboxVisualState,
 } from '../ui/components/authFormUxBehavior';
+import { DriverUpdateScreen } from '../ui/components/DriverUpdateScreen';
 import { TransientToast } from '../ui/components/TransientToast';
 import { scheduleTransientToastDismiss } from '../ui/components/transientToastBehavior';
+import {
+  classifyDriverAppUpdate,
+  shouldPresentDriverAppUpdate,
+  type DriverAppUpdateState,
+} from '../domain/appUpdate/driverAppUpdate';
 import { buildAuthFailureMessage, shouldDiscardSavedLoginAfterRefreshFailure } from './authDiagnostics';
 import {
   buildActiveRouteForegroundNotification,
@@ -217,8 +225,8 @@ type RouteLoadOptions = {
 };
 
 const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
-const DRIVER_APP_VERSION = '1.0.0';
 const DRIVER_CONSENT_DOCUMENT_URL = 'https://clever-route-api.cleversystem.ai/privacy';
+const DRIVER_APP_UPDATE_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 const DRIVER_RESTORE_LOADING_TIMEOUT_MS = 8_000;
 const PULL_REFRESH_DRAG_RESISTANCE = 0.72;
 const PULL_REFRESH_MAX_DISTANCE = 120;
@@ -278,6 +286,8 @@ function DriverApp() {
   const [isDriverRestoreComplete, setIsDriverRestoreComplete] = useState(false);
   const [driverRestoreProblem, setDriverRestoreProblem] = useState<string | null>(null);
   const [driverRestoreAttempt, setDriverRestoreAttempt] = useState(0);
+  const [driverAppUpdateState, setDriverAppUpdateState] = useState<DriverAppUpdateState>({ kind: 'checking' });
+  const [dismissedDriverAppVersionCode, setDismissedDriverAppVersionCode] = useState<number | null>(null);
   const [pendingActiveRouteNotificationTarget, setPendingActiveRouteNotificationTarget] = useState<ActiveRouteNotificationTarget | null>(null);
   const pendingActiveRouteNotificationTargetRef = useRef<ActiveRouteNotificationTarget | null>(null);
   const [pendingStopArrivalNotification, setPendingStopArrivalNotification] = useState<StopArrivalNotificationData | null>(null);
@@ -336,6 +346,8 @@ function DriverApp() {
   const previousRouteSyncNetworkRef = useRef(networkReachability);
   const isRetryingOfflineSubmissionsRef = useRef(false);
   const previousNetworkReachabilityRef = useRef(networkReachability);
+  const driverAppUpdateCheckRunningRef = useRef(false);
+  const lastDriverAppUpdateCheckAtRef = useRef<number | null>(null);
 
   const syncOfflineQueueState = useCallback((queue: OfflineSubmissionQueue | null) => {
     if (queue === null) {
@@ -453,6 +465,44 @@ function DriverApp() {
   const driverMapStyleUrl = useMemo(() => readDriverMapStyleUrl(process.env.EXPO_PUBLIC_DRIVER_MAP_STYLE_URL), []);
 
   const runtimeServices = useMemo(() => createDriverRuntimeServices({ config: runtimeConfig }), [runtimeConfig]);
+  const installedDriverAppVersion = useMemo(() => readInstalledDriverAppVersion(), []);
+  const driverAppReleaseService = useMemo(() => (
+    runtimeConfig.mode === 'live' && Platform.OS === 'android'
+      ? createDriverAppReleaseApiClient({ baseUrl: runtimeConfig.deliveryServerBaseUrl })
+      : null
+  ), [runtimeConfig]);
+  const checkForDriverAppUpdate = useCallback(async (force = false): Promise<void> => {
+    if (driverAppUpdateCheckRunningRef.current) {
+      return;
+    }
+
+    const lastCheckedAt = lastDriverAppUpdateCheckAtRef.current;
+    if (
+      !force
+      && lastCheckedAt !== null
+      && Date.now() - lastCheckedAt < DRIVER_APP_UPDATE_RECHECK_INTERVAL_MS
+    ) {
+      return;
+    }
+    if (driverAppReleaseService === null || installedDriverAppVersion === null) {
+      setDriverAppUpdateState({ kind: 'unavailable' });
+      return;
+    }
+
+    driverAppUpdateCheckRunningRef.current = true;
+    try {
+      const release = await driverAppReleaseService.getAndroidRelease();
+      setDriverAppUpdateState(classifyDriverAppUpdate({
+        currentVersionCode: installedDriverAppVersion.versionCode,
+        release,
+      }));
+      lastDriverAppUpdateCheckAtRef.current = Date.now();
+    } catch {
+      setDriverAppUpdateState({ kind: 'unavailable' });
+    } finally {
+      driverAppUpdateCheckRunningRef.current = false;
+    }
+  }, [driverAppReleaseService, installedDriverAppVersion]);
   const routeAccessService = useMemo(() => (
     runtimeConfig.mode === 'live'
       ? runtimeServices.routeAccessService
@@ -1460,7 +1510,7 @@ function DriverApp() {
         const choiceSubmission = toCompanyGuidanceSubmission(choice);
         const consentResult = await submitDriverConsent(
           {
-            appContext: { appVersion: DRIVER_APP_VERSION },
+            appContext: { appVersion: installedDriverAppVersion?.versionName ?? 'unknown' },
             deviceContext: { platform: Platform.OS },
             routeContext: choice.routeAccess.routeContext,
           },
@@ -1689,6 +1739,7 @@ function DriverApp() {
     clearAndStopActiveLocationSession,
     continuousLocationStreamService,
     driverAccessTokenStore,
+    installedDriverAppVersion?.versionName,
     mockAssignedRouteService,
     mockDriverConsentService,
     offlineSubmissionQueue,
@@ -1982,7 +2033,17 @@ function DriverApp() {
   }, [driverRestoreProblem, isDriverRestoreComplete, networkReachability, retryDriverRestore]);
 
   useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      void checkForDriverAppUpdate(true);
+    });
+    return () => task.cancel();
+  }, [checkForDriverAppUpdate]);
+
+  useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void checkForDriverAppUpdate();
+      }
       if (state === 'active' && verifiedDriverPhoneE164 !== null) {
         void refreshBackgroundLocationPermission();
       }
@@ -2003,6 +2064,7 @@ function DriverApp() {
 
     return () => subscription.remove();
   }, [
+    checkForDriverAppUpdate,
     driverRestoreProblem,
     handleRefreshRoutes,
     isDriverRestoreComplete,
@@ -3135,6 +3197,26 @@ function DriverApp() {
   const isCountrySelectionScreen = screen === 'countrySelect';
   const isFullMapScreen = screen === 'mapPreview' && selectedRoute !== null;
   const isProofCameraScreen = screen === 'proofCamera';
+  const pendingDriverAppRelease = driverAppUpdateState.kind === 'optional_update'
+    || driverAppUpdateState.kind === 'required_update'
+    ? driverAppUpdateState.release
+    : null;
+  const shouldShowDriverUpdateScreen = shouldPresentDriverAppUpdate({
+    dismissedVersionCode: dismissedDriverAppVersionCode,
+    hasActiveRoute: activeRoutePlanId !== null,
+    isRestoreComplete: isDriverRestoreComplete,
+    isRouteSyncLoading: routeSyncState === 'loading',
+    state: driverAppUpdateState,
+  });
+
+  function handleOpenDriverAppUpdate(): void {
+    if (pendingDriverAppRelease === null) {
+      return;
+    }
+    void Linking.openURL(pendingDriverAppRelease.installUrl).catch(() => {
+      setMessage('The update page could not be opened.');
+    });
+  }
 
   return (
     <View style={styles.safeArea}>
@@ -3143,6 +3225,14 @@ function DriverApp() {
         <DriverRestoreScreen
           onRetry={retryDriverRestore}
           problem={driverRestoreProblem}
+        />
+      ) : shouldShowDriverUpdateScreen && pendingDriverAppRelease !== null ? (
+        <DriverUpdateScreen
+          currentVersionName={installedDriverAppVersion?.versionName ?? 'Unknown'}
+          isRequired={driverAppUpdateState.kind === 'required_update'}
+          latestVersionName={pendingDriverAppRelease.latestVersionName}
+          onLater={() => setDismissedDriverAppVersionCode(pendingDriverAppRelease.latestVersionCode)}
+          onUpdate={handleOpenDriverAppUpdate}
         />
       ) : (
         <>
@@ -3300,7 +3390,7 @@ function DriverApp() {
               acceptedLocation={acceptedLocation}
               acceptedPrivacy={acceptedPrivacy}
               accountName={accountName}
-              appVersion={DRIVER_APP_VERSION}
+              appVersion={installedDriverAppVersion?.versionName ?? 'Unknown'}
               isLoadingAccountProfile={isLoadingAccountProfile}
               isRequestingAccountDeletion={isRequestingAccountDeletion}
               onBack={openHomeRoot}

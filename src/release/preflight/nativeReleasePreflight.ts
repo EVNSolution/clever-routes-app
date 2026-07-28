@@ -108,8 +108,8 @@ function checkExpoIdentity(appConfig: NativeReleasePreflightInput['appConfig']):
   if (expo.scheme !== 'clever-driver') {
     return fail('expo.identity', 'Expo URL scheme must be clever-driver.');
   }
-  if (expo.version !== '1.0.0') {
-    return fail('expo.identity', 'Expo app version must match the approved 1.0.0 release baseline.');
+  if (typeof expo.version !== 'string' || !/^\d+\.\d+\.\d+$/u.test(expo.version)) {
+    return fail('expo.identity', 'Expo app version must be a three-part numeric release version.');
   }
   if (expo.ios?.bundleIdentifier !== 'com.evns.cleverdriverapp') {
     return fail('expo.identity', 'iOS bundleIdentifier must be com.evns.cleverdriverapp.');
@@ -123,14 +123,14 @@ function checkExpoIdentity(appConfig: NativeReleasePreflightInput['appConfig']):
   if (expo.android?.package !== 'com.evns.cleverdriverapp') {
     return fail('expo.identity', 'Android package must be com.evns.cleverdriverapp.');
   }
-  if (expo.android?.versionCode !== 1) {
-    return fail('expo.identity', 'Android versionCode must remain 1 before the first EAS remote version sync.');
+  if (!Number.isInteger(expo.android?.versionCode) || (expo.android?.versionCode ?? 0) <= 0) {
+    return fail('expo.identity', 'Android versionCode must be a positive integer.');
   }
   if (expo.extra?.projectStartIssue !== 'EVNSolution/clever-change-control#145') {
     return fail('expo.identity', 'Expo extra.projectStartIssue must reference EVNSolution/clever-change-control#145.');
   }
 
-  return pass('expo.identity', 'Expo app identity and native version pins match the release baseline.');
+  return pass('expo.identity', 'Expo app identity and native version values are valid.');
 }
 
 function checkExpoPermissions(appConfig: NativeReleasePreflightInput['appConfig']): NativeReleasePreflightCheck {
