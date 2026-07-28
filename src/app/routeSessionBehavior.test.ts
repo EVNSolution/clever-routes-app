@@ -87,15 +87,14 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const etaSnapshot = route\.etaSnapshot \?\? null/u);
     assert.match(componentSource, /const nextStopEta = etaSnapshot\?\.nextStopEta \?\? null/u);
     assert.match(componentSource, /const remainingRouteEta = etaSnapshot\?\.remainingRouteEta \?\? null/u);
-    assert.match(componentSource, /const currentTaskNextStopDistance = nextStopEta === null[\s\S]*formatAssignedRouteDistance\(\{ distanceMeters: nextStopEta\.distanceFromPreviousMeters, durationSeconds: null \}\)/u);
     assert.match(componentSource, /const currentTaskNextStopEta = nextStopEta === null[\s\S]*formatAssignedRouteEta\(nextStopEta\.estimatedArrivalAt, route\.timezone\)/u);
-    assert.match(componentSource, /const currentTaskRouteCompletionDistance = remainingRouteEta === null[\s\S]*formatAssignedRouteDistance\(\{ distanceMeters: remainingRouteEta\.distanceMeters, durationSeconds: null \}\)/u);
     assert.match(componentSource, /const currentTaskRouteCompletionEta = remainingRouteEta === null[\s\S]*formatAssignedRouteEta\(remainingRouteEta\.estimatedCompletionAt, route\.timezone\)/u);
     assert.match(componentSource, /const currentTaskEtaFailure = etaSnapshot\?\.status === 'FAILED'[\s\S]*ETA unavailable/u);
     assert.match(componentSource, /const showRouteEtaRows = !isPickupTask[\s\S]*etaSnapshot !== null[\s\S]*etaSnapshot\.status === 'READY' \|\| etaSnapshot\.status === 'FAILED'/u);
     assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*label="Arrive"[\s\S]*label="Navigate"[\s\S]*<\/View>[\s\S]*showRouteEtaRows \? \(/u);
-    assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Next stop: \{currentTaskNextStopDistance\} ETA \{currentTaskNextStopEta\}<\/Text>/u);
-    assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Route complete: \{currentTaskRouteCompletionDistance\} ETA \{currentTaskRouteCompletionEta\}<\/Text>/u);
+    assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Estimated arrival time at next stop: \{currentTaskNextStopEta\}<\/Text>/u);
+    assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Estimated completion time: \{currentTaskRouteCompletionEta\}<\/Text>/u);
+    assert.doesNotMatch(componentSource, /Next stop:|Route complete:|currentTaskNextStopDistance|currentTaskRouteCompletionDistance/u);
     assert.match(componentSource, /styles\.routeActionButton/u);
     assert.match(componentSource, /styles\.currentTaskAddressText/u);
     assert.match(appSource, /routeActionRow:[\s\S]*flexDirection: 'row'/u);

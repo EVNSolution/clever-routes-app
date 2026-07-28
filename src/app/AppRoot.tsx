@@ -4190,15 +4190,9 @@ function RouteSessionScreen({
   const etaSnapshot = route.etaSnapshot ?? null;
   const nextStopEta = etaSnapshot?.nextStopEta ?? null;
   const remainingRouteEta = etaSnapshot?.remainingRouteEta ?? null;
-  const currentTaskNextStopDistance = nextStopEta === null
-    ? null
-    : formatAssignedRouteDistance({ distanceMeters: nextStopEta.distanceFromPreviousMeters, durationSeconds: null });
   const currentTaskNextStopEta = nextStopEta === null
     ? null
     : formatAssignedRouteEta(nextStopEta.estimatedArrivalAt, route.timezone);
-  const currentTaskRouteCompletionDistance = remainingRouteEta === null
-    ? null
-    : formatAssignedRouteDistance({ distanceMeters: remainingRouteEta.distanceMeters, durationSeconds: null });
   const currentTaskRouteCompletionEta = remainingRouteEta === null || remainingRouteEta.estimatedCompletionAt === null
     ? null
     : formatAssignedRouteEta(remainingRouteEta.estimatedCompletionAt, route.timezone);
@@ -4289,11 +4283,11 @@ function RouteSessionScreen({
               {currentTaskEtaFailure !== null ? (
                 <Text style={styles.currentTaskEtaWarningText}>{currentTaskEtaFailure}</Text>
               ) : null}
-              {currentTaskNextStopEta !== null && currentTaskNextStopDistance !== null ? (
-                <Text style={styles.currentTaskEtaText}>Next stop: {currentTaskNextStopDistance} ETA {currentTaskNextStopEta}</Text>
+              {currentTaskNextStopEta !== null ? (
+                <Text style={styles.currentTaskEtaText}>Estimated arrival time at next stop: {currentTaskNextStopEta}</Text>
               ) : null}
-              {currentTaskRouteCompletionEta !== null && currentTaskRouteCompletionDistance !== null ? (
-                <Text style={styles.currentTaskEtaText}>Route complete: {currentTaskRouteCompletionDistance} ETA {currentTaskRouteCompletionEta}</Text>
+              {currentTaskRouteCompletionEta !== null ? (
+                <Text style={styles.currentTaskEtaText}>Estimated completion time: {currentTaskRouteCompletionEta}</Text>
               ) : null}
             </View>
           ) : null}
