@@ -214,7 +214,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
     discardRouteSubmissions: (routePlanId) => {
       const queueItemIds = Array.from(items.values())
         .filter((item) => getQueueItemRoutePlanId(item) === routePlanId)
-        .filter((item) => !isTerminalStopDriverEvent(item))
+        .filter((item) => item.kind !== 'proof_media' && !isTerminalStopDriverEvent(item))
         .map((item) => item.queueItemId);
       for (const queueItemId of queueItemIds) {
         items.delete(queueItemId);

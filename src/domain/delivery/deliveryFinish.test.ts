@@ -375,4 +375,35 @@ describe('delivery finish route cleanup', () => {
     assert.equal(result.kind === 'recorded' ? result.discardedQueuedItems : null, 1);
     assert.deepEqual(queue.listPending().map((item) => item.queueItemId), ['driver-event:location-route-2']);
   });
+
+  it('preserves queued proof after route completion is recorded', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'stop-1',
+      fileName: 'stop-1.jpg',
+      routePlanId: 'route-1',
+      source: 'camera',
+      uri: 'file:///proof/stop-1.jpg',
+    });
+    const stream = createMockStreamService();
+
+    const result = await finishDeliveryAfterActive({
+      deliveryStart: {
+        flowState: 'delivery_active',
+        kind: 'delivery_active',
+        locationPermission: 'foreground',
+        message: 'active',
+      },
+      driverEventService: createMockDriverEventService(),
+      now: new Date('2026-05-12T08:40:00.000Z'),
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+      streamService: stream.service,
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+      'proof-media:route-1:stop-1:stop-1.jpg',
+    ]);
+  });
 });

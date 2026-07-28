@@ -775,7 +775,7 @@ describe('offline submission queue', () => {
     assert.deepEqual(queue.listPending(), []);
   });
 
-  it('discards route-scoped non-terminal submissions when a route is completed', () => {
+  it('discards transient route submissions but preserves terminal stop evidence and proof', () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueDriverEvent({
       clientEventId: 'route-1-event',
@@ -808,9 +808,10 @@ describe('offline submission queue', () => {
       occurredAt: new Date('2026-05-12T11:00:00.000Z'),
     });
 
-    assert.equal(queue.discardRouteSubmissions('route-1'), 2);
+    assert.equal(queue.discardRouteSubmissions('route-1'), 1);
     assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
       'driver-event:route-1-terminal-stop',
+      'proof-media:route-1:stop-1:stop-1.jpg',
       'driver-event:route-2-event',
       'driver-event:unscoped-event',
     ]);
@@ -969,13 +970,15 @@ describe('offline submission queue', () => {
     const result = await retryOfflineSubmissions({
       driverEventService: createMockDriverEventService(),
       proofMediaUploadService: {
-        uploadProofMedia: async () => { throw new Error('should be cleaned before upload'); },
+        uploadProofMedia: async () => { throw new Error('should stay queued until a later retry'); },
       },
       queue,
       routePlanId: 'route-1',
     });
 
-    assert.deepEqual(result, { discarded: 2, failed: 0, retried: 1, succeeded: 1 });
-    assert.deepEqual(queue.listPending(), []);
+    assert.deepEqual(result, { discarded: 1, failed: 0, retried: 1, succeeded: 1 });
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+      'proof-media:route-1:stop-1:proof.jpg',
+    ]);
   });
 });
