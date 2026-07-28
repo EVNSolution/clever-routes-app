@@ -1,6 +1,6 @@
 {
   "name": "clever-driver-app",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -27,6 +27,7 @@
     "@maplibre/maplibre-react-native": "^11.3.4",
     "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~56.0.17",
+    "expo-application": "~56.0.3",
     "expo-camera": "~56.0.8",
     "expo-dev-client": "~56.0.24",
     "expo-font": "~56.0.7",
