@@ -52,6 +52,7 @@ export type OfflineSubmissionQueue = {
   blockRouteSubmissionsForReconciliation(routePlanId: string): { blocked: number; discarded: number };
   clear(): number;
   discard(queueItemId: string): boolean;
+  discardReconciliationRecords(): number;
   discardRouteSubmissions(routePlanId: string): number;
   enqueueDriverEvent(event: DriverEventInput): OfflineDriverEventQueueItem;
   enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
@@ -210,6 +211,20 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
         emitChange();
       }
       return deleted;
+    },
+    discardReconciliationRecords: () => {
+      let discarded = 0;
+      for (const item of Array.from(items.values())) {
+        if (item.reconciliation === undefined) {
+          continue;
+        }
+        items.delete(item.queueItemId);
+        discarded += 1;
+      }
+      if (discarded > 0) {
+        emitChange();
+      }
+      return discarded;
     },
     discardRouteSubmissions: (routePlanId) => {
       const queueItemIds = Array.from(items.values())

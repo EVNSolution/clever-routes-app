@@ -453,6 +453,43 @@ describe('offline submission queue', () => {
     assert.equal(restored.listPending()[0]?.reconciliation?.reason, 'route_not_in_progress');
   });
 
+  it('clears only acknowledged reconciliation records and keeps retryable submissions', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    queue.enqueueDriverEvent({
+      clientEventId: 'blocked-delivery',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-07-20T10:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'retryable-location',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-07-20T10:01:00.000Z'),
+      routePlanId: 'route-2',
+    });
+    queue.blockRouteSubmissionsForReconciliation('route-1');
+
+    assert.equal(queue.discardReconciliationRecords(), 1);
+    await queue.whenPersisted();
+
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+      'driver-event:retryable-location',
+    ]);
+
+    const restored = await createPersistentOfflineSubmissionQueue({ storage });
+    assert.deepEqual(restored.listPending().map((item) => item.queueItemId), [
+      'driver-event:retryable-location',
+    ]);
+    assert.deepEqual(getOfflineSubmissionQueueSummary(restored), {
+      blockedCount: 0,
+      reconciliationRoutePlanIds: [],
+      retryableCount: 1,
+      totalCount: 1,
+    });
+  });
+
   it('discards scanner-rejected queued proof media instead of retrying it', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueProofMediaUpload({

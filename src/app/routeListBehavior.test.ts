@@ -142,6 +142,26 @@ describe('routes list behavior', () => {
     assert.match(source, /executionStatus === 'IN_PROGRESS'[\s\S]*pendingRouteEnd === undefined/u);
   });
 
+  it('clears acknowledged reconciliation records without deleting or refreshing the server route', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const routesPage = getRoutesPageSource();
+    const clearSource = appSource.slice(
+      appSource.indexOf('async function clearRouteReconciliationRecords()'),
+      appSource.indexOf('const refreshRouteAccessLookupForSubmission', appSource.indexOf('async function clearRouteReconciliationRecords()')),
+    );
+
+    assert.match(routesPage, />Unsynced delivery record<\/Text>/u);
+    assert.match(routesPage, /must be cleared before starting again/u);
+    assert.match(routesPage, /accessibilityLabel="Clear saved reconciliation record"/u);
+    assert.match(routesPage, /onPress=\{onClearRouteReconciliation\}/u);
+    assert.match(routesPage, />Clear Record<\/Text>/u);
+    assert.doesNotMatch(routesPage, /Refresh routes after server route ended/u);
+    assert.match(clearSource, /queue\.discardReconciliationRecords\(\)/u);
+    assert.match(clearSource, /await queue\.whenPersisted\(\)/u);
+    assert.match(clearSource, /syncOfflineQueueState\(queue\)/u);
+    assert.doesNotMatch(clearSource, /handleRefreshRoutes|finishRoute|deleteActiveRoute/u);
+  });
+
   it('releases Delete back to Ready instead of completing or removing the route', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const deleteSource = source.slice(
