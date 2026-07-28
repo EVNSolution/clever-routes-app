@@ -78,6 +78,7 @@ import {
 import {
   applyDriverRouteEtaUpdate,
   createMockDriverEventService,
+  recordPickupCompletedAfterDeliveryStart,
   recordRouteStartedAfterDeliveryStart,
   recordStopArrivedAfterDeliveryStart,
   type DriverEventService,
@@ -191,7 +192,7 @@ type AppScreen =
   | 'stopDetails';
 type RouteStatus = RouteSessionStatus;
 type RouteSyncState = 'error' | 'idle' | 'loading' | 'ready';
-type RouteRecoveryRefreshReason = 'driver_access_expired' | 'route_not_in_progress';
+type RouteRecoveryRefreshReason = 'driver_access_expired' | 'pickup_eta_snapshot_synced' | 'route_not_in_progress';
 type BackgroundLocationPermissionState = BackgroundPermissionResult | 'checking';
 type CompletedDeliveriesFilter = 'all' | 'delivered' | 'issues';
 type StopDetailsReturnScreen = 'completedDeliveries' | 'routeSession';
@@ -773,8 +774,16 @@ function DriverApp() {
           setRouteRecoveryRefreshReason('route_not_in_progress');
           setMessage('Route ended or released on server. Unsynced delivery results were preserved for reconciliation.');
         } else if (result.requiresRouteLookup === true) {
-          setRouteRecoveryRefreshReason('driver_access_expired');
-          setMessage('Driver access expired. Refreshing route assignments.');
+          setRouteRecoveryRefreshReason(
+            result.routeLookupReason === 'pickup_eta_snapshot_synced'
+              ? 'pickup_eta_snapshot_synced'
+              : 'driver_access_expired',
+          );
+          setMessage(
+            result.routeLookupReason === 'pickup_eta_snapshot_synced'
+              ? 'Pickup synced. Refreshing route ETA.'
+              : 'Driver access expired. Refreshing route assignments.',
+          );
         }
       }
       await queue.whenPersisted();
@@ -994,6 +1003,22 @@ function DriverApp() {
     )));
   }
 
+  function applyEtaSnapshotToRoute(routePlanId: string, etaSnapshot: AssignedRoute['etaSnapshot']) {
+    setRouteSessions((current) => current.map((session) => {
+      if (session.route.id !== routePlanId) {
+        return session;
+      }
+
+      return {
+        ...session,
+        route: {
+          ...session.route,
+          etaSnapshot: etaSnapshot ?? null,
+        },
+      };
+    }));
+  }
+
   const submitStopArrivalForRouteStop = useCallback(async (
     routeSession: RouteSession,
     stop: AssignedRouteStop,
@@ -1029,13 +1054,11 @@ function DriverApp() {
       routePlanId: routeSession.route.id,
     });
 
+    if (result.kind === 'recorded' && result.etaSnapshot !== undefined) {
+      applyEtaSnapshotToRoute(routeSession.route.id, result.etaSnapshot);
+    }
     if (result.kind === 'recorded' && result.etaUpdate !== undefined) {
-      const etaUpdate = result.etaUpdate;
-      setRouteSessions((current) => current.map((session) => (
-        session.route.id === routeSession.route.id
-          ? { ...session, route: applyDriverRouteEtaUpdate(session.route, etaUpdate) }
-          : session
-      )));
+      applyEtaUpdateToRoute(routeSession.route.id, result.etaUpdate);
     }
     if (result.kind === 'queued') {
       await queue.whenPersisted();
@@ -1569,6 +1592,8 @@ function DriverApp() {
       if (restoredActiveSession !== null) {
         const restoredServerProgress = getAssignedRouteServerProgress(restoredActiveSession.route);
         const pickupIsUnconfirmed = restoredServerProgress.navigationStepIndex === COMPANY_STEP_INDEX
+          && (restoredActiveSession.route.etaSnapshot?.status === undefined
+            || restoredActiveSession.route.etaSnapshot?.status === 'PRE_PICKUP')
           && activeRouteSession?.pickupCompletedAt === undefined;
         const restoredStepIndex = clampRouteNavigationStepIndex(
           pickupIsUnconfirmed
@@ -1752,6 +1777,8 @@ function DriverApp() {
       void handleRefreshRoutes().finally(() => {
         if (recoveryReason === 'route_not_in_progress') {
           setMessage('Route ended or released on server. Unsynced delivery results were preserved for reconciliation.');
+        } else if (recoveryReason === 'pickup_eta_snapshot_synced') {
+          setMessage('Pickup synced. Route ETA refreshed.');
         }
       });
     }, 0);
@@ -2139,9 +2166,6 @@ function DriverApp() {
       });
       setRouteStartedEventResult(routeStartedResult);
       if (routeStartedResult.kind === 'recorded') {
-        if (routeStartedResult.etaUpdate !== undefined) {
-          applyEtaUpdateToRoute(routeSession.route.id, routeStartedResult.etaUpdate);
-        }
         const marked = await driverAccessTokenStore.markActiveRouteStarted(
           routeSession.route.id,
           routeStartedAt.toISOString(),
@@ -2284,21 +2308,70 @@ function DriverApp() {
     }
 
     if (isCompanyStep) {
+      if (deliveryStartResult === null) {
+        setMessage('Start the route before confirming pickup.');
+        return;
+      }
       const requestScreen = screenRef.current;
+      const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      if (offlineSubmissionQueue === null) {
+        setOfflineSubmissionQueue(queue);
+      }
+
+      if (selectedRouteSession === null) {
+        setMessage('Route context was not available for pickup completion. Refresh routes and try again.');
+        return;
+      }
+      const routeSubmission = toCompanyGuidanceSubmission(selectedRouteSession);
+      const result = await recordPickupCompletedAfterDeliveryStart({
+        deliveryStart: deliveryStartResult,
+        driverEventService: createRouteOrderedDriverEventService({
+          driverEventService: getDriverEventServiceForCurrentSubmission({
+            fallback: mockDriverEventService,
+            refreshDriverAccess: buildDriverAccessRefresh(routeSubmission),
+            runtimeConfig,
+            submission: routeSubmission,
+          }),
+          queue,
+          routePlanId: selectedRoute.id,
+        }),
+        offlineQueue: queue,
+        routePlanId: selectedRoute.id,
+      });
+      if (result.kind === 'recorded' && result.etaSnapshot !== undefined) {
+        applyEtaSnapshotToRoute(selectedRoute.id, result.etaSnapshot);
+      }
+      if (result.kind === 'recorded' && result.etaUpdate !== undefined) {
+        applyEtaUpdateToRoute(selectedRoute.id, result.etaUpdate);
+      }
+
+      let pickupMessage = 'Store Pickup completed. Continue to Stop 1.';
+      if (result.kind === 'queued') {
+        await queue.whenPersisted();
+        pickupMessage = 'Store Pickup saved offline. Continue to Stop 1 while syncing.';
+        if (result.requiresRouteLookup === true) {
+          setRouteRecoveryRefreshReason('driver_access_expired');
+          pickupMessage = 'Store Pickup saved offline. Driver access expired, so route assignments are refreshing.';
+        }
+      } else if (result.kind === 'blocked') {
+        setMessage(result.message);
+        return;
+      }
+
       const pickupCompleted = await driverAccessTokenStore.saveActiveRouteSession({
         navigationStepIndex: 1,
         pickupCompleted: true,
         routePlanId: selectedRoute.id,
       });
       if (!pickupCompleted) {
-        setMessage('Store Pickup could not be completed. Refresh the route and try again.');
+        setMessage('Store Pickup could not be confirmed. Refresh the route and try again.');
         return;
       }
       setNavigationStepIndex(1);
       if (screenRef.current === requestScreen) {
         setScreen('routeSession');
       }
-      setMessage('Store Pickup completed. Continue to Stop 1.');
+      setMessage(pickupMessage);
       return;
     }
 
@@ -4114,7 +4187,27 @@ function RouteSessionScreen({
   const currentTaskPaymentAmount = stop === null
     ? null
     : formatAssignedRouteCompactPaymentAmount(stop.totalPriceAmount, stop.currencyCode);
-  const currentTaskEta = stop === null ? null : formatAssignedRouteEta(stop.estimatedArrivalAt, route.timezone);
+  const etaSnapshot = route.etaSnapshot ?? null;
+  const nextStopEta = etaSnapshot?.nextStopEta ?? null;
+  const remainingRouteEta = etaSnapshot?.remainingRouteEta ?? null;
+  const currentTaskNextStopDistance = nextStopEta === null
+    ? null
+    : formatAssignedRouteDistance({ distanceMeters: nextStopEta.distanceFromPreviousMeters, durationSeconds: null });
+  const currentTaskNextStopEta = nextStopEta === null
+    ? null
+    : formatAssignedRouteEta(nextStopEta.estimatedArrivalAt, route.timezone);
+  const currentTaskRouteCompletionDistance = remainingRouteEta === null
+    ? null
+    : formatAssignedRouteDistance({ distanceMeters: remainingRouteEta.distanceMeters, durationSeconds: null });
+  const currentTaskRouteCompletionEta = remainingRouteEta === null || remainingRouteEta.estimatedCompletionAt === null
+    ? null
+    : formatAssignedRouteEta(remainingRouteEta.estimatedCompletionAt, route.timezone);
+  const currentTaskEtaFailure = etaSnapshot?.status === 'FAILED'
+    ? (etaSnapshot.failureMessage?.trim() || 'ETA unavailable')
+    : null;
+  const showRouteEtaRows = !isPickupTask
+    && etaSnapshot !== null
+    && (etaSnapshot.status === 'READY' || etaSnapshot.status === 'FAILED');
   const primaryProgressAction = routeStatus === 'active' && allStopsCompleted
     ? { disabled: isFinishingRoute, label: 'Finish Route', loading: isFinishingRoute, onPress: onFinishRoute }
     : null;
@@ -4171,7 +4264,6 @@ function RouteSessionScreen({
               <Text style={styles.currentTaskAddressText}>{currentTaskAddress}</Text>
             ) : null}
             <View style={styles.currentTaskStatusColumn}>
-              {currentTaskEta !== null ? <Text style={styles.currentTaskEtaText}>ETA {currentTaskEta}</Text> : null}
               {currentTaskPaymentAmount !== null ? (
                 <Text style={styles.currentTaskPaymentAmount}>{currentTaskPaymentAmount}</Text>
               ) : null}
@@ -4192,6 +4284,19 @@ function RouteSessionScreen({
               </View>
             </View>
           )}
+          {showRouteEtaRows ? (
+            <View style={styles.routeSessionEtaRows}>
+              {currentTaskEtaFailure !== null ? (
+                <Text style={styles.currentTaskEtaWarningText}>{currentTaskEtaFailure}</Text>
+              ) : null}
+              {currentTaskNextStopEta !== null && currentTaskNextStopDistance !== null ? (
+                <Text style={styles.currentTaskEtaText}>Next stop: {currentTaskNextStopDistance} ETA {currentTaskNextStopEta}</Text>
+              ) : null}
+              {currentTaskRouteCompletionEta !== null && currentTaskRouteCompletionDistance !== null ? (
+                <Text style={styles.currentTaskEtaText}>Route complete: {currentTaskRouteCompletionDistance} ETA {currentTaskRouteCompletionEta}</Text>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -6482,6 +6587,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
+  routeSessionEtaRows: {
+    gap: 4,
+  },
   currentTaskStatusColumn: {
     alignItems: 'flex-end',
     gap: 5,
@@ -6489,6 +6597,11 @@ const styles = StyleSheet.create({
   },
   currentTaskEtaText: {
     color: '#1d4ed8',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  currentTaskEtaWarningText: {
+    color: '#b45309',
     fontSize: 12,
     fontWeight: '800',
   },

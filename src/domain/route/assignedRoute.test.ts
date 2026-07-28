@@ -70,6 +70,7 @@ describe('driver assigned route UX flow', () => {
     );
     assert.equal(result.route.stops[0]?.items[0]?.name, 'Tomato box');
     assert.equal(result.route.stops[0]?.customerNote, null);
+    assert.equal(result.route.stops[0]?.distanceFromPreviousMeters, null);
     assert.equal(formatAssignedRouteItemLine(result.route.stops[0]!.items[0]!), 'Tomato box (Size: Large): 2');
     assert.equal(JSON.stringify(result).includes('tomatono.myshopify.com'), true);
   });
@@ -208,6 +209,134 @@ describe('driver assigned route UX flow', () => {
 
     assert.equal(result.status, 'ASSIGNED_ROUTE');
     assert.equal(result.route.timezone, 'America/Toronto');
+  });
+
+  it('accepts optional READY etaSnapshot from the assigned-route contract', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              etaSnapshot: {
+                calculatedAt: '2026-05-12T11:00:00.000Z',
+                failureCode: null,
+                failureMessage: null,
+                nextStopEta: {
+                  deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+                  distanceFromPreviousMeters: 100,
+                  estimatedArrivalAt: '2026-05-12T11:15:00.000Z',
+                  sequence: 1,
+                },
+                pickupCompletedAt: '2026-05-12T10:58:00.000Z',
+                remainingRouteEta: {
+                  distanceMeters: 3500,
+                  estimatedCompletionAt: '2026-05-12T11:40:00.000Z',
+                },
+                status: 'READY',
+              },
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: sampleAssignedRoute.id });
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.equal(result.route.etaSnapshot?.status, 'READY');
+    assert.equal(result.route.etaSnapshot?.nextStopEta?.distanceFromPreviousMeters, 100);
+    assert.equal(result.route.etaSnapshot?.remainingRouteEta?.estimatedCompletionAt, '2026-05-12T11:40:00.000Z');
+  });
+
+  it('accepts and normalizes stop distanceFromPreviousMeters from assigned-route responses', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              stops: sampleAssignedRoute.stops.map((stop, index) => ({
+                ...stop,
+                ...(index === 0 ? { distanceFromPreviousMeters: 1250 } : {}),
+              })),
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: sampleAssignedRoute.id });
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.equal(result.route.stops[0]?.distanceFromPreviousMeters, 1250);
+    assert.equal(result.route.stops[1]?.distanceFromPreviousMeters, null);
+  });
+
+  it('normalizes explicit null etaSnapshot from assigned-route responses', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              etaSnapshot: null,
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: sampleAssignedRoute.id });
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.equal(result.route.etaSnapshot, null);
+  });
+
+  it('accepts PRE_PICKUP etaSnapshot only with exact null fields', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              etaSnapshot: {
+                calculatedAt: null,
+                failureCode: null,
+                failureMessage: null,
+                nextStopEta: null,
+                pickupCompletedAt: null,
+                remainingRouteEta: null,
+                status: 'PRE_PICKUP',
+              },
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: sampleAssignedRoute.id });
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.equal(result.route.etaSnapshot?.status, 'PRE_PICKUP');
+    assert.equal(result.route.etaSnapshot.nextStopEta, null);
+    assert.equal(result.route.etaSnapshot.remainingRouteEta, null);
   });
 
   it('rejects assigned route payloads that omit required stop item arrays', async () => {
@@ -418,6 +547,190 @@ describe('driver assigned route UX flow', () => {
         kind: 'failed',
         message: 'Map preview couldn’t load. Route details are still available.',
       },
+    );
+  });
+
+  it('rejects malformed etaSnapshot from assigned-route payloads', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              etaSnapshot: {
+                calculatedAt: '2026-05-12T11:00:00.000Z',
+                status: 'READY',
+                remainingRouteEta: {
+                  distanceMeters: 'invalid',
+                  estimatedCompletionAt: '2026-05-12T11:40:00.000Z',
+                },
+              },
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.getAssignedRoute({ routeContext: sampleAssignedRoute.id }),
+      /Invalid assigned route response/u,
+    );
+  });
+
+  it('rejects PRE_PICKUP etaSnapshot payloads with post-pickup fields', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              etaSnapshot: {
+                calculatedAt: null,
+                failureCode: null,
+                failureMessage: null,
+                nextStopEta: {
+                  deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+                  distanceFromPreviousMeters: 100,
+                  estimatedArrivalAt: '2026-05-12T11:15:00.000Z',
+                  sequence: 1,
+                },
+                pickupCompletedAt: null,
+                remainingRouteEta: null,
+                status: 'PRE_PICKUP',
+              },
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.getAssignedRoute({ routeContext: sampleAssignedRoute.id }),
+      /Invalid assigned route response/u,
+    );
+  });
+
+  it('rejects READY etaSnapshot payloads without required ETA clocks', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              etaSnapshot: {
+                calculatedAt: '2026-05-12T11:00:00.000Z',
+                failureCode: null,
+                failureMessage: null,
+                nextStopEta: {
+                  deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+                  distanceFromPreviousMeters: null,
+                  estimatedArrivalAt: null,
+                  sequence: 1,
+                },
+                pickupCompletedAt: '2026-05-12T10:58:00.000Z',
+                remainingRouteEta: {
+                  distanceMeters: null,
+                  estimatedCompletionAt: '2026-05-12T11:40:00.000Z',
+                },
+                status: 'READY',
+              },
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.getAssignedRoute({ routeContext: sampleAssignedRoute.id }),
+      /Invalid assigned route response/u,
+    );
+  });
+
+  it('rejects READY etaSnapshot payloads without a concrete next stop id', async () => {
+    const makeClient = (deliveryStopId: string | null) => createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              etaSnapshot: {
+                calculatedAt: '2026-05-12T11:00:00.000Z',
+                failureCode: null,
+                failureMessage: null,
+                nextStopEta: {
+                  deliveryStopId,
+                  distanceFromPreviousMeters: null,
+                  estimatedArrivalAt: '2026-05-12T11:15:00.000Z',
+                  sequence: 1,
+                },
+                pickupCompletedAt: '2026-05-12T10:58:00.000Z',
+                remainingRouteEta: {
+                  distanceMeters: null,
+                  estimatedCompletionAt: '2026-05-12T11:40:00.000Z',
+                },
+                status: 'READY',
+              },
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => makeClient(null).getAssignedRoute({ routeContext: sampleAssignedRoute.id }),
+      /Invalid assigned route response/u,
+    );
+    await assert.rejects(
+      () => makeClient('').getAssignedRoute({ routeContext: sampleAssignedRoute.id }),
+      /Invalid assigned route response/u,
+    );
+  });
+
+  it('rejects malformed stop distanceFromPreviousMeters from assigned-route responses', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              stops: sampleAssignedRoute.stops.map((stop, index) => ({
+                ...stop,
+                ...(index === 0 ? { distanceFromPreviousMeters: Number.NaN } : {}),
+              })),
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.getAssignedRoute({ routeContext: sampleAssignedRoute.id }),
+      /Invalid assigned route response/u,
     );
   });
 

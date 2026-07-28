@@ -84,7 +84,18 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const currentTaskPaymentAmount = stop === null[\s\S]*\? null[\s\S]*: formatAssignedRouteCompactPaymentAmount\(stop\.totalPriceAmount, stop\.currencyCode\)/u);
     assert.match(componentSource, /<View style=\{styles\.currentTaskMetaRow\}>[\s\S]*currentTaskAddress !== null \? \([\s\S]*<Text style=\{styles\.currentTaskAddressText\}>\{currentTaskAddress\}<\/Text>[\s\S]*\) : null[\s\S]*<Text style=\{styles\.currentTaskPaymentAmount\}>\{currentTaskPaymentAmount\}<\/Text>/u);
     assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*<PrimaryButton compact disabled=\{isRecordingArrival\} label="Arrive" loading=\{isRecordingArrival\} onPress=\{onArrived\} \/>[\s\S]*<SecondaryButton compact label="Navigate" onPress=\{onOpenNavigation\} \/>[\s\S]*<\/View>/u);
-    assert.match(componentSource, /formatAssignedRouteEta\(stop\.estimatedArrivalAt, route\.timezone\)[\s\S]*>ETA \{currentTaskEta\}<\/Text>/u);
+    assert.match(componentSource, /const etaSnapshot = route\.etaSnapshot \?\? null/u);
+    assert.match(componentSource, /const nextStopEta = etaSnapshot\?\.nextStopEta \?\? null/u);
+    assert.match(componentSource, /const remainingRouteEta = etaSnapshot\?\.remainingRouteEta \?\? null/u);
+    assert.match(componentSource, /const currentTaskNextStopDistance = nextStopEta === null[\s\S]*formatAssignedRouteDistance\(\{ distanceMeters: nextStopEta\.distanceFromPreviousMeters, durationSeconds: null \}\)/u);
+    assert.match(componentSource, /const currentTaskNextStopEta = nextStopEta === null[\s\S]*formatAssignedRouteEta\(nextStopEta\.estimatedArrivalAt, route\.timezone\)/u);
+    assert.match(componentSource, /const currentTaskRouteCompletionDistance = remainingRouteEta === null[\s\S]*formatAssignedRouteDistance\(\{ distanceMeters: remainingRouteEta\.distanceMeters, durationSeconds: null \}\)/u);
+    assert.match(componentSource, /const currentTaskRouteCompletionEta = remainingRouteEta === null[\s\S]*formatAssignedRouteEta\(remainingRouteEta\.estimatedCompletionAt, route\.timezone\)/u);
+    assert.match(componentSource, /const currentTaskEtaFailure = etaSnapshot\?\.status === 'FAILED'[\s\S]*ETA unavailable/u);
+    assert.match(componentSource, /const showRouteEtaRows = !isPickupTask[\s\S]*etaSnapshot !== null[\s\S]*etaSnapshot\.status === 'READY' \|\| etaSnapshot\.status === 'FAILED'/u);
+    assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*label="Arrive"[\s\S]*label="Navigate"[\s\S]*<\/View>[\s\S]*showRouteEtaRows \? \(/u);
+    assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Next stop: \{currentTaskNextStopDistance\} ETA \{currentTaskNextStopEta\}<\/Text>/u);
+    assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Route complete: \{currentTaskRouteCompletionDistance\} ETA \{currentTaskRouteCompletionEta\}<\/Text>/u);
     assert.match(componentSource, /styles\.routeActionButton/u);
     assert.match(componentSource, /styles\.currentTaskAddressText/u);
     assert.match(appSource, /routeActionRow:[\s\S]*flexDirection: 'row'/u);
@@ -98,12 +109,31 @@ describe('route session current task behavior', () => {
 
   it('keeps Store Pickup active after GPS starts until pickup is completed', () => {
     const componentSource = getRouteSessionComponentSource();
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const startRouteSessionStart = appSource.indexOf('async function startRouteSessionAfterConfirmed(');
+    const startRouteSessionEnd = appSource.indexOf('\n\n  function handleOpenRoutePreview(', startRouteSessionStart);
+    const startRouteSessionSource = appSource.slice(startRouteSessionStart, startRouteSessionEnd);
 
     assert.match(componentSource, /const isPickupTask = routeStatus === 'active' && currentNavigationStepIndex === COMPANY_STEP_INDEX/u);
     assert.match(componentSource, /const currentTaskTitle = isPickupTask \? 'Store Pickup' : stop === null \? 'Next Stop'/u);
     assert.match(componentSource, /const currentTaskAddress = stop === null \? null : formatStopSearchAddress\(stop\)/u);
     assert.match(componentSource, /isPickupTask \? \([\s\S]*<PrimaryButton label="Pickup & Start Route" onPress=\{onArrived\} \/>[\s\S]*\) : \([\s\S]*label="Arrive"[\s\S]*label="Navigate"/u);
     assert.match(readFileSync(appRootPath, 'utf8'), /saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: 1,[\s\S]*pickupCompleted: true/u);
+    assert.doesNotMatch(startRouteSessionSource, /applyEtaSnapshotToRoute/u);
+    assert.doesNotMatch(startRouteSessionSource, /applyEtaUpdateToRoute/u);
+  });
+
+  it('keeps pickup queued copy truthful and refreshes route access immediately after queued 401', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const arrivedBegin = appSource.indexOf('async function handleArrivedAtStep()');
+    const arrivedEnd = appSource.indexOf('\n\n  async function recordStopArrival(', arrivedBegin);
+    const arrivedSource = appSource.slice(arrivedBegin, arrivedEnd);
+
+    assert.match(arrivedSource, /let pickupMessage = 'Store Pickup completed\. Continue to Stop 1\.'/u);
+    assert.match(arrivedSource, /if \(result\.kind === 'queued'\) \{[\s\S]*pickupMessage = 'Store Pickup saved offline\. Continue to Stop 1 while syncing\.'/u);
+    assert.match(arrivedSource, /if \(result\.requiresRouteLookup === true\) \{[\s\S]*setRouteRecoveryRefreshReason\('driver_access_expired'\);[\s\S]*pickupMessage = 'Store Pickup saved offline\. Driver access expired, so route assignments are refreshing\.'/u);
+    assert.match(arrivedSource, /setMessage\(pickupMessage\);/u);
+    assert.doesNotMatch(arrivedSource, /setMessage\('Store Pickup queued[\s\S]*setMessage\('Store Pickup completed/u);
   });
 
   it('keeps Arrive on the route session without a redundant live tracking page', () => {

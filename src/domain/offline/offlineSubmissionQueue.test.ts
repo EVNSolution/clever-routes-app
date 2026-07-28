@@ -309,6 +309,7 @@ describe('offline submission queue', () => {
       failed: 1,
       requiresRouteLookup: true,
       retried: 1,
+      routeLookupReason: 'driver_access_expired',
       succeeded: 0,
     });
     assert.equal(queue.listPending()[0]?.attempts, 1);
@@ -560,6 +561,63 @@ describe('offline submission queue', () => {
     assert.equal(pending[0]?.kind, 'driver_event');
     assert.equal(pending[0]?.attempts, 1);
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.occurredAt instanceof Date : false, true);
+  });
+
+  it('hydrates queued pickup completion events from durable storage', async () => {
+    const storage = createMemoryStorage({
+      [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]: JSON.stringify({
+        items: [
+          {
+            attempts: 0,
+            enqueuedAt: '2026-05-12T11:00:00.000Z',
+            event: {
+              clientEventId: 'pickup-completed-1',
+              eventType: 'PICKUP_COMPLETED',
+              occurredAt: '2026-05-12T11:01:00.000Z',
+              routePlanId: 'route-1',
+            },
+            kind: 'driver_event',
+            queueItemId: 'driver-event:pickup-completed-1',
+          },
+        ],
+        version: 1,
+      }),
+    });
+
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    const pending = queue.listPending();
+
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'PICKUP_COMPLETED');
+  });
+
+  it('requests route lookup after a queued pickup completion sync succeeds', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'pickup-completed-1',
+      eventType: 'PICKUP_COMPLETED',
+      occurredAt: new Date('2026-05-12T11:01:00.000Z'),
+      routePlanId: 'route-1',
+    });
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => { throw new Error('unexpected proof upload'); },
+      },
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(result, {
+      discarded: 0,
+      failed: 0,
+      requiresRouteLookup: true,
+      retried: 1,
+      routeLookupReason: 'pickup_eta_snapshot_synced',
+      succeeded: 1,
+    });
+    assert.equal(queue.listPending().length, 0);
   });
 
   it('persists enqueue and discard mutations to durable storage', async () => {

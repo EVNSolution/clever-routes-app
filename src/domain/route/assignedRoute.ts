@@ -104,6 +104,7 @@ export type AssignedRouteStop = {
   deliverySession?: string | null;
   deliveryStopId: string;
   durationFromPreviousSeconds?: number | null;
+  distanceFromPreviousMeters?: number | null;
   estimatedArrivalAt?: string | null;
   items: AssignedRouteOrderItem[];
   normalizedPaymentStatus: NormalizedPaymentStatus | null;
@@ -116,6 +117,20 @@ export type AssignedRouteStop = {
   status: string;
   totalPriceAmount?: string | null;
 };
+
+export type AssignedRouteEtaRemaining = {
+  distanceMeters: number | null;
+  estimatedCompletionAt: string | null;
+};
+
+export type AssignedRouteEtaSnapshotStop = {
+  deliveryStopId: string | null;
+  distanceFromPreviousMeters: number | null;
+  estimatedArrivalAt: string | null;
+  sequence: number;
+};
+
+export type AssignedRouteEtaSnapshotStatus = 'PRE_PICKUP' | 'READY' | 'FAILED';
 
 export type AssignedRouteStopPoint = {
   deliveryStopId: string;
@@ -138,7 +153,18 @@ export type AssignedRoute = {
   routeStopPoints: AssignedRouteStopPoint[];
   shopDomain: string;
   stops: AssignedRouteStop[];
+  etaSnapshot?: AssignedRouteEtaSnapshot | null;
   timezone: string;
+};
+
+export type AssignedRouteEtaSnapshot = {
+  calculatedAt: string | null;
+  failureCode: string | null;
+  failureMessage: string | null;
+  nextStopEta: AssignedRouteEtaSnapshotStop | null;
+  pickupCompletedAt: string | null;
+  remainingRouteEta: AssignedRouteEtaRemaining | null;
+  status: AssignedRouteEtaSnapshotStatus;
 };
 
 export type AssignedRouteLookupResult =
@@ -562,6 +588,7 @@ function isAssignedRoute(value: unknown): value is AssignedRoute {
     typeof route.shopDomain === 'string' &&
     Array.isArray(route.stops) &&
     route.stops.every(isAssignedRouteStop) &&
+    (route.etaSnapshot === undefined || route.etaSnapshot === null || isAssignedRouteEtaSnapshot(route.etaSnapshot)) &&
     nullableString(route.timezone)
   );
 }
@@ -574,6 +601,7 @@ function normalizeAssignedRoute(route: AssignedRoute): AssignedRoute {
     routeMetrics: route.routeMetrics ?? null,
     routeStopPoints: route.routeStopPoints ?? [],
     stops: route.stops.map(normalizeAssignedRouteStop),
+    etaSnapshot: route.etaSnapshot ?? null,
     timezone: route.timezone ?? DEFAULT_ASSIGNED_ROUTE_TIMEZONE,
   };
 }
@@ -582,6 +610,7 @@ function normalizeAssignedRouteStop(stop: AssignedRouteStop): AssignedRouteStop 
   return {
     ...stop,
     customerNote: stop.customerNote ?? null,
+    distanceFromPreviousMeters: stop.distanceFromPreviousMeters ?? null,
     durationFromPreviousSeconds: stop.durationFromPreviousSeconds ?? null,
     estimatedArrivalAt: stop.estimatedArrivalAt ?? null,
     items: stop.items.map((item) => ({
@@ -655,6 +684,78 @@ function isAssignedRouteStopPoint(value: unknown): value is AssignedRouteStopPoi
   );
 }
 
+export function isAssignedRouteEtaSnapshot(value: unknown): value is AssignedRouteEtaSnapshot {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const snapshot = value as Record<string, unknown>;
+  if (snapshot.status === 'PRE_PICKUP') {
+    return (
+      snapshot.calculatedAt === null
+      && snapshot.failureCode === null
+      && snapshot.failureMessage === null
+      && snapshot.pickupCompletedAt === null
+      && snapshot.nextStopEta === null
+      && snapshot.remainingRouteEta === null
+    );
+  }
+
+  if (snapshot.status === 'READY') {
+    return (
+      nullableString(snapshot.calculatedAt)
+      && snapshot.failureCode === null
+      && snapshot.failureMessage === null
+      && isNonEmptyString(snapshot.pickupCompletedAt)
+      && isAssignedRouteEtaSnapshotStop(snapshot.nextStopEta)
+      && isNonEmptyString(snapshot.nextStopEta.deliveryStopId)
+      && isNonEmptyString(snapshot.nextStopEta.estimatedArrivalAt)
+      && isAssignedRouteEtaRemaining(snapshot.remainingRouteEta)
+      && isNonEmptyString(snapshot.remainingRouteEta.estimatedCompletionAt)
+    );
+  }
+
+  if (snapshot.status === 'FAILED') {
+    return (
+      nullableString(snapshot.calculatedAt)
+      && isNonEmptyString(snapshot.failureCode)
+      && isNonEmptyString(snapshot.failureMessage)
+      && isNonEmptyString(snapshot.pickupCompletedAt)
+      && (snapshot.nextStopEta === null || isAssignedRouteEtaSnapshotStop(snapshot.nextStopEta))
+      && (snapshot.remainingRouteEta === null || isAssignedRouteEtaRemaining(snapshot.remainingRouteEta))
+    );
+  }
+
+  return false;
+}
+
+function isAssignedRouteEtaRemaining(value: unknown): value is AssignedRouteEtaRemaining {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const remaining = value as Record<string, unknown>;
+  return (
+    nullableFiniteNumber(remaining.distanceMeters)
+    && (remaining.estimatedCompletionAt === null || typeof remaining.estimatedCompletionAt === 'string')
+  );
+}
+
+function isAssignedRouteEtaSnapshotStop(value: unknown): value is AssignedRouteEtaSnapshotStop {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const stop = value as Record<string, unknown>;
+  return (
+    (stop.deliveryStopId === null || typeof stop.deliveryStopId === 'string')
+    && nullableFiniteNumber(stop.distanceFromPreviousMeters)
+    && nullableString(stop.estimatedArrivalAt)
+    && typeof stop.sequence === 'number'
+    && Number.isInteger(stop.sequence)
+  );
+}
+
 function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
@@ -668,6 +769,7 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
     (stop.customerNote === undefined || nullableString(stop.customerNote)) &&
     (stop.deliverySession === undefined || nullableString(stop.deliverySession)) &&
     typeof stop.deliveryStopId === 'string' &&
+    (stop.distanceFromPreviousMeters === undefined || nullableFiniteNumber(stop.distanceFromPreviousMeters)) &&
     (stop.durationFromPreviousSeconds === undefined || nullableFiniteNumber(stop.durationFromPreviousSeconds)) &&
     (stop.estimatedArrivalAt === undefined || nullableString(stop.estimatedArrivalAt)) &&
     Array.isArray(stop.items) &&
@@ -768,6 +870,10 @@ function nullableFiniteNumber(value: unknown): value is number | null {
 
 function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '';
 }
 
 function nullableMoneyString(value: unknown): value is string | null {

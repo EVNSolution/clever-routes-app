@@ -5,6 +5,7 @@ import {
   applyDriverRouteEtaUpdate,
   createDriverEventsApiClient,
   createMockDriverEventService,
+  recordPickupCompletedAfterDeliveryStart,
   recordRouteStartedAfterDeliveryStart,
   recordStopArrivedAfterDeliveryStart,
 } from './driverEvents';
@@ -318,5 +319,130 @@ describe('driver event API boundary', () => {
     assert.match(result.message, /Driver session expired/iu);
     assert.match(result.message, /HTTP 401/iu);
     assert.equal(queue.listPending().length, 1);
+  });
+
+  it('records PICKUP_COMPLETED and accepts server-returned etaSnapshot', async () => {
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          data: {
+            duplicate: false,
+            etaSnapshot: {
+              calculatedAt: '2026-05-12T11:00:00.000Z',
+              failureCode: null,
+              failureMessage: null,
+              nextStopEta: {
+                deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+                distanceFromPreviousMeters: 180,
+                estimatedArrivalAt: '2026-05-12T11:20:00.000Z',
+                sequence: 1,
+              },
+              pickupCompletedAt: '2026-05-12T10:58:00.000Z',
+              remainingRouteEta: {
+                distanceMeters: 4500,
+                estimatedCompletionAt: '2026-05-12T11:45:00.000Z',
+              },
+              status: 'READY',
+            },
+            eventId: 'evt_pickup_1',
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await recordPickupCompletedAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: service,
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.equal(result.etaSnapshot?.status, 'READY');
+    assert.equal(result.etaSnapshot?.nextStopEta?.sequence, 1);
+    assert.equal(result.etaSnapshot?.remainingRouteEta?.estimatedCompletionAt, '2026-05-12T11:45:00.000Z');
+  });
+
+  it('accepts duplicate PICKUP_COMPLETED responses with etaSnapshot and omitted etaUpdate', async () => {
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          data: {
+            duplicate: true,
+            etaSnapshot: {
+              calculatedAt: '2026-05-12T11:00:00.000Z',
+              failureCode: null,
+              failureMessage: null,
+              nextStopEta: {
+                deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+                distanceFromPreviousMeters: 180,
+                estimatedArrivalAt: '2026-05-12T11:20:00.000Z',
+                sequence: 1,
+              },
+              pickupCompletedAt: '2026-05-12T10:58:00.000Z',
+              remainingRouteEta: {
+                distanceMeters: 4500,
+                estimatedCompletionAt: '2026-05-12T11:45:00.000Z',
+              },
+              status: 'READY',
+            },
+            eventId: 'evt_pickup_original',
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await recordPickupCompletedAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: service,
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.equal(result.duplicate, true);
+    assert.equal(result.eventId, 'evt_pickup_original');
+    assert.equal(result.etaUpdate, undefined);
+    assert.equal(result.etaSnapshot?.status, 'READY');
+  });
+
+  it('queues PICKUP_COMPLETED when a recorded response omits etaSnapshot', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          data: {
+            duplicate: false,
+            eventId: 'evt_pickup_missing_snapshot',
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await recordPickupCompletedAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: service,
+      offlineQueue: queue,
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.kind, 'queued');
+    assert.match(result.message, /ETA snapshot/iu);
+    const pending = queue.listPending();
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'PICKUP_COMPLETED');
   });
 });

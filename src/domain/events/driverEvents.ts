@@ -7,13 +7,21 @@ import {
 } from '../../api/deliveryServer/driverApiError';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
-import type { AssignedRoute } from '../route/assignedRoute';
+import { isAssignedRouteEtaSnapshot } from '../route/assignedRoute';
+import type {
+  AssignedRoute,
+  AssignedRouteEtaRemaining,
+  AssignedRouteEtaSnapshot,
+  AssignedRouteEtaSnapshotStatus,
+  AssignedRouteEtaSnapshotStop,
+} from '../route/assignedRoute';
 
 export type DriverEventType =
   | 'LOCATION_UPDATED'
   | 'ROUTE_COMPLETED'
   | 'ROUTE_PAUSED'
   | 'ROUTE_STARTED'
+  | 'PICKUP_COMPLETED'
   | 'STOP_ARRIVED'
   | 'STOP_DELIVERED'
   | 'STOP_FAILED';
@@ -31,10 +39,16 @@ export type DriverEventInput = {
 
 export type DriverEventRecordResult = {
   duplicate: boolean;
+  etaSnapshot?: DriverRouteEtaSnapshot;
   etaUpdate?: DriverRouteEtaUpdate;
   eventId: string;
   status: 'recorded';
 };
+
+export type DriverRouteEtaSnapshotStop = AssignedRouteEtaSnapshotStop;
+export type DriverRouteEtaRemaining = AssignedRouteEtaRemaining;
+export type DriverRouteEtaSnapshotStatus = AssignedRouteEtaSnapshotStatus;
+export type DriverRouteEtaSnapshot = AssignedRouteEtaSnapshot;
 
 export type DriverRouteEtaStopUpdate = {
   deliveryStopId: string;
@@ -48,8 +62,12 @@ export type DriverRouteEtaUpdate = {
   delaySeconds: number | null;
   previousEstimatedArrivalAt: string | null;
   serverReceivedAt: string;
-  trigger: 'ROUTE_STARTED' | 'STOP_ARRIVED';
+  trigger: 'ROUTE_STARTED' | 'STOP_ARRIVED' | 'PICKUP_COMPLETED';
   updatedStops: DriverRouteEtaStopUpdate[];
+  etaStatus?: 'FAILED' | 'READY';
+  etaFailureCode?: string | null;
+  etaFailureMessage?: string | null;
+  etaCalculatedAt?: string | null;
 };
 
 export type DriverEventService = {
@@ -66,6 +84,11 @@ export type RouteStartedRecordResult =
   | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed'; requiresRouteLookup?: true };
 
 export type StopArrivedRecordResult =
+  | DriverEventRecordResult & { kind: 'recorded' }
+  | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
+  | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed'; requiresRouteLookup?: true };
+
+export type PickupCompletedRecordResult =
   | DriverEventRecordResult & { kind: 'recorded' }
   | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
   | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed'; requiresRouteLookup?: true };
@@ -236,6 +259,68 @@ export async function recordStopArrivedAfterDeliveryStart(input: {
   }
 }
 
+export async function recordPickupCompletedAfterDeliveryStart(input: {
+  clientEventId?: string;
+  deliveryStart: DeliveryStartResult;
+  driverEventService: DriverEventService;
+  occurredAt?: Date;
+  offlineQueue?: OfflineSubmissionQueue;
+  routePlanId: string;
+}): Promise<PickupCompletedRecordResult> {
+  if (input.deliveryStart.kind !== 'delivery_active') {
+    return {
+      kind: 'blocked',
+      message: 'Pickup completion is recorded only while the route is active.',
+      reason: 'delivery_not_active',
+    };
+  }
+
+  const occurredAt = input.occurredAt ?? new Date();
+  const event: DriverEventInput = createPickupCompletedDriverEvent({
+    clientEventId: input.clientEventId,
+    occurredAt,
+    routePlanId: input.routePlanId,
+  });
+
+  try {
+    const result = await input.driverEventService.recordDriverEvent(event);
+    if (result.etaSnapshot === undefined) {
+      throw new Error('Pickup completion response did not include an ETA snapshot.');
+    }
+    return { ...result, kind: 'recorded' };
+  } catch (error) {
+    if (input.offlineQueue === undefined) {
+      throw error;
+    }
+
+    const queued = input.offlineQueue.enqueueDriverEvent(event);
+    return {
+      kind: 'queued',
+      message: `Pickup event queued for retry: ${formatDriverApiErrorForDriver(error)}`,
+      queueItemId: queued.queueItemId,
+      reason: 'record_failed',
+      ...(getDriverApiRequiresRouteLookup(error) === undefined ? {} : { requiresRouteLookup: true as const }),
+    };
+  }
+}
+
+export function createPickupCompletedDriverEvent(input: {
+  clientEventId?: string;
+  occurredAt: Date;
+  routePlanId: string;
+}): DriverEventInput {
+  return {
+    clientEventId: input.clientEventId ?? createPickupCompletedClientEventId(input.occurredAt),
+    eventType: 'PICKUP_COMPLETED',
+    occurredAt: input.occurredAt,
+    routePlanId: input.routePlanId,
+  };
+}
+
+export function createPickupCompletedClientEventId(occurredAt: Date): string {
+  return `pickup-completed-${occurredAt.getTime().toString(36)}`;
+}
+
 export function applyDriverRouteEtaUpdate(route: AssignedRoute, etaUpdate: DriverRouteEtaUpdate): AssignedRoute {
   const updatedEtaByStopId = new Map(
     etaUpdate.updatedStops.map((stop) => [stop.deliveryStopId, stop.estimatedArrivalAt]),
@@ -281,12 +366,18 @@ function readDriverEventRecordEnvelope(payload: unknown): DriverEventRecordResul
   return {
     duplicate: data.duplicate,
     ...(data.etaUpdate === undefined ? {} : { etaUpdate: data.etaUpdate }),
+    ...(data.etaSnapshot === undefined ? {} : { etaSnapshot: data.etaSnapshot }),
     eventId: data.eventId,
     status: 'recorded',
   };
 }
 
-function isDriverEventRecordData(value: unknown): value is { duplicate: boolean; etaUpdate?: DriverRouteEtaUpdate; eventId: string } {
+function isDriverEventRecordData(value: unknown): value is {
+  duplicate: boolean;
+  etaUpdate?: DriverRouteEtaUpdate;
+  etaSnapshot?: DriverRouteEtaSnapshot;
+  eventId: string;
+} {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }
@@ -295,6 +386,7 @@ function isDriverEventRecordData(value: unknown): value is { duplicate: boolean;
   return (
     typeof data.duplicate === 'boolean'
     && (data.etaUpdate === undefined || isDriverRouteEtaUpdate(data.etaUpdate))
+    && (data.etaSnapshot === undefined || isAssignedRouteEtaSnapshot(data.etaSnapshot))
     && typeof data.eventId === 'string'
     && data.eventId.trim() !== ''
   );
@@ -312,7 +404,7 @@ function isDriverRouteEtaUpdate(value: unknown): value is DriverRouteEtaUpdate {
     && nullableFiniteNumber(update.delaySeconds)
     && nullableString(update.previousEstimatedArrivalAt)
     && typeof update.serverReceivedAt === 'string'
-    && (update.trigger === 'ROUTE_STARTED' || update.trigger === 'STOP_ARRIVED')
+    && (update.trigger === 'ROUTE_STARTED' || update.trigger === 'STOP_ARRIVED' || update.trigger === 'PICKUP_COMPLETED')
     && Array.isArray(update.updatedStops)
     && update.updatedStops.every(isDriverRouteEtaStopUpdate)
   );

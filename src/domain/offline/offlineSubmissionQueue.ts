@@ -74,6 +74,7 @@ export type OfflineSubmissionRetryResult = {
   failed: number;
   reconciliationRoutePlanIds?: string[];
   requiresRouteLookup?: true;
+  routeLookupReason?: 'driver_access_expired' | 'pickup_eta_snapshot_synced';
   retried: number;
   succeeded: number;
 };
@@ -91,6 +92,7 @@ const ROUTE_WORKFLOW_EVENT_TYPES = new Set<DriverEventType>([
   'ROUTE_COMPLETED',
   'ROUTE_PAUSED',
   'ROUTE_STARTED',
+  'PICKUP_COMPLETED',
   'STOP_ARRIVED',
   'STOP_DELIVERED',
   'STOP_FAILED',
@@ -341,6 +343,7 @@ export async function retryOfflineSubmissions(input: {
   let discarded = 0;
   let failed = 0;
   let requiresRouteLookup: true | undefined;
+  let routeLookupReason: OfflineSubmissionRetryResult['routeLookupReason'];
   let retried = 0;
   let succeeded = 0;
   const pending = input.queue.listPending().filter((item) => (
@@ -376,6 +379,10 @@ export async function retryOfflineSubmissions(input: {
     try {
       if (item.kind === 'driver_event') {
         await input.driverEventService.recordDriverEvent(item.event);
+        if (item.event.eventType === 'PICKUP_COMPLETED') {
+          requiresRouteLookup = true;
+          routeLookupReason = 'pickup_eta_snapshot_synced';
+        }
       } else {
         await input.proofMediaUploadService.uploadProofMedia(item.request);
       }
@@ -408,7 +415,10 @@ export async function retryOfflineSubmissions(input: {
         continue;
       }
 
-      requiresRouteLookup ??= getDriverApiRequiresRouteLookup(error);
+      if (getDriverApiRequiresRouteLookup(error) === true) {
+        requiresRouteLookup = true;
+        routeLookupReason = 'driver_access_expired';
+      }
       input.queue.recordRetryFailure(item.queueItemId, error instanceof Error ? error.message : 'unknown error');
       const updatedItem = input.queue.listPending().find((pendingItem) => pendingItem.queueItemId === item.queueItemId);
       if (updatedItem !== undefined && shouldDiscardOfflineSubmission(updatedItem, retryPolicy, now())) {
@@ -428,6 +438,7 @@ export async function retryOfflineSubmissions(input: {
       ? {}
       : { reconciliationRoutePlanIds: [...reconciliationRoutePlanIds] }),
     ...(requiresRouteLookup === undefined ? {} : { requiresRouteLookup }),
+    ...(routeLookupReason === undefined ? {} : { routeLookupReason }),
     retried,
     succeeded,
   };
@@ -731,6 +742,7 @@ function readPersistedProofMediaRequest(value: unknown): ProofMediaUploadRequest
 function readDriverEventType(value: unknown): DriverEventType | null {
   const allowed: DriverEventType[] = [
     'LOCATION_UPDATED',
+    'PICKUP_COMPLETED',
     'ROUTE_COMPLETED',
     'ROUTE_PAUSED',
     'ROUTE_STARTED',
