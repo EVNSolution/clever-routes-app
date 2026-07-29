@@ -39,7 +39,9 @@ describe('stop details simplification', () => {
     assert.match(componentSource, /isPickupStop \? 'Order Type' : 'Payment'/u);
     assert.match(componentSource, /isPickupStop \? \([\s\S]*label="Pickup"/u);
     assert.match(componentSource, /const paymentAmount = formatAssignedRouteCompactPaymentAmount\(stop\.totalPriceAmount, stop\.currencyCode\)/u);
+    assert.match(componentSource, /const paymentMethodLabel = payment\.methodLabel === 'Payment' \? null : payment\.methodLabel/u);
     assert.match(componentSource, /payment\.methodLabel/u);
+    assert.match(componentSource, /paymentMethodLabel === null \? null : \([\s\S]*\{paymentMethodLabel\}/u);
     assert.match(componentSource, /label=\{payment\.status\.label\}/u);
     assert.match(componentSource, /StatusChip large label=\{paymentAmount\} tone=\{payment\.status\.tone\}/u);
     assert.doesNotMatch(componentSource, /payment\.amountLabel/u);
