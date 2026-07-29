@@ -4489,6 +4489,7 @@ function StopDetailsScreen({
 }) {
   const payment = formatAssignedRoutePaymentSummary(stop);
   const paymentAmount = formatAssignedRouteCompactPaymentAmount(stop.totalPriceAmount, stop.currencyCode);
+  const paymentMethodLabel = payment.methodLabel === 'Payment' ? null : payment.methodLabel;
   const isPickupStop = isAssignedRoutePickupStop(stop);
   return (
     <View style={styles.stopDetailsPage}>
@@ -4511,7 +4512,9 @@ function StopDetailsScreen({
         ) : (
           <View style={styles.stopDetailsPaymentRow}>
             <View style={styles.stopDetailsPaymentContext}>
-              <Text style={styles.stopDetailsPaymentMethod}>{payment.methodLabel}</Text>
+              {paymentMethodLabel === null ? null : (
+                <Text style={styles.stopDetailsPaymentMethod}>{paymentMethodLabel}</Text>
+              )}
               <StatusChip compact label={payment.status.label} tone={payment.status.tone} />
             </View>
             <StatusChip large label={paymentAmount} tone={payment.status.tone} />
