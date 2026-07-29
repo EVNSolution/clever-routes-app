@@ -39,8 +39,10 @@ describe('stop details simplification', () => {
     assert.match(componentSource, /isPickupStop \? 'Order Type' : 'Payment'/u);
     assert.match(componentSource, /isPickupStop \? \([\s\S]*label="Pickup"/u);
     assert.match(componentSource, /const paymentAmount = formatAssignedRouteCompactPaymentAmount\(stop\.totalPriceAmount, stop\.currencyCode\)/u);
+    assert.match(componentSource, /payment\.methodLabel/u);
+    assert.match(componentSource, /label=\{payment\.status\.label\}/u);
     assert.match(componentSource, /StatusChip large label=\{paymentAmount\} tone=\{payment\.status\.tone\}/u);
-    assert.doesNotMatch(componentSource, /payment\.amountLabel|payment\.methodLabel|label=\{payment\.status\.label\}/u);
+    assert.doesNotMatch(componentSource, /payment\.amountLabel/u);
     assert.doesNotMatch(componentSource, /payment\.detail|stopDetailsPaymentDetail/u);
     assert.match(componentSource, />Qty<\/Text>/u);
     assert.match(componentSource, />Item<\/Text>/u);
@@ -72,7 +74,7 @@ describe('stop details simplification', () => {
     assert.doesNotMatch(componentSource, /Items to drop|formatAssignedRouteItemLine/u);
   });
 
-  it('keeps the full address visible and reduces Payment to one large amount pill', () => {
+  it('keeps the full address visible and restores compact payment context beside the amount pill', () => {
     const source = getAppRootSource();
     const componentSource = getStopDetailsComponentSource();
     const stylesSource = source.slice(source.indexOf('stopDetailsAddress:'), source.indexOf('stopDetailsItemHeader:'));
@@ -80,7 +82,8 @@ describe('stop details simplification', () => {
     assert.match(componentSource, /<Text style=\{styles\.stopDetailsAddress\}>\{formatStopStreetAddress\(stop\)\}<\/Text>/u);
     assert.match(stylesSource, /stopDetailsAddress:[\s\S]*flexShrink: 0,[\s\S]*width: '100%'/u);
     assert.match(source, /statusChipLarge:[\s\S]*fontSize: 18,[\s\S]*paddingHorizontal: 14,[\s\S]*paddingVertical: 9/u);
-    assert.match(stylesSource, /stopDetailsPaymentRow:[\s\S]*justifyContent: 'flex-end'/u);
+    assert.match(stylesSource, /stopDetailsPaymentRow:[\s\S]*justifyContent: 'space-between'/u);
+    assert.match(stylesSource, /stopDetailsPaymentContext:[\s\S]*flexDirection: 'row'/u);
   });
 
   it('uses a clear arrival, navigation, and call action hierarchy', () => {

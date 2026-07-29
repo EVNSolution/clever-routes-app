@@ -4510,6 +4510,10 @@ function StopDetailsScreen({
           </View>
         ) : (
           <View style={styles.stopDetailsPaymentRow}>
+            <View style={styles.stopDetailsPaymentContext}>
+              <Text style={styles.stopDetailsPaymentMethod}>{payment.methodLabel}</Text>
+              <StatusChip compact label={payment.status.label} tone={payment.status.tone} />
+            </View>
             <StatusChip large label={paymentAmount} tone={payment.status.tone} />
           </View>
         )}
@@ -7312,7 +7316,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 12,
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+  },
+  stopDetailsPaymentContext: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 1,
+    gap: 8,
+  },
+  stopDetailsPaymentMethod: {
+    color: '#111827',
+    flexShrink: 1,
+    fontSize: 15,
+    fontWeight: '800',
   },
   stopDetailsItemHeader: {
     flexDirection: 'row',
