@@ -45,9 +45,16 @@ export function buildActiveRouteForegroundNotification(input: {
   const customerNote = truncateNotificationText(stop.customerNote);
   const payment = formatAssignedRoutePaymentSummary(stop);
   const isPickupStop = isAssignedRoutePickupStop(stop);
+  const paymentLines = isPickupStop
+    ? ['Order type: Pickup']
+    : [
+      `Status: ${payment.status.label}`,
+      `Total: ${payment.amountLabel}`,
+      payment.methodLabel === 'Payment' ? null : `Method: ${payment.methodLabel}`,
+    ];
   const body = [
     address,
-    isPickupStop ? 'Order type: Pickup' : `Payment: ${payment.notificationLabel}`,
+    ...paymentLines,
     customerNote === null ? null : `Note: ${customerNote}`,
     `Items ${itemSummary}`,
   ].filter((value): value is string => value !== null).join('\n');
@@ -140,12 +147,13 @@ function formatExpandedNotificationBody(input: {
     ...(input.isPickupStop
       ? ['Order type', 'Pickup']
       : [
-        'Payment',
-        input.payment.methodLabel,
         'Status',
         input.payment.status.label,
         'Total',
         input.payment.amountLabel,
+        ...(input.payment.methodLabel === 'Payment'
+          ? []
+          : ['Method', input.payment.methodLabel]),
       ]),
     'Address',
     input.address,
