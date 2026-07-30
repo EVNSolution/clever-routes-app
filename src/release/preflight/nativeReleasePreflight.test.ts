@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -179,6 +180,47 @@ test('native release preflight validates a source-controlled iOS project when pr
   assert.equal(result.ok, true);
   assert.equal(result.failures.length, 0);
   assert.equal(result.checks.at(-1)?.id, 'ios.native');
+});
+
+test('keeps the Expo 56 iOS deployment target aligned at 16.4', () => {
+  const podfileProperties = readJson<Record<string, unknown>>('ios/Podfile.properties.json');
+  const podfile = readFileSync(resolve(repoRoot, 'ios/Podfile'), 'utf8');
+  const projectPbxproj = readFileSync(
+    resolve(repoRoot, 'ios/CleverDriver.xcodeproj/project.pbxproj'),
+    'utf8',
+  );
+  const projectTargets = [...projectPbxproj.matchAll(/IPHONEOS_DEPLOYMENT_TARGET = ([^;]+);/gu)]
+    .map((match) => match[1]);
+
+  assert.equal(podfileProperties['ios.deploymentTarget'], '16.4');
+  assert.match(podfile, /podfile_properties\['ios\.deploymentTarget'\] \|\| '16\.4'/u);
+  assert.ok(projectTargets.length > 0);
+  assert.deepEqual([...new Set(projectTargets)], ['16.4']);
+});
+
+test('keeps the MapLibre Swift package attached during CocoaPods installation', () => {
+  const podfile = readFileSync(resolve(repoRoot, 'ios/Podfile'), 'utf8');
+
+  assert.match(podfile, /\$MLRN\.post_install\(installer\)/u);
+});
+
+test('keeps the AppDelegate aligned with the Expo 56 Xcode 26 template', () => {
+  const appDelegate = readFileSync(resolve(repoRoot, 'ios/CleverDriver/AppDelegate.swift'), 'utf8');
+
+  assert.match(appDelegate, /^internal import Expo$/mu);
+  assert.match(appDelegate, /^@main\nclass AppDelegate: ExpoAppDelegate \{$/mu);
+  assert.doesNotMatch(appDelegate, /bindReactNativeFactory/u);
+});
+
+test('keeps the native iOS app icon synchronized and opaque', () => {
+  const configuredIcon = readFileSync(resolve(repoRoot, 'assets/icon.png'));
+  const nativeIcon = readFileSync(
+    resolve(repoRoot, 'ios/CleverDriver/Images.xcassets/AppIcon.appiconset/App-Icon-1024x1024@1x.png'),
+  );
+  const digest = (contents: Buffer) => createHash('sha256').update(contents).digest('hex');
+
+  assert.equal(digest(nativeIcon), digest(configuredIcon));
+  assert.equal(nativeIcon.readUInt8(25), 2);
 });
 
 test('native release preflight rejects local Apple team pins in source-controlled iOS project', () => {
