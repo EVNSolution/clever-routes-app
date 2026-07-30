@@ -38,7 +38,7 @@ describe('driver login flow', () => {
     assert.match(source, /case 'countrySelect':[\s\S]*setScreen\('loginPhone'\)/u);
     assert.match(source, /const isCountrySelectionScreen = screen === 'countrySelect'/u);
     assert.match(source, /isCountrySelectionScreen \? \([\s\S]*<CountrySelectionScreen/u);
-    assert.match(countrySelectionScreen, /<ScreenHeader hideRightAction onBack=\{onBack\} title="Select Country" \/>/u);
+    assert.match(countrySelectionScreen, /<FixedScreenHeader onBack=\{onBack\} title="Select Country" topInset=\{topInset\} \/>/u);
     assert.match(countrySelectionScreen, /<LabeledInput[\s\S]*label="Search Country"/u);
     assert.match(countrySelectionScreen, /<ScrollView/u);
     assert.doesNotMatch(countrySelectionScreen, /autoFocus/u);

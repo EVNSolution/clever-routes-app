@@ -80,20 +80,21 @@ describe('route preview behavior', () => {
 
   it('keeps operational session controls out of the Route Details preview component', () => {
     const componentSource = getRoutePreviewComponentSource();
+    const appSource = readFileSync(appRootPath, 'utf8');
 
-    assert.match(componentSource, /ROUTE_PREVIEW_COPY\.title/u);
+    assert.match(appSource, /title=\{ROUTE_PREVIEW_COPY\.title\}/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.date/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.map/u);
     assert.match(componentSource, /RoutePreviewRegionBlock/u);
     assert.match(componentSource, /buildRoutePreviewRegionItems/u);
-    assert.match(readFileSync(appRootPath, 'utf8'), /function RoutePreviewRegionBlock[\s\S]*ROUTE_PREVIEW_LABELS\.region[\s\S]*items\.map/u);
+    assert.match(appSource, /function RoutePreviewRegionBlock[\s\S]*ROUTE_PREVIEW_LABELS\.region[\s\S]*items\.map/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.stops/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.distance/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.time/u);
     assert.match(componentSource, /ROUTE_PREVIEW_LABELS\.sequence/u);
     assert.doesNotMatch(componentSource, /DataRow label=\{ROUTE_PREVIEW_LABELS\.region\}/u);
 
-    assert.match(componentSource, /hideRightAction/u);
+    assert.match(appSource, /screen === 'routePreview' \? \([\s\S]*title=\{ROUTE_PREVIEW_COPY\.title\}/u);
     assert.doesNotMatch(componentSource, /Menu/u);
     assert.doesNotMatch(componentSource, /PrimaryButton/u);
     assert.doesNotMatch(componentSource, /SecondaryButton/u);

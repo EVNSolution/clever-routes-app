@@ -9,7 +9,7 @@ const appRootPath = join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx')
 function getCompletedDeliveriesSource(): string {
   const source = readFileSync(appRootPath, 'utf8');
   const start = source.indexOf('function CompletedDeliveriesScreen(');
-  const end = source.indexOf('function ScreenHeader(', start);
+  const end = source.indexOf('function CompletedDeliveryMetric(', start);
 
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
@@ -49,7 +49,7 @@ describe('Completed Deliveries behavior', () => {
     const completedSource = getCompletedDeliveriesSource();
     const listStyles = source.slice(source.indexOf('completedList:'), source.indexOf('emptyCard:'));
 
-    assert.match(completedSource, /<ScreenHeader hideRightAction/u);
+    assert.match(source, /screen === 'completedDeliveries' \? \([\s\S]*title="Completed Deliveries"/u);
     assert.match(completedSource, /<CompletedDeliveryMetric label="Completed"/u);
     assert.match(completedSource, /<CompletedDeliveryMetric label="Delivered"/u);
     assert.match(completedSource, /<CompletedDeliveryMetric label="Issues"/u);

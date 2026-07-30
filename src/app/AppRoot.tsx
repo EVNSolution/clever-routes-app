@@ -146,6 +146,7 @@ import {
   getConsentCheckboxVisualState,
 } from '../ui/components/authFormUxBehavior';
 import { DriverUpdateScreen } from '../ui/components/DriverUpdateScreen';
+import { FixedScreenHeader } from '../ui/components/FixedScreenHeader';
 import { TransientToast } from '../ui/components/TransientToast';
 import { scheduleTransientToastDismiss } from '../ui/components/transientToastBehavior';
 import {
@@ -584,11 +585,6 @@ function DriverApp() {
   function handleOpenAccountName(): void {
     setAccountNameDraft(accountName ?? '');
     setScreen('accountName');
-  }
-
-  function handleCloseAccountName(): void {
-    setAccountNameDraft(accountName ?? '');
-    setScreen('settings');
   }
 
   async function handleSaveAccountName(): Promise<void> {
@@ -1446,10 +1442,6 @@ function DriverApp() {
     } finally {
       setIsLoggingIn(false);
     }
-  }
-
-  function openHomeRoot() {
-    setScreen('mainTabs');
   }
 
   const openVerifiedNoAssignedRoute = useCallback(async () => {
@@ -3218,6 +3210,34 @@ function DriverApp() {
     });
   }
 
+  const standardScreenHeader = screen === 'mainTabs' ? (
+    <FixedScreenHeader
+      onRightPress={handleOpenSettings}
+      rightAccessibilityLabel="Settings"
+      rightIcon="settings"
+      title="My Routes"
+      topInset={topInset}
+    />
+  ) : screen === 'settings' ? (
+    <FixedScreenHeader onBack={handleAppBack} title="Settings" topInset={topInset} />
+  ) : screen === 'accountName' ? (
+    <FixedScreenHeader onBack={handleAppBack} title="Name" topInset={topInset} />
+  ) : screen === 'routePreview' ? (
+    <FixedScreenHeader onBack={handleAppBack} title={ROUTE_PREVIEW_COPY.title} topInset={topInset} />
+  ) : screen === 'routeSession' ? (
+    <FixedScreenHeader onBack={handleAppBack} title={selectedRoute?.name ?? 'Route'} topInset={topInset} />
+  ) : screen === 'stopDetails' ? (
+    <FixedScreenHeader
+      onBack={handleAppBack}
+      title={stopDetailsStop === null ? 'Stop' : `Stop ${stopDetailsStop.sequence}`}
+      topInset={topInset}
+    />
+  ) : screen === 'arrivalCheck' ? (
+    <FixedScreenHeader onBack={handleAppBack} title="Complete Delivery" topInset={topInset} />
+  ) : screen === 'completedDeliveries' ? (
+    <FixedScreenHeader onBack={handleAppBack} title="Completed Deliveries" topInset={topInset} />
+  ) : null;
+
   return (
     <View style={styles.safeArea}>
       <StatusBar style="dark" />
@@ -3252,6 +3272,7 @@ function DriverApp() {
             searchQuery={countrySearchQuery}
             selectedCountry={selectedPhoneCountry}
             selectedLocale={selectedDriverLocale}
+            topInset={topInset}
           />
         ) : isFullMapScreen ? (
           <MapPreviewScreen
@@ -3259,6 +3280,7 @@ function DriverApp() {
             mapStyleUrl={driverMapStyleUrl}
             onBack={() => setScreen('routePreview')}
             route={selectedRoute}
+            topInset={topInset}
           />
         ) : isProofCameraScreen ? (
           <ProofCameraScreen
@@ -3273,9 +3295,11 @@ function DriverApp() {
             }}
           />
         ) : (
-          <View style={styles.scrollStage}>
+          <View style={styles.standardScreenFrame}>
+            {standardScreenHeader}
+            <View style={styles.scrollStage}>
             {screen === 'mainTabs' ? (
-              <View pointerEvents="none" style={[styles.pullRefreshReveal, { top: topInset }]}>
+              <View pointerEvents="none" style={styles.pullRefreshReveal}>
                 <Reanimated.View style={[styles.pullRefreshContent, pullRefreshContentStyle]}>
                   <Text style={styles.pullRefreshUpdatedAt}>
                     {lastRoutesUpdatedAt === null ? 'Last updated —' : formatRouteListUpdatedAt(lastRoutesUpdatedAt)}
@@ -3299,7 +3323,11 @@ function DriverApp() {
               >
                 <ScrollView
                   bounces={screen !== 'mainTabs'}
-                  contentContainerStyle={[styles.container, screen === 'routeSession' && styles.routeSessionContainer]}
+                  contentContainerStyle={[
+                    styles.container,
+                    standardScreenHeader !== null && styles.containerWithFixedHeader,
+                    screen === 'routeSession' && styles.routeSessionContainer,
+                  ]}
                   keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
                   keyboardShouldPersistTaps="handled"
                   onScroll={(event) => {
@@ -3373,7 +3401,6 @@ function DriverApp() {
               onOpenRoutePreview={handleOpenRoutePreview}
               onOpenBackgroundLocationSettings={() => { void handleOpenBackgroundLocationSettings(); }}
               onContinueRoute={handleOpenRouteSession}
-              onOpenSettings={handleOpenSettings}
               onClearRouteReconciliation={handleRequestRouteReconciliationClear}
               onRetryRouteSync={() => { void handleRefreshRoutes(); }}
               onStartRoute={handleStartRoute}
@@ -3393,7 +3420,6 @@ function DriverApp() {
               appVersion={installedDriverAppVersion?.versionName ?? 'Unknown'}
               isLoadingAccountProfile={isLoadingAccountProfile}
               isRequestingAccountDeletion={isRequestingAccountDeletion}
-              onBack={openHomeRoot}
               onEditName={handleOpenAccountName}
               onOpenConsentDocument={handleOpenConsentDocument}
               onLogout={handleLogout}
@@ -3406,7 +3432,6 @@ function DriverApp() {
             <AccountNamePage
               isSaving={isSavingAccountName}
               nameDraft={accountNameDraft}
-              onBack={handleCloseAccountName}
               onChangeName={setAccountNameDraft}
               onSave={() => { void handleSaveAccountName(); }}
             />
@@ -3424,7 +3449,6 @@ function DriverApp() {
               isStartingRoute={isStartingRoute}
               mapStyleUrl={driverMapStyleUrl}
               onArrived={handleArrivedAtStep}
-              onBack={openHomeRoot}
               onFinishRoute={handleManualFinishRoute}
               onOpenNavigation={() => handleOpenNavigationForStop(currentStop)}
               onOpenRouteNavigation={() => handleOpenRouteNavigation(selectedRoute)}
@@ -3440,7 +3464,6 @@ function DriverApp() {
           {screen === 'routePreview' && selectedRoute !== null ? (
             <RoutePreviewScreen
               mapStyleUrl={driverMapStyleUrl}
-              onBack={openHomeRoot}
               onOpenMapPreview={openMapPreview}
               route={selectedRoute}
             />
@@ -3453,9 +3476,6 @@ function DriverApp() {
               isArriving={isRecordingArrival}
               isSkipping={isCompletingStop}
               isReadOnly={stopDetailsReturnScreen === 'completedDeliveries'}
-              onBack={() => {
-                handleAppBack();
-              }}
               onArrive={handleArriveFromStopDetails}
               onCall={() => handleCallStop(stopDetailsStop)}
               onOpenNavigation={() => handleOpenNavigationForStop(stopDetailsStop)}
@@ -3470,9 +3490,6 @@ function DriverApp() {
               isCapturingPhoto={isCapturingPhoto}
               isCompletingStop={isCompletingStop || isFinishingRoute}
               onAnnounceTip={handleAnnounceCurrentTip}
-              onBack={() => {
-                handleAppBack();
-              }}
               onAddPhoto={handleAddDeliveryPhoto}
               onCompleteStop={handleCompleteCurrentStop}
               onDraftChange={updateCurrentStopDraft}
@@ -3486,7 +3503,6 @@ function DriverApp() {
             <CompletedDeliveriesScreen
               completedStopIds={completedStopIds}
               completedStopTimes={completedStopTimes}
-              onBack={openHomeRoot}
               onOpenStop={(stop) => {
                 setSelectedStopDetailsId(stop.deliveryStopId);
                 setStopDetailsReturnScreen('completedDeliveries');
@@ -3498,6 +3514,7 @@ function DriverApp() {
                 </ScrollView>
               </Reanimated.View>
             </GestureDetector>
+            </View>
           </View>
         )}
           </KeyboardAvoidingView>
@@ -3702,7 +3719,6 @@ function MyRoutesPage({
   onOpenRoutePreview,
   onContinueRoute,
   onClearRouteReconciliation,
-  onOpenSettings,
   onRetryRouteSync,
   onStartRoute,
   routeSessions,
@@ -3724,7 +3740,6 @@ function MyRoutesPage({
   onOpenRoutePreview(routeId: string): void;
   onContinueRoute(routeId: string): void;
   onClearRouteReconciliation(): void;
-  onOpenSettings(): void;
   onRetryRouteSync(): void;
   onStartRoute(routeId: string): void;
   routeSessions: RouteSession[];
@@ -3754,25 +3769,6 @@ function MyRoutesPage({
 
   return (
     <View style={styles.myRoutesPage}>
-      <View style={styles.myRoutesHeader}>
-        <Text style={styles.pageTitle}>My Routes</Text>
-        <Pressable
-          accessibilityLabel="Settings"
-          accessibilityRole="button"
-          hitSlop={8}
-          onPress={onOpenSettings}
-          style={styles.settingsIconButton}
-        >
-          <Ionicons
-            accessibilityElementsHidden
-            color="#111827"
-            importantForAccessibility="no-hide-descendants"
-            name="settings"
-            size={30}
-          />
-        </Pressable>
-      </View>
-
       {routeReconciliationCount > 0 ? (
         <View accessibilityRole="alert" style={styles.routeReconciliationWarning}>
           <View style={styles.routeReconciliationWarningCopy}>
@@ -3940,7 +3936,6 @@ function SettingsPage({
   appVersion,
   isLoadingAccountProfile,
   isRequestingAccountDeletion,
-  onBack,
   onEditName,
   onOpenConsentDocument,
   onLogout,
@@ -3953,7 +3948,6 @@ function SettingsPage({
   appVersion: string;
   isLoadingAccountProfile: boolean;
   isRequestingAccountDeletion: boolean;
-  onBack(): void;
   onEditName(): void;
   onOpenConsentDocument(): void;
   onLogout(): void;
@@ -3962,21 +3956,6 @@ function SettingsPage({
 }) {
   return (
     <View style={styles.settingsScreen}>
-      <View style={styles.settingsHeader}>
-        <Pressable
-          accessibilityLabel="Back"
-          accessibilityRole="button"
-          onPress={onBack}
-          style={({ pressed }) => [
-            styles.settingsBackButton,
-            pressed && styles.settingsBackButtonPressed,
-          ]}
-        >
-          <Ionicons color="#111827" name="chevron-back" size={30} />
-        </Pressable>
-        <Text style={styles.settingsHeaderTitle}>Settings</Text>
-      </View>
-
       <View style={styles.settingsSection}>
         <Text style={styles.settingsSectionLabel}>ACCOUNT</Text>
         <View style={styles.settingsGroup}>
@@ -4099,33 +4078,16 @@ function SettingsPage({
 function AccountNamePage({
   isSaving,
   nameDraft,
-  onBack,
   onChangeName,
   onSave,
 }: {
   isSaving: boolean;
   nameDraft: string;
-  onBack(): void;
   onChangeName(value: string): void;
   onSave(): void;
 }) {
   return (
     <View style={styles.settingsScreen}>
-      <View style={styles.settingsHeader}>
-        <Pressable
-          accessibilityLabel="Back"
-          accessibilityRole="button"
-          onPress={onBack}
-          style={({ pressed }) => [
-            styles.settingsBackButton,
-            pressed && styles.settingsBackButtonPressed,
-          ]}
-        >
-          <Ionicons color="#111827" name="chevron-back" size={30} />
-        </Pressable>
-        <Text style={styles.settingsHeaderTitle}>Name</Text>
-      </View>
-
       <View style={styles.settingsSection}>
         <Text style={styles.settingsSectionLabel}>ACCOUNT</Text>
         <View style={styles.settingsNameEditor}>
@@ -4169,12 +4131,10 @@ function RoutePreviewRegionBlock({ items }: { items: string[] }) {
 
 function RoutePreviewScreen({
   mapStyleUrl,
-  onBack,
   onOpenMapPreview,
   route,
 }: {
   mapStyleUrl: string;
-  onBack(): void;
   onOpenMapPreview(): void;
   route: AssignedRoute;
 }) {
@@ -4182,8 +4142,6 @@ function RoutePreviewScreen({
 
   return (
     <View style={styles.screenStack}>
-      <ScreenHeader hideRightAction onBack={onBack} title={ROUTE_PREVIEW_COPY.title} />
-
       <View style={styles.summaryCard}>
         <DataRow label={ROUTE_PREVIEW_LABELS.date} value={route.deliveryDate} />
         <RoutePreviewRegionBlock items={buildRoutePreviewRegionItems(route)} />
@@ -4235,7 +4193,6 @@ function RouteSessionScreen({
   isStartingRoute,
   mapStyleUrl,
   onArrived,
-  onBack,
   onFinishRoute,
   onOpenNavigation,
   onOpenRouteNavigation,
@@ -4256,7 +4213,6 @@ function RouteSessionScreen({
   isStartingRoute: boolean;
   mapStyleUrl: string;
   onArrived(): void;
-  onBack(): void;
   onFinishRoute(): void;
   onOpenNavigation(): void;
   onOpenRouteNavigation(): void;
@@ -4299,7 +4255,6 @@ function RouteSessionScreen({
   return (
     <View style={styles.routeSessionPage}>
       <View style={styles.routeSessionHeader}>
-        <ScreenHeader onBack={onBack} title={route.name} />
         <View style={styles.routeSessionMetaRow}>
           <Text numberOfLines={1} style={styles.routeSessionMeta}>
             {route.stops.length} {route.stops.length === 1 ? 'Stop' : 'Stops'}
@@ -4440,11 +4395,13 @@ function MapPreviewScreen({
   mapStyleUrl,
   onBack,
   route,
+  topInset,
 }: {
   currentStepIndex: number;
   mapStyleUrl: string;
   onBack(): void;
   route: AssignedRoute;
+  topInset: number;
 }) {
   return (
     <View style={styles.fullScreenMap}>
@@ -4456,7 +4413,7 @@ function MapPreviewScreen({
         showUserLocation={false}
       />
       <View style={styles.fullScreenMapHeader}>
-        <ScreenHeader hideRightAction onBack={onBack} title="Map Preview" />
+        <FixedScreenHeader overlay onBack={onBack} title="Map Preview" topInset={topInset} />
       </View>
     </View>
   );
@@ -4469,7 +4426,6 @@ function StopDetailsScreen({
   isReadOnly = false,
   isSkipping,
   onArrive,
-  onBack,
   onCall,
   onOpenNavigation,
   onSkip,
@@ -4481,7 +4437,6 @@ function StopDetailsScreen({
   isReadOnly?: boolean;
   isSkipping: boolean;
   onArrive(): void;
-  onBack(): void;
   onCall(): void;
   onOpenNavigation(): void;
   onSkip(): void;
@@ -4493,7 +4448,6 @@ function StopDetailsScreen({
   const isPickupStop = isAssignedRoutePickupStop(stop);
   return (
     <View style={styles.stopDetailsPage}>
-      <ScreenHeader hideRightAction onBack={onBack} title={`Stop ${stop.sequence}`} />
       <Text style={styles.stopDetailsAddress}>{formatStopStreetAddress(stop)}</Text>
 
       <View style={styles.stopDetailsSection}>
@@ -4629,7 +4583,6 @@ function ArrivalCheckScreen({
   isCapturingPhoto,
   isCompletingStop,
   onAnnounceTip,
-  onBack,
   onAddPhoto,
   onCompleteStop,
   onDraftChange,
@@ -4641,7 +4594,6 @@ function ArrivalCheckScreen({
   isCapturingPhoto: boolean;
   isCompletingStop: boolean;
   onAnnounceTip(): void;
-  onBack(): void;
   onAddPhoto(): void;
   onCompleteStop(): void;
   onDraftChange(patch: Partial<StopProofDraft>): void;
@@ -4651,7 +4603,6 @@ function ArrivalCheckScreen({
 }) {
   return (
     <View style={styles.screenStack}>
-      <ScreenHeader onBack={onBack} title="Complete Delivery" />
       <Pressable accessibilityRole="button" onPress={onAnnounceTip} style={styles.nearbyBanner}>
         <View style={styles.statusDot} />
         <View style={styles.routeHeaderText}>
@@ -4707,13 +4658,11 @@ function ArrivalCheckScreen({
 function CompletedDeliveriesScreen({
   completedStopIds,
   completedStopTimes,
-  onBack,
   onOpenStop,
   route,
 }: {
   completedStopIds: string[];
   completedStopTimes: Record<string, string>;
-  onBack(): void;
   onOpenStop(stop: AssignedRouteStop): void;
   route: AssignedRoute;
 }) {
@@ -4732,7 +4681,6 @@ function CompletedDeliveriesScreen({
 
   return (
     <View style={styles.completedDeliveriesPage}>
-      <ScreenHeader hideRightAction onBack={onBack} title="Completed Deliveries" />
       <View style={styles.completedRouteHeader}>
         <Text numberOfLines={1} style={styles.pageTitleSmall}>{route.name}</Text>
         <Text style={styles.helperText}>{route.deliveryDate}</Text>
@@ -4808,39 +4756,6 @@ function CompletedDeliveryMetric({ label, value }: { label: string; value: strin
   );
 }
 
-function ScreenHeader({
-  hideRightAction = false,
-  onBack,
-  onRightPress,
-  rightLabel,
-  title,
-}: {
-  hideRightAction?: boolean;
-  onBack?(): void;
-  onRightPress?(): void;
-  rightLabel?: string;
-  title: string;
-}) {
-  const rightContent = rightLabel ?? 'Menu';
-  const rightSlot = hideRightAction ? (
-    <Text style={styles.headerSideText} />
-  ) : onRightPress === undefined ? (
-    <Text style={rightLabel === undefined ? styles.headerSideText : styles.headerActionText}>{rightContent}</Text>
-  ) : (
-    <Pressable accessibilityRole="button" onPress={onRightPress}>
-      <Text style={styles.headerActionText}>{rightContent}</Text>
-    </Pressable>
-  );
-
-  return (
-    <View style={styles.screenHeader}>
-      {onBack === undefined ? <Text style={styles.headerSideText} /> : <Pressable accessibilityRole="button" onPress={onBack}><Text style={styles.headerActionText}>Back</Text></Pressable>}
-      <Text numberOfLines={1} style={styles.headerTitle}>{title}</Text>
-      {rightSlot}
-    </View>
-  );
-}
-
 function CountrySelectorButton({
   onPress,
   selectedCountry,
@@ -4879,6 +4794,7 @@ function CountrySelectionScreen({
   searchQuery,
   selectedCountry,
   selectedLocale,
+  topInset,
 }: {
   countries: DriverPhoneCountry[];
   onBack(): void;
@@ -4887,39 +4803,42 @@ function CountrySelectionScreen({
   searchQuery: string;
   selectedCountry: DriverPhoneCountry;
   selectedLocale: string;
+  topInset: number;
 }) {
   return (
-    <View style={styles.countrySelectionScreen}>
-      <ScreenHeader hideRightAction onBack={onBack} title="Select Country" />
-      <LabeledInput
-        label="Search Country"
-        onChangeText={onSearchChange}
-        placeholder="Country, ISO, + code, locale, or language"
-        value={searchQuery}
-      />
-      <ScrollView
-        contentContainerStyle={styles.countrySelectionListContent}
-        keyboardDismissMode="on-drag"
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-        style={styles.countrySelectionList}
-      >
-        {countries.length > 0 ? countries.map((country) => {
-          const rowText = getCountrySelectorRowText(country, { locale: selectedLocale });
+    <View style={styles.countrySelectionFrame}>
+      <FixedScreenHeader onBack={onBack} title="Select Country" topInset={topInset} />
+      <View style={styles.countrySelectionScreen}>
+        <LabeledInput
+          label="Search Country"
+          onChangeText={onSearchChange}
+          placeholder="Country, ISO, + code, locale, or language"
+          value={searchQuery}
+        />
+        <ScrollView
+          contentContainerStyle={styles.countrySelectionListContent}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          style={styles.countrySelectionList}
+        >
+          {countries.length > 0 ? countries.map((country) => {
+            const rowText = getCountrySelectorRowText(country, { locale: selectedLocale });
 
-          return (
-            <Pressable
-              accessibilityRole="button"
-              key={country.iso2}
-              onPress={() => onSelectCountry(country)}
-              style={[styles.countryRow, country.iso2 === selectedCountry.iso2 && styles.countryRowSelected]}
-            >
-              <Text numberOfLines={1} style={styles.countrySelectorText}>{rowText.title}</Text>
-              <Text numberOfLines={1} style={styles.helperText}>{rowText.subtitle}</Text>
-            </Pressable>
-          );
-        }) : <Text style={styles.helperText}>No supported countries matched this search.</Text>}
-      </ScrollView>
+            return (
+              <Pressable
+                accessibilityRole="button"
+                key={country.iso2}
+                onPress={() => onSelectCountry(country)}
+                style={[styles.countryRow, country.iso2 === selectedCountry.iso2 && styles.countryRowSelected]}
+              >
+                <Text numberOfLines={1} style={styles.countrySelectorText}>{rowText.title}</Text>
+                <Text numberOfLines={1} style={styles.helperText}>{rowText.subtitle}</Text>
+              </Pressable>
+            );
+          }) : <Text style={styles.helperText}>No supported countries matched this search.</Text>}
+        </ScrollView>
+      </View>
     </View>
   );
 }
@@ -5825,6 +5744,9 @@ const styles = StyleSheet.create({
   keyboardArea: {
     flex: 1,
   },
+  standardScreenFrame: {
+    flex: 1,
+  },
   scrollStage: {
     flex: 1,
     overflow: 'hidden',
@@ -5843,6 +5765,7 @@ const styles = StyleSheet.create({
     left: 0,
     position: 'absolute',
     right: 0,
+    top: 0,
   },
   pullRefreshContent: {
     alignItems: 'center',
@@ -5867,6 +5790,9 @@ const styles = StyleSheet.create({
     padding: 22,
     paddingBottom: 28,
     paddingTop: 34,
+  },
+  containerWithFixedHeader: {
+    paddingTop: 18,
   },
   routeSessionContainer: {
     gap: 0,
@@ -5990,34 +5916,9 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     textAlign: 'center',
   },
-  myRoutesHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginTop: 16,
-    minHeight: 76,
-    paddingHorizontal: 56,
-  },
   pageHeader: {
     gap: 6,
     paddingTop: 8,
-  },
-  pageTitle: {
-    color: '#111827',
-    fontSize: 30,
-    fontWeight: '800',
-    letterSpacing: -0.5,
-    textAlign: 'center',
-  },
-  settingsIconButton: {
-    alignItems: 'center',
-    borderRadius: 22,
-    height: 44,
-    justifyContent: 'center',
-    position: 'absolute',
-    right: 8,
-    top: 16,
-    width: 44,
   },
   pageTitleSmall: {
     color: '#111827',
@@ -6107,12 +6008,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
+  countrySelectionFrame: {
+    flex: 1,
+  },
   countrySelectionScreen: {
     flex: 1,
     gap: 18,
     padding: 22,
     paddingBottom: 28,
-    paddingTop: 34,
+    paddingTop: 18,
   },
   countrySelectionList: {
     flex: 1,
@@ -6400,59 +6304,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff7ed',
     color: '#b45309',
   },
-  screenHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
-    minHeight: 44,
-  },
-  headerActionText: {
-    color: '#0b57d0',
-    fontSize: 16,
-    fontWeight: '700',
-    minWidth: 52,
-  },
-  headerSideText: {
-    minWidth: 52,
-  },
-  headerTitle: {
-    color: '#111827',
-    flex: 1,
-    fontSize: 18,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
   settingsScreen: {
     gap: 28,
     paddingBottom: 12,
-  },
-  settingsHeader: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 64,
-    position: 'relative',
-  },
-  settingsBackButton: {
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderColor: '#e4e7ec',
-    borderRadius: 24,
-    borderWidth: 1,
-    height: 48,
-    justifyContent: 'center',
-    left: 0,
-    position: 'absolute',
-    width: 48,
-  },
-  settingsBackButtonPressed: {
-    backgroundColor: '#eef2f6',
-  },
-  settingsHeaderTitle: {
-    color: '#111827',
-    fontSize: 22,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-    textAlign: 'center',
   },
   settingsSection: {
     gap: 10,
@@ -6766,9 +6620,6 @@ const styles = StyleSheet.create({
   },
   fullScreenMapHeader: {
     left: 0,
-    paddingHorizontal: 22,
-    paddingBottom: 12,
-    paddingTop: 34,
     position: 'absolute',
     right: 0,
     top: 0,

@@ -31,9 +31,9 @@ function getAccountNamePageSource(): string {
 describe('Settings page behavior', () => {
   it('uses an inset-grouped account summary with only working settings', () => {
     const settingsPage = getSettingsPageSource();
+    const source = readFileSync(appRootPath, 'utf8');
 
-    assert.match(settingsPage, /accessibilityLabel="Back"/u);
-    assert.match(settingsPage, /name="chevron-back"/u);
+    assert.match(source, /screen === 'settings' \? \([\s\S]*<FixedScreenHeader onBack=\{handleAppBack\} title="Settings"/u);
     assert.match(settingsPage, />ACCOUNT</u);
     assert.match(settingsPage, />Name</u);
     assert.match(settingsPage, /accessibilityLabel="Change Name"/u);
@@ -78,7 +78,7 @@ describe('Settings page behavior', () => {
     const accountNamePage = getAccountNamePageSource();
     const source = readFileSync(appRootPath, 'utf8');
 
-    assert.match(accountNamePage, /settingsHeaderTitle\}>Name/u);
+    assert.match(source, /screen === 'accountName' \? \([\s\S]*title="Name"/u);
     assert.match(accountNamePage, /label="Name"/u);
     assert.match(accountNamePage, /maxLength=\{80\}/u);
     assert.match(accountNamePage, /autoCapitalize="words"/u);
@@ -127,8 +127,7 @@ describe('Settings page behavior', () => {
       source.indexOf('summaryCard:'),
     );
 
-    assert.match(settingsStyles, /settingsHeader:/u);
-    assert.match(settingsStyles, /settingsBackButton:/u);
+    assert.doesNotMatch(settingsStyles, /settingsHeader:|settingsBackButton:/u);
     assert.match(settingsStyles, /settingsSectionLabel:/u);
     assert.match(settingsStyles, /settingsGroup:/u);
     assert.match(settingsStyles, /settingsRow:/u);

@@ -24,9 +24,10 @@ function getStopDetailsComponentSource(): string {
 describe('stop details simplification', () => {
   it('renders the selected order details and the server customer note', () => {
     const componentSource = getStopDetailsComponentSource();
+    const source = getAppRootSource();
 
     assert.match(componentSource, /<View style=\{styles\.stopDetailsPage\}>/u);
-    assert.match(componentSource, /<ScreenHeader hideRightAction onBack=\{onBack\} title=\{`Stop \$\{stop\.sequence\}`\} \/>/u);
+    assert.match(source, /screen === 'stopDetails' \? \([\s\S]*`Stop \$\{stopDetailsStop\.sequence\}`/u);
     assert.match(componentSource, /style=\{styles\.stopDetailsAddress\}/u);
     assert.match(componentSource, /formatStopStreetAddress\(stop\)/u);
     assert.doesNotMatch(componentSource, /numberOfLines=\{2\} style=\{styles\.stopDetailsAddress\}/u);
@@ -164,7 +165,7 @@ describe('stop details simplification', () => {
     assert.doesNotMatch(source, /PanResponder|swipeBackResponder|SWIPE_BACK_|panHandlers/u);
     assert.match(source, /case 'stopDetails':[\s\S]*setSelectedStopDetailsId\(null\);[\s\S]*setScreen\(stopDetailsReturnScreen\);[\s\S]*return true;/u);
     assert.doesNotMatch(source, /stopDetailsBackTarget/u);
-    assert.match(source, /<StopDetailsScreen[\s\S]*onBack=\{\(\) => \{[\s\S]*handleAppBack\(\);[\s\S]*\}\}/u);
+    assert.match(source, /screen === 'stopDetails' \? \([\s\S]*<FixedScreenHeader[\s\S]*onBack=\{handleAppBack\}/u);
     assert.doesNotMatch(source, /trackingDeckPanResponder/u);
   });
 });

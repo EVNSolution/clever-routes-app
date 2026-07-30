@@ -3,7 +3,7 @@
     "name": "Clever Driver",
     "slug": "clever-driver-app",
     "scheme": "clever-driver",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "com.evns.cleverdriverapp",
-      "versionCode": 3,
+      "versionCode": 4,
       "icon": "./assets/icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
