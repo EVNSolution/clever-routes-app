@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -209,6 +210,17 @@ test('keeps the AppDelegate aligned with the Expo 56 Xcode 26 template', () => {
   assert.match(appDelegate, /^internal import Expo$/mu);
   assert.match(appDelegate, /^@main\nclass AppDelegate: ExpoAppDelegate \{$/mu);
   assert.doesNotMatch(appDelegate, /bindReactNativeFactory/u);
+});
+
+test('keeps the native iOS app icon synchronized and opaque', () => {
+  const configuredIcon = readFileSync(resolve(repoRoot, 'assets/icon.png'));
+  const nativeIcon = readFileSync(
+    resolve(repoRoot, 'ios/CleverDriver/Images.xcassets/AppIcon.appiconset/App-Icon-1024x1024@1x.png'),
+  );
+  const digest = (contents: Buffer) => createHash('sha256').update(contents).digest('hex');
+
+  assert.equal(digest(nativeIcon), digest(configuredIcon));
+  assert.equal(nativeIcon.readUInt8(25), 2);
 });
 
 test('native release preflight rejects local Apple team pins in source-controlled iOS project', () => {
