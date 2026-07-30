@@ -278,7 +278,7 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /handleStopArrivalNotificationPress[\s\S]*setArrivalCheckReturnScreen\('routeSession'\);[\s\S]*setScreen\('arrivalCheck'\)/u);
     assert.match(backHandlerSource, /case 'arrivalCheck':[\s\S]*setScreen\(arrivalCheckReturnScreen\);[\s\S]*return true/u);
     assert.match(appSource, /\[accountName, arrivalCheckReturnScreen, isPhotoActionSheetVisible, screen, setScreen, stopDetailsReturnScreen\]/u);
-    assert.match(appSource, /<ArrivalCheckScreen[\s\S]*onBack=\{\(\) => \{[\s\S]*handleAppBack\(\);[\s\S]*\}\}/u);
+    assert.match(appSource, /screen === 'arrivalCheck' \? \([\s\S]*<FixedScreenHeader onBack=\{handleAppBack\}/u);
     assert.doesNotMatch(backHandlerSource, /setScreen\('stopDetails'\)/u);
   });
 
@@ -418,10 +418,10 @@ describe('route session current task behavior', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const componentSource = getRouteSessionComponentSource();
 
-    assert.match(appSource, /contentContainerStyle=\{\[styles\.container, screen === 'routeSession' && styles\.routeSessionContainer\]\}/u);
+    assert.match(appSource, /contentContainerStyle=\{\[[\s\S]*styles\.container,[\s\S]*screen === 'routeSession' && styles\.routeSessionContainer/u);
     assert.match(appSource, /routeSessionContainer:[\s\S]*gap: 0,[\s\S]*paddingHorizontal: 0,/u);
     assert.match(componentSource, /<View style=\{styles\.routeSessionPage\}>/u);
-    assert.match(componentSource, /<ScreenHeader onBack=\{onBack\} title=\{route\.name\} \/>/u);
+    assert.match(appSource, /screen === 'routeSession' \? \([\s\S]*title=\{selectedRoute\?\.name \?\? 'Route'\}/u);
     assert.match(componentSource, /<View style=\{styles\.routeSessionMetaRow\}>[\s\S]*\{route\.stops\.length\} \{route\.stops\.length === 1 \? 'Stop' : 'Stops'\}[\s\S]*Duration \{formatAssignedRouteDuration\(route\.routeMetrics\)\}[\s\S]*<\/View>/u);
     assert.doesNotMatch(componentSource, /\| Duration/u);
     assert.match(appSource, /routeSessionMetaRow:[\s\S]*gap: 20,[\s\S]*justifyContent: 'center'/u);

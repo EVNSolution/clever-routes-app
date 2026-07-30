@@ -23,24 +23,12 @@ describe('routes list behavior', () => {
   it('uses a routes-first shell with a gear-only Settings action and a revealed pull-refresh area', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const routesPage = getRoutesPageSource();
-    const routesHeaderStyles = source.slice(source.indexOf('myRoutesHeader:'), source.indexOf('pageHeader:'));
-    const pageTitleStyles = source.slice(source.indexOf('pageTitle:'), source.indexOf('settingsIconButton:'));
-    const settingsButtonStyles = source.slice(source.indexOf('settingsIconButton:'), source.indexOf('pageTitleSmall:'));
 
     assert.match(source, /import Ionicons from '@expo\/vector-icons\/Ionicons'/u);
-    assert.match(routesPage, /<Text style=\{styles\.pageTitle\}>My Routes<\/Text>/u);
-    assert.match(routesPage, /accessibilityLabel="Settings"/u);
-    assert.match(routesPage, /<Ionicons[\s\S]*name="settings"[\s\S]*size=\{30\}/u);
+    assert.match(source, /screen === 'mainTabs' \? \([\s\S]*rightAccessibilityLabel="Settings"[\s\S]*rightIcon="settings"[\s\S]*title="My Routes"/u);
+    assert.doesNotMatch(routesPage, /accessibilityLabel="Settings"|>My Routes</u);
     assert.doesNotMatch(routesPage, /⚙/u);
-    assert.doesNotMatch(routesHeaderStyles, /backgroundColor|borderColor|borderRadius|borderWidth/u);
-    assert.match(routesHeaderStyles, /justifyContent: 'center'/u);
-    assert.match(routesHeaderStyles, /marginTop: 16/u);
-    assert.match(routesHeaderStyles, /minHeight: 76/u);
-    assert.match(pageTitleStyles, /textAlign: 'center'/u);
-    assert.match(settingsButtonStyles, /position: 'absolute'/u);
-    assert.match(settingsButtonStyles, /right: 8/u);
-    assert.match(settingsButtonStyles, /top: 16/u);
-    assert.doesNotMatch(settingsButtonStyles, /settingsIcon:/u);
+    assert.match(source, /<View style=\{styles\.standardScreenFrame\}>[\s\S]*\{standardScreenHeader\}[\s\S]*<ScrollView/u);
     assert.match(routesPage, /title="No routes assigned yet"/u);
     assert.match(routesPage, /body="When dispatch assigns you a route, it’ll appear here\."/u);
     assert.match(source, /styles\.pullRefreshReveal/u);
@@ -52,7 +40,7 @@ describe('routes list behavior', () => {
     assert.match(source, /withSpring\(PULL_REFRESH_REVEAL_HEIGHT/u);
     assert.match(source, /reduceMotion: ReduceMotion\.System/u);
     assert.match(source, /const \{ top: topInset \} = useSafeAreaInsets\(\)/u);
-    assert.match(source, /style=\{\[styles\.pullRefreshReveal, \{ top: topInset \}\]\}/u);
+    assert.match(source, /style=\{styles\.pullRefreshReveal\}/u);
     assert.match(source, /<ActivityIndicator/u);
     assert.doesNotMatch(source, /pullRefreshResponder|pullRefreshSpin|Animated\.loop|>↻</u);
     assert.doesNotMatch(source, /RefreshControl|routeRefreshFooter/u);
