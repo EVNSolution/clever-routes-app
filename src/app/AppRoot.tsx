@@ -349,6 +349,7 @@ function DriverApp() {
   const previousNetworkReachabilityRef = useRef(networkReachability);
   const driverAppUpdateCheckRunningRef = useRef(false);
   const lastDriverAppUpdateCheckAtRef = useRef<number | null>(null);
+  const previousActiveRoutePlanIdRef = useRef<string | null>(null);
 
   const syncOfflineQueueState = useCallback((queue: OfflineSubmissionQueue | null) => {
     if (queue === null) {
@@ -1890,12 +1891,15 @@ function DriverApp() {
     isPullRefreshingRef.current = true;
     pullRefreshOffset.value = withSpring(PULL_REFRESH_REVEAL_HEIGHT, PULL_REFRESH_SPRING_CONFIG);
     try {
-      await handleRefreshRoutes();
+      await Promise.all([
+        handleRefreshRoutes(),
+        checkForDriverAppUpdate(true),
+      ]);
     } finally {
       pullRefreshOffset.value = withSpring(0, PULL_REFRESH_SPRING_CONFIG);
       isPullRefreshingRef.current = false;
     }
-  }, [handleRefreshRoutes, pullRefreshOffset]);
+  }, [checkForDriverAppUpdate, handleRefreshRoutes, pullRefreshOffset]);
 
   const retryDriverRestore = useCallback(() => {
     if (isDriverRestoreComplete) {
@@ -2030,6 +2034,15 @@ function DriverApp() {
     });
     return () => task.cancel();
   }, [checkForDriverAppUpdate]);
+
+  useEffect(() => {
+    const didReleaseActiveRoute = previousActiveRoutePlanIdRef.current !== null
+      && activeRoutePlanId === null;
+    previousActiveRoutePlanIdRef.current = activeRoutePlanId;
+    if (didReleaseActiveRoute) {
+      void checkForDriverAppUpdate(true);
+    }
+  }, [activeRoutePlanId, checkForDriverAppUpdate]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
