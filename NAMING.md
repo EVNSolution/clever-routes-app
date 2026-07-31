@@ -12,6 +12,11 @@ Canonical values:
 - URL scheme: `clever-routes`
 - Target domain: Shopify delivery
 
+Android releases before `1.0.5` used the legacy
+`com.evns.cleverdriverapp` application ID. Because Android treats the canonical
+ID as a different app, the `1.0.5` direct release requires users to install the
+new app, sign in again, verify their routes, and then remove the legacy app.
+
 Do not use future DSV app identifiers in this repository. The future DSV mobile app is reserved for:
 
 - Product/display name: `CLEVER Driver`

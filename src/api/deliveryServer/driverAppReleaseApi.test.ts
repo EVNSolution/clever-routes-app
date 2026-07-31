@@ -14,6 +14,12 @@ describe('driver app release API', () => {
           json: async () => ({
             data: {
               distributionChannel: 'direct',
+              installation: {
+                guideUrl: 'https://delivery.example.com/driver-app',
+                mode: 'package_migration',
+                replacesPackageIds: ['com.evns.cleverdriverapp'],
+                targetPackageId: 'com.evnsolution.clever.routes',
+              },
               installUrl: 'https://delivery.example.com/routes-app',
               latestVersionCode: 2,
               latestVersionName: '1.0.1',

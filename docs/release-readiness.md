@@ -25,19 +25,30 @@ Do not add final store listing copy, screenshots, signing ownership, or public l
   version changes with it.
 - On startup and when returning to the foreground after the recheck interval,
   the app reads `GET /routes-app/release/android`.
+- The release manifest declares the target Android package ID and the legacy
+  package IDs it replaces. A package mismatch is a required reinstall, not a
+  normal in-place update.
 - Update lookup runs independently from saved-session restore. Lookup failure
   must not delay login, route restore, or route work.
 - An available update is shown only after restore finishes and no active route
   is in progress. Optional updates allow `Later` for the current app process;
   required updates do not.
-- `Update` opens the server-owned stable `/routes-app` URL in the browser. The
-  app never receives or stores the backing Google Drive URL.
+- `Update` opens the server-owned stable `/routes-app` URL. A package migration
+  instead opens the server-provided `/driver-app` guide, which explains that
+  the new app must be installed, signed into again, and verified before the
+  previous app is removed. The app never receives or stores the backing Google
+  Drive URL.
+- Legacy builds continue to discover the release through
+  `GET /driver-app/release/android`; the server returns the same canonical
+  manifest and install guide.
 - The server publishes `latestVersionCode`, `latestVersionName`, and
   `minimumSupportedVersionCode` from deployment environment values. Advance the
   published latest version only after the replacement APK has been uploaded and
   verified.
-- Keep the existing Android signing identity while using the direct channel so
-  the downloaded APK can upgrade an installed copy without clearing app data.
+- Release `1.0.5` (`versionCode` `6`) starts the
+  `com.evnsolution.clever.routes` identity. It cannot overwrite the legacy
+  `com.evns.cleverdriverapp` package, so users must sign in again and remove the
+  previous app after verifying the new installation.
 
 ## Native build profile matrix
 
@@ -49,7 +60,7 @@ The native binary build path uses Expo EAS profiles:
 | `preview` iOS | `npx eas-cli build --platform ios --profile preview` | Internal iPhone smoke build through EAS internal distribution | Expo account/project access, Apple team/signing authority, registered devices or approved internal distribution path, EAS `preview` environment values |
 | `production` all | `npx eas-cli build --platform all --profile production` | Store/TestFlight/Play candidate archives | Expo account/project access, Apple/Google store authority, production signing, EAS `production` environment values, approved privacy/store copy |
 
-`cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied to committed source. `cli.appVersionSource` is `remote`; the current local direct-distribution Android build is `1.0.2` (`versionCode` `3`), while future production store builds use `autoIncrement` to avoid duplicate build numbers.
+`cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied to committed source. `cli.appVersionSource` is `remote`; the current local direct-distribution Android build is `1.0.5` (`versionCode` `6`), while future production store builds use `autoIncrement` to avoid duplicate build numbers.
 
 Before running any preview/production EAS build for evidence, run:
 

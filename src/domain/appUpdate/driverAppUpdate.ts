@@ -1,5 +1,11 @@
 export type DriverAppReleaseManifest = {
   distributionChannel: 'direct';
+  installation: {
+    guideUrl: string;
+    mode: 'package_migration';
+    replacesPackageIds: string[];
+    targetPackageId: string;
+  };
   installUrl: string;
   latestVersionCode: number;
   latestVersionName: string;
@@ -12,12 +18,17 @@ export type DriverAppUpdateState =
   | { kind: 'unavailable' }
   | { kind: 'up_to_date'; release: DriverAppReleaseManifest }
   | { kind: 'optional_update'; release: DriverAppReleaseManifest }
-  | { kind: 'required_update'; release: DriverAppReleaseManifest };
+  | { kind: 'required_update'; release: DriverAppReleaseManifest }
+  | { kind: 'required_reinstall'; release: DriverAppReleaseManifest };
 
 export function classifyDriverAppUpdate(input: {
+  currentPackageId: string;
   currentVersionCode: number;
   release: DriverAppReleaseManifest;
 }): DriverAppUpdateState {
+  if (input.currentPackageId !== input.release.installation.targetPackageId) {
+    return { kind: 'required_reinstall', release: input.release };
+  }
   if (input.currentVersionCode >= input.release.latestVersionCode) {
     return { kind: 'up_to_date', release: input.release };
   }
@@ -38,12 +49,17 @@ export function shouldPresentDriverAppUpdate(input: {
     !input.isRestoreComplete
     || input.isRouteSyncLoading
     || input.hasActiveRoute
-    || (input.state.kind !== 'optional_update' && input.state.kind !== 'required_update')
+    || (
+      input.state.kind !== 'optional_update'
+      && input.state.kind !== 'required_update'
+      && input.state.kind !== 'required_reinstall'
+    )
   ) {
     return false;
   }
 
   return input.state.kind === 'required_update'
+    || input.state.kind === 'required_reinstall'
     || input.dismissedVersionCode !== input.state.release.latestVersionCode;
 }
 
@@ -54,6 +70,7 @@ export function readDriverAppReleaseManifest(value: unknown): DriverAppReleaseMa
 
   const {
     distributionChannel,
+    installation,
     installUrl,
     latestVersionCode,
     latestVersionName,
@@ -70,18 +87,42 @@ export function readDriverAppReleaseManifest(value: unknown): DriverAppReleaseMa
     || typeof latestVersionName !== 'string'
     || latestVersionName.trim() === ''
     || !isHttpUrl(installUrl)
+    || !isPackageMigration(installation)
   ) {
     throw new Error('Invalid driver app release manifest');
   }
 
   return {
     distributionChannel,
+    installation,
     installUrl,
     latestVersionCode,
     latestVersionName: latestVersionName.trim(),
     minimumSupportedVersionCode,
     platform,
   };
+}
+
+function isPackageMigration(value: unknown): value is DriverAppReleaseManifest['installation'] {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const {
+    guideUrl,
+    mode,
+    replacesPackageIds,
+    targetPackageId,
+  } = value;
+  return mode === 'package_migration'
+    && isHttpUrl(guideUrl)
+    && isNonEmptyString(targetPackageId)
+    && Array.isArray(replacesPackageIds)
+    && replacesPackageIds.length > 0
+    && replacesPackageIds.every(isNonEmptyString);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '';
 }
 
 function isHttpUrl(value: unknown): value is string {

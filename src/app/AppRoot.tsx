@@ -495,6 +495,7 @@ function DriverApp() {
     try {
       const release = await driverAppReleaseService.getAndroidRelease();
       setDriverAppUpdateState(classifyDriverAppUpdate({
+        currentPackageId: installedDriverAppVersion.packageId,
         currentVersionCode: installedDriverAppVersion.versionCode,
         release,
       }));
@@ -3204,6 +3205,7 @@ function DriverApp() {
   const isProofCameraScreen = screen === 'proofCamera';
   const pendingDriverAppRelease = driverAppUpdateState.kind === 'optional_update'
     || driverAppUpdateState.kind === 'required_update'
+    || driverAppUpdateState.kind === 'required_reinstall'
     ? driverAppUpdateState.release
     : null;
   const shouldShowDriverUpdateScreen = shouldPresentDriverAppUpdate({
@@ -3218,7 +3220,10 @@ function DriverApp() {
     if (pendingDriverAppRelease === null) {
       return;
     }
-    void Linking.openURL(pendingDriverAppRelease.installUrl).catch(() => {
+    const targetUrl = driverAppUpdateState.kind === 'required_reinstall'
+      ? pendingDriverAppRelease.installation.guideUrl
+      : pendingDriverAppRelease.installUrl;
+    void Linking.openURL(targetUrl).catch(() => {
       setMessage('The update page could not be opened.');
     });
   }
@@ -3262,7 +3267,11 @@ function DriverApp() {
       ) : shouldShowDriverUpdateScreen && pendingDriverAppRelease !== null ? (
         <DriverUpdateScreen
           currentVersionName={installedDriverAppVersion?.versionName ?? 'Unknown'}
-          isRequired={driverAppUpdateState.kind === 'required_update'}
+          isReinstall={driverAppUpdateState.kind === 'required_reinstall'}
+          isRequired={
+            driverAppUpdateState.kind === 'required_update'
+            || driverAppUpdateState.kind === 'required_reinstall'
+          }
           latestVersionName={pendingDriverAppRelease.latestVersionName}
           onLater={() => setDismissedDriverAppVersionCode(pendingDriverAppRelease.latestVersionCode)}
           onUpdate={handleOpenDriverAppUpdate}

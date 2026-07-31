@@ -9,6 +9,12 @@ import {
 
 const releasePayload = {
   distributionChannel: 'direct',
+  installation: {
+    guideUrl: 'https://delivery.example.com/driver-app',
+    mode: 'package_migration',
+    replacesPackageIds: ['com.evns.cleverdriverapp'],
+    targetPackageId: 'com.evnsolution.clever.routes',
+  },
   installUrl: 'https://delivery.example.com/routes-app',
   latestVersionCode: 3,
   latestVersionName: '1.1.0',
@@ -20,9 +26,31 @@ describe('driver app update classification', () => {
   it('distinguishes current, optional, and required direct releases by versionCode', () => {
     const release = readDriverAppReleaseManifest(releasePayload);
 
-    assert.equal(classifyDriverAppUpdate({ currentVersionCode: 3, release }).kind, 'up_to_date');
-    assert.equal(classifyDriverAppUpdate({ currentVersionCode: 2, release }).kind, 'optional_update');
-    assert.equal(classifyDriverAppUpdate({ currentVersionCode: 1, release }).kind, 'required_update');
+    assert.equal(classifyDriverAppUpdate({
+      currentPackageId: 'com.evnsolution.clever.routes',
+      currentVersionCode: 3,
+      release,
+    }).kind, 'up_to_date');
+    assert.equal(classifyDriverAppUpdate({
+      currentPackageId: 'com.evnsolution.clever.routes',
+      currentVersionCode: 2,
+      release,
+    }).kind, 'optional_update');
+    assert.equal(classifyDriverAppUpdate({
+      currentPackageId: 'com.evnsolution.clever.routes',
+      currentVersionCode: 1,
+      release,
+    }).kind, 'required_update');
+  });
+
+  it('requires a reinstall when the installed Android package is the legacy identity', () => {
+    const release = readDriverAppReleaseManifest(releasePayload);
+
+    assert.equal(classifyDriverAppUpdate({
+      currentPackageId: 'com.evns.cleverdriverapp',
+      currentVersionCode: 3,
+      release,
+    }).kind, 'required_reinstall');
   });
 
   it('accepts only a consistent direct Android release contract', () => {
@@ -36,6 +64,35 @@ describe('driver app update classification', () => {
       { ...releasePayload, latestVersionName: ' ' },
       { ...releasePayload, minimumSupportedVersionCode: 4 },
       { ...releasePayload, platform: 'ios' },
+      { ...releasePayload, installation: null },
+      {
+        ...releasePayload,
+        installation: {
+          ...releasePayload.installation,
+          guideUrl: 'file:///tmp/reinstall.html',
+        },
+      },
+      {
+        ...releasePayload,
+        installation: {
+          ...releasePayload.installation,
+          mode: 'upgrade',
+        },
+      },
+      {
+        ...releasePayload,
+        installation: {
+          ...releasePayload.installation,
+          replacesPackageIds: [],
+        },
+      },
+      {
+        ...releasePayload,
+        installation: {
+          ...releasePayload.installation,
+          targetPackageId: ' ',
+        },
+      },
     ]) {
       assert.throws(() => readDriverAppReleaseManifest(invalidPayload));
     }
@@ -43,6 +100,7 @@ describe('driver app update classification', () => {
 
   it('never covers restore, route loading, or an active delivery', () => {
     const optionalState = classifyDriverAppUpdate({
+      currentPackageId: 'com.evnsolution.clever.routes',
       currentVersionCode: 2,
       release: readDriverAppReleaseManifest(releasePayload),
     });
@@ -82,5 +140,21 @@ describe('driver app update classification', () => {
       isRouteSyncLoading: false,
       state: optionalState,
     }), false);
+  });
+
+  it('never allows a package migration reinstall to be dismissed', () => {
+    const reinstallState = classifyDriverAppUpdate({
+      currentPackageId: 'com.evns.cleverdriverapp',
+      currentVersionCode: 3,
+      release: readDriverAppReleaseManifest(releasePayload),
+    });
+
+    assert.equal(shouldPresentDriverAppUpdate({
+      dismissedVersionCode: 3,
+      hasActiveRoute: false,
+      isRestoreComplete: true,
+      isRouteSyncLoading: false,
+      state: reinstallState,
+    }), true);
   });
 });
