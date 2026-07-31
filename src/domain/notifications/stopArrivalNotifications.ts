@@ -6,7 +6,24 @@ import {
 } from '../route/assignedRoute';
 
 export const STOP_ARRIVAL_NOTIFICATION_TYPE = 'stop_arrival';
+export const DRIVER_ROUTE_NOTIFICATION_TYPE = 'driver_route_changed';
 export const DEFAULT_STOP_ARRIVAL_RADIUS_METERS = 50;
+
+export type DriverRouteNotificationAction = 'assigned' | 'cancelled' | 'changed' | 'released';
+
+export type DriverRouteNotificationData = {
+  action: DriverRouteNotificationAction;
+  childVersion: number;
+  routeGroupingId: string;
+  routePlanId: string;
+  type: typeof DRIVER_ROUTE_NOTIFICATION_TYPE;
+};
+
+export type DriverRouteNotificationNavigation =
+  | 'active_route_protected'
+  | 'open_route'
+  | 'refresh_only'
+  | 'target_unavailable';
 
 export type StopArrivalNotificationData = {
   deliveryStopId: string;
@@ -42,11 +59,67 @@ export type StopArrivalNotificationRegistrationResult =
     };
 
 export type StopArrivalNotificationService = {
+  addDriverRouteNotificationReceivedListener(listener: (data: DriverRouteNotificationData) => Promise<void> | void): () => void;
+  addDriverRouteNotificationResponseListener(listener: (data: DriverRouteNotificationData) => Promise<void> | void): () => void;
   addStopArrivalResponseListener(listener: (data: StopArrivalNotificationData) => Promise<void> | void): () => void;
+  consumePendingDriverRouteNotification(): Promise<DriverRouteNotificationData | null>;
+  getDevicePushToken(): Promise<string | null>;
+  getLastDriverRouteNotificationResponse(): Promise<DriverRouteNotificationData | null>;
   getLastStopArrivalResponse(): Promise<StopArrivalNotificationData | null>;
   registerForStopArrivalNotifications(): Promise<StopArrivalNotificationRegistrationResult>;
   scheduleStopArrivalNotification(input: StopArrivalNotificationCandidate): Promise<void>;
 };
+
+export function parseDriverRouteNotificationData(
+  data: Record<string, unknown> | null | undefined,
+): DriverRouteNotificationData | null {
+  if (data === null || data === undefined || data.type !== DRIVER_ROUTE_NOTIFICATION_TYPE) {
+    return null;
+  }
+  if (
+    !isDriverRouteNotificationAction(data.action)
+    || typeof data.routeGroupingId !== 'string'
+    || data.routeGroupingId.trim() === ''
+    || typeof data.routePlanId !== 'string'
+    || data.routePlanId.trim() === ''
+  ) {
+    return null;
+  }
+  const childVersion = typeof data.childVersion === 'number'
+    ? data.childVersion
+    : typeof data.childVersion === 'string'
+      ? Number(data.childVersion)
+      : Number.NaN;
+  if (!Number.isInteger(childVersion) || childVersion <= 0) {
+    return null;
+  }
+
+  return {
+    action: data.action,
+    childVersion,
+    routeGroupingId: data.routeGroupingId,
+    routePlanId: data.routePlanId,
+    type: DRIVER_ROUTE_NOTIFICATION_TYPE,
+  };
+}
+
+export function getDriverRouteNotificationNavigation(input: {
+  action: DriverRouteNotificationAction;
+  activeRoutePlanId: string | null;
+  availableRoutePlanIds: string[];
+  openRequested: boolean;
+  routePlanId: string;
+}): DriverRouteNotificationNavigation {
+  if (!input.openRequested || input.action === 'cancelled' || input.action === 'released') {
+    return 'refresh_only';
+  }
+  if (input.activeRoutePlanId !== null && input.activeRoutePlanId !== input.routePlanId) {
+    return 'active_route_protected';
+  }
+  return input.availableRoutePlanIds.includes(input.routePlanId)
+    ? 'open_route'
+    : 'target_unavailable';
+}
 
 export function getStopArrivalNotificationCandidate(input: {
   completedStopIds: string[];
@@ -161,4 +234,8 @@ function getDistanceMeters(a: StopArrivalLocation, b: StopArrivalLocation): numb
 
 function toRadians(degrees: number): number {
   return degrees * Math.PI / 180;
+}
+
+function isDriverRouteNotificationAction(value: unknown): value is DriverRouteNotificationAction {
+  return value === 'assigned' || value === 'cancelled' || value === 'changed' || value === 'released';
 }

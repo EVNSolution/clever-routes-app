@@ -43,6 +43,20 @@ export type DriverAuthService = {
   login(input: LoginDriverAccountInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
   refreshSession(input: RefreshDriverAuthSessionInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
   register(input: RegisterDriverAccountInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
+  registerPushInstallation(input: {
+    accountAccessToken: string;
+    appId: string;
+    appVersion?: string;
+    deviceId?: string;
+    devicePushToken: string;
+    locale?: string;
+    platform: string;
+    timezone?: string;
+  }): Promise<void>;
+  revokePushInstallation(input: {
+    accountAccessToken: string;
+    devicePushToken: string;
+  }): Promise<void>;
   requestAccountDeletion(input: {
     accountAccessToken: string;
     reason?: string;
@@ -137,6 +151,25 @@ export function createDriverAuthApiClient(input: {
     return { request: readDriverAccountDeletionEnvelope(payload) };
   }
 
+  async function requestPushInstallation(input: {
+    accountAccessToken: string;
+    body: Record<string, string>;
+    method: 'DELETE' | 'PUT';
+  }): Promise<void> {
+    const response = await fetchImpl(`${baseUrl}/api/driver/mobile/push-token`, withNoStoreDriverApiRequest({
+      body: JSON.stringify(input.body),
+      headers: {
+        Authorization: `Bearer ${input.accountAccessToken.trim()}`,
+        'Content-Type': 'application/json',
+      },
+      method: input.method,
+    }));
+    await response.json();
+    if (!response.ok) {
+      throw createDriverApiHttpError({ endpoint: 'Driver Push installation', status: response.status });
+    }
+  }
+
   return {
     getAccountProfile: (request) => requestAccountProfile({
       accountAccessToken: request.accountAccessToken,
@@ -154,7 +187,25 @@ export function createDriverAuthApiClient(input: {
       inviteCode: request.inviteCode.trim().toUpperCase(),
       pin: request.pin.trim(),
     }, 'Register Driver Account'),
+    registerPushInstallation: (request) => requestPushInstallation({
+      accountAccessToken: request.accountAccessToken,
+      body: {
+        appId: request.appId.trim(),
+        ...(request.appVersion?.trim() ? { appVersion: request.appVersion.trim() } : {}),
+        ...(request.deviceId?.trim() ? { deviceId: request.deviceId.trim() } : {}),
+        devicePushToken: request.devicePushToken.trim(),
+        ...(request.locale?.trim() ? { locale: request.locale.trim() } : {}),
+        platform: request.platform.trim(),
+        ...(request.timezone?.trim() ? { timezone: request.timezone.trim() } : {}),
+      },
+      method: 'PUT',
+    }),
     requestAccountDeletion,
+    revokePushInstallation: (request) => requestPushInstallation({
+      accountAccessToken: request.accountAccessToken,
+      body: { devicePushToken: request.devicePushToken.trim() },
+      method: 'DELETE',
+    }),
     updateAccountProfile: (request) => requestAccountProfile({
       accountAccessToken: request.accountAccessToken,
       method: 'PATCH',
@@ -181,6 +232,7 @@ export function createMockDriverAuthService(accountAccess: DriverAccountAccessTo
     login: async () => ({ accountAccess }),
     refreshSession: async () => ({ accountAccess }),
     register: async () => ({ accountAccess }),
+    registerPushInstallation: async () => undefined,
     requestAccountDeletion: async () => ({
       request: {
         duplicate: false,
@@ -188,6 +240,7 @@ export function createMockDriverAuthService(accountAccess: DriverAccountAccessTo
         status: 'REQUESTED',
       },
     }),
+    revokePushInstallation: async () => undefined,
     updateAccountProfile: async (request) => {
       currentProfile = { ...currentProfile, name: request.name.trim() };
       return { account: currentProfile };

@@ -2,6 +2,11 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
+def googleServicesConfigFile = file("google-services.json")
+if (googleServicesConfigFile.exists()) {
+    apply plugin: "com.google.gms.google-services"
+}
+
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
 /**
@@ -92,8 +97,8 @@ android {
         applicationId 'com.evnsolution.clever.routes'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 6
-        versionName "1.0.5"
+        versionCode 7
+        versionName "1.1.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -178,5 +183,13 @@ dependencies {
         implementation("com.facebook.react:hermes-android")
     } else {
         implementation jscFlavor
+    }
+}
+
+if (!googleServicesConfigFile.exists()) {
+    tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+        doFirst {
+            throw new GradleException("Release build requires android/app/google-services.json. Run npm run prepare:android:firebase first.")
+        }
     }
 }

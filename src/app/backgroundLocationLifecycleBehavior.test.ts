@@ -39,7 +39,7 @@ describe('background location lifecycle wiring', () => {
     assert.ok(trackingIndex < routeStartedIndex);
     assert.match(startSource, /startedAt: routeStartedAt\.toISOString\(\)/u);
     assert.match(startSource, /markActiveRouteStarted/u);
-    assert.equal((source.match(/registerForStopArrivalNotifications\(\)/gu) ?? []).length, 1);
+    assert.equal((startSource.match(/registerForStopArrivalNotifications\(\)/gu) ?? []).length, 1);
   });
 
   it('refreshes background permission on My Routes and after returning from system settings', () => {

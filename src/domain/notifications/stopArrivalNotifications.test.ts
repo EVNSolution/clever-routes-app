@@ -3,6 +3,8 @@ import { describe, it } from 'node:test';
 
 import { sampleAssignedRoute } from '../route/assignedRoute';
 import {
+  getDriverRouteNotificationNavigation,
+  parseDriverRouteNotificationData,
   formatStopArrivalNotificationContent,
   getStopArrivalNotificationCandidate,
   parseStopArrivalNotificationData,
@@ -67,5 +69,59 @@ describe('stop arrival notifications', () => {
 
     assert.equal(parseStopArrivalNotificationData({ deliveryStopId: 'stop-1', routePlanId: 'route-1' }), null);
     assert.equal(parseStopArrivalNotificationData({ deliveryStopId: '', routePlanId: 'route-1', type: 'stop_arrival' }), null);
+  });
+
+  it('parses route assignment notifications without accepting customer data', () => {
+    assert.deepEqual(parseDriverRouteNotificationData({
+      action: 'assigned',
+      childVersion: '3',
+      routeGroupingId: 'group-1',
+      routePlanId: 'route-1',
+      type: 'driver_route_changed',
+    }), {
+      action: 'assigned',
+      childVersion: 3,
+      routeGroupingId: 'group-1',
+      routePlanId: 'route-1',
+      type: 'driver_route_changed',
+    });
+    assert.equal(parseDriverRouteNotificationData({
+      action: 'assigned',
+      childVersion: '3',
+      routeGroupingId: 'group-1',
+      routePlanId: 'route-1',
+      type: 'wrong_type',
+    }), null);
+  });
+
+  it('opens only the refreshed target route and protects a different active route', () => {
+    assert.equal(getDriverRouteNotificationNavigation({
+      action: 'assigned',
+      activeRoutePlanId: null,
+      availableRoutePlanIds: ['route-1'],
+      openRequested: true,
+      routePlanId: 'route-1',
+    }), 'open_route');
+    assert.equal(getDriverRouteNotificationNavigation({
+      action: 'changed',
+      activeRoutePlanId: 'active-route',
+      availableRoutePlanIds: ['active-route', 'route-1'],
+      openRequested: true,
+      routePlanId: 'route-1',
+    }), 'active_route_protected');
+    assert.equal(getDriverRouteNotificationNavigation({
+      action: 'released',
+      activeRoutePlanId: null,
+      availableRoutePlanIds: [],
+      openRequested: true,
+      routePlanId: 'route-1',
+    }), 'refresh_only');
+    assert.equal(getDriverRouteNotificationNavigation({
+      action: 'assigned',
+      activeRoutePlanId: null,
+      availableRoutePlanIds: [],
+      openRequested: true,
+      routePlanId: 'route-1',
+    }), 'target_unavailable');
   });
 });

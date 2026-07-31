@@ -39,6 +39,7 @@ android/.cxx/
 android/app/build/
 android/captures/
 android/local.properties
+android/app/google-services.json
 ios/build/
 ios/DerivedData/
 ios/Pods/
