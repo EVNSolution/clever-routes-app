@@ -7,6 +7,17 @@ import { describe, it } from 'node:test';
 const appRootPath = join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx');
 
 describe('driver login flow', () => {
+  it('uses the CLEVER Routes brand on every entry surface', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const entryFlowSource = source.slice(
+      source.indexOf('function DriverRestoreScreen'),
+      source.indexOf('function MyRoutesPage'),
+    );
+
+    assert.equal(entryFlowSource.match(/<Text style=\{styles\.brandGreen\}>Routes<\/Text>/gu)?.length, 3);
+    assert.doesNotMatch(entryFlowSource, /<Text style=\{styles\.brandGreen\}>Driver<\/Text>/u);
+  });
+
   it('uses phone then PIN login, with invite code only in first-registration mode', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const loginDetailScreen = source.slice(
