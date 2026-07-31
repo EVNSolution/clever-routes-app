@@ -137,6 +137,77 @@ describe('DriverAuthService', () => {
     assert.equal(result.accountAccess.use, 'driver_account');
   });
 
+  it('registers and revokes the current app installation with the account bearer', async () => {
+    const requests: { body?: string; headers?: Record<string, string>; method?: string; url: string }[] = [];
+    const client = createDriverAuthApiClient({
+      baseUrl: 'https://test-api.com/',
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body,
+          headers: init?.headers,
+          method: init?.method,
+          url,
+        });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: init?.method === 'PUT'
+              ? { pushToken: { id: 'push-token-id', status: 'ACTIVE' } }
+              : { revoked: true },
+            error: null,
+          }),
+        };
+      },
+    });
+
+    await client.registerPushInstallation({
+      accountAccessToken: ' account-token ',
+      appId: 'com.evnsolution.clever.routes',
+      appVersion: '1.1.0',
+      devicePushToken: 'native-token',
+      locale: 'en-CA',
+      platform: 'android',
+      timezone: 'America/Toronto',
+    });
+    await client.revokePushInstallation({
+      accountAccessToken: ' account-token ',
+      devicePushToken: 'native-token',
+    });
+
+    assert.deepEqual(requests, [
+      {
+        body: JSON.stringify({
+          appId: 'com.evnsolution.clever.routes',
+          appVersion: '1.1.0',
+          devicePushToken: 'native-token',
+          locale: 'en-CA',
+          platform: 'android',
+          timezone: 'America/Toronto',
+        }),
+        headers: {
+          Authorization: 'Bearer account-token',
+          'Cache-Control': 'no-store',
+          'Content-Type': 'application/json',
+          Pragma: 'no-cache',
+        },
+        method: 'PUT',
+        url: 'https://test-api.com/api/driver/mobile/push-token',
+      },
+      {
+        body: JSON.stringify({ devicePushToken: 'native-token' }),
+        headers: {
+          Authorization: 'Bearer account-token',
+          'Cache-Control': 'no-store',
+          'Content-Type': 'application/json',
+          Pragma: 'no-cache',
+        },
+        method: 'DELETE',
+        url: 'https://test-api.com/api/driver/mobile/push-token',
+      },
+    ]);
+  });
+
   it('requests global account deletion with the account bearer and explicit confirmation', async () => {
     const requests: { body?: string; headers?: Record<string, string>; method?: string; url: string }[] = [];
     const client = createDriverAuthApiClient({

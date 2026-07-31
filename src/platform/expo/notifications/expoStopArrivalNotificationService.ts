@@ -1,13 +1,19 @@
 import * as Notifications from 'expo-notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 
 import {
   formatStopArrivalNotificationContent,
+  parseDriverRouteNotificationData,
   parseStopArrivalNotificationData,
   type StopArrivalNotificationService,
 } from '../../../domain/notifications/stopArrivalNotifications';
 
 const STOP_ARRIVAL_CHANNEL_ID = 'stop-arrivals';
+const DRIVER_ROUTE_CHANNEL_ID = 'route-updates';
+const DRIVER_NOTIFICATION_BACKGROUND_TASK = 'clever-driver-route-notification';
+const PENDING_DRIVER_ROUTE_NOTIFICATION_KEY = 'clever.pendingDriverRouteNotification.v1';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -18,8 +24,49 @@ Notifications.setNotificationHandler({
   }),
 });
 
+if (!TaskManager.isTaskDefined(DRIVER_NOTIFICATION_BACKGROUND_TASK)) {
+  TaskManager.defineTask<Notifications.NotificationTaskPayload>(
+    DRIVER_NOTIFICATION_BACKGROUND_TASK,
+    async ({ data, error }) => {
+      if (error !== undefined) {
+        return Notifications.BackgroundNotificationTaskResult.Failed;
+      }
+      const routeNotification = parseDriverRouteNotificationData(readBackgroundNotificationData(data));
+      if (routeNotification === null) {
+        return Notifications.BackgroundNotificationTaskResult.NoData;
+      }
+      await AsyncStorage.setItem(
+        PENDING_DRIVER_ROUTE_NOTIFICATION_KEY,
+        JSON.stringify(routeNotification),
+      );
+      return Notifications.BackgroundNotificationTaskResult.NewData;
+    },
+  );
+}
+void Notifications.registerTaskAsync(DRIVER_NOTIFICATION_BACKGROUND_TASK).catch(() => undefined);
+
 export function createExpoStopArrivalNotificationService(): StopArrivalNotificationService {
   return {
+    addDriverRouteNotificationReceivedListener: (listener) => {
+      const subscription = Notifications.addNotificationReceivedListener((notification) => {
+        const data = parseDriverRouteNotificationData(notification.request.content.data);
+        if (data !== null) {
+          void Promise.resolve(listener(data)).catch(() => undefined);
+        }
+      });
+
+      return () => subscription.remove();
+    },
+    addDriverRouteNotificationResponseListener: (listener) => {
+      const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+        const data = parseDriverRouteNotificationData(response.notification.request.content.data);
+        if (data !== null) {
+          void Promise.resolve(listener(data)).catch(() => undefined);
+        }
+      });
+
+      return () => subscription.remove();
+    },
     addStopArrivalResponseListener: (listener) => {
       const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
         const data = parseStopArrivalNotificationData(response.notification.request.content.data);
@@ -29,6 +76,27 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
       });
 
       return () => subscription.remove();
+    },
+    consumePendingDriverRouteNotification: async () => {
+      const raw = await AsyncStorage.getItem(PENDING_DRIVER_ROUTE_NOTIFICATION_KEY);
+      if (raw === null) {
+        return null;
+      }
+      await AsyncStorage.removeItem(PENDING_DRIVER_ROUTE_NOTIFICATION_KEY);
+      try {
+        return parseDriverRouteNotificationData(JSON.parse(raw) as Record<string, unknown>);
+      } catch {
+        return null;
+      }
+    },
+    getDevicePushToken: readDevicePushToken,
+    getLastDriverRouteNotificationResponse: async () => {
+      const response = await Notifications.getLastNotificationResponseAsync();
+      const data = parseDriverRouteNotificationData(response?.notification.request.content.data);
+      if (data !== null) {
+        await Notifications.clearLastNotificationResponseAsync();
+      }
+      return data;
     },
     getLastStopArrivalResponse: async () => {
       const response = await Notifications.getLastNotificationResponseAsync();
@@ -90,6 +158,12 @@ async function ensureStopArrivalNotificationChannel(): Promise<void> {
     name: 'Stop arrival alerts',
     vibrationPattern: [0, 250, 250, 250],
   });
+  await Notifications.setNotificationChannelAsync(DRIVER_ROUTE_CHANNEL_ID, {
+    importance: Notifications.AndroidImportance.HIGH,
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+    name: 'Route updates',
+    vibrationPattern: [0, 250, 250, 250],
+  });
 }
 
 async function readDevicePushToken(): Promise<string | null> {
@@ -102,4 +176,24 @@ async function readDevicePushToken(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+function readBackgroundNotificationData(
+  payload: Notifications.NotificationTaskPayload,
+): Record<string, unknown> | null {
+  if ('actionIdentifier' in payload) {
+    return payload.notification.request.content.data ?? null;
+  }
+  const dataString = payload.data.dataString;
+  if (typeof dataString === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(dataString);
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return payload.data;
 }

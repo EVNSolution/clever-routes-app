@@ -168,7 +168,9 @@ import { readDriverMapStyleUrl } from './routeMapGeoJson';
 import { ROUTE_VISUAL_STATE_COLORS, ROUTE_VISUAL_STATE_SURFACES } from './routeVisualState';
 import { splitStopItemName } from './stopItemDisplay';
 import {
+  getDriverRouteNotificationNavigation,
   getStopArrivalNotificationCandidate,
+  type DriverRouteNotificationData,
   type StopArrivalNotificationData,
 } from '../domain/notifications/stopArrivalNotifications';
 import { createExpoStopArrivalNotificationService } from '../platform/expo/notifications/expoStopArrivalNotificationService';
@@ -206,6 +208,10 @@ type BackgroundLocationPermissionState = BackgroundPermissionResult | 'checking'
 type CompletedDeliveriesFilter = 'all' | 'delivered' | 'issues';
 type StopDetailsReturnScreen = 'completedDeliveries' | 'routeSession';
 type ArrivalCheckReturnScreen = 'routeSession' | 'stopDetails';
+type PendingDriverRouteNotification = {
+  data: DriverRouteNotificationData;
+  openRequested: boolean;
+};
 
 type StopProofDraft = {
   additionalNotes: string;
@@ -292,6 +298,7 @@ function DriverApp() {
   const [pendingActiveRouteNotificationTarget, setPendingActiveRouteNotificationTarget] = useState<ActiveRouteNotificationTarget | null>(null);
   const pendingActiveRouteNotificationTargetRef = useRef<ActiveRouteNotificationTarget | null>(null);
   const [pendingStopArrivalNotification, setPendingStopArrivalNotification] = useState<StopArrivalNotificationData | null>(null);
+  const [pendingDriverRouteNotification, setPendingDriverRouteNotification] = useState<PendingDriverRouteNotification | null>(null);
 
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
   const [, setConsentSubmission] = useState<DriverConsentSubmissionResult | null>(null);
@@ -341,6 +348,7 @@ function DriverApp() {
   const pullRefreshOffset = useSharedValue(0);
   const notifiedStopArrivalIdsRef = useRef<Set<string>>(new Set());
   const hasCheckedInitialStopArrivalNotificationRef = useRef(false);
+  const hasCheckedInitialDriverRouteNotificationRef = useRef(false);
   const networkState = Network.useNetworkState();
   const networkReachability = getNetworkReachability(networkState);
   const previousDriverRestoreNetworkRef = useRef(networkReachability);
@@ -350,6 +358,8 @@ function DriverApp() {
   const driverAppUpdateCheckRunningRef = useRef(false);
   const lastDriverAppUpdateCheckAtRef = useRef<number | null>(null);
   const previousActiveRoutePlanIdRef = useRef<string | null>(null);
+  const registeredDevicePushTokenRef = useRef<string | null>(null);
+  const isPushRegistrationRunningRef = useRef(false);
 
   const syncOfflineQueueState = useCallback((queue: OfflineSubmissionQueue | null) => {
     if (queue === null) {
@@ -550,6 +560,49 @@ function DriverApp() {
       }, routeAccessService);
     }
   }, [driverAccessTokenStore, driverAuthService, routeAccessService]);
+
+  const registerCurrentPushInstallation = useCallback(async (): Promise<void> => {
+    if (
+      runtimeConfig.mode !== 'live'
+      || installedDriverAppVersion === null
+      || isPushRegistrationRunningRef.current
+    ) {
+      return;
+    }
+
+    isPushRegistrationRunningRef.current = true;
+    try {
+      const registration = await stopArrivalNotificationService.registerForStopArrivalNotifications();
+      if (registration.kind !== 'registered' || registration.devicePushToken === null) {
+        return;
+      }
+      const accountAccess = await getActiveAccountAccess();
+      if (accountAccess === null) {
+        return;
+      }
+      await driverAuthService.registerPushInstallation({
+        accountAccessToken: accountAccess.accessToken,
+        appId: installedDriverAppVersion.packageId,
+        appVersion: installedDriverAppVersion.versionName,
+        devicePushToken: registration.devicePushToken,
+        locale: selectedDriverLocale,
+        platform: Platform.OS,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      });
+      registeredDevicePushTokenRef.current = registration.devicePushToken;
+    } catch {
+      // Push registration is best-effort and retried on authenticated app activation.
+    } finally {
+      isPushRegistrationRunningRef.current = false;
+    }
+  }, [
+    driverAuthService,
+    getActiveAccountAccess,
+    installedDriverAppVersion,
+    runtimeConfig.mode,
+    selectedDriverLocale,
+    stopArrivalNotificationService,
+  ]);
 
   async function loadAccountProfile(): Promise<void> {
     setIsLoadingAccountProfile(true);
@@ -1807,6 +1860,128 @@ function DriverApp() {
   ]);
 
   useEffect(() => {
+    if (!isDriverRestoreComplete || verifiedDriverPhoneE164 === null) {
+      return undefined;
+    }
+    const task = InteractionManager.runAfterInteractions(() => {
+      void registerCurrentPushInstallation();
+    });
+    return () => task.cancel();
+  }, [
+    isDriverRestoreComplete,
+    registerCurrentPushInstallation,
+    verifiedDriverPhoneE164,
+  ]);
+
+  useEffect(() => {
+    const receiveRouteNotification = (data: DriverRouteNotificationData, openRequested: boolean) => {
+      setPendingDriverRouteNotification({ data, openRequested });
+      if (verifiedDriverPhoneE164 !== null) {
+        setMessage('Route update received. Refreshing assigned routes...');
+        void handleRefreshRoutes();
+      }
+    };
+    const removeReceivedListener = stopArrivalNotificationService.addDriverRouteNotificationReceivedListener(
+      (data) => receiveRouteNotification(data, false),
+    );
+    const removeResponseListener = stopArrivalNotificationService.addDriverRouteNotificationResponseListener(
+      (data) => receiveRouteNotification(data, true),
+    );
+
+    if (!hasCheckedInitialDriverRouteNotificationRef.current) {
+      hasCheckedInitialDriverRouteNotificationRef.current = true;
+      void Promise.all([
+        stopArrivalNotificationService.consumePendingDriverRouteNotification(),
+        stopArrivalNotificationService.getLastDriverRouteNotificationResponse(),
+      ]).then(([backgroundData, responseData]) => {
+        if (responseData !== null) {
+          receiveRouteNotification(responseData, true);
+        } else if (backgroundData !== null) {
+          receiveRouteNotification(backgroundData, false);
+        }
+      });
+    }
+
+    return () => {
+      removeReceivedListener();
+      removeResponseListener();
+    };
+  }, [
+    handleRefreshRoutes,
+    stopArrivalNotificationService,
+    verifiedDriverPhoneE164,
+  ]);
+
+  useEffect(() => {
+    if (
+      pendingDriverRouteNotification === null
+      || verifiedDriverPhoneE164 === null
+      || isRefreshingRoutes
+      || isLoggingIn
+    ) {
+      return undefined;
+    }
+    const timeout = setTimeout(() => {
+      if (routeSyncState === 'idle') {
+        void handleRefreshRoutes();
+        return;
+      }
+      if (routeSyncState === 'error') {
+        setPendingDriverRouteNotification(null);
+        setMessage('A route update arrived, but the server refresh failed. Your current route was not replaced.');
+        return;
+      }
+      if (routeSyncState !== 'ready') {
+        return;
+      }
+
+      const { data, openRequested } = pendingDriverRouteNotification;
+      const navigation = getDriverRouteNotificationNavigation({
+        action: data.action,
+        activeRoutePlanId,
+        availableRoutePlanIds: routeSessions.map((session) => session.route.id),
+        openRequested,
+        routePlanId: data.routePlanId,
+      });
+      setPendingDriverRouteNotification(null);
+      if (navigation === 'open_route') {
+        const routeSession = getRouteSessionForAction(routeSessions, data.routePlanId);
+        if (routeSession !== null) {
+          setSelectedRouteId(routeSession.route.id);
+          setSubmission(toCompanyGuidanceSubmission(routeSession));
+          setScreen('routePreview');
+        }
+        setMessage(data.action === 'assigned' ? 'Assigned route loaded.' : 'Updated route loaded.');
+        return;
+      }
+      if (navigation === 'active_route_protected') {
+        setMessage('Routes refreshed. Your active route remains open; review the new assignment from My Routes.');
+        return;
+      }
+      if (navigation === 'target_unavailable') {
+        setMessage('Routes refreshed, but that assignment is no longer available.');
+        return;
+      }
+      setMessage(
+        data.action === 'cancelled' || data.action === 'released'
+          ? 'Routes refreshed. The removed assignment is no longer shown.'
+          : 'Assigned routes are up to date.',
+      );
+    }, 0);
+    return () => clearTimeout(timeout);
+  }, [
+    activeRoutePlanId,
+    handleRefreshRoutes,
+    isLoggingIn,
+    isRefreshingRoutes,
+    pendingDriverRouteNotification,
+    routeSessions,
+    routeSyncState,
+    setScreen,
+    verifiedDriverPhoneE164,
+  ]);
+
+  useEffect(() => {
     if (
       routeRecoveryRefreshReason === null
       || verifiedDriverPhoneE164 === null
@@ -2052,6 +2227,7 @@ function DriverApp() {
       }
       if (state === 'active' && verifiedDriverPhoneE164 !== null) {
         void refreshBackgroundLocationPermission();
+        void registerCurrentPushInstallation();
       }
       if (state === 'active' && !isDriverRestoreComplete && driverRestoreProblem !== null) {
         retryDriverRestore();
@@ -2076,6 +2252,7 @@ function DriverApp() {
     isDriverRestoreComplete,
     isStartingRoute,
     refreshBackgroundLocationPermission,
+    registerCurrentPushInstallation,
     retryDriverRestore,
     screen,
     verifiedDriverPhoneE164,
@@ -3074,6 +3251,18 @@ function DriverApp() {
 
   async function handleLogout() {
     setMessage(null);
+    const registeredDevicePushToken = registeredDevicePushTokenRef.current
+      ?? await stopArrivalNotificationService.getDevicePushToken().catch(() => null);
+    if (registeredDevicePushToken !== null && runtimeConfig.mode === 'live') {
+      const accountAccess = await getActiveAccountAccess().catch(() => null);
+      if (accountAccess !== null) {
+        await driverAuthService.revokePushInstallation({
+          accountAccessToken: accountAccess.accessToken,
+          devicePushToken: registeredDevicePushToken,
+        }).catch(() => undefined);
+      }
+    }
+    registeredDevicePushTokenRef.current = null;
     await clearAndStopActiveLocationSession();
     try {
       const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
@@ -3088,6 +3277,8 @@ function DriverApp() {
     }
 
     resetRouteProgress();
+    setPendingDriverRouteNotification(null);
+    hasCheckedInitialDriverRouteNotificationRef.current = false;
     setRouteSyncState('idle');
     setLastRoutesUpdatedAt(null);
     setVerifiedDriverPhoneE164(null);
