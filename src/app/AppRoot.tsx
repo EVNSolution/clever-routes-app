@@ -227,7 +227,7 @@ type RouteLoadOptions = {
 
 const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
 const DRIVER_CONSENT_DOCUMENT_URL = 'https://clever-route-api.cleversystem.ai/privacy';
-const DRIVER_APP_UPDATE_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
+const ROUTES_APP_UPDATE_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 const DRIVER_RESTORE_LOADING_TIMEOUT_MS = 8_000;
 const PULL_REFRESH_DRAG_RESISTANCE = 0.72;
 const PULL_REFRESH_MAX_DISTANCE = 120;
@@ -482,7 +482,7 @@ function DriverApp() {
     if (
       !force
       && lastCheckedAt !== null
-      && Date.now() - lastCheckedAt < DRIVER_APP_UPDATE_RECHECK_INTERVAL_MS
+      && Date.now() - lastCheckedAt < ROUTES_APP_UPDATE_RECHECK_INTERVAL_MS
     ) {
       return;
     }
