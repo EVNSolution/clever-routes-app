@@ -420,7 +420,7 @@ function DriverApp() {
 
     Alert.alert(
       'Allow background location',
-      'Clever Driver collects your precise location while a delivery route is in progress, even when the app is closed or not in use. This keeps the store’s live route progress and arrival records up to date. Location tracking stops when the route ends.',
+      'CLEVER Routes collects your precise location while a delivery route is in progress, even when the app is closed or not in use. This keeps the store’s live route progress and arrival records up to date. Location tracking stops when the route ends.',
       [
         { style: 'cancel', text: 'Not Now' },
         {
@@ -626,7 +626,7 @@ function DriverApp() {
     }
 
     Alert.alert(
-      'Delete Clever Driver account?',
+      'Delete CLEVER Routes account?',
       'This sends an account deletion request and signs you out. Delivery records that the store must retain are reviewed separately.',
       [
         { style: 'cancel', text: 'Cancel' },
@@ -3809,7 +3809,7 @@ function MyRoutesPage({
           <View style={styles.backgroundLocationWarningCopy}>
             <Text style={styles.backgroundLocationWarningTitle}>Allow all the time required</Text>
             <Text style={styles.backgroundLocationWarningBody}>
-              Clever Driver collects your precise location during an active route, even when the app is closed or not in use.
+              CLEVER Routes collects your precise location during an active route, even when the app is closed or not in use.
             </Text>
           </View>
           <Pressable
@@ -4114,7 +4114,7 @@ function AccountNamePage({
             returnKeyType="done"
             value={nameDraft}
           />
-          <Text style={styles.helperText}>This is your name in Clever Driver. Store display names can be different.</Text>
+          <Text style={styles.helperText}>This is your name in CLEVER Routes. Store display names can be different.</Text>
           <PrimaryButton
             disabled={isSaving || nameDraft.trim().length === 0}
             label="Save"

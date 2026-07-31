@@ -96,11 +96,11 @@
 
 ---
 
-# Clever Driver App UI Design Prompt
+# CLEVER Routes App UI Design Prompt
 
 ## 0. Global Design Direction
 
-Create a modern, premium mobile UI design system for a Canadian delivery-driver route management app named **Clever Driver**.
+Create a modern, premium mobile UI design system for a Canadian delivery-driver route management app named **CLEVER Routes**.
 
 The app should feel operational, reliable, clean, and driver-friendly.
 The interface must prioritize clarity, fast scanning, and confident action-taking while driving or handling deliveries.
@@ -2208,6 +2208,6 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - Show `Name` in the `ACCOUNT` group and open a dedicated name editor from that row.
 - Load and update the self-chosen name through the phone-account bearer contract at `/driver/account/profile`.
 - Limit the trimmed name to 1–80 characters and keep the server response as the displayed source of truth.
-- Explain only on the editor page that the Clever Driver account name may differ from store display names.
+- Explain only on the editor page that the CLEVER Routes account name may differ from store display names.
 - Each Shopify store's driver `displayName` remains store-scoped and independent from the account name and other stores' aliases.
 - Do not copy, backfill, or synchronize Shopify store aliases into the phone-account name.

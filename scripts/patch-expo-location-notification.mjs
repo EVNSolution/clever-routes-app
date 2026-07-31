@@ -86,11 +86,14 @@ const patches = [
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
     before: `    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setSmallIcon(iconsResId)\n      .build()`,
     after: `    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setSmallIcon(iconsResId)\n      .build()`,
+    satisfiedBy: `.setPublicVersion(publicNotification)`,
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
     before: `    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setSmallIcon(iconsResId)\n      .build()`,
-    after: `    val publicNotification = Notification.Builder(this, mChannelId)\n      .setCategory(Notification.CATEGORY_SERVICE)\n      .setContentTitle("Clever Driver")\n      .setContentText("Active route in progress")\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setSmallIcon(iconsResId)\n      .build()\n\n    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setPublicVersion(publicNotification)\n      .setSmallIcon(iconsResId)\n      .setVisibility(Notification.VISIBILITY_PRIVATE)\n      .build()`,
+    previous: `.setContentTitle("Clever Driver")`,
+    previousAfter: `.setContentTitle("CLEVER Routes")`,
+    after: `    val publicNotification = Notification.Builder(this, mChannelId)\n      .setCategory(Notification.CATEGORY_SERVICE)\n      .setContentTitle("CLEVER Routes")\n      .setContentText("Active route in progress")\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setSmallIcon(iconsResId)\n      .build()\n\n    return builder.setCategory(Notification.CATEGORY_SERVICE)\n      .setOngoing(true)\n      .setOnlyAlertOnce(true)\n      .setPublicVersion(publicNotification)\n      .setSmallIcon(iconsResId)\n      .setVisibility(Notification.VISIBILITY_PRIVATE)\n      .build()`,
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
@@ -108,13 +111,26 @@ const changedFiles = new Set();
 for (const patch of patches) {
   const filePath = resolve(process.cwd(), patch.file);
   const source = readFileSync(filePath, 'utf8');
-  if (source.includes(patch.after)) {
+  if (
+    source.includes(patch.after)
+    || (patch.satisfiedBy !== undefined && source.includes(patch.satisfiedBy))
+  ) {
     continue;
   }
-  if (!source.includes(patch.before)) {
-    throw new Error(`Unsupported expo-location source while patching ${patch.file}`);
+  const matchedSource = source.includes(patch.before)
+    ? patch.before
+    : patch.previous !== undefined && source.includes(patch.previous)
+      ? patch.previous
+      : null;
+  if (matchedSource === null) {
+    throw new Error(
+      `Unsupported expo-location source while patching ${patch.file}: ${patch.before.slice(0, 80)}`,
+    );
   }
-  writeFileSync(filePath, source.replace(patch.before, patch.after));
+  const replacement = matchedSource === patch.previous
+    ? patch.previousAfter ?? patch.after
+    : patch.after;
+  writeFileSync(filePath, source.replace(matchedSource, replacement));
   changedFiles.add(patch.file);
 }
 

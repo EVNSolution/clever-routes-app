@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "Clever Driver",
+    "name": "CLEVER Routes",
     "slug": "clever-driver-app",
     "scheme": "clever-driver",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "com.evns.cleverdriverapp",
-      "versionCode": 4,
+      "versionCode": 5,
       "icon": "./assets/icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
@@ -35,8 +35,8 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Allow Clever Driver to use your location while you are actively delivering a route.",
-          "locationAlwaysAndWhenInUsePermission": "Allow Clever Driver to use your location for active delivery tracking.",
+          "locationWhenInUsePermission": "Allow CLEVER Routes to use your location while you are actively delivering a route.",
+          "locationAlwaysAndWhenInUsePermission": "Allow CLEVER Routes to use your location for active delivery tracking.",
           "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
@@ -45,14 +45,14 @@
       [
         "expo-image-picker",
         {
-          "cameraPermission": "Allow Clever Driver to take proof photos for active deliveries.",
-          "photosPermission": "Allow Clever Driver to attach proof photos for active deliveries."
+          "cameraPermission": "Allow CLEVER Routes to take proof photos for active deliveries.",
+          "photosPermission": "Allow CLEVER Routes to attach proof photos for active deliveries."
         }
       ],
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Clever Driver to take proof photos for active deliveries.",
+          "cameraPermission": "Allow CLEVER Routes to take proof photos for active deliveries.",
           "recordAudioAndroid": false,
           "barcodeScannerEnabled": false
         }

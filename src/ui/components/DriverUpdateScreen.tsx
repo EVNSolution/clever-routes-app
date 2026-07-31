@@ -19,7 +19,7 @@ export function DriverUpdateScreen({
       <View style={styles.icon}>
         <Ionicons color="#0b57d0" name="arrow-up-circle" size={46} />
       </View>
-      <Text style={styles.title}>Update Clever Driver</Text>
+      <Text style={styles.title}>Update CLEVER Routes</Text>
       <Text style={styles.body}>
         {isRequired
           ? 'Install the latest version before starting another route.'

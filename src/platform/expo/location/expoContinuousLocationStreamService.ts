@@ -64,7 +64,7 @@ function runLocationTaskOperation<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 const DEFAULT_ACTIVE_ROUTE_NOTIFICATION: ContinuousLocationNotificationContent = {
-  body: 'Next stop details are available in Clever Driver.',
+  body: 'Next stop details are available in CLEVER Routes.',
   title: 'Route in progress',
 };
 

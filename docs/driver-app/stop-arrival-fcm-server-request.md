@@ -2,7 +2,7 @@
 
 ## Objective
 
-Implement server-side FCM stop-arrival alerts for the Clever Driver app.
+Implement server-side FCM stop-arrival alerts for the CLEVER Routes app.
 
 When an active driver enters the allowed arrival radius for the **current delivery stop**, the server should send an FCM push notification. Tapping that notification opens the driver app directly to the `Arrival Check` proof screen where the driver can:
 
