@@ -3753,7 +3753,7 @@ function DriverRestoreScreen({
 }) {
   return (
     <View style={styles.driverRestoreScreen}>
-      <Text style={styles.driverRestoreBrand}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Driver</Text></Text>
+      <Text style={styles.driverRestoreBrand}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Routes</Text></Text>
       {problem === null ? <ActivityIndicator color="#0b57d0" size="large" /> : null}
       <Text style={styles.driverRestoreTitle}>
         {problem === null ? 'Restoring your session' : 'Connection needed'}
@@ -3793,7 +3793,7 @@ function LoginPhoneScreen({
   return (
     <View style={styles.screenStack}>
       <View style={styles.brandPanel}>
-        <Text style={styles.brandName}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Driver</Text></Text>
+        <Text style={styles.brandName}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Routes</Text></Text>
         <Text style={styles.brandTagline}>Smarter routes for faster deliveries.</Text>
       </View>
 
@@ -3849,7 +3849,7 @@ function LoginDetailScreen({
   return (
     <View style={styles.screenStack}>
       <View style={styles.brandPanel}>
-        <Text style={styles.brandName}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Driver</Text></Text>
+        <Text style={styles.brandName}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Routes</Text></Text>
         <Text style={styles.brandTagline}>{isRegistration ? 'Create your driver account' : 'Enter your PIN'}</Text>
       </View>
 
