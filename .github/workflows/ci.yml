@@ -1,11 +1,11 @@
-name: Driver App CI
+name: Routes App CI
 
 # Run manually only to avoid consuming GitHub Actions minutes on every PR/push.
 on:
   workflow_dispatch:
 
 concurrency:
-  group: driver-app-ci-${{ github.workflow }}-${{ github.ref }}
+  group: routes-app-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   verify:
-    name: Verify driver app workspace
+    name: Verify routes app workspace
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

@@ -1,10 +1,10 @@
-# Contributing to clever-driver-app
+# Contributing to clever-routes-app
 
 This repository is the driver-facing native mobile app for Clever/Tomatono delivery operations. Keep product scope in `docs/project-brief.md` and agent workflow rules in `AGENTS.md`.
 
 ## Branch and issue flow
 
-1. Work from `dev` through a target issue in `EVNSolution/clever-driver-app`.
+1. Work from `dev` through a target issue in `EVNSolution/clever-routes-app`.
 2. Link the target issue to the related `EVNSolution/clever-change-control` issue.
 3. Use an issue-linked branch named `cc-<change-control-issue-number>-<short-scope>`.
 4. Open PRs against `dev`; do not push directly to `main` or `dev` after branch protection is active.

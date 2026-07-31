@@ -4,7 +4,7 @@ import type { DriverEventInput, DriverEventService } from '../events/driverEvent
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 import { isDriverRouteNotInProgressError } from '../../api/deliveryServer/driverApiError';
 
-export const CONTINUOUS_LOCATION_TASK_NAME = 'clever-driver-continuous-location';
+export const CONTINUOUS_LOCATION_TASK_NAME = 'clever-routes-continuous-location';
 
 export type BackgroundPermissionResult = 'denied' | 'granted';
 

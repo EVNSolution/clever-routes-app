@@ -87,9 +87,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.evns.cleverdriverapp'
+    namespace 'com.evnsolution.clever.routes'
     defaultConfig {
-        applicationId 'com.evns.cleverdriverapp'
+        applicationId 'com.evnsolution.clever.routes'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 5

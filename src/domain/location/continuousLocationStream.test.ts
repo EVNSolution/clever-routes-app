@@ -131,7 +131,7 @@ describe('continuous location streaming', () => {
       kind: 'streaming',
       message: 'Continuous location updates are active.',
       routePlanId: 'route-1',
-      taskName: 'clever-driver-continuous-location',
+      taskName: 'clever-routes-continuous-location',
     });
     assert.deepEqual(streamService.started, [{
       notification: {
@@ -139,7 +139,7 @@ describe('continuous location streaming', () => {
         title: 'Next stop 1  ETA 7:08 AM',
       },
       routePlanId: 'route-1',
-      taskName: 'clever-driver-continuous-location',
+      taskName: 'clever-routes-continuous-location',
     }]);
   });
 
@@ -242,8 +242,8 @@ describe('continuous location streaming', () => {
 
     const result = await stopContinuousLocationUpdates({ streamService });
 
-    assert.deepEqual(result, { kind: 'stopped', taskName: 'clever-driver-continuous-location' });
-    assert.deepEqual(streamService.stopped, ['clever-driver-continuous-location']);
+    assert.deepEqual(result, { kind: 'stopped', taskName: 'clever-routes-continuous-location' });
+    assert.deepEqual(streamService.stopped, ['clever-routes-continuous-location']);
   });
 
   it('clears the active route marker before stopping native tracking', async () => {
@@ -263,10 +263,10 @@ describe('continuous location streaming', () => {
       streamService,
     });
 
-    assert.deepEqual(result, { kind: 'stopped', taskName: 'clever-driver-continuous-location' });
+    assert.deepEqual(result, { kind: 'stopped', taskName: 'clever-routes-continuous-location' });
     assert.deepEqual(calls, [
       'clear-active-route',
-      'stop:clever-driver-continuous-location',
+      'stop:clever-routes-continuous-location',
     ]);
   });
 
@@ -283,7 +283,7 @@ describe('continuous location streaming', () => {
 
     assert.deepEqual(result, {
       kind: 'unchanged',
-      taskName: 'clever-driver-continuous-location',
+      taskName: 'clever-routes-continuous-location',
     });
     assert.deepEqual(streamService.stopped, []);
   });

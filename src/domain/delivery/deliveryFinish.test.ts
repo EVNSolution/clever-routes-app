@@ -64,7 +64,7 @@ describe('delivery finish route cleanup', () => {
 
     assert.equal(result.kind, 'recorded');
     assert.equal(result.flowState, 'delivery_finished');
-    assert.deepEqual(stream.stoppedTasks, ['clever-driver-continuous-location']);
+    assert.deepEqual(stream.stoppedTasks, ['clever-routes-continuous-location']);
     assert.deepEqual(driverEvents.recordedEvents.map((event) => ({
       eventType: event.eventType,
       occurredAt: event.occurredAt.toISOString(),
@@ -278,7 +278,7 @@ describe('delivery finish route cleanup', () => {
     assert.equal(routeSessionDeactivated, true);
     assert.equal(result.kind, 'queued');
     assert.equal(result.flowState, 'delivery_finished');
-    assert.deepEqual(stream.stoppedTasks, ['clever-driver-continuous-location']);
+    assert.deepEqual(stream.stoppedTasks, ['clever-routes-continuous-location']);
     const pending = queue.listPending();
     assert.equal(pending.length, 1);
     assert.equal(pending[0]?.kind, 'driver_event');

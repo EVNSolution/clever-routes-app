@@ -102,17 +102,17 @@ function checkExpoIdentity(appConfig: NativeReleasePreflightInput['appConfig']):
   if (expo === undefined) {
     return fail('expo.identity', 'Expo app config is required.');
   }
-  if (expo.slug !== 'clever-driver-app') {
-    return fail('expo.identity', 'Expo slug must be clever-driver-app.');
+  if (expo.slug !== 'clever-routes-app') {
+    return fail('expo.identity', 'Expo slug must be clever-routes-app.');
   }
-  if (expo.scheme !== 'clever-driver') {
-    return fail('expo.identity', 'Expo URL scheme must be clever-driver.');
+  if (expo.scheme !== 'clever-routes') {
+    return fail('expo.identity', 'Expo URL scheme must be clever-routes.');
   }
   if (typeof expo.version !== 'string' || !/^\d+\.\d+\.\d+$/u.test(expo.version)) {
     return fail('expo.identity', 'Expo app version must be a three-part numeric release version.');
   }
-  if (expo.ios?.bundleIdentifier !== 'com.evns.cleverdriverapp') {
-    return fail('expo.identity', 'iOS bundleIdentifier must be com.evns.cleverdriverapp.');
+  if (expo.ios?.bundleIdentifier !== 'com.evnsolution.clever.routes') {
+    return fail('expo.identity', 'iOS bundleIdentifier must be com.evnsolution.clever.routes.');
   }
   if (expo.ios?.buildNumber !== '1') {
     return fail('expo.identity', 'iOS buildNumber must remain 1 before the first EAS remote version sync.');
@@ -120,8 +120,8 @@ function checkExpoIdentity(appConfig: NativeReleasePreflightInput['appConfig']):
   if (expo.ios?.supportsTablet !== false) {
     return fail('expo.identity', 'iOS supportsTablet must remain false for the phone-first driver MVP.');
   }
-  if (expo.android?.package !== 'com.evns.cleverdriverapp') {
-    return fail('expo.identity', 'Android package must be com.evns.cleverdriverapp.');
+  if (expo.android?.package !== 'com.evnsolution.clever.routes') {
+    return fail('expo.identity', 'Android package must be com.evnsolution.clever.routes.');
   }
   if (!Number.isInteger(expo.android?.versionCode) || (expo.android?.versionCode ?? 0) <= 0) {
     return fail('expo.identity', 'Android versionCode must be a positive integer.');

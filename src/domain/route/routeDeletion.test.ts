@@ -52,7 +52,7 @@ describe('active route deletion', () => {
       routeTermination: {
         action: 'RELEASE',
         reason: 'DRIVER_RELEASED',
-        source: 'clever-driver-app',
+        source: 'clever-routes-app',
       },
       shopifyAdminNotification: {
         channel: 'SHOPIFY_ADMIN',

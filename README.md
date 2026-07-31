@@ -1,4 +1,4 @@
-# clever-driver-app
+# clever-routes-app
 
 Dedicated native mobile app repository for Clever delivery drivers.
 
@@ -140,9 +140,10 @@ passes for release-sensitive config changes.
 
 ## Documentation map
 
+- `NAMING.md` — canonical product, repository, Expo, native app ID, URL scheme, and DSV boundary values.
 - `docs/project-brief.md` — product role, MVP scenarios, platform decision, and implementation sequencing.
 - `docs/code-organization.md` — source folder role index, import boundaries, test placement rules, and current-to-target migration map.
-- `docs/refactor/driver-app-structure-refactor-plan.md` — execution record and validation scope for the source structure refactor.
+- `docs/refactor/routes-app-structure-refactor-plan.md` — execution record and validation scope for the source structure refactor.
 - `docs/repository-setup.md` — repo baseline, scripts, ignore policy, text normalization policy, and follow-up setup notes.
 - `docs/route-access-flow.md` — app-side route access, consent, assigned route, native map handoff, delivery event, proof media, and offline queue boundary.
 - `docs/release-readiness.md` — production distribution, store/privacy disclosure, physical-device smoke evidence, and release blockers.

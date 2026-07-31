@@ -69,7 +69,7 @@ Recommended request body:
 {
   "platform": "android",
   "devicePushToken": "<fcm token>",
-  "appId": "com.evns.cleverdriverapp",
+  "appId": "com.evnsolution.clever.routes",
   "appVersion": "0.1.0",
   "deviceId": "<stable app/device installation id if available>",
   "locale": "en-CA",

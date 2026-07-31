@@ -9,7 +9,7 @@ import {
 
 const releasePayload = {
   distributionChannel: 'direct',
-  installUrl: 'https://delivery.example.com/driver-app',
+  installUrl: 'https://delivery.example.com/routes-app',
   latestVersionCode: 3,
   latestVersionName: '1.1.0',
   minimumSupportedVersionCode: 2,

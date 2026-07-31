@@ -2,7 +2,7 @@
 
 ## 이 파일의 역할
 
-이 파일은 `clever-driver-app`의 초기 기획 초안이다.
+이 파일은 `clever-routes-app`의 초기 기획 초안이다.
 
 agent 작업 절차, branch 운영, 테스트 순서, 완료 조건은 `AGENTS.md`에 둔다.
 이 문서는 무엇을 만들지, 왜 필요한지, 현재 어디까지 확정됐는지를 기록한다.
@@ -10,14 +10,14 @@ agent 작업 절차, branch 운영, 테스트 순서, 완료 조건은 `AGENTS.m
 ## 연결값
 
 - project-start issue: `EVNSolution/clever-change-control#145`
-- target repo issue: `EVNSolution/clever-driver-app#1`
-- target repo: `EVNSolution/clever-driver-app`
-- target service: `clever-driver-app`
+- target repo issue: `EVNSolution/clever-routes-app#1`
+- target repo: `EVNSolution/clever-routes-app`
+- target service: `clever-routes-app`
 - template lineage: `clever-agent-project/docs/templates@main`
 
 ## 레포 역할
 
-`clever-driver-app`는 Clever/Tomatono 배송원이 쓰는 driver-facing mobile client의 구현 대상 repo다.
+`clever-routes-app`는 Clever/Tomatono 배송원이 쓰는 driver-facing mobile client의 구현 대상 repo다.
 
 이 repo가 책임지는 것:
 
@@ -355,7 +355,7 @@ delivery server와 앱은 아래 driver-facing contract를 사용한다.
 - 산출물:
   - local or CI verification output
   - mobile runtime screenshot/video 또는 build artifact
-  - 필요 시 `clever-context-monorepo/docs/services/clever-driver-app/index.md`
+  - 필요 시 `clever-context-monorepo/docs/services/clever-routes-app/index.md`
 - 완료 기준:
   - PR 본문에 target issue, change-control issue, linked branch, 검증 결과가 남는다.
   - public contract/API/data flow 변경 여부가 context monorepo에 반영되거나 불필요 사유가 기록된다.

@@ -9,7 +9,7 @@ import {
   type ProofMediaUploadService,
 } from '../proof/proofMediaUpload';
 
-export const OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY = '@clever-driver/offline-submission-queue-v1';
+export const OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY = '@clever-routes/offline-submission-queue-v1';
 export const OFFLINE_SUBMISSION_QUEUE_MAX_ITEMS = 4_000;
 export const OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY = {
   maxAgeMs: 72 * 60 * 60 * 1000,

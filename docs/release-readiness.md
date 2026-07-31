@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document tracks the non-code evidence needed before a production iOS/Android release of `clever-driver-app`. Product scope remains in `docs/project-brief.md`; app-side API/runtime behavior remains in `docs/route-access-flow.md`.
+This document tracks the non-code evidence needed before a production iOS/Android release of `clever-routes-app`. Product scope remains in `docs/project-brief.md`; app-side API/runtime behavior remains in `docs/route-access-flow.md`.
 
 ## Distribution decision
 
@@ -11,8 +11,8 @@ existing direct APK channel temporarily, and the owner intends to move to Google
 Play in one later migration. `eas.json` still defines the store build-profile
 scaffolding for that migration:
 
-- Current Android channel: stable `/driver-app` browser handoff to the managed
-  `clever-driver-latest.apk` file
+- Current Android channel: stable `/routes-app` browser handoff to the managed
+  `clever-routes-latest.apk` file
 - Later Android channel: Google Play testing or production track
 - iOS channel: App Store/TestFlight or an approved private distribution path
 - Apple Business Manager Custom Apps and managed Google Play/private app for restricted driver distribution
@@ -24,13 +24,13 @@ Do not add final store listing copy, screenshots, signing ownership, or public l
 - Every directly distributed APK increments Android `versionCode`; display
   version changes with it.
 - On startup and when returning to the foreground after the recheck interval,
-  the app reads `GET /driver-app/release/android`.
+  the app reads `GET /routes-app/release/android`.
 - Update lookup runs independently from saved-session restore. Lookup failure
   must not delay login, route restore, or route work.
 - An available update is shown only after restore finishes and no active route
   is in progress. Optional updates allow `Later` for the current app process;
   required updates do not.
-- `Update` opens the server-owned stable `/driver-app` URL in the browser. The
+- `Update` opens the server-owned stable `/routes-app` URL in the browser. The
   app never receives or stores the backing Google Drive URL.
 - The server publishes `latestVersionCode`, `latestVersionName`, and
   `minimumSupportedVersionCode` from deployment environment values. Advance the
@@ -143,8 +143,8 @@ stable work items instead of unowned notes:
 
 | Blocker | Tracking issue | Scope |
 | --- | --- | --- |
-| Physical iOS/Android device smoke evidence for background tracking, proof capture, offline retry/discard, token recovery, and route completion cleanup | EVNSolution/clever-driver-app#72 | Driver app evidence collection |
-| Owner-controlled Expo/EAS project, Apple/Google signing credentials, EAS preview/production environment values, store/private distribution policy, owner/legal-approved privacy disclosure copy, and public license/reuse decision | EVNSolution/clever-driver-app#73 | Native build/distribution approval |
+| Physical iOS/Android device smoke evidence for background tracking, proof capture, offline retry/discard, token recovery, and route completion cleanup | EVNSolution/clever-routes-app#72 | Driver app evidence collection |
+| Owner-controlled Expo/EAS project, Apple/Google signing credentials, EAS preview/production environment values, store/private distribution policy, owner/legal-approved privacy disclosure copy, and public license/reuse decision | EVNSolution/clever-routes-app#73 | Native build/distribution approval |
 | Production proof-media object storage ownership, signed retrieval/access-control, scanner backend/private evidence storage, and deployed cleanup/scheduler evidence | EVNSolution/clever-delivery-server#71 | Delivery-server proof media hardening |
 
 The baseline context-monorepo service pointer is complete:

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document records the driver-app phone entry implementation and the optional future SMS verification plan. The current app does not use SMS OTP: it normalizes the phone to E.164, signs an existing account in with a six-digit PIN, or registers once with an existing Shopify invitation code plus a new PIN. Shopify invitation/signup creation stays manual and is not requested by the app or server login flow. Any future SMS slice must be backend-owned.
+This document records the routes-app phone entry implementation and the optional future SMS verification plan. The current app does not use SMS OTP: it normalizes the phone to E.164, signs an existing account in with a six-digit PIN, or registers once with an existing Shopify invitation code plus a new PIN. Shopify invitation/signup creation stays manual and is not requested by the app or server login flow. Any future SMS slice must be backend-owned.
 
 ## Current app state
 
