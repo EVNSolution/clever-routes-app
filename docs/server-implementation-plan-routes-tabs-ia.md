@@ -1,7 +1,7 @@
 # Server Implementation Plan — Driver App Tabs IA Follow-up
 
 Date: 2026-05-19
-Authoring scope: `clever-driver-app` documentation only
+Authoring scope: `clever-routes-app` documentation only
 Server/shopify implementation status: **plan-only; no server/shopify code changed**
 
 ## Purpose

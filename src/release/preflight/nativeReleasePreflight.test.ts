@@ -65,7 +65,7 @@ test('native release preflight reports release-blocking config gaps without secr
   assert.deepEqual(result.failures, [
     {
       id: 'expo.identity',
-      message: 'iOS bundleIdentifier must be com.evns.cleverdriverapp.'
+      message: 'iOS bundleIdentifier must be com.evnsolution.clever.routes.'
     },
     {
       id: 'runtime.env.example',
@@ -172,7 +172,7 @@ test('native release preflight validates a source-controlled iOS project when pr
       projectPbxproj: [
         'MARKETING_VERSION = 1.0.4;',
         'CURRENT_PROJECT_VERSION = 1;',
-        'PRODUCT_BUNDLE_IDENTIFIER = com.evns.cleverdriverapp;',
+        'PRODUCT_BUNDLE_IDENTIFIER = com.evnsolution.clever.routes;',
       ].join('\n'),
     },
   });
@@ -186,7 +186,7 @@ test('keeps the Expo 56 iOS deployment target aligned at 16.4', () => {
   const podfileProperties = readJson<Record<string, unknown>>('ios/Podfile.properties.json');
   const podfile = readFileSync(resolve(repoRoot, 'ios/Podfile'), 'utf8');
   const projectPbxproj = readFileSync(
-    resolve(repoRoot, 'ios/CleverDriver.xcodeproj/project.pbxproj'),
+    resolve(repoRoot, 'ios/CleverRoutes.xcodeproj/project.pbxproj'),
     'utf8',
   );
   const projectTargets = [...projectPbxproj.matchAll(/IPHONEOS_DEPLOYMENT_TARGET = ([^;]+);/gu)]
@@ -205,7 +205,7 @@ test('keeps the MapLibre Swift package attached during CocoaPods installation', 
 });
 
 test('keeps the AppDelegate aligned with the Expo 56 Xcode 26 template', () => {
-  const appDelegate = readFileSync(resolve(repoRoot, 'ios/CleverDriver/AppDelegate.swift'), 'utf8');
+  const appDelegate = readFileSync(resolve(repoRoot, 'ios/CleverRoutes/AppDelegate.swift'), 'utf8');
 
   assert.match(appDelegate, /^internal import Expo$/mu);
   assert.match(appDelegate, /^@main\nclass AppDelegate: ExpoAppDelegate \{$/mu);
@@ -215,7 +215,7 @@ test('keeps the AppDelegate aligned with the Expo 56 Xcode 26 template', () => {
 test('keeps the native iOS app icon synchronized and opaque', () => {
   const configuredIcon = readFileSync(resolve(repoRoot, 'assets/icon.png'));
   const nativeIcon = readFileSync(
-    resolve(repoRoot, 'ios/CleverDriver/Images.xcassets/AppIcon.appiconset/App-Icon-1024x1024@1x.png'),
+    resolve(repoRoot, 'ios/CleverRoutes/Images.xcassets/AppIcon.appiconset/App-Icon-1024x1024@1x.png'),
   );
   const digest = (contents: Buffer) => createHash('sha256').update(contents).digest('hex');
 
@@ -239,7 +239,7 @@ test('native release preflight rejects local Apple team pins in source-controlle
         'DEVELOPMENT_TEAM = Y4RMZPJAA7;',
         'MARKETING_VERSION = 1.0.4;',
         'CURRENT_PROJECT_VERSION = 1;',
-        'PRODUCT_BUNDLE_IDENTIFIER = com.evns.cleverdriverapp;',
+        'PRODUCT_BUNDLE_IDENTIFIER = com.evnsolution.clever.routes;',
       ].join('\n'),
     },
   });
@@ -269,7 +269,7 @@ test('native release preflight rejects unapproved generated iOS permission copy'
       projectPbxproj: [
         'MARKETING_VERSION = 1.0.4;',
         'CURRENT_PROJECT_VERSION = 1;',
-        'PRODUCT_BUNDLE_IDENTIFIER = com.evns.cleverdriverapp;',
+        'PRODUCT_BUNDLE_IDENTIFIER = com.evnsolution.clever.routes;',
       ].join('\n'),
     },
   });

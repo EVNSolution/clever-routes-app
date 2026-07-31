@@ -55,9 +55,9 @@ test('keeps source-controlled Android versions aligned across Expo and Gradle', 
   const versionCode = Number(androidBuildGradle.match(/\bversionCode\s+(\d+)/u)?.[1]);
   const versionName = androidBuildGradle.match(/\bversionName\s+"([^"]+)"/u)?.[1];
 
-  assert.equal(appConfig.expo?.ios?.bundleIdentifier, 'com.evns.cleverdriverapp');
+  assert.equal(appConfig.expo?.ios?.bundleIdentifier, 'com.evnsolution.clever.routes');
   assert.equal(appConfig.expo?.ios?.buildNumber, '1');
-  assert.equal(appConfig.expo?.android?.package, 'com.evns.cleverdriverapp');
+  assert.equal(appConfig.expo?.android?.package, 'com.evnsolution.clever.routes');
   assert.equal(appConfig.expo?.android?.versionCode, versionCode);
   assert.equal(appConfig.expo?.version, versionName);
 });
@@ -70,7 +70,7 @@ test('keeps the installed app name aligned across Expo, Android, and iOS', () =>
     resolve(repoRoot, 'android/app/src/main/res/values/strings.xml'),
     'utf8',
   );
-  const iosInfoPlist = readFileSync(resolve(repoRoot, 'ios/CleverDriver/Info.plist'), 'utf8');
+  const iosInfoPlist = readFileSync(resolve(repoRoot, 'ios/CleverRoutes/Info.plist'), 'utf8');
 
   assert.equal(appConfig.expo?.name, 'CLEVER Routes');
   assert.match(androidStrings, /<string name="app_name">CLEVER Routes<\/string>/u);
@@ -99,7 +99,7 @@ test('keeps direct-download Android optimization isolated to the distribution AP
 test('keeps source-controlled native release metadata aligned and minimally privileged', () => {
   const androidManifest = readFileSync(resolve(repoRoot, 'android/app/src/main/AndroidManifest.xml'), 'utf8');
   const androidGradleProperties = readFileSync(resolve(repoRoot, 'android/gradle.properties'), 'utf8');
-  const iosInfoPlist = readFileSync(resolve(repoRoot, 'ios/CleverDriver/Info.plist'), 'utf8');
+  const iosInfoPlist = readFileSync(resolve(repoRoot, 'ios/CleverRoutes/Info.plist'), 'utf8');
 
   assert.doesNotMatch(androidManifest, /android\.permission\.SYSTEM_ALERT_WINDOW/u);
   assert.doesNotMatch(androidGradleProperties, /^expo\.devlauncher\.configureInRelease\s*=\s*true\s*$/mu);

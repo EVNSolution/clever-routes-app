@@ -82,7 +82,7 @@ describe('driver event API boundary', () => {
       deliveryStopId: 'stop-1',
       eventType: 'STOP_DELIVERED',
       occurredAt: new Date('2026-05-12T07:15:00.000Z'),
-      payload: { proof: { note: 'Left with concierge', source: 'driver-app-mvp', type: 'DELIVERED_NOTE' } },
+      payload: { proof: { note: 'Left with concierge', source: 'clever-routes-app', type: 'DELIVERED_NOTE' } },
       routePlanId: 'route-1',
     });
 
@@ -91,7 +91,7 @@ describe('driver event API boundary', () => {
       deliveryStopId: 'stop-1',
       eventType: 'STOP_DELIVERED',
       occurredAt: '2026-05-12T07:15:00.000Z',
-      proof: { note: 'Left with concierge', source: 'driver-app-mvp', type: 'DELIVERED_NOTE' },
+      proof: { note: 'Left with concierge', source: 'clever-routes-app', type: 'DELIVERED_NOTE' },
       routePlanId: 'route-1',
     });
   });

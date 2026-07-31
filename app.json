@@ -1,19 +1,19 @@
 {
   "expo": {
     "name": "CLEVER Routes",
-    "slug": "clever-driver-app",
-    "scheme": "clever-driver",
+    "slug": "clever-routes-app",
+    "scheme": "clever-routes",
     "version": "1.0.4",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.evns.cleverdriverapp",
+      "bundleIdentifier": "com.evnsolution.clever.routes",
       "buildNumber": "1",
       "icon": "./assets/icon.png"
     },
     "android": {
-      "package": "com.evns.cleverdriverapp",
+      "package": "com.evnsolution.clever.routes",
       "versionCode": 5,
       "icon": "./assets/icon.png",
       "adaptiveIcon": {

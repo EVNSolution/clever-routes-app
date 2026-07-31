@@ -64,17 +64,17 @@ docs/release-evidence/
 docs/smoke-evidence/
 release-evidence-manifest-*.md
 docs/release-evidence-manifest-*.md
-clever-driver-*.png
-clever-driver-*.jpg
-clever-driver-*.jpeg
-clever-driver-*.heic
-clever-driver-*.heif
-clever-driver-*.mp4
-clever-driver-*.mov
-clever-driver-*.m4v
-clever-driver-*.webm
-clever-driver-*.txt
-clever-driver-*.pdf
+clever-routes-*.png
+clever-routes-*.jpg
+clever-routes-*.jpeg
+clever-routes-*.heic
+clever-routes-*.heif
+clever-routes-*.mp4
+clever-routes-*.mov
+clever-routes-*.m4v
+clever-routes-*.webm
+clever-routes-*.txt
+clever-routes-*.pdf
 
 # Mobile signing and provisioning secrets
 credentials.json

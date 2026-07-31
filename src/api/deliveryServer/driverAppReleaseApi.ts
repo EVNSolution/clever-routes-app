@@ -33,7 +33,7 @@ export function createDriverAppReleaseApiClient(input: {
 
       try {
         const response = await fetchImpl(
-          `${baseUrl}/driver-app/release/android`,
+          `${baseUrl}/routes-app/release/android`,
           withNoStoreDriverApiRequest<{
             headers?: Record<string, string>;
             method: string;

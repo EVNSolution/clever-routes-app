@@ -62,7 +62,7 @@ describe('stop proof event flow', () => {
         proof: {
           media: [{ kind: 'photo', uri: 'file:///proof/stop-1.jpg' }],
           note: 'Left with concierge',
-          source: 'driver-app-mvp',
+          source: 'clever-routes-app',
           type: 'DELIVERED_NOTE',
         },
       },
@@ -90,7 +90,7 @@ describe('stop proof event flow', () => {
       proof: {
         note: 'No answer at buzzer',
         reason: 'CUSTOMER_UNAVAILABLE',
-        source: 'driver-app-mvp',
+        source: 'clever-routes-app',
         type: 'FAILED_REASON',
       },
     });
@@ -116,7 +116,7 @@ describe('stop proof event flow', () => {
       proof: {
         note: 'Pickup order was incorrectly included in the delivery route.',
         reason: 'ADMIN_ROUTE_ASSIGNMENT_ERROR',
-        source: 'driver-app-mvp',
+        source: 'clever-routes-app',
         type: 'FAILED_REASON',
       },
     });
@@ -183,7 +183,7 @@ describe('stop proof event flow', () => {
             strokeCount: 2,
           },
         ],
-        source: 'driver-app-mvp',
+        source: 'clever-routes-app',
         type: 'DELIVERED_NOTE',
       },
     });

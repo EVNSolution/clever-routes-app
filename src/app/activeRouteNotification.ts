@@ -8,7 +8,7 @@ import {
 } from '../domain/route/assignedRoute';
 import type { ContinuousLocationNotificationContent } from '../domain/location/continuousLocationStream';
 
-const ACTIVE_ROUTE_NOTIFICATION_URL_PREFIX = 'clever-driver://route-stop?';
+const ACTIVE_ROUTE_NOTIFICATION_URL_PREFIX = 'clever-routes://route-stop?';
 const CUSTOMER_NOTE_MAX_LENGTH = 72;
 const EXPANDED_CUSTOMER_NOTE_MAX_LENGTH = 160;
 
@@ -78,7 +78,7 @@ export function buildActiveRouteForegroundNotification(input: {
 }
 
 export function buildActiveRouteNotificationUrl(target: ActiveRouteNotificationTarget): string {
-  return `clever-driver://route-stop?routePlanId=${encodeURIComponent(target.routePlanId)}&deliveryStopId=${encodeURIComponent(target.deliveryStopId)}`;
+  return `clever-routes://route-stop?routePlanId=${encodeURIComponent(target.routePlanId)}&deliveryStopId=${encodeURIComponent(target.deliveryStopId)}`;
 }
 
 export function parseActiveRouteNotificationUrl(value: string): ActiveRouteNotificationTarget | null {

@@ -134,7 +134,7 @@ Decision timestamp:
 
 | Blocker | Issue | Status / evidence reference |
 | --- | --- | --- |
-| Physical iOS/Android smoke evidence | EVNSolution/clever-driver-app#72 | pending |
-| Native EAS builds, signing, store/privacy approvals, license decision | EVNSolution/clever-driver-app#73 | pending |
+| Physical iOS/Android smoke evidence | EVNSolution/clever-routes-app#72 | pending |
+| Native EAS builds, signing, store/privacy approvals, license decision | EVNSolution/clever-routes-app#73 | pending |
 | Production proof-media object storage, signed access, scanner, cleanup evidence | EVNSolution/clever-delivery-server#71 | pending |
 | Baseline context-monorepo service pointer | EVNSolution/clever-context-monorepo#23 / PR #24 | complete; open a new context issue only if production runtime/API boundaries change |

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Move `clever-driver-app` from a flat `src/` layout into the documented folder-role index, remove non-product work folders, and keep behavior unchanged.
+Move `clever-routes-app` from a flat `src/` layout into the documented folder-role index, remove non-product work folders, and keep behavior unchanged.
 
 ## Completed scope
 

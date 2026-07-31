@@ -14,7 +14,7 @@ describe('driver app release API', () => {
           json: async () => ({
             data: {
               distributionChannel: 'direct',
-              installUrl: 'https://delivery.example.com/driver-app',
+              installUrl: 'https://delivery.example.com/routes-app',
               latestVersionCode: 2,
               latestVersionName: '1.0.1',
               minimumSupportedVersionCode: 1,
@@ -32,7 +32,7 @@ describe('driver app release API', () => {
     const release = await client.getAndroidRelease();
 
     assert.equal(release.latestVersionCode, 2);
-    assert.equal(requests[0]?.url, 'https://delivery.example.com/driver-app/release/android');
+    assert.equal(requests[0]?.url, 'https://delivery.example.com/routes-app/release/android');
     assert.equal(requests[0]?.init?.cache, 'no-store');
     assert.equal(requests[0]?.init?.credentials, 'omit');
     assert.deepEqual(requests[0]?.init?.headers, {

@@ -108,7 +108,7 @@ function getStopProofPayload(input: StopProofEventInput): Record<string, unknown
       ...(media.length === 0 ? {} : { media }),
       note: input.note,
       ...(signatures.length === 0 ? {} : { signatures }),
-      source: 'driver-app-mvp',
+      source: 'clever-routes-app',
       type: 'DELIVERED_NOTE',
     };
   }
@@ -118,7 +118,7 @@ function getStopProofPayload(input: StopProofEventInput): Record<string, unknown
     note: input.note,
     reason: input.reason ?? 'OTHER',
     ...(signatures.length === 0 ? {} : { signatures }),
-    source: 'driver-app-mvp',
+    source: 'clever-routes-app',
     type: 'FAILED_REASON',
   };
 }

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This runbook turns the release-readiness matrix into an executable iPhone and Android smoke sequence for `clever-driver-app`.
+This runbook turns the release-readiness matrix into an executable iPhone and Android smoke sequence for `clever-routes-app`.
 It does not contain real evidence. Actual screenshots, videos, logs, generated binaries, signing files, credentials, and production PII stay outside git.
 
 Use this after a committed source revision is selected and the owner-controlled Expo/EAS, Apple, Google, and delivery-server environment values are ready.
@@ -46,21 +46,21 @@ npx eas-cli build --platform all --profile production
 ```
 
 Store the EAS build URLs, install method, and build artifacts in the external evidence store. Do not commit `.apk`, `.aab`, `.ipa`, screenshots, videos, signing files, or generated native build outputs to this repository.
-The repository `.gitignore` also blocks common local evidence folders and `clever-driver-*` evidence file names, but the primary control is to keep the artifacts in the external evidence store.
+The repository `.gitignore` also blocks common local evidence folders and `clever-routes-*` evidence file names, but the primary control is to keep the artifacts in the external evidence store.
 
 ## Evidence file naming
 
 Use names that identify device, platform, scenario, and timestamp without exposing personal data:
 
 ```text
-clever-driver-<platform>-<device>-<scenario>-<yyyyMMdd-HHmm>-<shortsha>.<ext>
+clever-routes-<platform>-<device>-<scenario>-<yyyyMMdd-HHmm>-<shortsha>.<ext>
 ```
 
 Examples:
 
-- `clever-driver-ios-iphone15-route-lookup-20260513-1015-7fc4331.png`
-- `clever-driver-android-pixel8-background-tracking-20260513-1030-7fc4331.mp4`
-- `clever-driver-ios-iphone15-session-reset-20260513-1045-7fc4331.txt`
+- `clever-routes-ios-iphone15-route-lookup-20260513-1015-7fc4331.png`
+- `clever-routes-android-pixel8-background-tracking-20260513-1030-7fc4331.mp4`
+- `clever-routes-ios-iphone15-session-reset-20260513-1045-7fc4331.txt`
 
 ## Smoke sequence
 

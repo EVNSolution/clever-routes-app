@@ -27,8 +27,8 @@
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>clever-driver</string>
-				<string>com.evns.cleverdriverapp</string>
+				<string>clever-routes</string>
+				<string>com.evnsolution.clever.routes</string>
 			</array>
 		</dict>
 	</array>

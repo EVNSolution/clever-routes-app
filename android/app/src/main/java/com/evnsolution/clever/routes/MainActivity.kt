@@ -1,4 +1,4 @@
-package com.evns.cleverdriverapp
+package com.evnsolution.clever.routes
 
 import android.content.Intent
 import android.os.Build

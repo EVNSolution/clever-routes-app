@@ -1,6 +1,6 @@
 # CLEVER Routes App code organization
 
-This document is the source-of-truth folder-role index for `clever-driver-app`. The repository no longer uses a flat `src/` layout: production source files under `src/` must live in one approved role folder and `npm run check:source-layout` enforces that rule.
+This document is the source-of-truth folder-role index for `clever-routes-app`. The repository no longer uses a flat `src/` layout: production source files under `src/` must live in one approved role folder and `npm run check:source-layout` enforces that rule.
 
 ## Current source tree
 

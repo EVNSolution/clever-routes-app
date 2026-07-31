@@ -22,7 +22,7 @@ describe('active route foreground notification', () => {
       body: '200 Queen St W, Toronto\nStatus: Transfer pending\nTotal: CAD 52.00\nMethod: eTransfer\nNote: Please leave the order beside the loading entrance.\nItems 1 type, 1 EA',
       expandedBody: 'Status\nTransfer pending\nTotal\nCAD 52.00\nMethod\neTransfer\nAddress\n200 Queen St W, Toronto\nCustomer note\nPlease leave the order beside the loading entrance.\nItems\n1 type, 1 EA',
       title: 'Next stop 2  ETA 7:19 AM',
-      url: 'clever-driver://route-stop?routePlanId=11111111-1111-4111-8111-111111111111&deliveryStopId=33333333-3333-4333-8333-333333333333',
+      url: 'clever-routes://route-stop?routePlanId=11111111-1111-4111-8111-111111111111&deliveryStopId=33333333-3333-4333-8333-333333333333',
     });
     assert.doesNotMatch(buildActiveRouteForegroundNotification({ currentStepIndex: 2, route }).body, /Payment/u);
     assert.doesNotMatch(buildActiveRouteForegroundNotification({ currentStepIndex: 2, route }).expandedBody ?? '', /Payment/u);
@@ -79,7 +79,7 @@ describe('active route foreground notification', () => {
       body: '100 King St W, Toronto\nStatus: Collect cash\nTotal: CAD 84.50\nMethod: Cash on delivery\nNote: Call on arrival.\nItems 2 types, 7 EA',
       expandedBody: 'Status\nCollect cash\nTotal\nCAD 84.50\nMethod\nCash on delivery\nAddress\n100 King St W, Toronto\nCustomer note\nCall on arrival.\nItems\n2 types, 7 EA',
       title: 'Next stop 1  ETA 7:08 AM',
-      url: 'clever-driver://route-stop?routePlanId=11111111-1111-4111-8111-111111111111&deliveryStopId=22222222-2222-4222-8222-222222222222',
+      url: 'clever-routes://route-stop?routePlanId=11111111-1111-4111-8111-111111111111&deliveryStopId=22222222-2222-4222-8222-222222222222',
     });
     assert.doesNotMatch(buildActiveRouteForegroundNotification({ currentStepIndex: 1, route }).expandedBody ?? '', /unnecessarily long product/u);
   });
@@ -120,12 +120,12 @@ describe('active route foreground notification', () => {
 
   it('parses only complete CLEVER Routes route-stop links without the React Native URL hostname', () => {
     assert.deepEqual(parseActiveRouteNotificationUrl(
-      'clever-driver://route-stop?routePlanId=route%201&deliveryStopId=stop%202',
+      'clever-routes://route-stop?routePlanId=route%201&deliveryStopId=stop%202',
     ), {
       deliveryStopId: 'stop 2',
       routePlanId: 'route 1',
     });
-    assert.equal(parseActiveRouteNotificationUrl('clever-driver://route-stop?routePlanId=route-1'), null);
+    assert.equal(parseActiveRouteNotificationUrl('clever-routes://route-stop?routePlanId=route-1'), null);
     assert.equal(parseActiveRouteNotificationUrl('https://example.com/route-stop?routePlanId=route-1&deliveryStopId=stop-2'), null);
 
     const source = readFileSync(new URL('./activeRouteNotification.ts', import.meta.url), 'utf8');
