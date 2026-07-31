@@ -30,7 +30,7 @@ describe('active route foreground notification', () => {
 
   it('keeps Store Pickup distinct from Stop 1 in the foreground notification', () => {
     assert.deepEqual(buildActiveRouteForegroundNotification({ currentStepIndex: 0, route: sampleAssignedRoute }), {
-      body: 'Open Clever Driver to confirm pickup before the first delivery stop.',
+      body: 'Open CLEVER Routes to confirm pickup before the first delivery stop.',
       title: 'Pickup & Start Route',
     });
   });
@@ -118,7 +118,7 @@ describe('active route foreground notification', () => {
     assert.doesNotMatch(notification.expandedBody ?? '', /Method\n|Payment/u);
   });
 
-  it('parses only complete Clever Driver route-stop links without the React Native URL hostname', () => {
+  it('parses only complete CLEVER Routes route-stop links without the React Native URL hostname', () => {
     assert.deepEqual(parseActiveRouteNotificationUrl(
       'clever-driver://route-stop?routePlanId=route%201&deliveryStopId=stop%202',
     ), {

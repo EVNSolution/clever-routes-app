@@ -89,7 +89,7 @@ Runtime source anchors for this worksheet:
 
 ### Background location justification
 
-Draft review rationale: Clever Driver uses background-capable location only
+Draft review rationale: CLEVER Routes uses background-capable location only
 after the driver explicitly starts an active delivery route. The purpose is to
 record delivery progress and active route location events for dispatch,
 customer-support, and proof/compliance workflows. Tracking must stop when the
@@ -134,7 +134,7 @@ Contacts permission.
 
 ## Pre-submission blockers
 
-- Owner-approved privacy policy URL naming EVNSolution / Clever Driver.
+- Owner-approved privacy policy URL naming EVNSolution / CLEVER Routes.
 - App Store Connect App Privacy answers reviewed against the final build.
 - Google Play Data safety answers reviewed against the final build.
 - Google Play background location declaration, if production Android build keeps

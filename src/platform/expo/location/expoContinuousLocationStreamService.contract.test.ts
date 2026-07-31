@@ -80,10 +80,12 @@ describe('Expo continuous location wiring', () => {
     assert.match(serviceSource, /\.setOnlyAlertOnce\(true\)/u);
     assert.match(serviceSource, /\.setVisibility\(Notification\.VISIBILITY_PRIVATE\)/u);
     assert.match(serviceSource, /\.setPublicVersion\(publicNotification\)/u);
+    assert.match(serviceSource, /\.setContentTitle\("CLEVER Routes"\)/u);
     assert.match(serviceSource, /\.setContentText\("Active route in progress"\)/u);
     assert.match(serviceSource, /channel\.lockscreenVisibility = Notification\.VISIBILITY_PRIVATE/u);
     assert.match(patchSource, /updateLocationTaskNotificationAsync/u);
     assert.match(patchSource, /\.setOngoing\(true\)/u);
+    assert.match(patchSource, /\.setContentTitle\("CLEVER Routes"\)/u);
     assert.match(patchSource, /\.setVisibility\(Notification\.VISIBILITY_PRIVATE\)/u);
     assert.match(stopArrivalNotificationSource, /lockscreenVisibility: Notifications\.AndroidNotificationVisibility\.PRIVATE/u);
     assert.doesNotMatch(moduleConfigSource, /"publication"/u);

@@ -1,4 +1,4 @@
-# Clever Driver release evidence manifest template
+# CLEVER Routes release evidence manifest template
 
 ## Use and storage rules
 

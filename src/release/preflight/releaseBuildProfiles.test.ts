@@ -62,6 +62,24 @@ test('keeps source-controlled Android versions aligned across Expo and Gradle', 
   assert.equal(appConfig.expo?.version, versionName);
 });
 
+test('keeps the installed app name aligned across Expo, Android, and iOS', () => {
+  const appConfig = readJson<{
+    expo?: { name?: string };
+  }>('app.json');
+  const androidStrings = readFileSync(
+    resolve(repoRoot, 'android/app/src/main/res/values/strings.xml'),
+    'utf8',
+  );
+  const iosInfoPlist = readFileSync(resolve(repoRoot, 'ios/CleverDriver/Info.plist'), 'utf8');
+
+  assert.equal(appConfig.expo?.name, 'CLEVER Routes');
+  assert.match(androidStrings, /<string name="app_name">CLEVER Routes<\/string>/u);
+  assert.match(
+    iosInfoPlist,
+    /<key>CFBundleDisplayName<\/key>\s*<string>CLEVER Routes<\/string>/u,
+  );
+});
+
 test('keeps direct-download Android optimization isolated to the distribution APK build', () => {
   const packageConfig = readJson<{
     scripts?: Record<string, string>;

@@ -23,7 +23,7 @@ export function buildActiveRouteForegroundNotification(input: {
 }): ContinuousLocationNotificationContent {
   if (input.currentStepIndex <= 0) {
     return {
-      body: 'Open Clever Driver to confirm pickup before the first delivery stop.',
+      body: 'Open CLEVER Routes to confirm pickup before the first delivery stop.',
       title: 'Pickup & Start Route',
     };
   }
@@ -32,7 +32,7 @@ export function buildActiveRouteForegroundNotification(input: {
   const stop = input.route.stops[stopIndex] ?? input.route.stops[0] ?? null;
   if (stop === null) {
     return {
-      body: 'Open Clever Driver for route details.',
+      body: 'Open CLEVER Routes for route details.',
       title: 'Route in progress',
     };
   }

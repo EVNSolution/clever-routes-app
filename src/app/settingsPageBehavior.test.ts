@@ -74,7 +74,7 @@ describe('Settings page behavior', () => {
     );
   });
 
-  it('edits the global Clever Driver account name on a dedicated page', () => {
+  it('edits the global CLEVER Routes account name on a dedicated page', () => {
     const accountNamePage = getAccountNamePageSource();
     const source = readFileSync(appRootPath, 'utf8');
 
@@ -83,7 +83,7 @@ describe('Settings page behavior', () => {
     assert.match(accountNamePage, /maxLength=\{80\}/u);
     assert.match(accountNamePage, /autoCapitalize="words"/u);
     assert.match(accountNamePage, /placeholder="Your name"/u);
-    assert.match(accountNamePage, /This is your name in Clever Driver\. Store display names can be different\./u);
+    assert.match(accountNamePage, /This is your name in CLEVER Routes\. Store display names can be different\./u);
     assert.match(accountNamePage, /label="Save"/u);
     assert.match(accountNamePage, /onPress=\{onSave\}/u);
     assert.match(source, /driverAuthService\.getAccountProfile/u);
@@ -111,7 +111,7 @@ describe('Settings page behavior', () => {
 
     assert.notEqual(handlerStart, -1);
     assert.notEqual(handlerEnd, -1);
-    assert.match(handlerSource, /Alert\.alert\(\s*'Delete Clever Driver account\?'/u);
+    assert.match(handlerSource, /Alert\.alert\(\s*'Delete CLEVER Routes account\?'/u);
     assert.match(handlerSource, /style: 'destructive'/u);
     assert.match(handlerSource, /getOfflineSubmissionQueueSummary\(queue\)/u);
     assert.match(handlerSource, /queueSummary\.totalCount > 0/u);
