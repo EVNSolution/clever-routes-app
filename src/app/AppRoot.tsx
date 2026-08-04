@@ -2527,13 +2527,31 @@ function DriverApp() {
   }
 
   async function handleCallStop(stop: AssignedRouteStop | null) {
-    const phone = stop?.phone ?? currentCompany?.operatorSupportContact;
-    if (phone === null || phone === undefined || phone.trim().length === 0) {
+    const phone = stop?.phone?.trim();
+    if (phone === undefined || phone.length === 0) {
       setMessage('No contact number is available for this stop.');
       return;
     }
 
-    await Linking.openURL(`tel:${phone}`);
+    try {
+      await Linking.openURL(`tel:${phone}`);
+    } catch {
+      setMessage('The phone app could not be opened.');
+    }
+  }
+
+  async function handleMessageStop(stop: AssignedRouteStop | null) {
+    const phone = stop?.phone?.trim();
+    if (phone === undefined || phone.length === 0) {
+      setMessage('No contact number is available for this stop.');
+      return;
+    }
+
+    try {
+      await Linking.openURL(`sms:${phone}`);
+    } catch {
+      setMessage('The messaging app could not be opened.');
+    }
   }
 
   function handleAnnounceCurrentTip() {
@@ -3691,6 +3709,7 @@ function DriverApp() {
               isReadOnly={stopDetailsReturnScreen === 'completedDeliveries'}
               onArrive={handleArriveFromStopDetails}
               onCall={() => handleCallStop(stopDetailsStop)}
+              onMessage={() => handleMessageStop(stopDetailsStop)}
               onOpenNavigation={() => handleOpenNavigationForStop(stopDetailsStop)}
               onSkip={handleSkipStopFromDetails}
               stop={stopDetailsStop}
@@ -4640,6 +4659,7 @@ function StopDetailsScreen({
   isSkipping,
   onArrive,
   onCall,
+  onMessage,
   onOpenNavigation,
   onSkip,
   stop,
@@ -4651,6 +4671,7 @@ function StopDetailsScreen({
   isSkipping: boolean;
   onArrive(): void;
   onCall(): void;
+  onMessage(): void;
   onOpenNavigation(): void;
   onSkip(): void;
   stop: AssignedRouteStop;
@@ -4659,6 +4680,8 @@ function StopDetailsScreen({
   const paymentAmount = formatAssignedRouteCompactPaymentAmount(stop.totalPriceAmount, stop.currencyCode);
   const paymentMethodLabel = payment.methodLabel === 'Payment' ? null : payment.methodLabel;
   const isPickupStop = isAssignedRoutePickupStop(stop);
+  const customerName = stop.recipientName?.trim() || null;
+  const customerPhone = stop.phone?.trim() || null;
   return (
     <View style={styles.stopDetailsPage}>
       <Text style={styles.stopDetailsAddress}>{formatStopStreetAddress(stop)}</Text>
@@ -4666,8 +4689,30 @@ function StopDetailsScreen({
       <View style={styles.stopDetailsSection}>
         <Text style={styles.stopDetailsSectionTitle}>Order</Text>
         <DataRow label="Order" value={stop.orderName} />
-        <DataRow label="Recipient" value={stop.recipientName ?? 'Not available'} />
-        <DataRow label="Phone" value={stop.phone ?? 'Not available'} />
+      </View>
+
+      <View style={styles.stopDetailsSection}>
+        <Text style={styles.stopDetailsSectionTitle}>Customer</Text>
+        <View style={styles.stopDetailsCustomerRow}>
+          <View style={styles.stopDetailsCustomerIdentity}>
+            <Text style={styles.stopDetailsCustomerName}>{customerName ?? 'Not available'}</Text>
+            <Text style={styles.stopDetailsCustomerPhone}>{customerPhone ?? 'Phone unavailable'}</Text>
+          </View>
+          {customerPhone !== null ? (
+            <View style={styles.stopDetailsCustomerActions}>
+              <StopContactIconButton
+                accessibilityLabel={`Call ${customerName ?? 'customer'}`}
+                icon="call-outline"
+                onPress={onCall}
+              />
+              <StopContactIconButton
+                accessibilityLabel={`Message ${customerName ?? 'customer'}`}
+                icon="chatbubble-outline"
+                onPress={onMessage}
+              />
+            </View>
+          ) : null}
+        </View>
       </View>
 
       <View style={[styles.stopDetailsSection, styles.stopDetailsPaymentSection]}>
@@ -4733,7 +4778,6 @@ function StopDetailsScreen({
               tone="arrive"
             />
             <StopDetailsActionButton label="Navigate" onPress={onOpenNavigation} tone="navigate" />
-            <StopDetailsActionButton label="Call" onPress={onCall} tone="call" />
           </View>
           <Pressable
             accessibilityRole="button"
@@ -4756,6 +4800,30 @@ function StopDetailsScreen({
   );
 }
 
+function StopContactIconButton({
+  accessibilityLabel,
+  icon,
+  onPress,
+}: {
+  accessibilityLabel: string;
+  icon: 'call-outline' | 'chatbubble-outline';
+  onPress(): void;
+}) {
+  return (
+    <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.stopDetailsContactIconButton,
+        pressed && styles.stopDetailsContactIconButtonPressed,
+      ]}
+    >
+      <Ionicons color="#0b57d0" name={icon} size={23} />
+    </Pressable>
+  );
+}
+
 function StopDetailsActionButton({
   disabled,
   label,
@@ -4767,7 +4835,7 @@ function StopDetailsActionButton({
   label: string;
   loading?: boolean;
   onPress(): void;
-  tone: 'arrive' | 'call' | 'navigate';
+  tone: 'arrive' | 'navigate';
 }) {
   const isSecondary = tone !== 'arrive';
   return (
@@ -7378,6 +7446,44 @@ const styles = StyleSheet.create({
   },
   stopDetailsPaymentSection: {
     alignItems: 'stretch',
+  },
+  stopDetailsCustomerRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  stopDetailsCustomerIdentity: {
+    flex: 1,
+    gap: 3,
+  },
+  stopDetailsCustomerName: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '700',
+    lineHeight: 21,
+  },
+  stopDetailsCustomerPhone: {
+    color: '#667085',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  stopDetailsCustomerActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  stopDetailsContactIconButton: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderColor: '#c7d7f5',
+    borderRadius: 24,
+    borderWidth: 1,
+    height: 48,
+    justifyContent: 'center',
+    width: 48,
+  },
+  stopDetailsContactIconButtonPressed: {
+    backgroundColor: '#eef4ff',
   },
   stopDetailsPaymentRow: {
     alignItems: 'center',

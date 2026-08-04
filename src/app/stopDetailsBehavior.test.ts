@@ -33,8 +33,9 @@ describe('stop details simplification', () => {
     assert.doesNotMatch(componentSource, /numberOfLines=\{2\} style=\{styles\.stopDetailsAddress\}/u);
     assert.match(componentSource, /<Text style=\{styles\.stopDetailsSectionTitle\}>Order<\/Text>/u);
     assert.match(componentSource, /<DataRow label="Order" value=\{stop\.orderName\}/u);
-    assert.match(componentSource, /<DataRow label="Recipient" value=\{stop\.recipientName/u);
-    assert.match(componentSource, /<DataRow label="Phone" value=\{stop\.phone/u);
+    assert.match(componentSource, /<Text style=\{styles\.stopDetailsSectionTitle\}>Customer<\/Text>/u);
+    assert.match(componentSource, /customerName \?\? 'Not available'/u);
+    assert.match(componentSource, /customerPhone \?\? 'Phone unavailable'/u);
     assert.match(componentSource, /formatAssignedRoutePaymentSummary\(stop\)/u);
     assert.match(componentSource, /isAssignedRoutePickupStop\(stop\)/u);
     assert.match(componentSource, /isPickupStop \? 'Order Type' : 'Payment'/u);
@@ -58,7 +59,6 @@ describe('stop details simplification', () => {
     assert.match(componentSource, /No delivery instructions provided\./u);
     assert.match(componentSource, /label="Arrive"/u);
     assert.match(componentSource, /label="Navigate"/u);
-    assert.match(componentSource, /label="Call"/u);
     assert.match(componentSource, />Skip Stop<\/Text>/u);
     assert.match(componentSource, /styles\.stopDetailsSkipAction/u);
     assert.match(componentSource, /canArrive/u);
@@ -72,7 +72,7 @@ describe('stop details simplification', () => {
     assert.doesNotMatch(componentSource, /I’m Nearby/u);
     assert.doesNotMatch(componentSource, /canMarkArrived/u);
     assert.doesNotMatch(componentSource, /onAnnounceTip/u);
-    assert.doesNotMatch(componentSource, /label="Complete"|label="Search Address"|label="Message"|onMessage/u);
+    assert.doesNotMatch(componentSource, /label="Complete"|label="Search Address"|label="Call"|label="Message"/u);
     assert.doesNotMatch(componentSource, /Stop Details|stopSummaryCard|stopBadge|listPanel|paymentBadgeOnlyPanel|stopItemsPanel|TextCard/u);
     assert.doesNotMatch(componentSource, /Items to drop|formatAssignedRouteItemLine/u);
   });
@@ -89,17 +89,37 @@ describe('stop details simplification', () => {
     assert.match(stylesSource, /stopDetailsPaymentContext:[\s\S]*flexDirection: 'row'/u);
   });
 
-  it('uses a clear arrival, navigation, and call action hierarchy', () => {
+  it('keeps call and message as customer icon shortcuts outside the delivery action hierarchy', () => {
     const source = getAppRootSource();
     const componentSource = getStopDetailsComponentSource();
-    const stylesSource = source.slice(source.indexOf('stopDetailsActions:'), source.indexOf('nearbyBanner:'));
+    const customerSectionSource = componentSource.slice(
+      componentSource.indexOf('<Text style={styles.stopDetailsSectionTitle}>Customer</Text>'),
+      componentSource.indexOf('<View style={[styles.stopDetailsSection, styles.stopDetailsPaymentSection]}>'),
+    );
+    const stylesSource = source.slice(source.indexOf('stopDetailsCustomerRow:'), source.indexOf('nearbyBanner:'));
 
     assert.match(
       componentSource,
-      /label="Arrive"[\s\S]*tone="arrive"[\s\S]*label="Navigate"[\s\S]*tone="navigate"[\s\S]*label="Call"[\s\S]*tone="call"/u,
+      /label="Arrive"[\s\S]*tone="arrive"[\s\S]*label="Navigate"[\s\S]*tone="navigate"/u,
     );
+    assert.doesNotMatch(componentSource, /label="Call"|tone="call"/u);
+    assert.match(componentSource, /onMessage\(\): void/u);
+    assert.match(componentSource, /const customerPhone = stop\.phone\?\.trim\(\) \|\| null/u);
+    assert.match(customerSectionSource, /<StopContactIconButton[\s\S]*accessibilityLabel=\{`Call \$\{customerName \?\? 'customer'\}`\}[\s\S]*icon="call-outline"[\s\S]*onPress=\{onCall\}/u);
+    assert.match(customerSectionSource, /<StopContactIconButton[\s\S]*accessibilityLabel=\{`Message \$\{customerName \?\? 'customer'\}`\}[\s\S]*icon="chatbubble-outline"[\s\S]*onPress=\{onMessage\}/u);
+    assert.match(componentSource, /customerPhone !== null \? \([\s\S]*styles\.stopDetailsCustomerActions/u);
+    const callHandlerSource = source.slice(
+      source.indexOf('async function handleCallStop'),
+      source.indexOf('async function handleMessageStop'),
+    );
+    assert.match(callHandlerSource, /const phone = stop\?\.phone\?\.trim\(\)/u);
+    assert.match(callHandlerSource, /Linking\.openURL\(`tel:\$\{phone\}`\)/u);
+    assert.doesNotMatch(callHandlerSource, /operatorSupportContact/u);
+    assert.match(source, /onMessage=\{\(\) => handleMessageStop\(stopDetailsStop\)\}/u);
+    assert.match(source, /async function handleMessageStop\(stop: AssignedRouteStop \| null\)[\s\S]*Linking\.openURL\(`sms:\$\{phone\}`\)/u);
     assert.match(componentSource, /disabled=\{!canArrive \|\| isArriving\}/u);
     assert.match(componentSource, /loading=\{isArriving\}/u);
+    assert.match(stylesSource, /stopDetailsContactIconButton:[\s\S]*height: 48,[\s\S]*width: 48/u);
     assert.match(stylesSource, /stopDetailsActionArrive:[\s\S]*backgroundColor: '#0b57d0'[\s\S]*borderColor: '#0b57d0'/u);
     assert.match(stylesSource, /stopDetailsActionSecondary:[\s\S]*backgroundColor: '#ffffff'[\s\S]*borderColor: '#0b57d0'/u);
     assert.match(stylesSource, /stopDetailsActionSecondaryText:[\s\S]*color: '#0b57d0'/u);
@@ -137,7 +157,7 @@ describe('stop details simplification', () => {
   it('lays stop information out as flat divided sections instead of cards', () => {
     const source = getAppRootSource();
     const componentSource = getStopDetailsComponentSource();
-    const stylesSource = source.slice(source.indexOf('stopDetailsPage:'), source.indexOf('stopDetailsActions:'));
+    const stylesSource = source.slice(source.indexOf('stopDetailsPage:'), source.indexOf('stopDetailsCustomerRow:'));
 
     assert.match(componentSource, /styles\.stopDetailsSection/u);
     assert.match(componentSource, /styles\.stopDetailsNote/u);
