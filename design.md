@@ -2160,6 +2160,16 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - Use comma-separated compact notification copy. Do not use middle-dot separators.
 - Never calculate an order total from item rows in the Driver app and never let the Driver app mutate payment status.
 
+## Stop Detail Customer Contact Shortcuts (2026-08-05)
+
+- Keep recipient name and phone number together in a dedicated `Customer` section in Stop Detail.
+- Place compact Call and Message icon actions beside that customer information. They are contact shortcuts, not primary delivery workflow buttons.
+- Keep `Arrive` and `Navigate` as the separate delivery action row; do not add Call or Message to that row.
+- Use the authoritative stop phone number for both system handoffs. Call opens the phone app and Message opens the system SMS composer; the app must not send a message automatically.
+- Show contact icons only when the stop has a non-empty phone number. Keep the informational `Phone unavailable` state when it does not.
+- Give each icon an explicit customer-specific accessibility label and a 48-by-48 cross-platform touch target.
+- Preserve the contact shortcuts when reviewing a completed stop while continuing to hide progress actions such as `Arrive`.
+
 ## Completed Deliveries Current Override (2026-07-22)
 
 - Treat Completed Deliveries as a compact operational record, not a dashboard. This section supersedes the older rounded summary card, pill-filter, and proof-missing guidance for this screen.
