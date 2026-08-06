@@ -70,7 +70,7 @@ describe('Android release publisher planning', () => {
   it('builds the reviewed server publisher command for SSM execution', () => {
     assert.deepEqual(buildSsmPublishCommand({
       apkSha256: sha256,
-      downloadUrl: 'https://drive.google.com/uc?export=download&id=file-9',
+      downloadUrl: 'https://drive.usercontent.google.com/download?id=file-9&export=download&confirm=t',
       instanceId: ssm.instanceId,
       minimumVersionCode: 8,
       region: ssm.region,
@@ -87,7 +87,7 @@ describe('Android release publisher planning', () => {
       '--document-name',
       'AWS-RunShellScript',
       '--parameters',
-      '{"commands":["cd /srv/clever-route-server && docker compose --env-file .deploy/current-image.env -f infra/compose/docker-compose.prod.yml exec -T clever-route-api node dist/scripts/publish-routes-app-release.js --version-code 9 --version-name \'1.1.2\' --minimum-version-code 8 --apk-sha256 \'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\' --download-url \'https://drive.google.com/uc?export=download&id=file-9\'"]}',
+      '{"commands":["cd /srv/clever-route-server && docker compose --env-file .deploy/current-image.env -f infra/compose/docker-compose.prod.yml exec -T clever-route-api node dist/scripts/publish-routes-app-release.js --version-code 9 --version-name \'1.1.2\' --minimum-version-code 8 --apk-sha256 \'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\' --download-url \'https://drive.usercontent.google.com/download?id=file-9&export=download&confirm=t\'"]}',
       '--query',
       'Command.CommandId',
       '--output',
@@ -141,9 +141,9 @@ describe('Android release publisher planning', () => {
 
     assert.equal(plan.needsDriveUpload, false);
     assert.equal(plan.driveFileId, 'orphan-file-9');
-    assert.equal(plan.downloadUrl, 'https://drive.google.com/uc?export=download&id=orphan-file-9');
+    assert.equal(plan.downloadUrl, 'https://drive.usercontent.google.com/download?id=orphan-file-9&export=download&confirm=t');
     assert.ok(plan.validations.includes('existing Drive APK com.evnsolution.clever.routes-1.1.2-9.apk with matching sha256 will be reused'));
-    assert.match(plan.ssmCommand.join(' '), /--download-url 'https:\/\/drive\.google\.com\/uc\?export=download&id=orphan-file-9'/u);
+    assert.match(plan.ssmCommand.join(' '), /--download-url 'https:\/\/drive\.usercontent\.google\.com\/download\?id=orphan-file-9&export=download&confirm=t'/u);
   });
 
   it('rejects mixed same-name Drive duplicates unless every duplicate has the matching sha256', () => {
@@ -190,7 +190,7 @@ describe('Android release publisher planning', () => {
     const plan = createAndroidReleasePublicationPlan(publishInput());
 
     assert.equal(plan.downloadUrl, buildDriveDownloadUrl('NEW_FILE_ID_AFTER_UPLOAD'));
-    assert.match(plan.ssmCommand.join(' '), /--download-url 'https:\/\/drive\.google\.com\/uc\?export=download&id=NEW_FILE_ID_AFTER_UPLOAD'/u);
+    assert.match(plan.ssmCommand.join(' '), /--download-url 'https:\/\/drive\.usercontent\.google\.com\/download\?id=NEW_FILE_ID_AFTER_UPLOAD&export=download&confirm=t'/u);
     assert.doesNotMatch(plan.ssmCommand.join(' '), /--download-url 'https:\/\/delivery\.example\.com\/routes-app'/u);
   });
 
@@ -229,7 +229,7 @@ describe('Android release publisher planning', () => {
     assert.equal(plan.mode, 'bootstrap-legacy');
     assert.equal(plan.driveFileName, undefined);
     assert.equal(plan.needsDriveUpload, false);
-    assert.equal(plan.downloadUrl, 'https://drive.google.com/uc?export=download&id=1sqfU_D40iMenCGWQ6F3dZYb875i1jbe2');
+    assert.equal(plan.downloadUrl, 'https://drive.usercontent.google.com/download?id=1sqfU_D40iMenCGWQ6F3dZYb875i1jbe2&export=download&confirm=t');
     assert.match(plan.ssmCommand.join(' '), /--version-code 8 --version-name '1\.1\.1'/u);
     assert.ok(plan.validations.includes('legacy Drive file 1sqfU_D40iMenCGWQ6F3dZYb875i1jbe2 reused without content replacement'));
   });
