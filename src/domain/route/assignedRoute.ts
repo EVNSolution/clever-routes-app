@@ -151,6 +151,7 @@ export type AssignedRoute = {
   routeMapPreview: AssignedRouteMapPreview | null;
   routeMetrics: AssignedRouteMetrics | null;
   routeStopPoints: AssignedRouteStopPoint[];
+  scheduledStartAt?: string | null;
   shopDomain: string;
   stops: AssignedRouteStop[];
   etaSnapshot?: AssignedRouteEtaSnapshot | null;
@@ -271,6 +272,7 @@ export const sampleAssignedRoute: AssignedRoute = {
       snappedCoordinates: [-79.391, 43.651],
     },
   ],
+  scheduledStartAt: '2026-05-12T11:00:00.000Z',
   shopDomain: 'tomatono.myshopify.com',
   stops: [
     {
@@ -468,6 +470,25 @@ export function formatAssignedRouteDuration(metrics: AssignedRouteMetrics | null
   return remainingMinutes === 0 ? `${hours} hr` : `${hours} hr ${remainingMinutes} min`;
 }
 
+export function formatAssignedRoutePickupTiming(route: AssignedRoute, nowMs: number): {
+  finish: string;
+  leave: string;
+  routeTime: string;
+} {
+  const scheduledStartMs = route.scheduledStartAt == null ? Number.NaN : Date.parse(route.scheduledStartAt);
+  const leaveAtMs = Number.isFinite(scheduledStartMs) && scheduledStartMs > nowMs ? scheduledStartMs : nowMs;
+  const leave = leaveAtMs === nowMs
+    ? 'Now'
+    : `In ${formatAssignedRouteDuration({ distanceMeters: 0, durationSeconds: (leaveAtMs - nowMs) / 1000 })}`;
+  const routeTime = formatAssignedRouteDuration(route.routeMetrics);
+  const durationSeconds = route.routeMetrics?.durationSeconds;
+  const finish = typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) && durationSeconds >= 0
+    ? formatAssignedRouteEta(new Date(leaveAtMs + durationSeconds * 1000).toISOString(), route.timezone) ?? 'Not available'
+    : 'Not available';
+
+  return { finish, leave, routeTime };
+}
+
 export function formatAssignedRouteEta(estimatedArrivalAt: string | null | undefined, timezone: string): string | null {
   if (estimatedArrivalAt === null || estimatedArrivalAt === undefined) {
     return null;
@@ -585,6 +606,7 @@ function isAssignedRoute(value: unknown): value is AssignedRoute {
     (route.routeMapPreview === undefined || route.routeMapPreview === null || isAssignedRouteMapPreview(route.routeMapPreview)) &&
     (route.routeMetrics === undefined || route.routeMetrics === null || isAssignedRouteMetrics(route.routeMetrics)) &&
     (route.routeStopPoints === undefined || (Array.isArray(route.routeStopPoints) && route.routeStopPoints.every(isAssignedRouteStopPoint))) &&
+    (route.scheduledStartAt === undefined || nullableString(route.scheduledStartAt)) &&
     typeof route.shopDomain === 'string' &&
     Array.isArray(route.stops) &&
     route.stops.every(isAssignedRouteStop) &&
@@ -600,6 +622,7 @@ function normalizeAssignedRoute(route: AssignedRoute): AssignedRoute {
     routeMapPreview: route.routeMapPreview ?? null,
     routeMetrics: route.routeMetrics ?? null,
     routeStopPoints: route.routeStopPoints ?? [],
+    scheduledStartAt: route.scheduledStartAt ?? null,
     stops: route.stops.map(normalizeAssignedRouteStop),
     etaSnapshot: route.etaSnapshot ?? null,
     timezone: route.timezone ?? DEFAULT_ASSIGNED_ROUTE_TIMEZONE,

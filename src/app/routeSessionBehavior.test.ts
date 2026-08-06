@@ -117,6 +117,10 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const currentTaskTitle = isPickupTask \? 'Store Pickup' : stop === null \? 'Next Stop'/u);
     assert.match(componentSource, /const currentTaskAddress = stop === null \? null : formatStopSearchAddress\(stop\)/u);
     assert.match(componentSource, /isPickupTask \? \([\s\S]*<PrimaryButton label="Pickup & Start Route" onPress=\{onArrived\} \/>[\s\S]*\) : \([\s\S]*label="Arrive"[\s\S]*label="Navigate"/u);
+    assert.match(componentSource, /const pickupTiming = formatAssignedRoutePickupTiming\(route, pickupTimingNow\)/u);
+    assert.match(componentSource, /const initialTimer = setTimeout\(\(\) => setPickupTimingNow\(Date\.now\(\)\), 0\)[\s\S]*const minuteTimer = setInterval\(\(\) => setPickupTimingNow\(Date\.now\(\)\), 60_000\)[\s\S]*clearTimeout\(initialTimer\)[\s\S]*clearInterval\(minuteTimer\)/u);
+    assert.match(componentSource, /isPickupTask \? \([\s\S]*styles\.pickupTimingGrid[\s\S]*label="Leave" value=\{pickupTiming\.leave\}[\s\S]*label="Route time" value=\{pickupTiming\.routeTime\}[\s\S]*label="Est\. finish" value=\{pickupTiming\.finish\}[\s\S]*<PrimaryButton label="Pickup & Start Route"/u);
+    assert.doesNotMatch(componentSource, /pickupTiming[\s\S]{0,400}[·•]/u);
     assert.match(readFileSync(appRootPath, 'utf8'), /saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: 1,[\s\S]*pickupCompleted: true/u);
     assert.doesNotMatch(startRouteSessionSource, /applyEtaSnapshotToRoute/u);
     assert.doesNotMatch(startRouteSessionSource, /applyEtaUpdateToRoute/u);

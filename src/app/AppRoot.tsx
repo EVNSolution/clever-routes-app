@@ -36,6 +36,7 @@ import {
   formatAssignedRouteDistance,
   formatAssignedRouteDuration,
   formatAssignedRouteEta,
+  formatAssignedRoutePickupTiming,
   formatAssignedRouteCompactPaymentAmount,
   formatAssignedRoutePaymentSummary,
   isAssignedRoutePickupStop,
@@ -4456,6 +4457,20 @@ function RouteSessionScreen({
   stop: AssignedRouteStop | null;
 }) {
   const isPickupTask = routeStatus === 'active' && currentNavigationStepIndex === COMPANY_STEP_INDEX;
+  const [pickupTimingNow, setPickupTimingNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isPickupTask) {
+      return undefined;
+    }
+
+    const initialTimer = setTimeout(() => setPickupTimingNow(Date.now()), 0);
+    const minuteTimer = setInterval(() => setPickupTimingNow(Date.now()), 60_000);
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(minuteTimer);
+    };
+  }, [isPickupTask]);
+  const pickupTiming = formatAssignedRoutePickupTiming(route, pickupTimingNow);
   const currentTaskTitle = isPickupTask ? 'Store Pickup' : stop === null ? 'Next Stop' : `Stop ${stop.sequence}`;
   const currentTaskAddress = stop === null ? null : formatStopSearchAddress(stop);
   const currentTaskGuidance = isPickupTask && company?.pickupGuidance?.trim()
@@ -4544,7 +4559,14 @@ function RouteSessionScreen({
             <Text style={styles.bodyText}>{currentTaskGuidance}</Text>
           ) : null}
           {isPickupTask ? (
-            <PrimaryButton label="Pickup & Start Route" onPress={onArrived} />
+            <>
+              <View style={styles.pickupTimingGrid}>
+                <MetricBlock label="Leave" value={pickupTiming.leave} />
+                <MetricBlock label="Route time" value={pickupTiming.routeTime} />
+                <MetricBlock label="Est. finish" value={pickupTiming.finish} />
+              </View>
+              <PrimaryButton label="Pickup & Start Route" onPress={onArrived} />
+            </>
           ) : (
             <View style={styles.routeActionRow}>
               <View style={styles.routeActionButton}>
@@ -6952,6 +6974,11 @@ const styles = StyleSheet.create({
     color: '#344054',
     fontSize: 15,
     fontWeight: '700',
+  },
+  pickupTimingGrid: {
+    flexDirection: 'row',
+    gap: 18,
+    paddingVertical: 2,
   },
   routeSessionPage: {
     overflow: 'visible',
