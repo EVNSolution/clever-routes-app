@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
   ensureDriveAnyoneReaderPermission,
   fetchOptionalRelease,
+  sha256File,
+  sha256ResponseBody,
   listDriveFiles,
+  selectSingleOnlineSsmTarget,
+  uploadDriveFileResumable,
 } from './androidReleasePublisherCliSupport';
 
 describe('Android release publisher CLI support', () => {
@@ -45,11 +53,11 @@ describe('Android release publisher CLI support', () => {
         return {
           json: async () => pageToken === null
             ? {
-                files: [{ id: 'first', name: 'old.apk', appProperties: { sha256: 'old-sha' } }],
+                files: [{ id: 'first', name: 'old.apk', sha256Checksum: 'old-bytes', appProperties: { sha256: 'old-sha' } }],
                 nextPageToken: 'page-2',
               }
             : {
-                files: [{ id: 'duplicate', name: 'com.evnsolution.clever.routes-1.1.2-9.apk', appProperties: { sha256: 'new-sha' } }],
+                files: [{ id: 'duplicate', name: 'com.evnsolution.clever.routes-1.1.2-9.apk', sha256Checksum: 'new-bytes', appProperties: { sha256: 'new-sha' } }],
               },
           ok: true,
           status: 200,
@@ -63,8 +71,8 @@ describe('Android release publisher CLI support', () => {
     assert.equal(new URL(requestedUrls[0]).searchParams.get('pageSize'), '1000');
     assert.equal(new URL(requestedUrls[1]).searchParams.get('pageToken'), 'page-2');
     assert.deepEqual(files, [
-      { id: 'first', name: 'old.apk', sha256: 'old-sha' },
-      { id: 'duplicate', name: 'com.evnsolution.clever.routes-1.1.2-9.apk', sha256: 'new-sha' },
+      { id: 'first', name: 'old.apk', sha256: 'old-sha', sha256Checksum: 'old-bytes' },
+      { id: 'duplicate', name: 'com.evnsolution.clever.routes-1.1.2-9.apk', sha256: 'new-sha', sha256Checksum: 'new-bytes' },
     ]);
   });
 
@@ -106,5 +114,105 @@ describe('Android release publisher CLI support', () => {
     assert.match(createdCalls[0].url, /\/private-orphan\/permissions\?fields=permissions/u);
     assert.equal(createdCalls[1].init?.method, 'POST');
     assert.deepEqual(JSON.parse(String(createdCalls[1].init?.body)), { role: 'reader', type: 'anyone' });
+  });
+
+  it('fails closed unless exactly one tagged SSM target is online', () => {
+    assert.equal(selectSingleOnlineSsmTarget([
+      { instanceId: 'i-online', pingStatus: 'Online' },
+    ]), 'i-online');
+
+    assert.throws(() => selectSingleOnlineSsmTarget([]), /expected one SSM target; got 0/u);
+    assert.throws(() => selectSingleOnlineSsmTarget([
+      { instanceId: 'i-a', pingStatus: 'Online' },
+      { instanceId: 'i-b', pingStatus: 'Online' },
+    ]), /expected one SSM target; got 2/u);
+    assert.throws(() => selectSingleOnlineSsmTarget([
+      { instanceId: 'i-offline', pingStatus: 'ConnectionLost' },
+    ]), /SSM target is not online/u);
+  });
+
+  it('hashes files and response bodies incrementally', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'routes-publisher-'));
+    const filePath = join(directory, 'candidate.apk');
+    const contents = Buffer.concat([
+      Buffer.alloc(128 * 1024, 1),
+      Buffer.alloc(128 * 1024, 2),
+    ]);
+    writeFileSync(filePath, contents);
+    const expected = createHash('sha256').update(contents).digest('hex');
+
+    try {
+      assert.equal(await sha256File(filePath), expected);
+      assert.equal(await sha256ResponseBody(new ReadableStream({
+        start(controller) {
+          controller.enqueue(contents.subarray(0, 64 * 1024));
+          controller.enqueue(contents.subarray(64 * 1024));
+          controller.close();
+        },
+      })), expected);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it('uploads APK content through a resumable streaming request with source provenance', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'routes-upload-'));
+    const filePath = join(directory, 'candidate.apk');
+    const contents = Buffer.from('streamed-apk-content');
+    const sha256 = createHash('sha256').update(contents).digest('hex');
+    writeFileSync(filePath, contents);
+    const calls: { init?: RequestInit & { duplex?: string }; url: string }[] = [];
+
+    try {
+      const fileId = await uploadDriveFileResumable({
+        apk: {
+          appName: 'CLEVER Routes',
+          packageName: 'com.evnsolution.clever.routes',
+          sha256,
+          sourceSha: 'abc123def456',
+          versionCode: 9,
+          versionName: '1.1.2',
+        },
+        apkPath: filePath,
+        fetchImpl: async (url, init) => {
+          calls.push({ init, url });
+          if (calls.length === 1) {
+            return {
+              body: null,
+              headers: new Headers({ Location: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=session' }),
+              json: async () => ({}),
+              ok: true,
+              status: 200,
+            };
+          }
+          assert.equal(Buffer.isBuffer(init?.body), false);
+          assert.equal(init?.duplex, 'half');
+          const uploaded = Buffer.from(await new Response(init?.body).arrayBuffer());
+          assert.deepEqual(uploaded, contents);
+          return {
+            body: null,
+            headers: new Headers(),
+            json: async () => ({
+              appProperties: { sha256, sourceSha: 'abc123def456' },
+              id: 'file-9',
+              sha256Checksum: sha256,
+            }),
+            ok: true,
+            status: 200,
+          };
+        },
+        fileName: 'com.evnsolution.clever.routes-1.1.2-9.apk',
+        folderId: 'approved-folder',
+        token: 'token',
+      });
+
+      assert.equal(fileId, 'file-9');
+      assert.equal(calls.length, 2);
+      const metadata = JSON.parse(String(calls[0].init?.body)) as { appProperties: { sourceSha: string } };
+      assert.equal(metadata.appProperties.sourceSha, 'abc123def456');
+      assert.match(calls[0].url, /uploadType=resumable/u);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 });

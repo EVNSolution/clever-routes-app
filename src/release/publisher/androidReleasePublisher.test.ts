@@ -6,6 +6,7 @@ import {
   buildSsmPublishCommand,
   buildVersionedApkFileName,
   createAndroidReleasePublicationPlan,
+  isAlreadyPublishedCandidate,
   parseAaptBadging,
   type AndroidApkMetadata,
   type AndroidReleasePublisherInput,
@@ -15,17 +16,18 @@ const sha256 = 'a'.repeat(64);
 const source = {
   branch: 'dev',
   clean: true,
-  headSha: 'abc123',
-  remoteHeadSha: 'abc123',
+  headSha: 'abc123def456',
+  remoteHeadSha: 'abc123def456',
 };
 const ssm = {
   instanceId: 'i-0123456789abcdef0',
-  region: 'us-east-1',
+  region: 'ap-northeast-2',
 };
 const apk: AndroidApkMetadata = {
   appName: 'CLEVER Routes',
   packageName: 'com.evnsolution.clever.routes',
   sha256,
+  sourceSha: source.headSha,
   versionCode: 9,
   versionName: '1.1.2',
 };
@@ -63,7 +65,13 @@ describe('Android release publisher planning', () => {
       sha256,
     );
 
-    assert.deepEqual(metadata, apk);
+    assert.deepEqual(metadata, {
+      appName: apk.appName,
+      packageName: apk.packageName,
+      sha256: apk.sha256,
+      versionCode: apk.versionCode,
+      versionName: apk.versionName,
+    });
     assert.equal(buildVersionedApkFileName(metadata), 'com.evnsolution.clever.routes-1.1.2-9.apk');
   });
 
@@ -81,7 +89,7 @@ describe('Android release publisher planning', () => {
       'ssm',
       'send-command',
       '--region',
-      'us-east-1',
+      'ap-northeast-2',
       '--instance-ids',
       'i-0123456789abcdef0',
       '--document-name',
@@ -103,7 +111,8 @@ describe('Android release publisher planning', () => {
     assert.equal(plan.needsDriveUpload, true);
     assert.equal(plan.downloadUrl, buildDriveDownloadUrl('NEW_FILE_ID_AFTER_UPLOAD'));
     assert.deepEqual(plan.validations, [
-      'source dev@abc123 matches origin/dev',
+      'source dev@abc123def456 matches origin/dev',
+      'APK provenance matches source abc123def456',
       'gcloud account dlajiin@gmail.com approved',
       'Drive folder 15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ approved',
     ]);
@@ -118,6 +127,7 @@ describe('Android release publisher planning', () => {
       ['gcloud account must be dlajiin@gmail.com', { gcloudAccount: 'someone@example.com' }],
       ['Drive folder must be 15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ', { drive: { existingFiles: [], folderId: 'wrong' } }],
       ['APK package must be com.evnsolution.clever.routes', { apk: { ...apk, packageName: 'com.example.app' } }],
+      ['APK provenance does not match', { apk: { ...apk, sourceSha: 'different-source' } }],
       ['versionCode rollback blocked', { currentRelease: { installUrl: 'x', latestVersionCode: 9, latestVersionName: '1.1.2', minimumSupportedVersionCode: 8, platform: 'android' } }],
       ['refusing conflicting retry', { drive: { existingFiles: [{ id: 'file-9', name: 'com.evnsolution.clever.routes-1.1.2-9.apk' }], folderId: '15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ' } }],
     ];
@@ -134,6 +144,8 @@ describe('Android release publisher planning', () => {
           id: 'orphan-file-9',
           name: 'com.evnsolution.clever.routes-1.1.2-9.apk',
           sha256,
+          sha256Checksum: sha256,
+          sourceSha: source.headSha,
         }],
         folderId: '15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ',
       },
@@ -142,11 +154,26 @@ describe('Android release publisher planning', () => {
     assert.equal(plan.needsDriveUpload, false);
     assert.equal(plan.driveFileId, 'orphan-file-9');
     assert.equal(plan.downloadUrl, 'https://drive.usercontent.google.com/download?id=orphan-file-9&export=download&confirm=t');
-    assert.ok(plan.validations.includes('existing Drive APK com.evnsolution.clever.routes-1.1.2-9.apk with matching sha256 will be reused'));
+    assert.ok(plan.validations.includes('existing Drive APK com.evnsolution.clever.routes-1.1.2-9.apk with matching checksum/provenance will be reused'));
     assert.match(plan.ssmCommand.join(' '), /--download-url 'https:\/\/drive\.usercontent\.google\.com\/download\?id=orphan-file-9&export=download&confirm=t'/u);
   });
 
-  it('rejects mixed same-name Drive duplicates unless every duplicate has the matching sha256', () => {
+  it('rejects Drive orphan reuse when server-computed bytes do not match mutable metadata', () => {
+    assert.throws(() => createAndroidReleasePublicationPlan(publishInput({
+      drive: {
+        existingFiles: [{
+          id: 'tampered-file-9',
+          name: 'com.evnsolution.clever.routes-1.1.2-9.apk',
+          sha256,
+          sha256Checksum: 'b'.repeat(64),
+          sourceSha: source.headSha,
+        }],
+        folderId: '15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ',
+      },
+    })), /different or unverifiable checksum\/provenance/u);
+  });
+
+  it('rejects mixed same-name Drive duplicates unless every duplicate has matching checksum and provenance', () => {
     assert.throws(() => createAndroidReleasePublicationPlan(publishInput({
       drive: {
         existingFiles: [
@@ -154,6 +181,8 @@ describe('Android release publisher planning', () => {
             id: 'matching-file-9',
             name: 'com.evnsolution.clever.routes-1.1.2-9.apk',
             sha256,
+            sha256Checksum: sha256,
+            sourceSha: source.headSha,
           },
           {
             id: 'unverifiable-file-9',
@@ -162,7 +191,7 @@ describe('Android release publisher planning', () => {
         ],
         folderId: '15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ',
       },
-    })), /different or unverifiable sha256/u);
+    })), /different or unverifiable checksum\/provenance/u);
 
     const plan = createAndroidReleasePublicationPlan(publishInput({
       drive: {
@@ -171,11 +200,15 @@ describe('Android release publisher planning', () => {
             id: 'matching-file-9-a',
             name: 'com.evnsolution.clever.routes-1.1.2-9.apk',
             sha256,
+            sha256Checksum: sha256,
+            sourceSha: source.headSha,
           },
           {
             id: 'matching-file-9-b',
             name: 'com.evnsolution.clever.routes-1.1.2-9.apk',
             sha256,
+            sha256Checksum: sha256,
+            sourceSha: source.headSha,
           },
         ],
         folderId: '15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ',
@@ -184,6 +217,50 @@ describe('Android release publisher planning', () => {
 
     assert.equal(plan.needsDriveUpload, false);
     assert.equal(plan.driveFileId, 'matching-file-9-a');
+  });
+
+  it('treats an identical public candidate as a successful retry after an unknown SSM outcome', () => {
+    assert.equal(isAlreadyPublishedCandidate({
+      apk,
+      currentRelease: {
+        installUrl: 'https://delivery.example.com/routes-app',
+        latestVersionCode: apk.versionCode,
+        latestVersionName: apk.versionName,
+        minimumSupportedVersionCode: 8,
+        platform: 'android',
+      },
+      currentSha256: apk.sha256,
+      expectedMinimumVersionCode: 8,
+      publicInstallUrl: 'https://delivery.example.com/routes-app',
+    }), true);
+
+    assert.throws(() => isAlreadyPublishedCandidate({
+      apk,
+      currentRelease: {
+        installUrl: 'https://delivery.example.com/routes-app',
+        latestVersionCode: apk.versionCode,
+        latestVersionName: apk.versionName,
+        minimumSupportedVersionCode: 8,
+        platform: 'android',
+      },
+      currentSha256: 'b'.repeat(64),
+      expectedMinimumVersionCode: 8,
+      publicInstallUrl: 'https://delivery.example.com/routes-app',
+    }), /same versionCode has different APK contents/u);
+
+    assert.throws(() => isAlreadyPublishedCandidate({
+      apk,
+      currentRelease: {
+        installUrl: 'https://delivery.example.com/routes-app',
+        latestVersionCode: apk.versionCode,
+        latestVersionName: apk.versionName,
+        minimumSupportedVersionCode: 8,
+        platform: 'android',
+      },
+      currentSha256: apk.sha256,
+      expectedMinimumVersionCode: 9,
+      publicInstallUrl: 'https://delivery.example.com/routes-app',
+    }), /same versionCode has a different minimum supported versionCode/u);
   });
 
   it('keeps the public installUrl stable while SSM receives the Drive backing URL', () => {

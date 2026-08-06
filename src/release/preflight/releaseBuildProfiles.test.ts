@@ -88,6 +88,7 @@ test('keeps direct-download Android optimization isolated to the distribution AP
   const preflight = packageConfig.scripts?.['prebuild:android:distribution'] ?? '';
 
   assert.match(preflight, /verify-distribution-source\.mjs/u);
+  assert.match(command, /app:clean/u);
   assert.match(command, /app:assembleRelease/u);
   assert.match(command, /reactNativeArchitectures=armeabi-v7a,arm64-v8a/u);
   assert.match(command, /android\.enableMinifyInReleaseBuilds=true/u);
@@ -100,11 +101,22 @@ test('exposes one reviewed direct Android publisher command', () => {
   const packageConfig = readJson<{
     scripts?: Record<string, string>;
   }>('package.json');
+  const publisherSource = readFileSync(
+    resolve(repoRoot, 'src/release/publisher/androidReleasePublisherCli.ts'),
+    'utf8',
+  );
 
   assert.equal(
     packageConfig.scripts?.['release:android:publish'],
     'tsx src/release/publisher/androidReleasePublisherCli.ts',
   );
+  assert.match(publisherSource, /npm', \['run', 'build:android:distribution'\]/u);
+  assert.match(publisherSource, /https:\/\/clever-route\.cleversystem\.ai/u);
+  assert.match(publisherSource, /ap-northeast-2/u);
+  assert.match(publisherSource, /Service/u);
+  assert.match(publisherSource, /clever-delivery-server/u);
+  assert.match(publisherSource, /ls-remote/u);
+  assert.doesNotMatch(publisherSource, /readFileSync|arrayBuffer|--ssm-instance-id|uploadType=multipart/u);
 });
 
 test('keeps source-controlled native release metadata aligned and minimally privileged', () => {
