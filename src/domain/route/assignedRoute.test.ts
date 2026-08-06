@@ -7,6 +7,7 @@ import {
   formatAssignedRouteDistance,
   formatAssignedRouteDuration,
   formatAssignedRouteEta,
+  formatAssignedRoutePickupTiming,
   formatAssignedRouteItemLine,
   formatAssignedRouteCompactPaymentAmount,
   hasAssignedRouteGeometry,
@@ -73,6 +74,44 @@ describe('driver assigned route UX flow', () => {
     assert.equal(result.route.stops[0]?.distanceFromPreviousMeters, null);
     assert.equal(formatAssignedRouteItemLine(result.route.stops[0]!.items[0]!), 'Tomato box (Size: Large): 2');
     assert.equal(JSON.stringify(result).includes('tomatono.myshopify.com'), true);
+  });
+
+  it('formats pickup timing from the scheduled start and route duration', () => {
+    assert.deepEqual(
+      formatAssignedRoutePickupTiming(
+        {
+          ...sampleAssignedRoute,
+          routeMetrics: { distanceMeters: 58_000, durationSeconds: 10_320 },
+          scheduledStartAt: '2026-08-07T02:30:00.000Z',
+          timezone: 'America/Toronto',
+        },
+        Date.parse('2026-08-07T02:21:30.000Z'),
+      ),
+      {
+        finish: '1:22 AM',
+        leave: 'In 9 min',
+        routeTime: '2 hr 52 min',
+      },
+    );
+  });
+
+  it('starts pickup timing now when the schedule is missing or has passed', () => {
+    assert.deepEqual(
+      formatAssignedRoutePickupTiming(
+        {
+          ...sampleAssignedRoute,
+          routeMetrics: { distanceMeters: 9_600, durationSeconds: 1_080 },
+          scheduledStartAt: null,
+          timezone: 'America/Toronto',
+        },
+        Date.parse('2026-08-07T02:30:00.000Z'),
+      ),
+      {
+        finish: '10:48 PM',
+        leave: 'Now',
+        routeTime: '18 min',
+      },
+    );
   });
 
   it('keeps the route screen safe when no route is assigned', async () => {
