@@ -96,6 +96,17 @@ test('keeps direct-download Android optimization isolated to the distribution AP
   assert.doesNotMatch(command, /android\.enableBundleCompression=true/u);
 });
 
+test('exposes one reviewed direct Android publisher command', () => {
+  const packageConfig = readJson<{
+    scripts?: Record<string, string>;
+  }>('package.json');
+
+  assert.equal(
+    packageConfig.scripts?.['release:android:publish'],
+    'tsx src/release/publisher/androidReleasePublisherCli.ts',
+  );
+});
+
 test('keeps source-controlled native release metadata aligned and minimally privileged', () => {
   const androidManifest = readFileSync(resolve(repoRoot, 'android/app/src/main/AndroidManifest.xml'), 'utf8');
   const androidGradleProperties = readFileSync(resolve(repoRoot, 'android/gradle.properties'), 'utf8');
