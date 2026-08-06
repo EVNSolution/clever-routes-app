@@ -418,6 +418,14 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(appSource, /timelineMarkerCompleted|timelineMarkerCurrent|timelineMarkerTextActive/u);
   });
 
+  it('fills the Stops width for Current without moving its row content', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+
+    assert.match(appSource, /routeSessionSection:[\s\S]*paddingHorizontal: 18/u);
+    assert.match(appSource, /timelineRow:[\s\S]*paddingHorizontal: 4/u);
+    assert.match(appSource, /timelineRowCurrent:[\s\S]*marginHorizontal: -18,[\s\S]*paddingHorizontal: 22/u);
+  });
+
   it('renders Route Session as a flat full-width route-first surface', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const componentSource = getRouteSessionComponentSource();

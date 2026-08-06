@@ -6870,6 +6870,8 @@ const styles = StyleSheet.create({
   },
   timelineRowCurrent: {
     backgroundColor: ROUTE_VISUAL_STATE_SURFACES.current,
+    marginHorizontal: -18,
+    paddingHorizontal: 22,
   },
   timelineIndex: {
     backgroundColor: ROUTE_VISUAL_STATE_COLORS.upcoming,
