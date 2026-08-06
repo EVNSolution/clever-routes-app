@@ -29,6 +29,7 @@ export type DriveReleaseFile = {
   id: string;
   name: string;
   sha256?: string;
+  sha256Checksum?: string;
   sourceSha?: string;
 };
 
@@ -173,7 +174,9 @@ export function createAndroidReleasePublicationPlan(input: AndroidReleasePublish
   const fileName = buildVersionedApkFileName(input.apk);
   const sameNameFiles = input.drive.existingFiles.filter((file) => file.name === fileName);
   const conflictingFile = sameNameFiles.find((file) => (
-    file.sha256 !== input.apk?.sha256 || file.sourceSha !== input.apk?.sourceSha
+    file.sha256 !== input.apk?.sha256
+    || file.sha256Checksum !== input.apk?.sha256
+    || file.sourceSha !== input.apk?.sourceSha
   ));
   if (conflictingFile !== undefined) {
     throw new Error(`Drive already contains ${fileName} with different or unverifiable checksum/provenance; refusing conflicting retry.`);
@@ -219,6 +222,34 @@ export function createAndroidReleasePublicationPlan(input: AndroidReleasePublish
         : [`existing Drive APK ${fileName} with matching checksum/provenance will be reused`]),
     ],
   };
+}
+
+export function isAlreadyPublishedCandidate(input: {
+  apk: AndroidApkMetadata;
+  currentRelease: PublicAndroidRelease | undefined;
+  currentSha256: string | undefined;
+  expectedMinimumVersionCode: number;
+  publicInstallUrl: string;
+}): boolean {
+  if (input.currentRelease?.latestVersionCode !== input.apk.versionCode) {
+    return false;
+  }
+  if (input.currentRelease.platform !== 'android') {
+    throw new Error('same versionCode is published for a non-Android platform.');
+  }
+  if (input.currentRelease.latestVersionName !== input.apk.versionName) {
+    throw new Error('same versionCode has a different versionName.');
+  }
+  if (input.currentRelease.installUrl !== input.publicInstallUrl) {
+    throw new Error('same versionCode has a different public install URL.');
+  }
+  if (input.currentRelease.minimumSupportedVersionCode !== input.expectedMinimumVersionCode) {
+    throw new Error('same versionCode has a different minimum supported versionCode.');
+  }
+  if (input.currentSha256 !== input.apk.sha256) {
+    throw new Error('same versionCode has different APK contents.');
+  }
+  return true;
 }
 
 function createLegacyBootstrapPlan(

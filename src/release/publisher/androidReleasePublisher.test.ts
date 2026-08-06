@@ -6,6 +6,7 @@ import {
   buildSsmPublishCommand,
   buildVersionedApkFileName,
   createAndroidReleasePublicationPlan,
+  isAlreadyPublishedCandidate,
   parseAaptBadging,
   type AndroidApkMetadata,
   type AndroidReleasePublisherInput,
@@ -143,6 +144,7 @@ describe('Android release publisher planning', () => {
           id: 'orphan-file-9',
           name: 'com.evnsolution.clever.routes-1.1.2-9.apk',
           sha256,
+          sha256Checksum: sha256,
           sourceSha: source.headSha,
         }],
         folderId: '15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ',
@@ -156,6 +158,21 @@ describe('Android release publisher planning', () => {
     assert.match(plan.ssmCommand.join(' '), /--download-url 'https:\/\/drive\.usercontent\.google\.com\/download\?id=orphan-file-9&export=download&confirm=t'/u);
   });
 
+  it('rejects Drive orphan reuse when server-computed bytes do not match mutable metadata', () => {
+    assert.throws(() => createAndroidReleasePublicationPlan(publishInput({
+      drive: {
+        existingFiles: [{
+          id: 'tampered-file-9',
+          name: 'com.evnsolution.clever.routes-1.1.2-9.apk',
+          sha256,
+          sha256Checksum: 'b'.repeat(64),
+          sourceSha: source.headSha,
+        }],
+        folderId: '15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ',
+      },
+    })), /different or unverifiable checksum\/provenance/u);
+  });
+
   it('rejects mixed same-name Drive duplicates unless every duplicate has matching checksum and provenance', () => {
     assert.throws(() => createAndroidReleasePublicationPlan(publishInput({
       drive: {
@@ -164,6 +181,7 @@ describe('Android release publisher planning', () => {
             id: 'matching-file-9',
             name: 'com.evnsolution.clever.routes-1.1.2-9.apk',
             sha256,
+            sha256Checksum: sha256,
             sourceSha: source.headSha,
           },
           {
@@ -182,12 +200,14 @@ describe('Android release publisher planning', () => {
             id: 'matching-file-9-a',
             name: 'com.evnsolution.clever.routes-1.1.2-9.apk',
             sha256,
+            sha256Checksum: sha256,
             sourceSha: source.headSha,
           },
           {
             id: 'matching-file-9-b',
             name: 'com.evnsolution.clever.routes-1.1.2-9.apk',
             sha256,
+            sha256Checksum: sha256,
             sourceSha: source.headSha,
           },
         ],
@@ -197,6 +217,50 @@ describe('Android release publisher planning', () => {
 
     assert.equal(plan.needsDriveUpload, false);
     assert.equal(plan.driveFileId, 'matching-file-9-a');
+  });
+
+  it('treats an identical public candidate as a successful retry after an unknown SSM outcome', () => {
+    assert.equal(isAlreadyPublishedCandidate({
+      apk,
+      currentRelease: {
+        installUrl: 'https://delivery.example.com/routes-app',
+        latestVersionCode: apk.versionCode,
+        latestVersionName: apk.versionName,
+        minimumSupportedVersionCode: 8,
+        platform: 'android',
+      },
+      currentSha256: apk.sha256,
+      expectedMinimumVersionCode: 8,
+      publicInstallUrl: 'https://delivery.example.com/routes-app',
+    }), true);
+
+    assert.throws(() => isAlreadyPublishedCandidate({
+      apk,
+      currentRelease: {
+        installUrl: 'https://delivery.example.com/routes-app',
+        latestVersionCode: apk.versionCode,
+        latestVersionName: apk.versionName,
+        minimumSupportedVersionCode: 8,
+        platform: 'android',
+      },
+      currentSha256: 'b'.repeat(64),
+      expectedMinimumVersionCode: 8,
+      publicInstallUrl: 'https://delivery.example.com/routes-app',
+    }), /same versionCode has different APK contents/u);
+
+    assert.throws(() => isAlreadyPublishedCandidate({
+      apk,
+      currentRelease: {
+        installUrl: 'https://delivery.example.com/routes-app',
+        latestVersionCode: apk.versionCode,
+        latestVersionName: apk.versionName,
+        minimumSupportedVersionCode: 8,
+        platform: 'android',
+      },
+      currentSha256: apk.sha256,
+      expectedMinimumVersionCode: 9,
+      publicInstallUrl: 'https://delivery.example.com/routes-app',
+    }), /same versionCode has a different minimum supported versionCode/u);
   });
 
   it('keeps the public installUrl stable while SSM receives the Drive backing URL', () => {

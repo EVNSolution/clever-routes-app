@@ -6,6 +6,7 @@ import {
   buildDriveDownloadUrl,
   buildVersionedApkFileName,
   createAndroidReleasePublicationPlan,
+  isAlreadyPublishedCandidate,
   parseAaptBadging,
   validateReleaseSource,
   type AndroidApkMetadata,
@@ -34,6 +35,7 @@ type CliArgs = {
 const approvedDriveFolderId = '15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ';
 const builtApkPath = 'android/app/build/outputs/apk/release/app-release.apk';
 const legacyDriveFileId = '1sqfU_D40iMenCGWQ6F3dZYb875i1jbe2';
+const officialSourceBranches = new Set(['dev', 'main']);
 const ssmServiceTagKey = 'Service';
 const ssmServiceTagValue = 'clever-delivery-server';
 const supportedOptions = new Set([
@@ -66,6 +68,27 @@ async function main(): Promise<void> {
     }
     source = sourceAfterBuild;
     apk = await readApkMetadata(builtApkPath, source.headSha);
+    const publicInstallUrl = `${trimTrailingSlash(args.deliveryServerBaseUrl)}/routes-app`;
+    if (currentRelease?.latestVersionCode === apk.versionCode) {
+      const currentSha256 = await downloadSha256(`${publicInstallUrl}/download`);
+      const expectedMinimumVersionCode = args.minimumVersionCode ?? currentRelease.minimumSupportedVersionCode;
+      if (isAlreadyPublishedCandidate({
+        apk,
+        currentRelease,
+        currentSha256,
+        expectedMinimumVersionCode,
+        publicInstallUrl,
+      })) {
+        console.log(JSON.stringify({
+          alreadyPublished: true,
+          dryRun: !args.execute,
+          release: currentRelease,
+          sha256: currentSha256,
+          source,
+        }, null, 2));
+        return;
+      }
+    }
   }
   const plan = createAndroidReleasePublicationPlan({
     apk,
@@ -122,6 +145,7 @@ async function main(): Promise<void> {
           id: extractDriveFileId(downloadUrl),
           name: requireValue(plan.driveFileName, 'Drive file name is required.'),
           sha256: apk?.sha256 ?? args.apkSha256,
+          sha256Checksum: apk?.sha256 ?? args.apkSha256,
           sourceSha: apk?.sourceSha,
         }] : []),
       ],
@@ -190,12 +214,24 @@ function parseArgs(argv: string[]): CliArgs {
 
 function readSourceState(): ReleaseSourceState {
   const branch = git('branch', '--show-current');
+  const remoteHeadSha = officialSourceBranches.has(branch)
+    ? readRemoteHeadSha(branch)
+    : '';
   return {
     branch,
     clean: git('status', '--porcelain') === '',
     headSha: git('rev-parse', 'HEAD'),
-    remoteHeadSha: git('rev-parse', `origin/${branch}`),
+    remoteHeadSha,
   };
+}
+
+function readRemoteHeadSha(branch: string): string {
+  const output = git('ls-remote', '--exit-code', 'origin', `refs/heads/${branch}`);
+  const matches = output.split('\n').filter((line) => line.endsWith(`\trefs/heads/${branch}`));
+  if (matches.length !== 1) {
+    throw new Error(`origin/${branch} did not resolve to exactly one remote head.`);
+  }
+  return matches[0].split(/\s+/u)[0];
 }
 
 async function readApkMetadata(apkPath: string, sourceSha: string): Promise<AndroidApkMetadata> {

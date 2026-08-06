@@ -67,15 +67,22 @@ Do not add final store listing copy, screenshots, signing ownership, or public l
   verification also hashes the response stream without buffering the full APK.
 - If Drive upload succeeds but SSM/server publish fails, the versioned Drive
   APK can be left as an orphan. A retry with the same APK reuses the existing
-  Drive file only when every same-name entry has the matching recorded sha256
-  and sourceSha. Any same-name file with missing or different checksum or
-  provenance is treated as a conflicting retry and must be resolved manually
-  outside the publisher before execution continues.
+  Drive file only when every same-name entry has the matching Drive-computed
+  byte checksum, recorded sha256, and sourceSha. Any same-name file with missing
+  or different checksum or provenance is treated as a conflicting retry and
+  must be resolved manually outside the publisher before execution continues.
   In execute mode, before SSM publish, the publisher inspects the selected Drive
   file permissions and creates `anyone:reader` only when absent, including for a
   reused same-checksum orphan. Dry-run does not mutate permissions.
   Drive listing requests page through the whole approved folder so duplicate
   immutable filenames are not missed after the first page.
+- Source validation resolves the live `origin/dev` or `origin/main` head with
+  `git ls-remote` before and after the build, so a stale local remote-tracking
+  ref cannot authorize a release.
+- If an earlier SSM command succeeded but the publisher lost its result, a
+  retry recognizes the same public version, install URL, and streamed APK
+  checksum as already published and exits successfully without another server
+  mutation.
 - The publisher treats `aws ssm send-command` as asynchronous. It captures the
   command id, waits for `command-executed`, checks the command invocation status,
   then verifies the public `/routes-app/release/android` manifest and anonymous

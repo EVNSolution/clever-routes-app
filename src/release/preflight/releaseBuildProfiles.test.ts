@@ -115,6 +115,7 @@ test('exposes one reviewed direct Android publisher command', () => {
   assert.match(publisherSource, /ap-northeast-2/u);
   assert.match(publisherSource, /Service/u);
   assert.match(publisherSource, /clever-delivery-server/u);
+  assert.match(publisherSource, /ls-remote/u);
   assert.doesNotMatch(publisherSource, /readFileSync|arrayBuffer|--ssm-instance-id|uploadType=multipart/u);
 });
 

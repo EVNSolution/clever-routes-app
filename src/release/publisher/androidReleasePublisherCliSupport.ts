@@ -190,7 +190,7 @@ export async function listDriveFiles(
 
   do {
     const params = new URLSearchParams({
-      fields: 'nextPageToken,files(id,name,appProperties)',
+      fields: 'nextPageToken,files(id,name,sha256Checksum,appProperties)',
       pageSize: '1000',
       q: `'${input.folderId}' in parents and trashed=false`,
     });
@@ -205,7 +205,12 @@ export async function listDriveFiles(
       throw new Error(`Drive folder listing failed with HTTP ${response.status}.`);
     }
     const body = await response.json() as {
-      files?: { appProperties?: { sha256?: string; sourceSha?: string }; id?: string; name?: string }[];
+      files?: {
+        appProperties?: { sha256?: string; sourceSha?: string };
+        id?: string;
+        name?: string;
+        sha256Checksum?: string;
+      }[];
       nextPageToken?: string;
     };
 
@@ -217,6 +222,7 @@ export async function listDriveFiles(
         id: file.id,
         name: file.name,
         sha256: file.appProperties?.sha256,
+        ...(file.sha256Checksum === undefined ? {} : { sha256Checksum: file.sha256Checksum }),
         ...(file.appProperties?.sourceSha === undefined ? {} : { sourceSha: file.appProperties.sourceSha }),
       }];
     }) ?? []));

@@ -53,11 +53,11 @@ describe('Android release publisher CLI support', () => {
         return {
           json: async () => pageToken === null
             ? {
-                files: [{ id: 'first', name: 'old.apk', appProperties: { sha256: 'old-sha' } }],
+                files: [{ id: 'first', name: 'old.apk', sha256Checksum: 'old-bytes', appProperties: { sha256: 'old-sha' } }],
                 nextPageToken: 'page-2',
               }
             : {
-                files: [{ id: 'duplicate', name: 'com.evnsolution.clever.routes-1.1.2-9.apk', appProperties: { sha256: 'new-sha' } }],
+                files: [{ id: 'duplicate', name: 'com.evnsolution.clever.routes-1.1.2-9.apk', sha256Checksum: 'new-bytes', appProperties: { sha256: 'new-sha' } }],
               },
           ok: true,
           status: 200,
@@ -71,8 +71,8 @@ describe('Android release publisher CLI support', () => {
     assert.equal(new URL(requestedUrls[0]).searchParams.get('pageSize'), '1000');
     assert.equal(new URL(requestedUrls[1]).searchParams.get('pageToken'), 'page-2');
     assert.deepEqual(files, [
-      { id: 'first', name: 'old.apk', sha256: 'old-sha' },
-      { id: 'duplicate', name: 'com.evnsolution.clever.routes-1.1.2-9.apk', sha256: 'new-sha' },
+      { id: 'first', name: 'old.apk', sha256: 'old-sha', sha256Checksum: 'old-bytes' },
+      { id: 'duplicate', name: 'com.evnsolution.clever.routes-1.1.2-9.apk', sha256: 'new-sha', sha256Checksum: 'new-bytes' },
     ]);
   });
 
