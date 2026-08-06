@@ -161,7 +161,7 @@ describe('route session current task behavior', () => {
 
   it('keeps Store information out of Stops and lists delivery addresses only', () => {
     const componentSource = getRouteSessionComponentSource();
-    const sequenceStart = componentSource.indexOf('<Text style={styles.sectionTitle}>Stops</Text>');
+    const sequenceStart = componentSource.indexOf("{selectedRouteContent === 'stops' ? (");
     const sequenceEnd = componentSource.indexOf("{routeStartedEventResult?.kind === 'recorded'", sequenceStart);
     const sequenceSource = componentSource.slice(sequenceStart, sequenceEnd);
 
@@ -424,6 +424,19 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /routeSessionSection:[\s\S]*paddingHorizontal: 18/u);
     assert.match(appSource, /timelineRow:[\s\S]*paddingHorizontal: 4/u);
     assert.match(appSource, /timelineRowCurrent:[\s\S]*marginHorizontal: -18,[\s\S]*paddingHorizontal: 22/u);
+  });
+
+  it('switches between touch-safe Stops and Inventory content without changing Stops rows', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const componentSource = getRouteSessionComponentSource();
+
+    assert.match(componentSource, /const \[selectedRouteContent, setSelectedRouteContent\] = useState<RouteSessionContentTab>\('stops'\)/u);
+    assert.match(componentSource, /accessibilityRole="tab"[\s\S]*accessibilityState=\{\{ selected: selectedRouteContent === 'stops' \}\}[\s\S]*>Stops</u);
+    assert.match(componentSource, /accessibilityRole="tab"[\s\S]*accessibilityState=\{\{ selected: selectedRouteContent === 'inventory' \}\}[\s\S]*>Inventory</u);
+    assert.match(componentSource, /selectedRouteContent === 'stops' \? \([\s\S]*route\.stops\.map\([\s\S]*\) : \([\s\S]*routeInventory\.groups\.map/u);
+    assert.match(componentSource, /routeInventory\.totalQuantity\} \{routeInventory\.totalQuantity === 1 \? 'Item' : 'Items'\}/u);
+    assert.match(appSource, /routeContentTab:[\s\S]*minHeight: 48/u);
+    assert.match(appSource, /routeInventoryItemRow:[\s\S]*minHeight: 48/u);
   });
 
   it('renders Route Session as a flat full-width route-first surface', () => {
