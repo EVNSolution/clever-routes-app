@@ -2135,6 +2135,16 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - Render those components as a direct vertical sequence. Text-heavy sections may retain internal reading padding and thin separators, but not outer margins, rounded shells, or shadows.
 - Keep `View Live` as the dedicated live GPS surface while the inline Route Session map remains directly gesture-operable.
 
+## Route Session Stops and Inventory (2026-08-06)
+
+- Use one equal-width `Stops | Inventory` tab control inside the existing flat Route Session section. `Stops` is selected by default.
+- Keep each tab at least 48 px high so the control remains touch-safe without adding a tall card or extra section heading.
+- Preserve the existing Stops row positions and full-width Current background when switching back from Inventory.
+- Show Inventory as a read-only loading manifest grouped in route/stop order. Keep the order name and stop number together so duplicate products at different deliveries do not lose their destination context.
+- Show the total assigned item quantity above the manifest. Use singular `Item` only when the total is one.
+- Keep inventory item rows at a 48 px minimum height with a fixed quantity column and wrapping product content. Long names and options may grow the row instead of clipping.
+- When the route has no items, keep the tab control visible and show a compact truthful empty state instead of collapsing the section.
+
 ## Current Task Actions
 
 - Before a route starts, let one full-width `Start Session` primary button occupy the task area without a separate pickup task card. Starting the session transitions directly to Stop 1.

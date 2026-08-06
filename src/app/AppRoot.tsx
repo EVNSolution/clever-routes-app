@@ -168,6 +168,7 @@ import { formatRouteListUpdatedAt } from './routeListBehavior';
 import { readDriverMapStyleUrl } from './routeMapGeoJson';
 import { ROUTE_VISUAL_STATE_COLORS, ROUTE_VISUAL_STATE_SURFACES } from './routeVisualState';
 import { splitStopItemName } from './stopItemDisplay';
+import { buildRouteInventory } from './routeInventory';
 import {
   getDriverRouteNotificationNavigation,
   getStopArrivalNotificationCandidate,
@@ -207,6 +208,7 @@ type RouteSyncState = 'error' | 'idle' | 'loading' | 'ready';
 type RouteRecoveryRefreshReason = 'driver_access_expired' | 'pickup_eta_snapshot_synced' | 'route_not_in_progress';
 type BackgroundLocationPermissionState = BackgroundPermissionResult | 'checking';
 type CompletedDeliveriesFilter = 'all' | 'delivered' | 'issues';
+type RouteSessionContentTab = 'inventory' | 'stops';
 type StopDetailsReturnScreen = 'completedDeliveries' | 'routeSession';
 type ArrivalCheckReturnScreen = 'routeSession' | 'stopDetails';
 type PendingDriverRouteNotification = {
@@ -4457,6 +4459,7 @@ function RouteSessionScreen({
   stop: AssignedRouteStop | null;
 }) {
   const isPickupTask = routeStatus === 'active' && currentNavigationStepIndex === COMPANY_STEP_INDEX;
+  const [selectedRouteContent, setSelectedRouteContent] = useState<RouteSessionContentTab>('stops');
   const [pickupTimingNow, setPickupTimingNow] = useState(() => Date.now());
   useEffect(() => {
     if (!isPickupTask) {
@@ -4471,6 +4474,7 @@ function RouteSessionScreen({
     };
   }, [isPickupTask]);
   const pickupTiming = formatAssignedRoutePickupTiming(route, pickupTimingNow);
+  const routeInventory = buildRouteInventory(route);
   const currentTaskTitle = isPickupTask ? 'Store Pickup' : stop === null ? 'Next Stop' : `Stop ${stop.sequence}`;
   const currentTaskAddress = stop === null ? null : formatStopSearchAddress(stop);
   const currentTaskGuidance = isPickupTask && company?.pickupGuidance?.trim()
@@ -4603,27 +4607,89 @@ function RouteSessionScreen({
       ) : null}
 
       <View style={styles.routeSessionSection}>
-        <Text style={styles.sectionTitle}>Stops</Text>
-        <View style={styles.routeSequenceList}>
-          {route.stops.map((stop, index) => {
-            const completed = completedStopIds.includes(stop.deliveryStopId);
-            const isProcessing = routeStatus === 'active' && currentNavigationStepIndex === index + 1 && !completed;
-            const state = completed ? 'completed' : isProcessing ? 'current' : 'upcoming';
-            const progressMeta = completed ? 'Done' : isProcessing ? 'Current' : undefined;
-            const metaTone = completed ? 'neutral' : isProcessing ? 'green' : 'neutral';
-            return (
-              <TimelineRow
-                key={stop.deliveryStopId}
-                marker={String(stop.sequence).padStart(2, '0')}
-                title={formatStopStreetAddress(stop)}
-                state={state}
-                meta={progressMeta}
-                metaTone={metaTone}
-                onPress={() => onOpenStop(stop)}
-              />
-            );
-          })}
+        <View style={styles.routeContentTabs}>
+          <Pressable
+            accessibilityRole="tab"
+            accessibilityState={{ selected: selectedRouteContent === 'stops' }}
+            onPress={() => setSelectedRouteContent('stops')}
+            style={[styles.routeContentTab, selectedRouteContent === 'stops' && styles.routeContentTabActive]}
+          >
+            <Text style={[styles.routeContentTabText, selectedRouteContent === 'stops' && styles.routeContentTabTextActive]}>Stops</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="tab"
+            accessibilityState={{ selected: selectedRouteContent === 'inventory' }}
+            onPress={() => setSelectedRouteContent('inventory')}
+            style={[styles.routeContentTab, selectedRouteContent === 'inventory' && styles.routeContentTabActive]}
+          >
+            <Text style={[styles.routeContentTabText, selectedRouteContent === 'inventory' && styles.routeContentTabTextActive]}>Inventory</Text>
+          </Pressable>
         </View>
+        {selectedRouteContent === 'stops' ? (
+          <View style={styles.routeSequenceList}>
+            {route.stops.map((stop, index) => {
+              const completed = completedStopIds.includes(stop.deliveryStopId);
+              const isProcessing = routeStatus === 'active' && currentNavigationStepIndex === index + 1 && !completed;
+              const state = completed ? 'completed' : isProcessing ? 'current' : 'upcoming';
+              const progressMeta = completed ? 'Done' : isProcessing ? 'Current' : undefined;
+              const metaTone = completed ? 'neutral' : isProcessing ? 'green' : 'neutral';
+              return (
+                <TimelineRow
+                  key={stop.deliveryStopId}
+                  marker={String(stop.sequence).padStart(2, '0')}
+                  title={formatStopStreetAddress(stop)}
+                  state={state}
+                  meta={progressMeta}
+                  metaTone={metaTone}
+                  onPress={() => onOpenStop(stop)}
+                />
+              );
+            })}
+          </View>
+        ) : (
+          <View style={styles.routeInventory}>
+            <View style={styles.routeInventorySummary}>
+              <Text style={styles.sectionTitle}>
+                {routeInventory.totalQuantity} {routeInventory.totalQuantity === 1 ? 'Item' : 'Items'}
+              </Text>
+              <Text style={styles.helperText}>
+                {routeInventory.groups.length} {routeInventory.groups.length === 1 ? 'Order' : 'Orders'}
+              </Text>
+            </View>
+            {routeInventory.groups.length === 0 ? (
+              <EmptyState minimal title="No inventory" body="Assigned route items will appear here." />
+            ) : routeInventory.groups.map((group) => (
+              <View key={group.deliveryStopId} style={styles.routeInventoryGroup}>
+                <View style={styles.routeInventoryGroupHeader}>
+                  <Text style={styles.routeInventoryStop}>Stop {String(group.stopSequence).padStart(2, '0')}</Text>
+                  <Text numberOfLines={1} style={styles.routeInventoryOrder}>{group.orderName}</Text>
+                </View>
+                {group.items.map((item, itemIndex) => {
+                  const itemName = splitStopItemName(item.name);
+                  return (
+                    <View
+                      key={`${item.productId}:${item.variationId}:${item.name}:${itemIndex}`}
+                      style={styles.routeInventoryItemRow}
+                    >
+                      <Text style={styles.routeInventoryItemQuantity}>{item.quantity} EA</Text>
+                      <View style={styles.stopDetailsItemContent}>
+                        <Text style={styles.stopDetailsItemNamePrimary}>{itemName.primary}</Text>
+                        {itemName.secondary === null ? null : (
+                          <Text style={styles.stopDetailsItemNameSecondary}>{itemName.secondary}</Text>
+                        )}
+                        {item.options.length === 0 ? null : (
+                          <Text style={styles.stopDetailsItemOptions}>
+                            {item.options.map((option) => `${option.key}: ${option.value}`).join(', ')}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            ))}
+          </View>
+        )}
       </View>
 
       {routeStartedEventResult?.kind === 'recorded' ? <StatusBanner tone="green" text="Route start event recorded." /> : null}
@@ -6918,6 +6984,86 @@ const styles = StyleSheet.create({
   routeSequenceList: {
     borderTopColor: '#e9ecf1',
     borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  routeContentTabs: {
+    backgroundColor: '#eef0f3',
+    borderRadius: 14,
+    flexDirection: 'row',
+    minHeight: 54,
+    padding: 3,
+  },
+  routeContentTab: {
+    alignItems: 'center',
+    borderColor: 'transparent',
+    borderRadius: 11,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 48,
+    paddingHorizontal: 12,
+  },
+  routeContentTabActive: {
+    backgroundColor: '#ffffff',
+    borderColor: '#d9dee8',
+  },
+  routeContentTabText: {
+    color: '#667085',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+  },
+  routeContentTabTextActive: {
+    color: '#111827',
+    fontWeight: '800',
+  },
+  routeInventory: {
+    borderTopColor: '#e9ecf1',
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  routeInventorySummary: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 52,
+    paddingVertical: 10,
+  },
+  routeInventoryGroup: {
+    borderTopColor: '#e9ecf1',
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  routeInventoryGroupHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 44,
+    paddingVertical: 8,
+  },
+  routeInventoryStop: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  routeInventoryOrder: {
+    color: '#667085',
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  routeInventoryItemRow: {
+    alignItems: 'flex-start',
+    borderTopColor: '#eef2f6',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    minHeight: 48,
+    paddingVertical: 10,
+  },
+  routeInventoryItemQuantity: {
+    color: '#087443',
+    fontSize: 14,
+    fontWeight: '800',
+    lineHeight: 20,
+    width: 58,
   },
   fullScreenMap: {
     flex: 1,
