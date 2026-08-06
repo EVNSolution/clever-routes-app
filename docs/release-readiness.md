@@ -25,9 +25,12 @@ Do not add final store listing copy, screenshots, signing ownership, or public l
   version changes with it.
 - Direct Android publishing uses one reviewed local command:
   `npm run release:android:publish`. Without `-- --execute` it is a dry-run
-  gate and prints the validated upload/SSM plan. Dry-run still checks the
-  approved Drive folder for immutable filename conflicts; it does not upload to
-  Drive, mutate server state, run SSM, or deploy anything.
+  gate and prints the validated upload/SSM plan. For a new release, both dry-run
+  and execute mode clean and build the fixed release output directly from the
+  verified `dev` or `main` commit; arbitrary `--apk` inputs are rejected. Dry-run
+  still checks the approved Drive folder for immutable filename conflicts and
+  resolves the tagged SSM target, but it does not upload to Drive, mutate server
+  state, run SSM, or deploy anything.
 - On startup and when returning to the foreground after the recheck interval,
   the app reads `GET /routes-app/release/android`.
 - The release manifest declares the target Android package ID and the legacy
@@ -55,14 +58,19 @@ Do not add final store listing copy, screenshots, signing ownership, or public l
 - The publisher blocks versionCode rollback and Drive filename conflicts. New
   APKs are uploaded as immutable versioned files under the approved Drive folder
   `15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ`, using the approved active gcloud account
-  `dlajiin@gmail.com`. Uploaded files include Drive `appProperties` for package,
-  versionCode, versionName, and sha256.
+  `dlajiin@gmail.com`. The publisher validates the clean source before and after
+  its fixed release build, streams the APK checksum, and records the verified
+  Git commit as `sourceSha`. Uploaded files include Drive `appProperties` for
+  package, versionCode, versionName, sha256, and sourceSha.
+- Drive publication uses a resumable upload session and streams the APK instead
+  of constructing an in-memory multipart body. Anonymous post-publish checksum
+  verification also hashes the response stream without buffering the full APK.
 - If Drive upload succeeds but SSM/server publish fails, the versioned Drive
   APK can be left as an orphan. A retry with the same APK reuses the existing
-  Drive file only when every same-name entry has the matching recorded sha256.
-  Any same-name file with a missing or different sha256 is treated as a
-  conflicting retry and must be resolved manually outside the publisher before
-  execution continues.
+  Drive file only when every same-name entry has the matching recorded sha256
+  and sourceSha. Any same-name file with missing or different checksum or
+  provenance is treated as a conflicting retry and must be resolved manually
+  outside the publisher before execution continues.
   In execute mode, before SSM publish, the publisher inspects the selected Drive
   file permissions and creates `anyone:reader` only when absent, including for a
   reused same-checksum orphan. Dry-run does not mutate permissions.
@@ -75,6 +83,11 @@ Do not add final store listing copy, screenshots, signing ownership, or public l
   `/srv/clever-route-server` with
   `docker compose --env-file .deploy/current-image.env -f infra/compose/docker-compose.prod.yml exec -T clever-route-api node dist/scripts/publish-routes-app-release.js`.
   AWS parameters are sent as JSON rather than hand-interpolated shell text.
+- The publisher defaults to `ap-northeast-2` and discovers the target through
+  the `Service=clever-delivery-server` SSM tag. Publication fails closed unless
+  exactly one tagged managed instance exists and reports `Online`; callers do
+  not supply an instance ID. The public delivery origin defaults to
+  `https://clever-route.cleversystem.ai`.
 - When discovering the current public release before publication, only HTTP 404
   is treated as absent/unbootstrapped state. Network, 5xx, and malformed
   response failures abort publication instead of silently bypassing rollback
@@ -92,21 +105,18 @@ Do not add final store listing copy, screenshots, signing ownership, or public l
 Dry-run example for a new APK:
 
 ```bash
-npm run release:android:publish -- \
-  --apk android/app/build/outputs/apk/release/app-release.apk \
-  --ssm-instance-id <running-server-instance-id> \
-  --delivery-server-base-url https://<delivery-server-origin>
+npm run release:android:publish
 ```
 
 Execution is intentionally explicit and owner-controlled:
 
 ```bash
 npm run release:android:publish -- \
-  --execute \
-  --apk android/app/build/outputs/apk/release/app-release.apk \
-  --ssm-instance-id <running-server-instance-id> \
-  --delivery-server-base-url https://<delivery-server-origin>
+  --execute
 ```
+
+`--ssm-region` and `--delivery-server-base-url` remain explicit environment
+overrides; the instance itself is always selected by the reviewed service tag.
 
 ## Native build profile matrix
 

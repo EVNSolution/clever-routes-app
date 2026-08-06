@@ -1,12 +1,147 @@
-import type { DriveReleaseFile, PublicAndroidRelease } from './androidReleasePublisher';
+import { createHash } from 'node:crypto';
+import { createReadStream, statSync } from 'node:fs';
+import { Readable } from 'node:stream';
+
+import type { AndroidApkMetadata, DriveReleaseFile, PublicAndroidRelease } from './androidReleasePublisher';
 
 type FetchResponse = {
+  body?: ReadableStream<Uint8Array> | null;
+  headers?: Headers;
   json: () => Promise<unknown>;
   ok: boolean;
   status: number;
 };
 
-type FetchLike = (url: string, init?: RequestInit) => Promise<FetchResponse>;
+type StreamingRequestInit = RequestInit & { duplex?: 'half' };
+type FetchLike = (url: string, init?: StreamingRequestInit) => Promise<FetchResponse>;
+
+export type SsmTarget = {
+  instanceId?: string;
+  pingStatus?: string;
+};
+
+export function selectSingleOnlineSsmTarget(targets: SsmTarget[]): string {
+  if (targets.length !== 1) {
+    throw new Error(`expected one SSM target; got ${targets.length}`);
+  }
+  const target = targets[0];
+  if (target.instanceId === undefined || target.instanceId === '') {
+    throw new Error('SSM target instance ID is missing.');
+  }
+  if (target.pingStatus !== 'Online') {
+    throw new Error(`SSM target is not online: ${target.instanceId}`);
+  }
+  return target.instanceId;
+}
+
+export async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk as Buffer);
+  }
+  return hash.digest('hex');
+}
+
+export async function sha256ResponseBody(body: ReadableStream<Uint8Array>): Promise<string> {
+  const hash = createHash('sha256');
+  const reader = body.getReader();
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        return hash.digest('hex');
+      }
+      hash.update(chunk.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export async function uploadDriveFileResumable(input: {
+  apk: AndroidApkMetadata;
+  apkPath: string;
+  fetchImpl?: FetchLike;
+  fileName: string;
+  folderId: string;
+  token: string;
+}): Promise<string> {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const size = statSync(input.apkPath).size;
+  const metadata = {
+    appProperties: {
+      packageName: input.apk.packageName,
+      sha256: input.apk.sha256,
+      sourceSha: input.apk.sourceSha,
+      versionCode: String(input.apk.versionCode),
+      versionName: input.apk.versionName,
+    },
+    mimeType: 'application/vnd.android.package-archive',
+    name: input.fileName,
+    parents: [input.folderId],
+  };
+  const sessionResponse = await fetchImpl(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,size,sha256Checksum,appProperties',
+    {
+      body: JSON.stringify(metadata),
+      headers: {
+        Authorization: `Bearer ${input.token}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Length': String(size),
+        'X-Upload-Content-Type': 'application/vnd.android.package-archive',
+      },
+      method: 'POST',
+    },
+  );
+  if (!sessionResponse.ok) {
+    throw new Error(`Drive resumable upload initialization failed with HTTP ${sessionResponse.status}.`);
+  }
+  const uploadUrl = sessionResponse.headers?.get('location');
+  if (uploadUrl === null || uploadUrl === undefined || !isApprovedDriveUploadUrl(uploadUrl)) {
+    throw new Error('Drive resumable upload did not return an approved session URL.');
+  }
+
+  const body = Readable.toWeb(createReadStream(input.apkPath)) as ReadableStream<Uint8Array>;
+  const uploadResponse = await fetchImpl(uploadUrl, {
+    body: body as BodyInit,
+    duplex: 'half',
+    headers: {
+      'Content-Length': String(size),
+      'Content-Type': 'application/vnd.android.package-archive',
+    },
+    method: 'PUT',
+  });
+  if (!uploadResponse.ok) {
+    throw new Error(`Drive APK upload failed with HTTP ${uploadResponse.status}.`);
+  }
+  const uploaded = await uploadResponse.json() as {
+    appProperties?: { sha256?: string; sourceSha?: string };
+    id?: string;
+    sha256Checksum?: string;
+  };
+  if (uploaded.sha256Checksum !== input.apk.sha256 || uploaded.appProperties?.sha256 !== input.apk.sha256) {
+    throw new Error('Drive upload checksum does not match the locally built APK.');
+  }
+  if (uploaded.appProperties.sourceSha !== input.apk.sourceSha) {
+    throw new Error('Drive upload provenance does not match the verified source commit.');
+  }
+  if (uploaded.id === undefined || uploaded.id === '') {
+    throw new Error('Drive upload did not return a file id.');
+  }
+  return uploaded.id;
+}
+
+function isApprovedDriveUploadUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:'
+      && url.hostname === 'www.googleapis.com'
+      && (url.pathname === '/upload/drive/v3/files' || url.pathname.startsWith('/upload/drive/v3/files/'))
+      && url.searchParams.has('upload_id');
+  } catch {
+    return false;
+  }
+}
 
 export async function fetchOptionalRelease(
   baseUrl: string,
@@ -70,7 +205,7 @@ export async function listDriveFiles(
       throw new Error(`Drive folder listing failed with HTTP ${response.status}.`);
     }
     const body = await response.json() as {
-      files?: { appProperties?: { sha256?: string }; id?: string; name?: string }[];
+      files?: { appProperties?: { sha256?: string; sourceSha?: string }; id?: string; name?: string }[];
       nextPageToken?: string;
     };
 
@@ -82,6 +217,7 @@ export async function listDriveFiles(
         id: file.id,
         name: file.name,
         sha256: file.appProperties?.sha256,
+        ...(file.appProperties?.sourceSha === undefined ? {} : { sourceSha: file.appProperties.sourceSha }),
       }];
     }) ?? []));
     pageToken = body.nextPageToken;

@@ -1,9 +1,13 @@
-export type AndroidApkMetadata = {
+export type AndroidApkBinaryMetadata = {
   appName: string;
   packageName: string;
   sha256: string;
   versionCode: number;
   versionName: string;
+};
+
+export type AndroidApkMetadata = AndroidApkBinaryMetadata & {
+  sourceSha: string;
 };
 
 export type ReleaseSourceState = {
@@ -25,6 +29,7 @@ export type DriveReleaseFile = {
   id: string;
   name: string;
   sha256?: string;
+  sourceSha?: string;
 };
 
 export type AndroidReleasePublisherInput = {
@@ -68,7 +73,7 @@ const legacyDriveFileId = '1sqfU_D40iMenCGWQ6F3dZYb875i1jbe2';
 const legacyVersionCode = 8;
 const legacyVersionName = '1.1.1';
 
-export function parseAaptBadging(output: string, sha256: string): AndroidApkMetadata {
+export function parseAaptBadging(output: string, sha256: string): AndroidApkBinaryMetadata {
   const packageMatch = output.match(/package:\s+name='([^']+)'\s+versionCode='(\d+)'\s+versionName='([^']+)'/u);
   const appNameMatch = output.match(/application-label(?:-[^:]+)?:'([^']+)'/u);
 
@@ -89,7 +94,7 @@ export function parseAaptBadging(output: string, sha256: string): AndroidApkMeta
   };
 }
 
-export function buildVersionedApkFileName(apk: AndroidApkMetadata): string {
+export function buildVersionedApkFileName(apk: AndroidApkBinaryMetadata): string {
   return `${apk.packageName}-${apk.versionName}-${apk.versionCode}.apk`;
 }
 
@@ -136,8 +141,17 @@ export function buildSsmPublishCommand(input: {
 
 export function createAndroidReleasePublicationPlan(input: AndroidReleasePublisherInput): AndroidReleasePublicationPlan {
   const validations: string[] = [];
-  validateSource(input.source);
+  validateReleaseSource(input.source);
   validations.push(`source ${input.source.branch}@${input.source.headSha} matches origin/${input.source.branch}`);
+
+  if (input.mode === 'publish') {
+    if (input.apk === undefined) {
+      throw new Error('publish mode requires APK metadata.');
+    }
+    validateApk(input.apk);
+    validateApkProvenance(input.apk, input.source);
+    validations.push(`APK provenance matches source ${input.source.headSha}`);
+  }
 
   if (input.gcloudAccount !== approvedGcloudAccount) {
     throw new Error(`gcloud account must be ${approvedGcloudAccount}.`);
@@ -156,13 +170,13 @@ export function createAndroidReleasePublicationPlan(input: AndroidReleasePublish
   if (input.apk === undefined) {
     throw new Error('publish mode requires APK metadata.');
   }
-
-  validateApk(input.apk);
   const fileName = buildVersionedApkFileName(input.apk);
   const sameNameFiles = input.drive.existingFiles.filter((file) => file.name === fileName);
-  const conflictingFile = sameNameFiles.find((file) => file.sha256 !== input.apk?.sha256);
+  const conflictingFile = sameNameFiles.find((file) => (
+    file.sha256 !== input.apk?.sha256 || file.sourceSha !== input.apk?.sourceSha
+  ));
   if (conflictingFile !== undefined) {
-    throw new Error(`Drive already contains ${fileName} with a different or unverifiable sha256; refusing conflicting retry.`);
+    throw new Error(`Drive already contains ${fileName} with different or unverifiable checksum/provenance; refusing conflicting retry.`);
   }
 
   validateVersionAdvance(input.currentRelease, input.apk.versionCode);
@@ -202,7 +216,7 @@ export function createAndroidReleasePublicationPlan(input: AndroidReleasePublish
       ...validations,
       ...(driveFileId === undefined
         ? []
-        : [`existing Drive APK ${fileName} with matching sha256 will be reused`]),
+        : [`existing Drive APK ${fileName} with matching checksum/provenance will be reused`]),
     ],
   };
 }
@@ -247,7 +261,7 @@ function createLegacyBootstrapPlan(
   };
 }
 
-function validateSource(source: ReleaseSourceState): void {
+export function validateReleaseSource(source: ReleaseSourceState): void {
   if (!officialSourceBranches.has(source.branch)) {
     throw new Error(`branch "${source.branch || 'detached HEAD'}" is not an official release source.`);
   }
@@ -256,6 +270,12 @@ function validateSource(source: ReleaseSourceState): void {
   }
   if (source.headSha !== source.remoteHeadSha) {
     throw new Error(`local ${source.branch} does not match origin/${source.branch}.`);
+  }
+}
+
+function validateApkProvenance(apk: AndroidApkMetadata, source: ReleaseSourceState): void {
+  if (apk.sourceSha !== source.headSha) {
+    throw new Error(`APK provenance does not match verified source ${source.headSha}.`);
   }
 }
 
