@@ -94,7 +94,7 @@ export function buildVersionedApkFileName(apk: AndroidApkMetadata): string {
 }
 
 export function buildDriveDownloadUrl(fileId: string): string {
-  return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
+  return `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`;
 }
 
 export function buildSsmPublishCommand(input: {
