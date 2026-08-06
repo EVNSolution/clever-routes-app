@@ -3,7 +3,7 @@
     "name": "CLEVER Routes",
     "slug": "clever-routes-app",
     "scheme": "clever-routes",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "com.evnsolution.clever.routes",
-      "versionCode": 8,
+      "versionCode": 9,
       "icon": "./assets/icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
