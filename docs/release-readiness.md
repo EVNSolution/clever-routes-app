@@ -23,6 +23,11 @@ Do not add final store listing copy, screenshots, signing ownership, or public l
 
 - Every directly distributed APK increments Android `versionCode`; display
   version changes with it.
+- Direct Android publishing uses one reviewed local command:
+  `npm run release:android:publish`. Without `-- --execute` it is a dry-run
+  gate and prints the validated upload/SSM plan. Dry-run still checks the
+  approved Drive folder for immutable filename conflicts; it does not upload to
+  Drive, mutate server state, run SSM, or deploy anything.
 - On startup and when returning to the foreground after the recheck interval,
   the app reads `GET /routes-app/release/android`.
 - The release manifest declares the target Android package ID and the legacy
@@ -37,7 +42,9 @@ Do not add final store listing copy, screenshots, signing ownership, or public l
   instead opens the server-provided `/driver-app` guide, which explains that
   the new app must be installed, signed into again, and verified before the
   previous app is removed. The app never receives or stores the backing Google
-  Drive URL.
+  Drive URL. The SSM server publisher receives the Drive backing URL through
+  `--download-url`; the public manifest `installUrl` remains the server-owned
+  stable `/routes-app` URL.
 - Legacy builds continue to discover the release through
   `GET /driver-app/release/android`; the server returns the same canonical
   manifest and install guide.
@@ -45,10 +52,61 @@ Do not add final store listing copy, screenshots, signing ownership, or public l
   `minimumSupportedVersionCode` from deployment environment values. Advance the
   published latest version only after the replacement APK has been uploaded and
   verified.
+- The publisher blocks versionCode rollback and Drive filename conflicts. New
+  APKs are uploaded as immutable versioned files under the approved Drive folder
+  `15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ`, using the approved active gcloud account
+  `dlajiin@gmail.com`. Uploaded files include Drive `appProperties` for package,
+  versionCode, versionName, and sha256.
+- If Drive upload succeeds but SSM/server publish fails, the versioned Drive
+  APK can be left as an orphan. A retry with the same APK reuses the existing
+  Drive file only when every same-name entry has the matching recorded sha256.
+  Any same-name file with a missing or different sha256 is treated as a
+  conflicting retry and must be resolved manually outside the publisher before
+  execution continues.
+  In execute mode, before SSM publish, the publisher inspects the selected Drive
+  file permissions and creates `anyone:reader` only when absent, including for a
+  reused same-checksum orphan. Dry-run does not mutate permissions.
+  Drive listing requests page through the whole approved folder so duplicate
+  immutable filenames are not missed after the first page.
+- The publisher treats `aws ssm send-command` as asynchronous. It captures the
+  command id, waits for `command-executed`, checks the command invocation status,
+  then verifies the public `/routes-app/release/android` manifest and anonymous
+  `/routes-app/download` checksum. The remote SSM command runs from
+  `/srv/clever-route-server` with
+  `docker compose --env-file .deploy/current-image.env -f infra/compose/docker-compose.prod.yml exec -T clever-route-api node dist/scripts/publish-routes-app-release.js`.
+  AWS parameters are sent as JSON rather than hand-interpolated shell text.
+- When discovering the current public release before publication, only HTTP 404
+  is treated as absent/unbootstrapped state. Network, 5xx, and malformed
+  response failures abort publication instead of silently bypassing rollback
+  checks.
+- The current legacy fixed Drive file
+  `1sqfU_D40iMenCGWQ6F3dZYb875i1jbe2` may only be reused with
+  `--mode bootstrap-legacy --apk-sha256 <sha256>`. That mode bootstraps
+  `1.1.1` (`versionCode` `8`) into the server database and does not replace
+  Drive file content.
 - Release `1.0.5` (`versionCode` `6`) starts the
   `com.evnsolution.clever.routes` identity. It cannot overwrite the legacy
   `com.evns.cleverdriverapp` package, so users must sign in again and remove the
   previous app after verifying the new installation.
+
+Dry-run example for a new APK:
+
+```bash
+npm run release:android:publish -- \
+  --apk android/app/build/outputs/apk/release/app-release.apk \
+  --ssm-instance-id <running-server-instance-id> \
+  --delivery-server-base-url https://<delivery-server-origin>
+```
+
+Execution is intentionally explicit and owner-controlled:
+
+```bash
+npm run release:android:publish -- \
+  --execute \
+  --apk android/app/build/outputs/apk/release/app-release.apk \
+  --ssm-instance-id <running-server-instance-id> \
+  --delivery-server-base-url https://<delivery-server-origin>
+```
 
 ## Native build profile matrix
 

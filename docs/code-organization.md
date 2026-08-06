@@ -38,6 +38,7 @@ src/
   release/
     evidence/                   # release evidence seed/verifier CLIs and tests
     preflight/                  # native release and source-layout preflights
+    publisher/                  # direct Android APK publisher planning and guarded CLI
   ui/
     components/                 # reusable UI components and pure component helpers
 ```
@@ -102,6 +103,7 @@ Reserved roots from the target architecture remain valid for future additions wh
 | Expo storage adapters | `src/platform/expo/secureStore/expoSecureDriverAccessTokenStore.ts`, `src/platform/expo/storage/expoOfflineSubmissionQueueStorage.ts` |
 | Release evidence | `src/release/evidence/releaseEvidenceSeed.ts`, `src/release/evidence/releaseEvidenceSeedCli.ts`, `src/release/evidence/releaseEvidenceSeed.test.ts`, `src/release/evidence/releaseEvidenceVerifier.ts`, `src/release/evidence/releaseEvidenceVerifierCli.ts`, `src/release/evidence/releaseEvidenceVerifier.test.ts` |
 | Release preflight | `src/release/preflight/nativeReleasePreflight.ts`, `src/release/preflight/nativeReleasePreflightCli.ts`, `src/release/preflight/nativeReleasePreflight.test.ts`, `src/release/preflight/releaseBuildProfiles.test.ts`, `src/release/preflight/sourceLayoutPreflight.ts`, `src/release/preflight/sourceLayoutPreflightCli.ts`, `src/release/preflight/sourceLayoutPreflight.test.ts` |
+| Release publisher | `src/release/publisher/androidReleasePublisher.ts`, `src/release/publisher/androidReleasePublisherCli.ts`, `src/release/publisher/androidReleasePublisherCliSupport.ts`, `src/release/publisher/androidReleasePublisher.test.ts`, `src/release/publisher/androidReleasePublisherCliSupport.test.ts` |
 | UI components | `src/ui/components/TransientToast.tsx`, `src/ui/components/transientToastBehavior.ts`, `src/ui/components/transientToast.test.ts` |
 
 ## Naming rules
