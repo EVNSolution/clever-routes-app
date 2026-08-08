@@ -64,6 +64,31 @@ describe('driver route access UX flow', () => {
     );
     assert.equal(getRouteAccessDeniedMessage('DISABLED'), 'This driver profile is inactive. Contact dispatch before continuing.');
     assert.equal(getRouteAccessDeniedMessage('BLOCKED'), 'This driver profile is blocked. Contact dispatch before continuing.');
+    assert.equal(
+      getRouteAccessDeniedMessage('VEHICLE_REQUIRED'),
+      'A vehicle must be assigned before this route can appear. Contact dispatch to assign a vehicle.',
+    );
+  });
+
+  it('parses the server vehicle-required response as dispatch guidance', async () => {
+    const client = createRouteAccessApiClient({
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({ data: { status: 'VEHICLE_REQUIRED' }, error: null }),
+      }),
+    });
+
+    const lookup = await client.lookupRouteAccess({ accountAccessToken: 'account-access-token' });
+    const result = await submitRouteAccess(
+      { accountAccessToken: 'account-access-token' },
+      createMockRouteAccessService(lookup),
+    );
+
+    assert.deepEqual(lookup, { status: 'VEHICLE_REQUIRED' });
+    assert.equal(result.kind, 'denied');
+    assert.equal(result.status, 'VEHICLE_REQUIRED');
+    assert.equal(result.message, 'A vehicle must be assigned before this route can appear. Contact dispatch to assign a vehicle.');
   });
 
   it('maps multiple phone matches to selectable routes with company metadata', async () => {

@@ -65,7 +65,7 @@ export type RouteAccessLookupResult =
       matches: RouteAccessAmbiguousMatch[];
       resolutionHint?: string | null;
     }
-  | { status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND' };
+  | { status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND' | 'VEHICLE_REQUIRED' };
 
 export type RouteAccessService = {
   lookupRouteAccess(input: RouteAccessLookupInput): Promise<RouteAccessLookupResult>;
@@ -95,7 +95,7 @@ export type RouteAccessSubmissionResult =
   | {
       kind: 'denied';
       message: string;
-      status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND';
+      status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND' | 'VEHICLE_REQUIRED';
     };
 
 export type FetchLike = (
@@ -233,7 +233,7 @@ export function getRouteAccessMultipleMatchesMessage(): string {
   return 'Multiple route assignments matched. Use the account route list or contact dispatch.';
 }
 
-export function getRouteAccessDeniedMessage(status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND'): string {
+export function getRouteAccessDeniedMessage(status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND' | 'VEHICLE_REQUIRED'): string {
   switch (status) {
     case 'NOT_FOUND':
       return 'No active route is assigned to this account. Contact dispatch if you expected an assignment.';
@@ -241,6 +241,8 @@ export function getRouteAccessDeniedMessage(status: 'BLOCKED' | 'DISABLED' | 'NO
       return 'This driver profile is inactive. Contact dispatch before continuing.';
     case 'BLOCKED':
       return 'This driver profile is blocked. Contact dispatch before continuing.';
+    case 'VEHICLE_REQUIRED':
+      return 'A vehicle must be assigned before this route can appear. Contact dispatch to assign a vehicle.';
   }
 }
 
@@ -308,7 +310,7 @@ function isRouteAccessLookupResult(value: unknown): value is RouteAccessLookupRe
   }
 
   const status = (value as { status?: unknown }).status;
-  if (status === 'BLOCKED' || status === 'DISABLED' || status === 'NOT_FOUND') {
+  if (status === 'BLOCKED' || status === 'DISABLED' || status === 'NOT_FOUND' || status === 'VEHICLE_REQUIRED') {
     return true;
   }
 
