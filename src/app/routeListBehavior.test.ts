@@ -75,13 +75,13 @@ describe('routes list behavior', () => {
     );
 
     assert.match(source, /const \[expandedRouteKey, setExpandedRouteKey\] = useState<string \| null>\(null\)/u);
-    assert.match(source, /visibleRouteSessions\.map\(\(session\) =>/u);
+    assert.match(source, /visibleRouteSessions\.map\(\(session, routeIndex\) =>/u);
     assert.match(source, /key=\{session\.route\.id\}/u);
     assert.doesNotMatch(source, /\{session\.route\.name\} \u00b7 \{session\.companyGuidance\.companyDisplayName\}/u);
     assert.match(source, /<DataRow label="Store" value=\{session\.companyGuidance\.companyDisplayName\} \/>/u);
     assert.match(source, /const isRouteCardExpanded = expandedRouteKey === session\.route\.id/u);
     assert.match(source, /setExpandedRouteKey\(\(value\) => value === session\.route\.id \? null : session\.route\.id\)/u);
-    assert.match(source, /<View style=\{styles\.routeCardHeader\}>[\s\S]*?<Text numberOfLines=\{1\} style=\{\[styles\.cardTitle, styles\.routeCardTitle\]\}>\s*\{session\.route\.name\}\s*<\/Text>[\s\S]*?<Text numberOfLines=\{1\} style=\{styles\.routeDateText\}>\{session\.route\.deliveryDate\}<\/Text>[\s\S]*?<StatusChip[\s\S]*?<Pressable[\s\S]*?style=\{styles\.routeToggleButton\}/u);
+    assert.match(source, /<View style=\{styles\.routeCardHeader\}>[\s\S]*?<Text numberOfLines=\{1\} style=\{\[styles\.cardTitle, styles\.routeCardTitle\]\}>\s*\{routeIndex \+ 1\}\. \{session\.route\.name\}\s*<\/Text>[\s\S]*?<Text numberOfLines=\{1\} style=\{styles\.routeDateText\}>\{session\.route\.deliveryDate\}<\/Text>[\s\S]*?<StatusChip[\s\S]*?<Pressable[\s\S]*?style=\{styles\.routeToggleButton\}/u);
     assert.match(source, /label=\{formatRouteStatus\(routeCardStatus\)\}/u);
     assert.doesNotMatch(source, /routeInitialBadge|routeInitialText|getInitials|routeCardMetaRow|routeCardStatusGroup/u);
     assert.doesNotMatch(source, /<DataRow label="Date"/u);
@@ -133,6 +133,8 @@ describe('routes list behavior', () => {
   it('keeps another ready route Start available while one route is active', () => {
     const source = getRoutesPageSource();
 
+    assert.match(source, /visibleRouteSessions\.map\(\(session, routeIndex\) =>/u);
+    assert.match(source, /\{routeIndex \+ 1\}\. \{session\.route\.name\}/u);
     assert.match(source, /const isStartDisabled = isStartingRoute \|\| isFinishingRoute \|\| isSwitchingRoute[\s\S]*backgroundLocationPermission !== 'granted'/u);
     assert.doesNotMatch(source, /const isStartDisabled = [^\n]*activeRoutePlanId !== null/u);
     assert.match(source, /const isContinueDisabled = [\s\S]*activeRoutePlanId !== session\.route\.id/u);
