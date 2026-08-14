@@ -365,6 +365,8 @@ describe('route session current task behavior', () => {
     const terminalSource = appSource.slice(terminalBegin, terminalEnd);
 
     assert.match(appSource, /const \[pendingRoutePlanId, setPendingRoutePlanId\] = useState<string \| null>\(null\)/u);
+    assert.match(appSource, /await queue\.whenPersisted\(\);[\s\S]*setRouteSessions\(\(current\) => current\.map\(\(session\)/u);
+    assert.match(appSource, /pendingRouteEnd: getPendingRouteEnd\(queue, session\.route\.id\) \?\? undefined/u);
     assert.match(startSource, /requestActiveRouteSwitchConfirmation/u);
     assert.match(startSource, /const targetRoutePlanId = routeSession\.route\.id/u);
     assert.match(startSource, /setPendingRoutePlanId\(targetRoutePlanId\)/u);

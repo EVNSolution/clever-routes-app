@@ -920,6 +920,10 @@ function DriverApp() {
       }
       await queue.whenPersisted();
       syncOfflineQueueState(queue);
+      setRouteSessions((current) => current.map((session) => ({
+        ...session,
+        pendingRouteEnd: getPendingRouteEnd(queue, session.route.id) ?? undefined,
+      })));
     } catch (error) {
       const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
       console.warn(`[offline-queue] Retry failed: ${errorMessage}`);
@@ -4211,7 +4215,7 @@ function MyRoutesPage({
         </View>
       ) : visibleRouteSessions.length > 0 ? (
         <View style={styles.routeCardList}>
-          {visibleRouteSessions.map((session) => {
+          {visibleRouteSessions.map((session, routeIndex) => {
             const classifiedRouteCardStatus = classifyAssignedRouteSession({
               now: classificationNow,
               route: session.route,
@@ -4236,7 +4240,7 @@ function MyRoutesPage({
               <View key={session.route.id} style={styles.selectedRouteCard}>
                 <View style={styles.routeCardHeader}>
                   <Text numberOfLines={1} style={[styles.cardTitle, styles.routeCardTitle]}>
-                    {session.route.name}
+                    {routeIndex + 1}. {session.route.name}
                   </Text>
                   <Text numberOfLines={1} style={styles.routeDateText}>{session.route.deliveryDate}</Text>
                   <StatusChip
