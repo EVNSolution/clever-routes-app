@@ -148,7 +148,7 @@ describe('stop details simplification', () => {
       source,
       /const canSkipFromStopDetails = canArriveFromStopDetails[\s\S]*currentStop\?\.deliveryStopId === stopDetailsStop\?\.deliveryStopId/u,
     );
-    assert.match(source, /Alert\.alert\(\s*'Skip this stop\?'/u);
+    assert.match(source, /showOperationalDialog\(\s*'Skip this stop\?'/u);
     assert.match(source, /text: 'Skip Stop'/u);
     assert.match(source, /handleTerminalStop\(selectedStop, 'failed'\)/u);
     assert.match(source, /reason: 'ADMIN_ROUTE_ASSIGNMENT_ERROR'/u);
