@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import { sampleAssignedRoute } from './assignedRoute';
 import {
   buildOutOfOrderStopArrivalWarning,
+  getAssignedRouteProgressAfterPickup,
   getAssignedRouteServerProgress,
   getNextIncompleteRouteStepIndex,
   getStopDetailsProgressState,
@@ -32,6 +33,21 @@ describe('route step progress state', () => {
     };
 
     assert.deepEqual(getAssignedRouteServerProgress(route), {
+      completedStopIds: [route.stops[0].deliveryStopId],
+      navigationStepIndex: 2,
+    });
+  });
+
+  it('continues pickup at the first incomplete stop when a partially completed route restarts', () => {
+    const route = {
+      ...sampleAssignedRoute,
+      stops: sampleAssignedRoute.stops.map((stop, index) => ({
+        ...stop,
+        status: index === 0 ? 'DELIVERED' : 'ASSIGNED',
+      })),
+    };
+
+    assert.deepEqual(getAssignedRouteProgressAfterPickup(route), {
       completedStopIds: [route.stops[0].deliveryStopId],
       navigationStepIndex: 2,
     });

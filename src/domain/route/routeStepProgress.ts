@@ -50,6 +50,17 @@ export function getAssignedRouteServerProgress(route: Pick<AssignedRoute, 'stops
   };
 }
 
+export function getAssignedRouteProgressAfterPickup(route: Pick<AssignedRoute, 'stops'>): {
+  completedStopIds: string[];
+  navigationStepIndex: number;
+} {
+  const serverProgress = getAssignedRouteServerProgress(route);
+  return {
+    ...serverProgress,
+    navigationStepIndex: Math.max(1, serverProgress.navigationStepIndex),
+  };
+}
+
 export function buildOutOfOrderStopArrivalWarning(input: {
   completedStopIds: string[];
   navigationStepIndex: number;

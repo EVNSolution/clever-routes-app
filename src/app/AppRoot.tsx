@@ -6,7 +6,6 @@ import * as Network from 'expo-network';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   AppState,
   BackHandler,
   Image,
@@ -32,6 +31,12 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { scheduleOnRN } from 'react-native-worklets';
 
 import {
+  OperationalDialog,
+  type OperationalDialogButton,
+  type OperationalDialogState,
+} from './OperationalDialog';
+
+import {
   createMockAssignedRouteService,
   formatAssignedRouteDistance,
   formatAssignedRouteDuration,
@@ -53,6 +58,7 @@ import {
 } from '../domain/route/routeSessionClassification';
 import {
   buildOutOfOrderStopArrivalWarning,
+  getAssignedRouteProgressAfterPickup,
   getAssignedRouteServerProgress,
   getCurrentRouteStop,
   getNextIncompleteRouteStepIndex,
@@ -315,6 +321,7 @@ function DriverApp() {
   const [deliveryFinishResult, setDeliveryFinishResult] = useState<DeliveryFinishResult | null>(null);
   const [activeRoutePlanId, setActiveRoutePlanId] = useState<string | null>(null);
   const [pendingRoutePlanId, setPendingRoutePlanId] = useState<string | null>(null);
+  const [operationalDialog, setOperationalDialog] = useState<OperationalDialogState | null>(null);
   const [routeStartedEventResult, setRouteStartedEventResult] = useState<RouteStartedRecordResult | null>(null);
   const [, setContinuousLocationResult] = useState<ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null>(null);
   const [stopProofResults, setStopProofResults] = useState<Record<string, StopProofEventResult>>({});
@@ -329,6 +336,27 @@ function DriverApp() {
   const [routeRecoveryRefreshReason, setRouteRecoveryRefreshReason] = useState<RouteRecoveryRefreshReason | null>(null);
   const [lastRoutesUpdatedAt, setLastRoutesUpdatedAt] = useState<Date | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  const showOperationalDialog = useCallback((
+    title: string,
+    message: string,
+    buttons: OperationalDialogButton[],
+    options?: { cancelable?: boolean },
+  ): void => {
+    setOperationalDialog({
+      buttons,
+      cancelable: options?.cancelable ?? true,
+      message,
+      title,
+    });
+  }, []);
+  const dismissOperationalDialog = useCallback((): void => {
+    setOperationalDialog(null);
+  }, []);
+  const handleOperationalDialogAction = useCallback((button: OperationalDialogButton): void => {
+    setOperationalDialog(null);
+    button.onPress?.();
+  }, []);
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isLoadingAccountProfile, setIsLoadingAccountProfile] = useState(false);
@@ -439,7 +467,7 @@ function DriverApp() {
       return;
     }
 
-    Alert.alert(
+    showOperationalDialog(
       'Allow background location',
       'CLEVER Routes collects your precise location while a delivery route is in progress, even when the app is closed or not in use. This keeps the store’s live route progress and arrival records up to date. Location tracking stops when the route ends.',
       [
@@ -449,8 +477,9 @@ function DriverApp() {
           text: 'Continue',
         },
       ],
+      { cancelable: true },
     );
-  }, [isRequestingBackgroundLocation, requestBackgroundLocationPermissionAfterDisclosure]);
+  }, [isRequestingBackgroundLocation, requestBackgroundLocationPermissionAfterDisclosure, showOperationalDialog]);
 
   const clearAndStopActiveLocationSession = useCallback(async (routePlanId?: string): Promise<void> => {
     try {
@@ -710,7 +739,7 @@ function DriverApp() {
       return;
     }
 
-    Alert.alert(
+    showOperationalDialog(
       'Delete CLEVER Routes account?',
       'This sends an account deletion request and signs you out. Delivery records that the store must retain are reviewed separately.',
       [
@@ -721,6 +750,7 @@ function DriverApp() {
           text: 'Request Deletion',
         },
       ],
+      { cancelable: true },
     );
   }
 
@@ -766,7 +796,7 @@ function DriverApp() {
 
     requestRouteReconciliationClearConfirmation({
       alertApi: {
-        alert: (title, message, buttons, options) => Alert.alert(title, message, buttons, options),
+        alert: showOperationalDialog,
       },
       count: routeReconciliationCount,
       onConfirm: () => {
@@ -2321,7 +2351,7 @@ function DriverApp() {
       const targetRoutePlanId = routeSession.route.id;
       requestActiveRouteSwitchConfirmation({
         alertApi: {
-          alert: (title, message, buttons, options) => Alert.alert(title, message, buttons, options),
+          alert: showOperationalDialog,
         },
         onCancelCurrentDelivery: () => {
           setPendingRoutePlanId(targetRoutePlanId);
@@ -2364,7 +2394,7 @@ function DriverApp() {
 
     requestRouteStartSessionConfirmation({
       alertApi: {
-        alert: (title, message, buttons, options) => Alert.alert(title, message, buttons, options),
+        alert: showOperationalDialog,
       },
       route: {
         deliveryDate: routeSession.route.deliveryDate,
@@ -2548,7 +2578,7 @@ function DriverApp() {
 
     requestActiveRouteDeletionConfirmation({
       alertApi: {
-        alert: (title, message, buttons, options) => Alert.alert(title, message, buttons, options),
+        alert: showOperationalDialog,
       },
       onConfirm: () => {
         void deleteActiveRouteAfterConfirmed(routeId);
@@ -2673,10 +2703,13 @@ function DriverApp() {
         applyEtaUpdateToRoute(selectedRoute.id, result.etaUpdate);
       }
 
-      let pickupMessage = 'Store Pickup completed. Continue to Stop 1.';
+      const pickupProgress = getAssignedRouteProgressAfterPickup(selectedRoute);
+      const pickupStop = selectedRoute.stops[pickupProgress.navigationStepIndex - 1];
+      const pickupStopLabel = pickupStop === undefined ? 'the next stop' : `Stop ${pickupStop.sequence}`;
+      let pickupMessage = `Store Pickup completed. Continue to ${pickupStopLabel}.`;
       if (result.kind === 'queued') {
         await queue.whenPersisted();
-        pickupMessage = 'Store Pickup saved offline. Continue to Stop 1 while syncing.';
+        pickupMessage = `Store Pickup saved offline. Continue to ${pickupStopLabel} while syncing.`;
         if (result.requiresRouteLookup === true) {
           setRouteRecoveryRefreshReason('driver_access_expired');
           pickupMessage = 'Store Pickup saved offline. Driver access expired, so route assignments are refreshing.';
@@ -2687,7 +2720,7 @@ function DriverApp() {
       }
 
       const pickupCompleted = await driverAccessTokenStore.saveActiveRouteSession({
-        navigationStepIndex: 1,
+        navigationStepIndex: pickupProgress.navigationStepIndex,
         pickupCompleted: true,
         routePlanId: selectedRoute.id,
       });
@@ -2695,7 +2728,8 @@ function DriverApp() {
         setMessage('Store Pickup could not be confirmed. Refresh the route and try again.');
         return;
       }
-      setNavigationStepIndex(1);
+      setCompletedStopIds(pickupProgress.completedStopIds);
+      setNavigationStepIndex(pickupProgress.navigationStepIndex);
       if (screenRef.current === requestScreen) {
         setScreen('routeSession');
       }
@@ -2823,13 +2857,13 @@ function DriverApp() {
       selectedStopId: selectedStop.deliveryStopId,
     });
     if (warning !== null) {
-      Alert.alert(warning.title, warning.message, [
+      showOperationalDialog(warning.title, warning.message, [
         { style: 'cancel', text: 'Cancel' },
         {
           onPress: () => { void activateAndRecordStopArrival(selectedStop); },
           text: 'Arrive',
         },
-      ]);
+      ], { cancelable: true });
       return;
     }
 
@@ -2851,7 +2885,7 @@ function DriverApp() {
     }
 
     const selectedStop = stopDetailsStop;
-    Alert.alert(
+    showOperationalDialog(
       'Skip this stop?',
       'This stop will be marked as skipped and the administrator will be notified.',
       [
@@ -2862,6 +2896,7 @@ function DriverApp() {
           text: 'Skip Stop',
         },
       ],
+      { cancelable: true },
     );
   }
 
@@ -3908,6 +3943,11 @@ function DriverApp() {
           {message !== null ? <TransientToast text={message} /> : null}
         </>
       )}
+      <OperationalDialog
+        dialog={operationalDialog}
+        onDismiss={dismissOperationalDialog}
+        onSelect={handleOperationalDialogAction}
+      />
     </View>
   );
 }

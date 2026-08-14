@@ -111,7 +111,7 @@ describe('Settings page behavior', () => {
 
     assert.notEqual(handlerStart, -1);
     assert.notEqual(handlerEnd, -1);
-    assert.match(handlerSource, /Alert\.alert\(\s*'Delete CLEVER Routes account\?'/u);
+    assert.match(handlerSource, /showOperationalDialog\(\s*'Delete CLEVER Routes account\?'/u);
     assert.match(handlerSource, /style: 'destructive'/u);
     assert.match(handlerSource, /getOfflineSubmissionQueueSummary\(queue\)/u);
     assert.match(handlerSource, /queueSummary\.totalCount > 0/u);

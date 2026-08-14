@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-07-27
+- Last refreshed: 2026-08-14
 - Primary product surfaces: authentication, My Routes, route session, stop details, completed deliveries, settings
 - Evidence reviewed: `src/app/AppRoot.tsx`, `src/app/routeVisualState.ts`, existing screen contracts in this file
 
@@ -42,21 +42,21 @@
 - Color: blue for primary action, green for current/success, warm amber for recoverable operational blockers
 - Typography: concise high-contrast titles with short supporting copy
 - Spacing/layout rhythm: compact mobile rows and touch-safe controls
-- Shape/radius/elevation: existing native card and warning styles; no new design-system layer
+- Shape/radius/elevation: 24px dialog cards, 14px action radii, restrained shadow; no device-owned alert styling
 - Motion: existing restrained interaction feedback only
 - Imagery/iconography: text-first operational UI; use existing icon conventions only
 
 ## Components
 
 - Existing components to reuse: route cards, warning banners, primary and secondary buttons, status chips
-- New/changed components: persistent route reconciliation warning on My Routes; shared stop payment summary for Stop Detail and foreground notifications
-- Variants and states: 401 access refresh, 409 route reconciliation, offline retryable, blocked evidence
-- Token/component ownership: `AppRoot.tsx` and existing route visual-state constants
+- New/changed components: one app-owned operational dialog for confirmations and disclosures; persistent route reconciliation warning on My Routes; shared stop payment summary for Stop Detail and foreground notifications
+- Variants and states: primary action, destructive action, cancel action, 401 access refresh, 409 route reconciliation, offline retryable, blocked evidence
+- Token/component ownership: `OperationalDialog.tsx`, `AppRoot.tsx`, and existing route visual-state constants
 
 ## Accessibility
 
 - Target standard: touch-safe mobile controls with readable contrast
-- Keyboard/focus behavior: native focus order follows visual order
+- Keyboard/focus behavior: dialog focus stays inside the modal; Android Back and backdrop taps dismiss only cancelable dialogs
 - Contrast/readability: warning text and action must remain legible without relying on color alone
 - Screen-reader semantics: terminal recovery warning uses alert semantics and a named refresh action
 - Reduced motion and sensory considerations: no animated urgency for reconciliation
@@ -75,6 +75,7 @@
 - Success: remove recovery state only when its preserved evidence is explicitly reconciled
 - Disabled: prevent route-start actions when required permissions or active-route constraints fail
 - Offline/slow network: retry normal queue entries; never auto-retry or silently age-delete 409-blocked stop outcomes and proof
+- Confirmation: primary action first, destructive action second, cancel action last; every action remains at least 54px tall
 
 ## Content voice
 
@@ -87,8 +88,8 @@
 - Framework/styling system: React Native and the existing `StyleSheet` patterns
 - Design-token constraints: reuse existing palette and surface conventions
 - Performance constraints: no polling or animation for reconciliation status
-- Compatibility constraints: background GPS must stop immediately on terminal route state
-- Test/screenshot expectations: source behavior tests plus queue and lifecycle tests; visual screenshot matching is not required for this operational banner
+- Compatibility constraints: background GPS must stop immediately on terminal route state; operational dialogs must not depend on iOS/Android manufacturer alert layouts
+- Test/screenshot expectations: source behavior tests plus queue and lifecycle tests; connected-device checks cover dialog layout, action order, Back dismissal, and destructive flow
 
 ## Open questions
 

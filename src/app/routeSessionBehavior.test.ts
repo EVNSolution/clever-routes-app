@@ -121,7 +121,10 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const initialTimer = setTimeout\(\(\) => setPickupTimingNow\(Date\.now\(\)\), 0\)[\s\S]*const minuteTimer = setInterval\(\(\) => setPickupTimingNow\(Date\.now\(\)\), 60_000\)[\s\S]*clearTimeout\(initialTimer\)[\s\S]*clearInterval\(minuteTimer\)/u);
     assert.match(componentSource, /isPickupTask \? \([\s\S]*styles\.pickupTimingGrid[\s\S]*label="Leave" value=\{pickupTiming\.leave\}[\s\S]*label="Route time" value=\{pickupTiming\.routeTime\}[\s\S]*label="Est\. finish" value=\{pickupTiming\.finish\}[\s\S]*<PrimaryButton label="Pickup & Start Route"/u);
     assert.doesNotMatch(componentSource, /pickupTiming[\s\S]{0,400}[·•]/u);
-    assert.match(readFileSync(appRootPath, 'utf8'), /saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: 1,[\s\S]*pickupCompleted: true/u);
+    assert.match(appSource, /const pickupProgress = getAssignedRouteProgressAfterPickup\(selectedRoute\)/u);
+    assert.match(appSource, /saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: pickupProgress\.navigationStepIndex,[\s\S]*pickupCompleted: true/u);
+    assert.match(appSource, /setCompletedStopIds\(pickupProgress\.completedStopIds\)/u);
+    assert.match(appSource, /setNavigationStepIndex\(pickupProgress\.navigationStepIndex\)/u);
     assert.doesNotMatch(startRouteSessionSource, /applyEtaSnapshotToRoute/u);
     assert.doesNotMatch(startRouteSessionSource, /applyEtaUpdateToRoute/u);
   });
@@ -132,8 +135,9 @@ describe('route session current task behavior', () => {
     const arrivedEnd = appSource.indexOf('\n\n  async function recordStopArrival(', arrivedBegin);
     const arrivedSource = appSource.slice(arrivedBegin, arrivedEnd);
 
-    assert.match(arrivedSource, /let pickupMessage = 'Store Pickup completed\. Continue to Stop 1\.'/u);
-    assert.match(arrivedSource, /if \(result\.kind === 'queued'\) \{[\s\S]*pickupMessage = 'Store Pickup saved offline\. Continue to Stop 1 while syncing\.'/u);
+    assert.match(arrivedSource, /const pickupStopLabel = pickupStop === undefined \? 'the next stop' : `Stop \$\{pickupStop\.sequence\}`/u);
+    assert.match(arrivedSource, /let pickupMessage = `Store Pickup completed\. Continue to \$\{pickupStopLabel\}\.`/u);
+    assert.match(arrivedSource, /if \(result\.kind === 'queued'\) \{[\s\S]*pickupMessage = `Store Pickup saved offline\. Continue to \$\{pickupStopLabel\} while syncing\.`/u);
     assert.match(arrivedSource, /if \(result\.requiresRouteLookup === true\) \{[\s\S]*setRouteRecoveryRefreshReason\('driver_access_expired'\);[\s\S]*pickupMessage = 'Store Pickup saved offline\. Driver access expired, so route assignments are refreshing\.'/u);
     assert.match(arrivedSource, /setMessage\(pickupMessage\);/u);
     assert.doesNotMatch(arrivedSource, /setMessage\('Store Pickup queued[\s\S]*setMessage\('Store Pickup completed/u);
@@ -190,7 +194,7 @@ describe('route session current task behavior', () => {
 
     assert.notEqual(arriveStart, -1);
     assert.match(arriveSource, /buildOutOfOrderStopArrivalWarning\(\{/u);
-    assert.match(arriveSource, /Alert\.alert\(warning\.title, warning\.message/u);
+    assert.match(arriveSource, /showOperationalDialog\(warning\.title, warning\.message/u);
     assert.match(arriveSource, /text: 'Arrive'/u);
     assert.match(arriveSource, /activateAndRecordStopArrival\(selectedStop\)/u);
     assert.match(appSource, /await driverAccessTokenStore\.saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: selectedStopIndex \+ 1/u);
@@ -203,6 +207,19 @@ describe('route session current task behavior', () => {
 
     assert.match(appSource, /getNextIncompleteRouteStepIndex\(\{/u);
     assert.doesNotMatch(appSource, /const nextNavigationStepIndex = navigationStepIndex \+ 1/u);
+  });
+
+  it('continues a partially completed route at its first incomplete stop after pickup', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const pickupStart = appSource.indexOf('if (isCompanyStep) {');
+    const pickupEnd = appSource.indexOf('\n\n    if (currentStop === null)', pickupStart);
+    const pickupSource = appSource.slice(pickupStart, pickupEnd);
+
+    assert.match(pickupSource, /getAssignedRouteProgressAfterPickup\(selectedRoute\)/u);
+    assert.match(pickupSource, /navigationStepIndex: pickupProgress\.navigationStepIndex/u);
+    assert.match(pickupSource, /setCompletedStopIds\(pickupProgress\.completedStopIds\)/u);
+    assert.match(pickupSource, /setNavigationStepIndex\(pickupProgress\.navigationStepIndex\)/u);
+    assert.doesNotMatch(pickupSource, /navigationStepIndex: 1|setNavigationStepIndex\(1\)/u);
   });
 
   it('shows only the search-ready street and city in the active task address', () => {
