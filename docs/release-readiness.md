@@ -135,7 +135,7 @@ The native binary build path uses Expo EAS profiles:
 | `preview` iOS | `npx eas-cli build --platform ios --profile preview` | Internal iPhone smoke build through EAS internal distribution | Expo account/project access, Apple team/signing authority, registered devices or approved internal distribution path, EAS `preview` environment values |
 | `production` all | `npx eas-cli build --platform all --profile production` | Store/TestFlight/Play candidate archives | Expo account/project access, Apple/Google store authority, production signing, EAS `production` environment values, approved privacy/store copy |
 
-`cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied to committed source. `cli.appVersionSource` is `remote`; the current local direct-distribution Android build is `1.1.6` (`versionCode` `13`), while future production store builds use `autoIncrement` to avoid duplicate build numbers.
+`cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied to committed source. `cli.appVersionSource` is `remote`; the current local direct-distribution Android build is `1.1.4` (`versionCode` `14`), while future production store builds use `autoIncrement` to avoid duplicate build numbers.
 
 Before running any preview/production EAS build for evidence, run:
 
