@@ -98,7 +98,7 @@ describe('driver app update classification', () => {
     }
   });
 
-  it('never covers restore, route loading, or an active delivery', () => {
+  it('keeps automatic checks out of active delivery but presents an explicit refresh result', () => {
     const optionalState = classifyDriverAppUpdate({
       currentPackageId: 'com.evnsolution.clever.routes',
       currentVersionCode: 2,
@@ -119,6 +119,14 @@ describe('driver app update classification', () => {
       isRouteSyncLoading: false,
       state: optionalState,
     }), false);
+    assert.equal(shouldPresentDriverAppUpdate({
+      dismissedVersionCode: 3,
+      explicitRefreshRequested: true,
+      hasActiveRoute: true,
+      isRestoreComplete: true,
+      isRouteSyncLoading: false,
+      state: optionalState,
+    }), true);
     assert.equal(shouldPresentDriverAppUpdate({
       dismissedVersionCode: null,
       hasActiveRoute: false,

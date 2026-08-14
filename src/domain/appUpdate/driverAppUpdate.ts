@@ -40,6 +40,7 @@ export function classifyDriverAppUpdate(input: {
 
 export function shouldPresentDriverAppUpdate(input: {
   dismissedVersionCode: number | null;
+  explicitRefreshRequested?: boolean;
   hasActiveRoute: boolean;
   isRestoreComplete: boolean;
   isRouteSyncLoading: boolean;
@@ -48,13 +49,19 @@ export function shouldPresentDriverAppUpdate(input: {
   if (
     !input.isRestoreComplete
     || input.isRouteSyncLoading
-    || input.hasActiveRoute
     || (
       input.state.kind !== 'optional_update'
       && input.state.kind !== 'required_update'
       && input.state.kind !== 'required_reinstall'
     )
   ) {
+    return false;
+  }
+
+  if (input.explicitRefreshRequested) {
+    return true;
+  }
+  if (input.hasActiveRoute) {
     return false;
   }
 
