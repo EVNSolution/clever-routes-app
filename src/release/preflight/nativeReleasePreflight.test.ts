@@ -42,6 +42,12 @@ test('native release preflight passes for the committed Expo and EAS config', ()
   );
 });
 
+test('prepares the ignored Firebase config during EAS builds', () => {
+  const packageJson = readJson<{ scripts?: Record<string, string> }>('package.json');
+
+  assert.equal(packageJson.scripts?.['eas-build-post-install'], 'npm run prepare:android:firebase');
+});
+
 test('native release preflight reports release-blocking config gaps without secrets', () => {
   const input = currentInput();
   const brokenInput: NativeReleasePreflightInput = {
