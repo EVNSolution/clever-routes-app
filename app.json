@@ -27,7 +27,10 @@
     },
     "extra": {
       "projectStartIssue": "EVNSolution/clever-change-control#145",
-      "frameworkBootstrapIssue": "EVNSolution/clever-change-control#146"
+      "frameworkBootstrapIssue": "EVNSolution/clever-change-control#146",
+      "eas": {
+        "projectId": "eb063931-8972-4a74-b56c-dd5897e54439"
+      }
     },
     "plugins": [
       "expo-notifications",
@@ -61,6 +64,7 @@
       "expo-status-bar",
       "expo-font"
     ],
-    "icon": "./assets/icon.png"
+    "icon": "./assets/icon.png",
+    "owner": "evandsolution"
   }
 }
