@@ -303,6 +303,7 @@ function DriverApp() {
   const [driverRestoreAttempt, setDriverRestoreAttempt] = useState(0);
   const [driverAppUpdateState, setDriverAppUpdateState] = useState<DriverAppUpdateState>({ kind: 'checking' });
   const [dismissedDriverAppVersionCode, setDismissedDriverAppVersionCode] = useState<number | null>(null);
+  const [explicitDriverAppUpdatePrompt, setExplicitDriverAppUpdatePrompt] = useState(false);
   const [pendingActiveRouteNotificationTarget, setPendingActiveRouteNotificationTarget] = useState<ActiveRouteNotificationTarget | null>(null);
   const pendingActiveRouteNotificationTargetRef = useRef<ActiveRouteNotificationTarget | null>(null);
   const [pendingStopArrivalNotification, setPendingStopArrivalNotification] = useState<StopArrivalNotificationData | null>(null);
@@ -365,6 +366,7 @@ function DriverApp() {
   const isRetryingOfflineSubmissionsRef = useRef(false);
   const previousNetworkReachabilityRef = useRef(networkReachability);
   const driverAppUpdateCheckRunningRef = useRef(false);
+  const explicitDriverAppUpdatePromptRequestedRef = useRef(false);
   const lastDriverAppUpdateCheckAtRef = useRef<number | null>(null);
   const previousActiveRoutePlanIdRef = useRef<string | null>(null);
   const registeredDevicePushTokenRef = useRef<string | null>(null);
@@ -492,7 +494,13 @@ function DriverApp() {
       ? createDriverAppReleaseApiClient({ baseUrl: runtimeConfig.deliveryServerBaseUrl })
       : null
   ), [runtimeConfig]);
-  const checkForDriverAppUpdate = useCallback(async (force = false): Promise<void> => {
+  const checkForDriverAppUpdate = useCallback(async (
+    force = false,
+    explicitRefreshRequested = false,
+  ): Promise<void> => {
+    if (explicitRefreshRequested) {
+      explicitDriverAppUpdatePromptRequestedRef.current = true;
+    }
     if (driverAppUpdateCheckRunningRef.current) {
       return;
     }
@@ -507,20 +515,34 @@ function DriverApp() {
     }
     if (driverAppReleaseService === null || installedDriverAppVersion === null) {
       setDriverAppUpdateState({ kind: 'unavailable' });
+      setExplicitDriverAppUpdatePrompt(false);
+      explicitDriverAppUpdatePromptRequestedRef.current = false;
       return;
     }
 
     driverAppUpdateCheckRunningRef.current = true;
     try {
       const release = await driverAppReleaseService.getAndroidRelease();
-      setDriverAppUpdateState(classifyDriverAppUpdate({
+      const nextState = classifyDriverAppUpdate({
         currentPackageId: installedDriverAppVersion.packageId,
         currentVersionCode: installedDriverAppVersion.versionCode,
         release,
-      }));
+      });
+      setDriverAppUpdateState(nextState);
+      setExplicitDriverAppUpdatePrompt(
+        explicitDriverAppUpdatePromptRequestedRef.current
+        && (
+          nextState.kind === 'optional_update'
+          || nextState.kind === 'required_update'
+          || nextState.kind === 'required_reinstall'
+        ),
+      );
+      explicitDriverAppUpdatePromptRequestedRef.current = false;
       lastDriverAppUpdateCheckAtRef.current = Date.now();
     } catch {
       setDriverAppUpdateState({ kind: 'unavailable' });
+      setExplicitDriverAppUpdatePrompt(false);
+      explicitDriverAppUpdatePromptRequestedRef.current = false;
     } finally {
       driverAppUpdateCheckRunningRef.current = false;
     }
@@ -2078,7 +2100,7 @@ function DriverApp() {
     try {
       await Promise.all([
         handleRefreshRoutes(),
-        checkForDriverAppUpdate(true),
+        checkForDriverAppUpdate(true, true),
       ]);
     } finally {
       pullRefreshOffset.value = withSpring(0, PULL_REFRESH_SPRING_CONFIG);
@@ -3537,6 +3559,7 @@ function DriverApp() {
     : null;
   const shouldShowDriverUpdateScreen = shouldPresentDriverAppUpdate({
     dismissedVersionCode: dismissedDriverAppVersionCode,
+    explicitRefreshRequested: explicitDriverAppUpdatePrompt,
     hasActiveRoute: activeRoutePlanId !== null,
     isRestoreComplete: isDriverRestoreComplete,
     isRouteSyncLoading: routeSyncState === 'loading',
@@ -3600,7 +3623,10 @@ function DriverApp() {
             || driverAppUpdateState.kind === 'required_reinstall'
           }
           latestVersionName={pendingDriverAppRelease.latestVersionName}
-          onLater={() => setDismissedDriverAppVersionCode(pendingDriverAppRelease.latestVersionCode)}
+          onLater={() => {
+            setExplicitDriverAppUpdatePrompt(false);
+            setDismissedDriverAppVersionCode(pendingDriverAppRelease.latestVersionCode);
+          }}
           onUpdate={handleOpenDriverAppUpdate}
         />
       ) : (

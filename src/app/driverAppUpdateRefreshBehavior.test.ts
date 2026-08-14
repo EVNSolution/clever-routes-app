@@ -20,7 +20,7 @@ describe('driver app update refresh behavior', () => {
 
     assert.match(
       pullRefreshSource,
-      /Promise\.all\(\[[\s\S]*handleRefreshRoutes\(\)[\s\S]*checkForDriverAppUpdate\(true\)[\s\S]*\]\)/u,
+      /Promise\.all\(\[[\s\S]*handleRefreshRoutes\(\)[\s\S]*checkForDriverAppUpdate\(true, true\)[\s\S]*\]\)/u,
     );
   });
 });
