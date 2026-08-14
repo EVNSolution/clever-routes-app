@@ -272,7 +272,7 @@ describe('route session current task behavior', () => {
 
     assert.notEqual(backHandlerStart, -1);
     assert.notEqual(backHandlerEnd, -1);
-    assert.match(appSource, /type ArrivalCheckReturnScreen = 'routeSession' \| 'stopDetails'/u);
+    assert.match(appSource, /type ArrivalCheckReturnScreen = 'mainTabs' \| 'routeSession' \| 'stopDetails'/u);
     assert.match(appSource, /const \[arrivalCheckReturnScreen, setArrivalCheckReturnScreen\] = useState<ArrivalCheckReturnScreen>\('routeSession'\)/u);
     assert.match(appSource, /await recordStopArrival\(currentStop, 'routeSession'\)/u);
     assert.match(appSource, /await recordStopArrival\(selectedStop, 'stopDetails', requestScreen\)/u);
@@ -309,7 +309,7 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /const screenRef = useRef<AppScreen>\('loginPhone'\)/u);
     assert.match(appSource, /const setScreen = useCallback\(\(nextScreen: AppScreen\) => \{[\s\S]*screenRef\.current = nextScreen;[\s\S]*setScreenState\(nextScreen\);[\s\S]*\}, \[\]\)/u);
     assert.match(arrivalSource, /requestScreen = screenRef\.current/u);
-    assert.match(arrivalSource, /if \(screenRef\.current !== requestScreen\) \{[\s\S]*return;[\s\S]*\}[\s\S]*setArrivalCheckReturnScreen\(returnScreen\);[\s\S]*setScreen\('arrivalCheck'\)/u);
+    assert.match(arrivalSource, /if \(screenRef\.current !== requestScreen\) \{[\s\S]*return false;[\s\S]*\}[\s\S]*setArrivalCheckReturnScreen\(returnScreen\);[\s\S]*setScreen\('arrivalCheck'\)/u);
   });
 
   it('keeps preview and completed-route screens bound to the explicitly selected route', () => {
@@ -353,6 +353,47 @@ describe('route session current task behavior', () => {
     assert.match(startSource, /if \(screenRef\.current === requestScreen\) \{[\s\S]*setScreen\('routeSession'\);[\s\S]*\}/u);
     assert.match(terminalSource, /const requestScreen = screenRef\.current/u);
     assert.match(terminalSource, /if \(screenRef\.current === requestScreen\) \{[\s\S]*setScreen\('routeSession'\);[\s\S]*\}/u);
+  });
+
+  it('switches routes only after the active stop and route session are durably ended', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const startBegin = appSource.indexOf('function handleStartRoute(');
+    const startEnd = appSource.indexOf('\n\n  async function startRouteSessionAfterConfirmed(', startBegin);
+    const startSource = appSource.slice(startBegin, startEnd);
+    const terminalBegin = appSource.indexOf('async function handleTerminalStop(');
+    const terminalEnd = appSource.indexOf('\n\n  async function finishRoute(', terminalBegin);
+    const terminalSource = appSource.slice(terminalBegin, terminalEnd);
+
+    assert.match(appSource, /const \[pendingRoutePlanId, setPendingRoutePlanId\] = useState<string \| null>\(null\)/u);
+    assert.match(startSource, /requestActiveRouteSwitchConfirmation/u);
+    assert.match(startSource, /const targetRoutePlanId = routeSession\.route\.id/u);
+    assert.match(startSource, /setPendingRoutePlanId\(targetRoutePlanId\)/u);
+    assert.match(startSource, /pendingRoutePlanId !== null/u);
+    assert.doesNotMatch(startSource, /Finish the active route before starting another route/u);
+    assert.match(terminalSource, /recordStopProofEventAfterDeliveryStart/u);
+    assert.match(terminalSource, /await finishActiveRouteForSwitch\(selectedRoute, routeSwitchPlanId, remainingStops\)/u);
+    const switchBegin = appSource.indexOf('async function finishActiveRouteForSwitch(');
+    const switchEnd = appSource.indexOf('\n\n  async function finishRoute(', switchBegin);
+    const switchSource = appSource.slice(switchBegin, switchEnd);
+    assert.match(switchSource, /await finishRoute\([\s\S]*routeEnd: 'released'/u);
+    assert.match(switchSource, /await startRouteSessionAfterConfirmed\(targetRoutePlanId/u);
+    assert.ok(terminalSource.indexOf('recordStopProofEventAfterDeliveryStart') < terminalSource.indexOf('finishActiveRouteForSwitch'));
+    assert.ok(switchSource.indexOf("routeEnd: 'released'") < switchSource.indexOf('startRouteSessionAfterConfirmed(targetRoutePlanId'));
+    assert.match(switchSource, /if \(!routeEnded\) \{[\s\S]*setPendingRoutePlanId\(null\);[\s\S]*return;[\s\S]*\}[\s\S]*startRouteSessionAfterConfirmed/u);
+    assert.match(startSource, /failureReason: 'OTHER'/u);
+    assert.match(startSource, /Driver cancelled the current delivery before switching routes\./u);
+  });
+
+  it('opens the existing proof and payment screen before completing a switch', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const startBegin = appSource.indexOf('function handleStartRoute(');
+    const startEnd = appSource.indexOf('\n\n  async function startRouteSessionAfterConfirmed(', startBegin);
+    const startSource = appSource.slice(startBegin, startEnd);
+
+    assert.match(startSource, /onCompleteCurrentDelivery:[\s\S]*recordStopArrival\(currentStop, 'mainTabs'\)/u);
+    assert.doesNotMatch(startSource, /onCompleteCurrentDelivery:[\s\S]*handleTerminalStop\([^)]*'delivered'/u);
+    assert.match(appSource, /async function recordStopArrival\([\s\S]*setArrivalCheckReturnScreen\(returnScreen\)[\s\S]*setScreen\('arrivalCheck'\)/u);
+    assert.match(appSource, /case 'arrivalCheck':[\s\S]*setPendingRoutePlanId\(null\)[\s\S]*setScreen\(arrivalCheckReturnScreen\)/u);
   });
 
   it('keeps Store Pickup and out-of-order arrival work from overriding Back', () => {

@@ -137,7 +137,11 @@ import {
   type RouteAccessRouteChoice,
   type RouteAccessSubmissionResult,
 } from '../domain/routeAccess/routeAccess';
-import { recordStopProofEventAfterDeliveryStart, type StopProofEventResult } from '../domain/stop/stopProofEvents';
+import {
+  recordStopProofEventAfterDeliveryStart,
+  type StopProofEventResult,
+  type StopProofFailureReason,
+} from '../domain/stop/stopProofEvents';
 import { openRouteNavigation, openStopNavigation } from '../domain/stop/stopNavigation';
 import {
   getCountrySelectorRowText,
@@ -177,6 +181,7 @@ import {
 } from '../domain/notifications/stopArrivalNotifications';
 import { createExpoStopArrivalNotificationService } from '../platform/expo/notifications/expoStopArrivalNotificationService';
 import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
+import { requestActiveRouteSwitchConfirmation } from './activeRouteSwitchConfirmation';
 import { requestRouteReconciliationClearConfirmation } from './routeReconciliationClearConfirmation';
 import {
   createDriverReleasedRoutePayload,
@@ -210,7 +215,7 @@ type BackgroundLocationPermissionState = BackgroundPermissionResult | 'checking'
 type CompletedDeliveriesFilter = 'all' | 'delivered' | 'issues';
 type RouteSessionContentTab = 'inventory' | 'stops';
 type StopDetailsReturnScreen = 'completedDeliveries' | 'routeSession';
-type ArrivalCheckReturnScreen = 'routeSession' | 'stopDetails';
+type ArrivalCheckReturnScreen = 'mainTabs' | 'routeSession' | 'stopDetails';
 type PendingDriverRouteNotification = {
   data: DriverRouteNotificationData;
   openRequested: boolean;
@@ -308,6 +313,7 @@ function DriverApp() {
   const [deliveryStartResult, setDeliveryStartResult] = useState<DeliveryStartResult | null>(null);
   const [deliveryFinishResult, setDeliveryFinishResult] = useState<DeliveryFinishResult | null>(null);
   const [activeRoutePlanId, setActiveRoutePlanId] = useState<string | null>(null);
+  const [pendingRoutePlanId, setPendingRoutePlanId] = useState<string | null>(null);
   const [routeStartedEventResult, setRouteStartedEventResult] = useState<RouteStartedRecordResult | null>(null);
   const [, setContinuousLocationResult] = useState<ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null>(null);
   const [stopProofResults, setStopProofResults] = useState<Record<string, StopProofEventResult>>({});
@@ -2273,7 +2279,7 @@ function DriverApp() {
   }, [isDriverRestoreComplete, refreshBackgroundLocationPermission, screen, verifiedDriverPhoneE164]);
 
   function handleStartRoute(routeId?: string) {
-    if (isStartingRoute || isFinishingRoute) {
+    if (isStartingRoute || isFinishingRoute || pendingRoutePlanId !== null) {
       return;
     }
     if (backgroundLocationPermission !== 'granted') {
@@ -2286,8 +2292,43 @@ function DriverApp() {
       return;
     }
     if (activeRoutePlanId !== null && activeRoutePlanId !== routeSession.route.id) {
-      setSelectedRouteId(activeRoutePlanId);
-      setMessage('Finish the active route before starting another route.');
+      const targetRoutePlanId = routeSession.route.id;
+      requestActiveRouteSwitchConfirmation({
+        alertApi: {
+          alert: (title, message, buttons, options) => Alert.alert(title, message, buttons, options),
+        },
+        onCancelCurrentDelivery: () => {
+          setPendingRoutePlanId(targetRoutePlanId);
+          if (currentStop === null) {
+            if (selectedRoute === null) {
+              setPendingRoutePlanId(null);
+              setMessage('The active route is no longer available. Refresh routes and try again.');
+              return;
+            }
+            void finishActiveRouteForSwitch(selectedRoute, targetRoutePlanId, true);
+            return;
+          }
+          void handleTerminalStop(currentStop, 'failed', {
+            failureNote: 'Driver cancelled the current delivery before switching routes.',
+            failureReason: 'OTHER',
+            switchToRoutePlanId: targetRoutePlanId,
+          });
+        },
+        onCompleteCurrentDelivery: () => {
+          if (currentStop === null) {
+            setSelectedRouteId(activeRoutePlanId);
+            setMessage('Complete Store Pickup before completing the current delivery.');
+            return;
+          }
+          setPendingRoutePlanId(targetRoutePlanId);
+          void (async () => {
+            const arrivalOpened = await recordStopArrival(currentStop, 'mainTabs');
+            if (!arrivalOpened) {
+              setPendingRoutePlanId(null);
+            }
+          })();
+        },
+      });
       return;
     }
     if (routeSession.pendingRouteEnd !== undefined) {
@@ -2316,11 +2357,6 @@ function DriverApp() {
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
     if (routeSession === null) {
       setMessage('No route is available to start.');
-      return;
-    }
-    if (activeRoutePlanId !== null && activeRoutePlanId !== routeSession.route.id) {
-      setSelectedRouteId(activeRoutePlanId);
-      setMessage('Finish the active route before starting another route.');
       return;
     }
     if (routeSession.pendingRouteEnd !== undefined) {
@@ -2653,10 +2689,10 @@ function DriverApp() {
     stop: AssignedRouteStop,
     returnScreen: ArrivalCheckReturnScreen,
     requestScreen = screenRef.current,
-  ) {
+  ): Promise<boolean> {
     if (deliveryStartResult === null) {
       setMessage('The active delivery stop could not be confirmed. Refresh the route and try again.');
-      return;
+      return false;
     }
 
     setIsRecordingArrival(true);
@@ -2664,27 +2700,29 @@ function DriverApp() {
     try {
       if (selectedRouteSession === null) {
         setMessage('The active route could not be confirmed. Refresh the route and try again.');
-        return;
+        return false;
       }
       const result = await submitStopArrivalForRouteStop(selectedRouteSession, stop);
       if (result.kind === 'blocked') {
         setMessage(result.message);
-        return;
+        return false;
       }
       if (screenRef.current !== requestScreen) {
         setMessage(result.kind === 'queued'
           ? result.message
           : 'Arrival was recorded. Open the stop again to continue.');
-        return;
+        return false;
       }
       setArrivalCheckReturnScreen(returnScreen);
       setScreen('arrivalCheck');
       setMessage(result.kind === 'queued'
         ? result.message
         : 'Arrival confirmed by server. Future stop ETAs were updated.');
+      return true;
     } catch (error) {
       const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
       setMessage(`Arrival could not be recorded: ${errorMessage}`);
+      return false;
     } finally {
       setIsRecordingArrival(false);
       refreshOfflineQueueCount();
@@ -2978,12 +3016,25 @@ function DriverApp() {
     await handleTerminalStop(currentStop, 'delivered');
   }
 
-  async function handleTerminalStop(stop: AssignedRouteStop, action: 'delivered' | 'failed') {
+  async function handleTerminalStop(
+    stop: AssignedRouteStop,
+    action: 'delivered' | 'failed',
+    options?: {
+      failureNote?: string;
+      failureReason?: StopProofFailureReason;
+      switchToRoutePlanId?: string;
+    },
+  ) {
+    const routeSwitchPlanId = options?.switchToRoutePlanId ?? pendingRoutePlanId;
     if (selectedRoute === null || deliveryStartResult === null) {
+      if (routeSwitchPlanId !== null) {
+        setPendingRoutePlanId(null);
+      }
       return;
     }
 
-    const isSkipped = action === 'failed';
+    const isRouteSwitch = routeSwitchPlanId !== null;
+    const isSkipped = action === 'failed' && !isRouteSwitch;
     const photoResult = proofPhotoResults[stop.deliveryStopId];
     const mediaResult = proofMediaResults[stop.deliveryStopId];
     const requestScreen = screenRef.current;
@@ -3013,11 +3064,15 @@ function DriverApp() {
           action,
           deliveryStopId: stop.deliveryStopId,
           media: mediaResult?.kind === 'uploaded' ? [mediaResult.media] : [],
-          note: isSkipped
+          note: options?.failureNote ?? (isSkipped
             ? 'Pickup order was incorrectly included in the delivery route.'
-            : formatStopProofNote(draft),
+            : formatStopProofNote(draft)),
           photoUris: photoResult?.kind === 'captured' ? [photoResult.uri] : [],
-          ...(isSkipped ? { reason: 'ADMIN_ROUTE_ASSIGNMENT_ERROR' as const } : {}),
+          ...(action !== 'failed'
+            ? {}
+            : isRouteSwitch
+              ? { reason: options?.failureReason ?? ('OTHER' as const) }
+              : { reason: 'ADMIN_ROUTE_ASSIGNMENT_ERROR' as const }),
           routePlanId: selectedRoute.id,
         },
         offlineQueue: queue,
@@ -3025,10 +3080,14 @@ function DriverApp() {
       setStopProofResults((current) => ({ ...current, [stop.deliveryStopId]: result }));
 
       if (result.kind === 'blocked') {
+        if (isRouteSwitch) {
+          setPendingRoutePlanId(null);
+        }
         setMessage(result.message);
         return;
       }
       if (result.kind === 'queued' && result.requiresRouteReconciliation === true) {
+        setPendingRoutePlanId(null);
         await clearAndStopActiveLocationSession(selectedRoute.id);
         syncOfflineQueueState(queue);
         setActiveRoutePlanId(null);
@@ -3043,6 +3102,7 @@ function DriverApp() {
         return;
       }
       if (result.kind === 'queued' && result.requiresRouteLookup === true) {
+        setPendingRoutePlanId(null);
         setRouteRecoveryRefreshReason('driver_access_expired');
         setMessage('Driver access expired. Refreshing route assignments while this stop remains queued.');
         return;
@@ -3054,6 +3114,15 @@ function DriverApp() {
         ...current,
         [stop.deliveryStopId]: formatLocalCompletedTime(new Date()),
       }));
+
+      if (routeSwitchPlanId !== null) {
+        const remainingStops = selectedRoute.stops.some(
+          (routeStop) => !nextCompletedStopIds.includes(routeStop.deliveryStopId),
+        );
+        await finishActiveRouteForSwitch(selectedRoute, routeSwitchPlanId, remainingStops);
+        return;
+      }
+
       const isLastStop = selectedRoute.stops.every((stop) => nextCompletedStopIds.includes(stop.deliveryStopId));
       if (isLastStop) {
         await finishRoute(selectedRoute);
@@ -3095,6 +3164,9 @@ function DriverApp() {
           : 'Stop completed. Next stop is ready.',
       );
     } catch (error) {
+      if (isRouteSwitch) {
+        setPendingRoutePlanId(null);
+      }
       const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
       setMessage(`${isSkipped ? 'Stop skip' : 'Stop completion'} could not be saved: ${errorMessage}`);
     } finally {
@@ -3103,15 +3175,54 @@ function DriverApp() {
     }
   }
 
+  async function finishActiveRouteForSwitch(
+    activeRoute: AssignedRoute,
+    targetRoutePlanId: string,
+    hasRemainingStops: boolean,
+  ): Promise<void> {
+    const targetRouteSession = getRouteSessionForAction(routeSessions, targetRoutePlanId);
+    const activeRouteSession = getRouteSessionForAction(routeSessions, activeRoute.id);
+    if (targetRouteSession === null || activeRouteSession === null) {
+      setPendingRoutePlanId(null);
+      setMessage('The selected route is no longer available. Refresh routes and try again.');
+      return;
+    }
+
+    const occurredAt = new Date();
+    const routeSubmission = toCompanyGuidanceSubmission(activeRouteSession);
+    const routeEnded = await finishRoute(activeRoute, hasRemainingStops
+      ? {
+          eventPayload: createDriverReleasedRoutePayload({
+            deliveryDate: activeRoute.deliveryDate,
+            occurredAt,
+            routeName: activeRoute.name,
+            routePlanId: activeRoute.id,
+            shopDomain: activeRouteSession.companyGuidance.shopDomain,
+          }),
+          now: occurredAt,
+          returnToRoutes: true,
+          routeEnd: 'released',
+          routeSubmission,
+        }
+      : undefined);
+    if (!routeEnded) {
+      setPendingRoutePlanId(null);
+      return;
+    }
+
+    setPendingRoutePlanId(null);
+    await startRouteSessionAfterConfirmed(targetRoutePlanId);
+  }
+
   async function finishRoute(route: AssignedRoute, options?: {
     eventPayload?: Record<string, unknown>;
     now?: Date;
     returnToRoutes?: boolean;
     routeEnd?: 'completed' | 'released';
     routeSubmission?: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>;
-  }) {
+  }): Promise<boolean> {
     if (deliveryStartResult?.kind !== 'delivery_active') {
-      return;
+      return false;
     }
 
     let routeSessionDeactivated = false;
@@ -3151,7 +3262,7 @@ function DriverApp() {
       setDeliveryFinishResult(finishResult);
       if (finishResult.kind === 'blocked') {
         setMessage(finishResult.message);
-        return;
+        return false;
       }
       if (finishResult.kind === 'queued' && finishResult.requiresRouteReconciliation === true) {
         syncOfflineQueueState(queue);
@@ -3159,7 +3270,7 @@ function DriverApp() {
         setScreen('mainTabs');
         setRouteRecoveryRefreshReason('route_not_in_progress');
         setMessage('Route ended or released on server. Unsynced delivery results were preserved for reconciliation.');
-        return;
+        return false;
       }
       if (finishResult.kind === 'queued') {
         setRouteSessions((current) => current.map((session): RouteSession => session.route.id === route.id
@@ -3198,6 +3309,7 @@ function DriverApp() {
         setScreen('completedDeliveries');
         setMessage(finishResult.message);
       }
+      return true;
     } catch (error) {
       if (routeSessionDeactivated) {
         try {
@@ -3210,6 +3322,7 @@ function DriverApp() {
       }
       const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
       setMessage(`Route completion could not be finalized: ${errorMessage}`);
+      return false;
     } finally {
       setIsFinishingRoute(false);
       refreshOfflineQueueCount();
@@ -3250,6 +3363,7 @@ function DriverApp() {
     setDeliveryStartResult(null);
     setDeliveryFinishResult(null);
     setActiveRoutePlanId(null);
+    setPendingRoutePlanId(null);
     setRouteStartedEventResult(null);
     setContinuousLocationResult(null);
     notifiedStopArrivalIdsRef.current.clear();
@@ -3357,6 +3471,7 @@ function DriverApp() {
         setScreen(stopDetailsReturnScreen);
         return true;
       case 'arrivalCheck':
+        setPendingRoutePlanId(null);
         setScreen(arrivalCheckReturnScreen);
         return true;
       case 'completedDeliveries':
@@ -3619,6 +3734,7 @@ function DriverApp() {
               isRefreshingRoutes={isRefreshingRoutes}
               isRequestingBackgroundLocation={isRequestingBackgroundLocation}
               isStartingRoute={isStartingRoute}
+              isSwitchingRoute={pendingRoutePlanId !== null}
               onDeleteRoute={handleDeleteActiveRoute}
               onOpenCompletedDeliveries={(routeId) => {
                 const routeSession = getRouteSessionForAction(routeSessions, routeId);
@@ -3948,6 +4064,7 @@ function MyRoutesPage({
   isRefreshingRoutes,
   isRequestingBackgroundLocation,
   isStartingRoute,
+  isSwitchingRoute,
   onDeleteRoute,
   onOpenCompletedDeliveries,
   onOpenBackgroundLocationSettings,
@@ -3969,6 +4086,7 @@ function MyRoutesPage({
   isRefreshingRoutes: boolean;
   isRequestingBackgroundLocation: boolean;
   isStartingRoute: boolean;
+  isSwitchingRoute: boolean;
   onDeleteRoute(routeId: string): void;
   onOpenCompletedDeliveries(routeId: string): void;
   onOpenBackgroundLocationSettings(): void;
@@ -4082,7 +4200,7 @@ function MyRoutesPage({
                   ? 'active'
                   : classifiedRouteCardStatus;
             const isRouteCardExpanded = expandedRouteKey === session.route.id;
-            const isStartDisabled = isStartingRoute || isFinishingRoute || activeRoutePlanId !== null
+            const isStartDisabled = isStartingRoute || isFinishingRoute || isSwitchingRoute
               || backgroundLocationPermission !== 'granted' || session.pendingRouteEnd !== undefined;
             const isContinueDisabled = isDeletingRoute || isFinishingRoute
               || backgroundLocationPermission !== 'granted' || activeRoutePlanId !== session.route.id;

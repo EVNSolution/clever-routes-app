@@ -130,6 +130,14 @@ describe('routes list behavior', () => {
     assert.match(source, /executionStatus === 'IN_PROGRESS'[\s\S]*pendingRouteEnd === undefined/u);
   });
 
+  it('keeps another ready route Start available while one route is active', () => {
+    const source = getRoutesPageSource();
+
+    assert.match(source, /const isStartDisabled = isStartingRoute \|\| isFinishingRoute \|\| isSwitchingRoute[\s\S]*backgroundLocationPermission !== 'granted'/u);
+    assert.doesNotMatch(source, /const isStartDisabled = [^\n]*activeRoutePlanId !== null/u);
+    assert.match(source, /const isContinueDisabled = [\s\S]*activeRoutePlanId !== session\.route\.id/u);
+  });
+
   it('clears acknowledged reconciliation records without deleting or refreshing the server route', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const routesPage = getRoutesPageSource();
