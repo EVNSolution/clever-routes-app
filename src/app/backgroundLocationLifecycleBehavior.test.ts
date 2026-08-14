@@ -163,7 +163,8 @@ describe('background location lifecycle wiring', () => {
 
     assert.match(finishSource, /deactivateActiveRouteSession: async \(\) => \{[\s\S]*clearActiveRouteSession\(route\.id\)/u);
     assert.doesNotMatch(finishSource, /catch \(error\) \{[\s\S]*clearAndStopActiveLocationSession\(route\.id\)/u);
-    assert.match(source, /const isStartDisabled = isStartingRoute \|\| isFinishingRoute \|\| activeRoutePlanId !== null/u);
+    assert.match(source, /const isStartDisabled = isStartingRoute \|\| isFinishingRoute \|\| isSwitchingRoute/u);
+    assert.doesNotMatch(source, /const isStartDisabled = [^\n]*activeRoutePlanId !== null/u);
   });
 
   it('shares the durable queue and retries each route with its own access token', () => {
