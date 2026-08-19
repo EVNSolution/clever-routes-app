@@ -5,17 +5,11 @@ import { Platform } from 'react-native';
 
 import {
   formatStopArrivalNotificationContent,
-  getStopArrivalNotificationAction,
   parseDriverRouteNotificationData,
-  parseStopArrivalNotificationData,
-  STOP_ARRIVAL_ADD_PROOF_ACTION_IDENTIFIER,
-  STOP_ARRIVAL_NEXT_STOP_ACTION_IDENTIFIER,
-  STOP_ARRIVAL_NOTIFICATION_CATEGORY_ID,
-  type StopArrivalNotificationResponse,
   type StopArrivalNotificationService,
 } from '../../../domain/notifications/stopArrivalNotifications';
 
-const STOP_ARRIVAL_CHANNEL_ID = 'stop-arrivals';
+const STOP_ARRIVAL_CHANNEL_ID = 'stop-arrivals-v2';
 const DRIVER_ROUTE_CHANNEL_ID = 'route-updates';
 const DRIVER_NOTIFICATION_BACKGROUND_TASK = 'clever-driver-route-notification';
 const PENDING_DRIVER_ROUTE_NOTIFICATION_KEY = 'clever.pendingDriverRouteNotification.v1';
@@ -72,16 +66,6 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
 
       return () => subscription.remove();
     },
-    addStopArrivalResponseListener: (listener) => {
-      const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-        const stopArrivalResponse = parseStopArrivalNotificationResponse(response);
-        if (stopArrivalResponse !== null) {
-          void Promise.resolve(listener(stopArrivalResponse)).catch(() => undefined);
-        }
-      });
-
-      return () => subscription.remove();
-    },
     consumePendingDriverRouteNotification: async () => {
       const raw = await AsyncStorage.getItem(PENDING_DRIVER_ROUTE_NOTIFICATION_KEY);
       if (raw === null) {
@@ -102,16 +86,6 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
         await Notifications.clearLastNotificationResponseAsync();
       }
       return data;
-    },
-    getLastStopArrivalResponse: async () => {
-      const response = await Notifications.getLastNotificationResponseAsync();
-      const stopArrivalResponse = response === null
-        ? null
-        : parseStopArrivalNotificationResponse(response);
-      if (stopArrivalResponse !== null) {
-        await Notifications.clearLastNotificationResponseAsync();
-      }
-      return stopArrivalResponse;
     },
     registerForStopArrivalNotifications: async () => {
       try {
@@ -146,7 +120,6 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
       await Notifications.scheduleNotificationAsync({
         content: {
           body: content.body,
-          categoryIdentifier: STOP_ARRIVAL_NOTIFICATION_CATEGORY_ID,
           data: candidate.data,
           sound: true,
           title: content.title,
@@ -162,28 +135,16 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
 }
 
 async function ensureStopArrivalNotificationChannel(): Promise<void> {
-  await Notifications.setNotificationCategoryAsync(STOP_ARRIVAL_NOTIFICATION_CATEGORY_ID, [
-    {
-      buttonTitle: 'Add Proof',
-      identifier: STOP_ARRIVAL_ADD_PROOF_ACTION_IDENTIFIER,
-      options: { opensAppToForeground: true },
-    },
-    {
-      buttonTitle: 'Next Stop',
-      identifier: STOP_ARRIVAL_NEXT_STOP_ACTION_IDENTIFIER,
-      options: { opensAppToForeground: true },
-    },
-  ]);
-
   if (Platform.OS !== 'android') {
     return;
   }
 
   await Notifications.setNotificationChannelAsync(STOP_ARRIVAL_CHANNEL_ID, {
-    importance: Notifications.AndroidImportance.HIGH,
+    enableVibrate: true,
+    importance: Notifications.AndroidImportance.MAX,
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
     name: 'Stop arrival alerts',
-    vibrationPattern: [0, 250, 250, 250],
+    vibrationPattern: [0, 400, 200, 400, 200, 700],
   });
   await Notifications.setNotificationChannelAsync(DRIVER_ROUTE_CHANNEL_ID, {
     importance: Notifications.AndroidImportance.HIGH,
@@ -191,17 +152,6 @@ async function ensureStopArrivalNotificationChannel(): Promise<void> {
     name: 'Route updates',
     vibrationPattern: [0, 250, 250, 250],
   });
-}
-
-function parseStopArrivalNotificationResponse(
-  response: Notifications.NotificationResponse,
-): StopArrivalNotificationResponse | null {
-  const data = parseStopArrivalNotificationData(response.notification.request.content.data);
-  const action = getStopArrivalNotificationAction(
-    response.actionIdentifier,
-    Notifications.DEFAULT_ACTION_IDENTIFIER,
-  );
-  return data === null || action === null ? null : { action, data };
 }
 
 async function readDevicePushToken(): Promise<string | null> {

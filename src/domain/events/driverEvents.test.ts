@@ -254,6 +254,36 @@ describe('driver event API boundary', () => {
     assert.equal(updatedRoute.stops[1]?.estimatedArrivalAt, '2026-05-12T11:23:00.000Z');
   });
 
+  it('includes the captured arrival coordinates and planned-stop distance in the first STOP_ARRIVED event', async () => {
+    const service = createMockDriverEventService();
+    const recordedAt = new Date('2026-08-18T15:48:00.000Z');
+
+    const result = await recordStopArrivedAfterDeliveryStart({
+      arrivalEvidence: {
+        distanceToPlannedStopMeters: 37.4,
+        latitude: 37.5133,
+        longitude: 126.9428,
+        recordedAt,
+      },
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      deliveryStopId: 'stop-1',
+      driverEventService: service,
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.deepEqual(service.recordedEvents[0], {
+      clientEventId: `stop-arrived-stop-1-${recordedAt.getTime().toString(36)}`,
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_ARRIVED',
+      latitude: 37.5133,
+      longitude: 126.9428,
+      occurredAt: recordedAt,
+      payload: { distanceToPlannedStopMeters: 37.4 },
+      routePlanId: 'route-1',
+    });
+  });
+
   it('queues STOP_ARRIVED when the server cannot receive the arrival signal', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     const result = await recordStopArrivedAfterDeliveryStart({

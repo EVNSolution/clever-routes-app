@@ -57,13 +57,13 @@ describe('route session current task behavior', () => {
   it('returns to My Routes after restoring an active session on app launch', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const restoreStart = appSource.indexOf('if (restoredActiveSession !== null) {');
-    const restoreEnd = appSource.indexOf('if (shouldNavigateOnSuccess) {', restoreStart);
+    const restoreEnd = appSource.indexOf('\n      if (shouldNavigateOnSuccess) {', restoreStart);
     const restoreSource = appSource.slice(restoreStart, restoreEnd);
 
     assert.notEqual(restoreStart, -1);
     assert.notEqual(restoreEnd, -1);
-    assert.match(restoreSource, /setActiveRoutePlanId\(restoredActiveSession\.route\.id\);[\s\S]*setNavigationStepIndex\(restoredStepIndex\);[\s\S]*setScreen\('mainTabs'\)/u);
-    assert.match(restoreSource, /setMessage\('Active route session restored\.'\)/u);
+    assert.match(restoreSource, /setActiveRoutePlanId\(restoredActiveSession\.route\.id\);[\s\S]*setNavigationStepIndex\(restoredStepIndex\);[\s\S]*if \(shouldNavigateOnSuccess\) \{\s+setScreen\('mainTabs'\);\s+\}/u);
+    assert.doesNotMatch(restoreSource, /setMessage\('Active route session restored\.'\)/u);
     assert.doesNotMatch(restoreSource, /Tap Continue/u);
     assert.doesNotMatch(restoreSource, /setScreen\('routeSession'\)/u);
   });
@@ -132,7 +132,7 @@ describe('route session current task behavior', () => {
   it('keeps pickup queued copy truthful and refreshes route access immediately after queued 401', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const arrivedBegin = appSource.indexOf('async function handleArrivedAtStep()');
-    const arrivedEnd = appSource.indexOf('\n\n  async function recordStopArrival(', arrivedBegin);
+    const arrivedEnd = appSource.indexOf('\n\n  async function activateAndRecordStopArrival(', arrivedBegin);
     const arrivedSource = appSource.slice(arrivedBegin, arrivedEnd);
 
     assert.match(arrivedSource, /const pickupStopLabel = pickupStop === undefined \? 'the next stop' : `Stop \$\{pickupStop\.sequence\}`/u);
@@ -199,7 +199,7 @@ describe('route session current task behavior', () => {
     assert.match(arriveSource, /activateAndRecordStopArrival\(selectedStop\)/u);
     assert.match(appSource, /await driverAccessTokenStore\.saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: selectedStopIndex \+ 1/u);
     assert.match(appSource, /await recordStopArrival\(selectedStop, 'stopDetails', requestScreen\)/u);
-    assert.match(appSource, /await submitStopArrivalForRouteStop\(selectedRouteSession, stop\)/u);
+    assert.match(appSource, /await submitStopArrivalForRouteStop\(routeSession, stop, arrivalEvidence\)/u);
   });
 
   it('chooses the next incomplete stop without assuming numeric sequence progression', () => {
@@ -241,7 +241,7 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /const initialStepIndex = COMPANY_STEP_INDEX/u);
     assert.match(appSource, /saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: initialStepIndex/u);
     assert.match(appSource, /setNavigationStepIndex\(initialStepIndex\)/u);
-    assert.match(appSource, /notification: buildActiveRouteForegroundNotification\(\{ currentStepIndex: initialStepIndex, route: routeSession\.route \}\)/u);
+    assert.match(appSource, /notification: buildActiveRouteForegroundNotification\(\{[\s\S]*currentStepIndex: initialStepIndex,[\s\S]*route: routeSession\.route,[\s\S]*\}\)/u);
     assert.doesNotMatch(appSource, /GPS tracking (?:is active|started)/u);
     assert.doesNotMatch(appSource, /formatContinuousLocationResult/u);
     assert.doesNotMatch(appSource, /continuousLocationResult !== null \? <StatusBanner/u);
@@ -269,16 +269,20 @@ describe('route session current task behavior', () => {
     const handlerStart = appSource.indexOf('const handleStopArrivalNotificationPress = useCallback(');
     const handlerEnd = appSource.indexOf('\n\n  useEffect(() => {', handlerStart);
     const handlerSource = appSource.slice(handlerStart, handlerEnd);
+    const arrivalStart = appSource.indexOf('const recordStopArrival = useCallback(');
+    const arrivalEnd = appSource.indexOf('\n\n  const handleStopArrivalNotificationPress', arrivalStart);
+    const arrivalSource = appSource.slice(arrivalStart, arrivalEnd);
 
     assert.notEqual(handlerStart, -1);
     assert.notEqual(handlerEnd, -1);
     assert.match(handlerSource, /activeRoutePlanId !== routeSession\.route\.id/u);
     assert.match(handlerSource, /navigationStepIndex !== stopIndex \+ 1/u);
-    assert.match(handlerSource, /await submitStopArrivalForRouteStop\(routeSession, routeSession\.route\.stops\[stopIndex\]\)/u);
+    assert.match(handlerSource, /await recordStopArrival\(stop, 'routeSession', requestScreen, action, routeSession\)/u);
+    assert.doesNotMatch(handlerSource, /submitStopArrivalForRouteStop/u);
     assert.match(handlerSource, /const requestScreen = screenRef\.current/u);
-    assert.match(handlerSource, /if \(screenRef\.current !== requestScreen\) \{[\s\S]*return;[\s\S]*\}[\s\S]*setArrivalCheckReturnScreen\('routeSession'\)/u);
+    assert.match(arrivalSource, /if \(screenRef\.current !== requestScreen\) \{[\s\S]*return false;[\s\S]*\}[\s\S]*setArrivalCheckReturnScreen\(returnScreen\)/u);
     assert.ok(handlerSource.indexOf('activeRoutePlanId !== routeSession.route.id') < handlerSource.indexOf('completedStopIds.includes'));
-    assert.ok(handlerSource.indexOf('submitStopArrivalForRouteStop') < handlerSource.indexOf("setScreen('arrivalCheck')"));
+    assert.ok(arrivalSource.indexOf('submitStopArrivalForRouteStop') < arrivalSource.indexOf("setScreen('arrivalCheck')"));
   });
 
   it('returns from arrival completion to the screen that initiated Arrive', () => {
@@ -294,9 +298,9 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /await recordStopArrival\(currentStop, 'routeSession'\)/u);
     assert.match(appSource, /await recordStopArrival\(selectedStop, 'stopDetails', requestScreen\)/u);
     assert.match(appSource, /void recordStopArrival\(selectedStop, 'stopDetails'\)/u);
-    assert.match(appSource, /async function recordStopArrival\([\s\S]*requestScreen = screenRef\.current,[\s\S]*\)/u);
+    assert.match(appSource, /const recordStopArrival = useCallback\(async \([\s\S]*requestScreen = screenRef\.current,[\s\S]*\)/u);
     assert.match(appSource, /setArrivalCheckReturnScreen\(returnScreen\);[\s\S]*setScreen\('arrivalCheck'\)/u);
-    assert.match(appSource, /handleStopArrivalNotificationPress[\s\S]*setArrivalCheckReturnScreen\('routeSession'\);[\s\S]*setScreen\('arrivalCheck'\)/u);
+    assert.match(appSource, /handleStopArrivalNotificationPress[\s\S]*recordStopArrival\(stop, 'routeSession', requestScreen, action, routeSession\)/u);
     assert.match(backHandlerSource, /case 'arrivalCheck':[\s\S]*setScreen\(arrivalCheckReturnScreen\);[\s\S]*return true/u);
     assert.match(appSource, /\[accountName, arrivalCheckReturnScreen, isPhotoActionSheetVisible, screen, setScreen, stopDetailsReturnScreen\]/u);
     assert.match(appSource, /screen === 'arrivalCheck' \? \([\s\S]*<FixedScreenHeader onBack=\{handleAppBack\}/u);
@@ -317,8 +321,8 @@ describe('route session current task behavior', () => {
 
   it('does not let a completed async Arrive request pull the user forward after Back', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
-    const arrivalStart = appSource.indexOf('async function recordStopArrival(');
-    const arrivalEnd = appSource.indexOf('\n\n  async function activateAndRecordStopArrival(', arrivalStart);
+    const arrivalStart = appSource.indexOf('const recordStopArrival = useCallback(');
+    const arrivalEnd = appSource.indexOf('\n\n  const handleStopArrivalNotificationPress', arrivalStart);
     const arrivalSource = appSource.slice(arrivalStart, arrivalEnd);
 
     assert.notEqual(arrivalStart, -1);
@@ -411,14 +415,14 @@ describe('route session current task behavior', () => {
 
     assert.match(startSource, /onCompleteCurrentDelivery:[\s\S]*recordStopArrival\(currentStop, 'mainTabs'\)/u);
     assert.doesNotMatch(startSource, /onCompleteCurrentDelivery:[\s\S]*handleTerminalStop\([^)]*'delivered'/u);
-    assert.match(appSource, /async function recordStopArrival\([\s\S]*setArrivalCheckReturnScreen\(returnScreen\)[\s\S]*setScreen\('arrivalCheck'\)/u);
+    assert.match(appSource, /const recordStopArrival = useCallback\(async \([\s\S]*setArrivalCheckReturnScreen\(returnScreen\)[\s\S]*setScreen\('arrivalCheck'\)/u);
     assert.match(appSource, /case 'arrivalCheck':[\s\S]*setPendingRoutePlanId\(null\)[\s\S]*setScreen\(arrivalCheckReturnScreen\)/u);
   });
 
   it('keeps Store Pickup and out-of-order arrival work from overriding Back', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const arrivedBegin = appSource.indexOf('async function handleArrivedAtStep()');
-    const arrivedEnd = appSource.indexOf('\n\n  async function recordStopArrival(', arrivedBegin);
+    const arrivedEnd = appSource.indexOf('\n\n  async function activateAndRecordStopArrival(', arrivedBegin);
     const arrivedSource = appSource.slice(arrivedBegin, arrivedEnd);
     const activateBegin = appSource.indexOf('async function activateAndRecordStopArrival(');
     const activateEnd = appSource.indexOf('\n\n  function handleOpenStopFromRouteSession(', activateBegin);
@@ -537,8 +541,12 @@ describe('route session current task behavior', () => {
 
   it('groups co-located stop numbers into a native capsule marker', () => {
     const nativeMapSource = readFileSync(nativeMapPath, 'utf8');
+    const markerSourceStart = nativeMapSource.indexOf('<GeoJSONSource data={routeMarkerCollection}');
+    const markerSourceEnd = nativeMapSource.indexOf('</GeoJSONSource>', markerSourceStart);
+    const markerSource = nativeMapSource.slice(markerSourceStart, markerSourceEnd);
 
     assert.match(nativeMapSource, /<GeoJSONSource data=\{routeMarkerCollection\}/u);
+    assert.doesNotMatch(markerSource, /<>|<\/>/u);
     assert.match(nativeMapSource, /id=\{SNAPPED_STOP_SOURCE_ID\} key=\{SNAPPED_STOP_SOURCE_ID\}/u);
     assert.match(nativeMapSource, /id=\{ROUTE_MARKER_SOURCE_ID\} key=\{ROUTE_MARKER_SOURCE_ID\}/u);
     assert.match(nativeMapSource, /id="route-preview-snapped-stop"[\s\S]*id="route-preview-marker-circle"[\s\S]*id="route-preview-marker-label"/u);

@@ -19,10 +19,10 @@ describe('active route foreground notification', () => {
     };
 
     assert.deepEqual(buildActiveRouteForegroundNotification({ currentStepIndex: 2, route }), {
-      body: '200 Queen St W, Toronto\nStatus: Transfer pending\nTotal: CAD 52.00\nMethod: eTransfer\nNote: Please leave the order beside the loading entrance.\nItems 1 type, 1 EA',
-      expandedBody: 'Status\nTransfer pending\nTotal\nCAD 52.00\nMethod\neTransfer\nAddress\n200 Queen St W, Toronto\nCustomer note\nPlease leave the order beside the loading entrance.\nItems\n1 type, 1 EA',
+      body: '200 Queen St W, Toronto\nStatus: Transfer pending\nTotal: CAD 52.00\nCustomer note: Please leave the order beside the loading entrance.\nItems 1 type, 1 EA',
+      expandedBody: '200 Queen St W, Toronto\nStatus\nTransfer pending\nTotal\nCAD 52.00\nCustomer note\nPlease leave the order beside the loading entrance.\nItems\n1 type, 1 EA',
       title: 'Next stop 2  ETA 7:19 AM',
-      url: 'clever-routes://route-stop?routePlanId=11111111-1111-4111-8111-111111111111&deliveryStopId=33333333-3333-4333-8333-333333333333',
+      url: 'clever-routes://route-stop?routePlanId=11111111-1111-4111-8111-111111111111&deliveryStopId=33333333-3333-4333-8333-333333333333&showStopActions=true',
     });
     assert.doesNotMatch(buildActiveRouteForegroundNotification({ currentStepIndex: 2, route }).body, /Payment/u);
     assert.doesNotMatch(buildActiveRouteForegroundNotification({ currentStepIndex: 2, route }).expandedBody ?? '', /Payment/u);
@@ -50,7 +50,7 @@ describe('active route foreground notification', () => {
 
     assert.match(notification.body, /Order type: Pickup/u);
     assert.doesNotMatch(notification.body, /Review payment|Payment:/u);
-    assert.match(notification.expandedBody ?? '', /^Order type\nPickup\n/u);
+    assert.match(notification.expandedBody ?? '', /^100 King St W, Toronto\nOrder type\nPickup\n/u);
   });
 
   it('shows item type and total quantity counts without product names', () => {
@@ -76,10 +76,10 @@ describe('active route foreground notification', () => {
     };
 
     assert.deepEqual(buildActiveRouteForegroundNotification({ currentStepIndex: 1, route }), {
-      body: '100 King St W, Toronto\nStatus: Collect cash\nTotal: CAD 84.50\nMethod: Cash on delivery\nNote: Call on arrival.\nItems 2 types, 7 EA',
-      expandedBody: 'Status\nCollect cash\nTotal\nCAD 84.50\nMethod\nCash on delivery\nAddress\n100 King St W, Toronto\nCustomer note\nCall on arrival.\nItems\n2 types, 7 EA',
+      body: '100 King St W, Toronto\nStatus: Collect cash\nTotal: CAD 84.50\nCustomer note: Call on arrival.\nItems 2 types, 7 EA',
+      expandedBody: '100 King St W, Toronto\nStatus\nCollect cash\nTotal\nCAD 84.50\nCustomer note\nCall on arrival.\nItems\n2 types, 7 EA',
       title: 'Next stop 1  ETA 7:08 AM',
-      url: 'clever-routes://route-stop?routePlanId=11111111-1111-4111-8111-111111111111&deliveryStopId=22222222-2222-4222-8222-222222222222',
+      url: 'clever-routes://route-stop?routePlanId=11111111-1111-4111-8111-111111111111&deliveryStopId=22222222-2222-4222-8222-222222222222&showStopActions=true',
     });
     assert.doesNotMatch(buildActiveRouteForegroundNotification({ currentStepIndex: 1, route }).expandedBody ?? '', /unnecessarily long product/u);
   });
@@ -96,7 +96,8 @@ describe('active route foreground notification', () => {
     };
 
     const notification = buildActiveRouteForegroundNotification({ currentStepIndex: 1, route });
-    assert.match(notification.body, /Status: Amount unavailable\nTotal: Amount unavailable\nMethod: Cash/u);
+    assert.match(notification.body, /Status: Amount unavailable\nTotal: Amount unavailable/u);
+    assert.doesNotMatch(notification.body, /Method:/u);
     assert.doesNotMatch(notification.body, /Collect cash/u);
     assert.match(notification.expandedBody ?? '', /Total\nAmount unavailable/u);
   });
@@ -130,6 +131,35 @@ describe('active route foreground notification', () => {
 
     const source = readFileSync(new URL('./activeRouteNotification.ts', import.meta.url), 'utf8');
     assert.doesNotMatch(source, /new URL\(/u);
+  });
+
+  it('always exposes direct actions for the current delivery stop', () => {
+    const notification = buildActiveRouteForegroundNotification({
+      currentStepIndex: 1,
+      route: sampleAssignedRoute,
+    });
+
+    assert.match(notification.url ?? '', /showStopActions=true/u);
+    assert.deepEqual(parseActiveRouteNotificationUrl(`${notification.url}&action=add_proof`), {
+      action: 'add_proof',
+      deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+      routePlanId: sampleAssignedRoute.id,
+    });
+    assert.deepEqual(parseActiveRouteNotificationUrl(`${notification.url}&action=next_stop`), {
+      action: 'next_stop',
+      deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+      routePlanId: sampleAssignedRoute.id,
+    });
+    assert.equal(parseActiveRouteNotificationUrl(`${notification.url}&action=unknown`), null);
+  });
+
+  it('exposes direct actions again when the current delivery stop changes', () => {
+    const notification = buildActiveRouteForegroundNotification({
+      currentStepIndex: 2,
+      route: sampleAssignedRoute,
+    });
+
+    assert.match(notification.url ?? '', /showStopActions=true/u);
   });
 
   it('opens a notification target only when it is the exact active route and current stop', () => {

@@ -1,5 +1,4 @@
 import {
-  formatAssignedRouteItemLine,
   type AssignedRoute,
   type AssignedRouteCoordinates,
   type AssignedRouteStop,
@@ -8,9 +7,6 @@ import {
 export const STOP_ARRIVAL_NOTIFICATION_TYPE = 'stop_arrival';
 export const DRIVER_ROUTE_NOTIFICATION_TYPE = 'driver_route_changed';
 export const DEFAULT_STOP_ARRIVAL_RADIUS_METERS = 50;
-export const STOP_ARRIVAL_NOTIFICATION_CATEGORY_ID = 'stopArrivalActions';
-export const STOP_ARRIVAL_ADD_PROOF_ACTION_IDENTIFIER = 'addProof';
-export const STOP_ARRIVAL_NEXT_STOP_ACTION_IDENTIFIER = 'nextStop';
 
 export type DriverRouteNotificationAction = 'assigned' | 'cancelled' | 'changed' | 'released';
 
@@ -58,6 +54,12 @@ export type StopArrivalLocation = {
   longitude: number;
 };
 
+export type StopArrivalProximityEvidence = {
+  distanceMeters: number;
+  isWithinRadius: boolean;
+  radiusMeters: number;
+};
+
 export type StopArrivalNotificationRegistrationResult =
   | {
       devicePushToken: string | null;
@@ -71,30 +73,12 @@ export type StopArrivalNotificationRegistrationResult =
 export type StopArrivalNotificationService = {
   addDriverRouteNotificationReceivedListener(listener: (data: DriverRouteNotificationData) => Promise<void> | void): () => void;
   addDriverRouteNotificationResponseListener(listener: (data: DriverRouteNotificationData) => Promise<void> | void): () => void;
-  addStopArrivalResponseListener(listener: (response: StopArrivalNotificationResponse) => Promise<void> | void): () => void;
   consumePendingDriverRouteNotification(): Promise<DriverRouteNotificationData | null>;
   getDevicePushToken(): Promise<string | null>;
   getLastDriverRouteNotificationResponse(): Promise<DriverRouteNotificationData | null>;
-  getLastStopArrivalResponse(): Promise<StopArrivalNotificationResponse | null>;
   registerForStopArrivalNotifications(): Promise<StopArrivalNotificationRegistrationResult>;
   scheduleStopArrivalNotification(input: StopArrivalNotificationCandidate): Promise<void>;
 };
-
-export function getStopArrivalNotificationAction(
-  actionIdentifier: string,
-  defaultActionIdentifier: string,
-): StopArrivalNotificationAction | null {
-  if (
-    actionIdentifier === defaultActionIdentifier
-    || actionIdentifier === STOP_ARRIVAL_ADD_PROOF_ACTION_IDENTIFIER
-  ) {
-    return 'add_proof';
-  }
-  if (actionIdentifier === STOP_ARRIVAL_NEXT_STOP_ACTION_IDENTIFIER) {
-    return 'next_stop';
-  }
-  return null;
-}
 
 export function parseDriverRouteNotificationData(
   data: Record<string, unknown> | null | undefined,
@@ -166,13 +150,13 @@ export function getStopArrivalNotificationCandidate(input: {
     return null;
   }
 
-  const destination = resolveStopCoordinates(input.route, stop);
-  if (destination === null) {
-    return null;
-  }
-
-  const distanceMeters = getDistanceMeters(input.lastLocation, destination);
-  if (distanceMeters > radiusMeters) {
+  const proximity = getStopArrivalProximityEvidence({
+    location: input.lastLocation,
+    radiusMeters,
+    route: input.route,
+    stop,
+  });
+  if (proximity === null || !proximity.isWithinRadius) {
     return null;
   }
 
@@ -182,41 +166,35 @@ export function getStopArrivalNotificationCandidate(input: {
       routePlanId: input.route.id,
       type: STOP_ARRIVAL_NOTIFICATION_TYPE,
     },
-    distanceMeters,
+    distanceMeters: proximity.distanceMeters,
     radiusMeters,
     stop,
   };
 }
 
-export function parseStopArrivalNotificationData(data: Record<string, unknown> | null | undefined): StopArrivalNotificationData | null {
-  if (data === null || data === undefined) {
+export function getStopArrivalProximityEvidence(input: {
+  location: StopArrivalLocation;
+  radiusMeters?: number;
+  route: AssignedRoute;
+  stop: AssignedRouteStop;
+}): StopArrivalProximityEvidence | null {
+  const destination = resolveStopCoordinates(input.route, input.stop);
+  if (destination === null) {
     return null;
   }
 
-  if (
-    data.type !== STOP_ARRIVAL_NOTIFICATION_TYPE ||
-    typeof data.routePlanId !== 'string' ||
-    data.routePlanId.trim().length === 0 ||
-    typeof data.deliveryStopId !== 'string' ||
-    data.deliveryStopId.trim().length === 0
-  ) {
-    return null;
-  }
-
+  const radiusMeters = input.radiusMeters ?? DEFAULT_STOP_ARRIVAL_RADIUS_METERS;
+  const distanceMeters = getDistanceMeters(input.location, destination);
   return {
-    deliveryStopId: data.deliveryStopId,
-    routePlanId: data.routePlanId,
-    type: STOP_ARRIVAL_NOTIFICATION_TYPE,
+    distanceMeters,
+    isWithinRadius: distanceMeters <= radiusMeters,
+    radiusMeters,
   };
 }
 
 export function formatStopArrivalNotificationContent(candidate: StopArrivalNotificationCandidate): StopArrivalNotificationContent {
-  const itemLines = candidate.stop.items.map(formatAssignedRouteItemLine);
   return {
-    body: [
-      `You have arrived near the destination: ${formatStopArrivalAddress(candidate.stop)}.`,
-      ...itemLines,
-    ].join('\n'),
+    body: formatStopArrivalAddress(candidate.stop),
     title: `Arrived near Stop ${candidate.stop.sequence}`,
   };
 }
@@ -236,16 +214,7 @@ function resolveStopCoordinates(route: AssignedRoute, stop: AssignedRouteStop): 
 }
 
 function formatStopArrivalAddress(stop: AssignedRouteStop): string {
-  return [
-    stop.address.address1,
-    stop.address.address2,
-    stop.address.city,
-    stop.address.province,
-    stop.address.postalCode,
-  ]
-    .map((part) => part?.trim() ?? '')
-    .filter(Boolean)
-    .join(', ');
+  return stop.address.address1.trim() || stop.address.city.trim() || 'Address unavailable';
 }
 
 function getDistanceMeters(a: StopArrivalLocation, b: StopArrivalLocation): number {

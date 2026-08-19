@@ -513,8 +513,7 @@ export function NativeRouteMapPreview({
         ) : null}
         {routeMarkerCollection !== null ? (
           <GeoJSONSource data={routeMarkerCollection} id={ROUTE_MARKER_SOURCE_ID} key={ROUTE_MARKER_SOURCE_ID}>
-            {compactRouteFocus ? (
-              <>
+            {compactRouteFocus ? [
                 <Layer
                   filter={[
                     'any',
@@ -522,11 +521,12 @@ export function NativeRouteMapPreview({
                     ['==', ['get', 'kind'], 'depot'],
                   ]}
                   id="route-preview-marker-session-focus"
+                  key="route-preview-marker-session-focus"
                   layout={ROUTE_MARKER_SESSION_FOCUS_LAYOUT}
                   paint={ROUTE_MARKER_SESSION_PAINT}
                   source={ROUTE_MARKER_SOURCE_ID}
                   type="symbol"
-                />
+                />,
                 <Layer
                   filter={[
                     'all',
@@ -534,17 +534,17 @@ export function NativeRouteMapPreview({
                     ['!=', ['get', 'kind'], 'depot'],
                   ]}
                   id="route-preview-marker-session-context"
+                  key="route-preview-marker-session-context"
                   layout={ROUTE_MARKER_SESSION_CONTEXT_LAYOUT}
                   paint={ROUTE_MARKER_SESSION_PAINT}
                   source={ROUTE_MARKER_SOURCE_ID}
                   type="symbol"
-                />
-              </>
-            ) : (
-              <>
+                />,
+              ] : [
                 <Layer
                   filter={['==', ['get', 'groupSize'], 1]}
                   id="route-preview-marker-circle"
+                  key="route-preview-marker-circle"
                   layout={{
                     'circle-sort-key': [
                       'case',
@@ -556,15 +556,16 @@ export function NativeRouteMapPreview({
                   paint={ROUTE_MARKER_CIRCLE_PAINT}
                   source={ROUTE_MARKER_SOURCE_ID}
                   type="circle"
-                />
+                />,
                 <Layer
                   filter={['==', ['get', 'groupSize'], 1]}
                   id="route-preview-marker-label"
+                  key="route-preview-marker-label"
                   layout={ROUTE_MARKER_LABEL_LAYOUT}
                   paint={ROUTE_MARKER_LABEL_PAINT}
                   source={ROUTE_MARKER_SOURCE_ID}
                   type="symbol"
-                />
+                />,
                 <Layer
                   filter={['all', ['>', ['get', 'groupSize'], 1], ['!=', ['get', 'markerState'], 'current']]}
                   id="route-preview-marker-group-compact-border"
@@ -573,7 +574,7 @@ export function NativeRouteMapPreview({
                   paint={ROUTE_MARKER_GROUP_BORDER_PAINT}
                   source={ROUTE_MARKER_SOURCE_ID}
                   type="symbol"
-                />
+                />,
                 <Layer
                   filter={['all', ['>', ['get', 'groupSize'], 1], ['!=', ['get', 'markerState'], 'current']]}
                   id="route-preview-marker-group-compact"
@@ -582,7 +583,7 @@ export function NativeRouteMapPreview({
                   paint={ROUTE_MARKER_GROUP_PAINT}
                   source={ROUTE_MARKER_SOURCE_ID}
                   type="symbol"
-                />
+                />,
                 <Layer
                   filter={['all', ['>', ['get', 'groupSize'], 1], ['==', ['get', 'markerState'], 'current']]}
                   id="route-preview-marker-group-border"
@@ -591,7 +592,7 @@ export function NativeRouteMapPreview({
                   paint={ROUTE_MARKER_GROUP_BORDER_PAINT}
                   source={ROUTE_MARKER_SOURCE_ID}
                   type="symbol"
-                />
+                />,
                 <Layer
                   filter={['all', ['>', ['get', 'groupSize'], 1], ['==', ['get', 'markerState'], 'current']]}
                   id="route-preview-marker-group"
@@ -600,9 +601,8 @@ export function NativeRouteMapPreview({
                   paint={ROUTE_MARKER_GROUP_PAINT}
                   source={ROUTE_MARKER_SOURCE_ID}
                   type="symbol"
-                />
-              </>
-            )}
+                />,
+              ]}
           </GeoJSONSource>
         ) : null}
         {showUserLocation && userLocationFeature !== null ? (
