@@ -5,8 +5,13 @@ import { Platform } from 'react-native';
 
 import {
   formatStopArrivalNotificationContent,
+  getStopArrivalNotificationAction,
   parseDriverRouteNotificationData,
   parseStopArrivalNotificationData,
+  STOP_ARRIVAL_ADD_PROOF_ACTION_IDENTIFIER,
+  STOP_ARRIVAL_NEXT_STOP_ACTION_IDENTIFIER,
+  STOP_ARRIVAL_NOTIFICATION_CATEGORY_ID,
+  type StopArrivalNotificationResponse,
   type StopArrivalNotificationService,
 } from '../../../domain/notifications/stopArrivalNotifications';
 
@@ -69,9 +74,9 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
     },
     addStopArrivalResponseListener: (listener) => {
       const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-        const data = parseStopArrivalNotificationData(response.notification.request.content.data);
-        if (data !== null) {
-          void Promise.resolve(listener(data)).catch(() => undefined);
+        const stopArrivalResponse = parseStopArrivalNotificationResponse(response);
+        if (stopArrivalResponse !== null) {
+          void Promise.resolve(listener(stopArrivalResponse)).catch(() => undefined);
         }
       });
 
@@ -100,7 +105,13 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
     },
     getLastStopArrivalResponse: async () => {
       const response = await Notifications.getLastNotificationResponseAsync();
-      return parseStopArrivalNotificationData(response?.notification.request.content.data);
+      const stopArrivalResponse = response === null
+        ? null
+        : parseStopArrivalNotificationResponse(response);
+      if (stopArrivalResponse !== null) {
+        await Notifications.clearLastNotificationResponseAsync();
+      }
+      return stopArrivalResponse;
     },
     registerForStopArrivalNotifications: async () => {
       try {
@@ -135,11 +146,14 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
       await Notifications.scheduleNotificationAsync({
         content: {
           body: content.body,
+          categoryIdentifier: STOP_ARRIVAL_NOTIFICATION_CATEGORY_ID,
           data: candidate.data,
           sound: true,
           title: content.title,
         },
-        trigger: null,
+        trigger: Platform.OS === 'android'
+          ? { channelId: STOP_ARRIVAL_CHANNEL_ID }
+          : null,
       });
       void candidate.distanceMeters;
       void candidate.radiusMeters;
@@ -148,6 +162,19 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
 }
 
 async function ensureStopArrivalNotificationChannel(): Promise<void> {
+  await Notifications.setNotificationCategoryAsync(STOP_ARRIVAL_NOTIFICATION_CATEGORY_ID, [
+    {
+      buttonTitle: 'Add Proof',
+      identifier: STOP_ARRIVAL_ADD_PROOF_ACTION_IDENTIFIER,
+      options: { opensAppToForeground: true },
+    },
+    {
+      buttonTitle: 'Next Stop',
+      identifier: STOP_ARRIVAL_NEXT_STOP_ACTION_IDENTIFIER,
+      options: { opensAppToForeground: true },
+    },
+  ]);
+
   if (Platform.OS !== 'android') {
     return;
   }
@@ -164,6 +191,17 @@ async function ensureStopArrivalNotificationChannel(): Promise<void> {
     name: 'Route updates',
     vibrationPattern: [0, 250, 250, 250],
   });
+}
+
+function parseStopArrivalNotificationResponse(
+  response: Notifications.NotificationResponse,
+): StopArrivalNotificationResponse | null {
+  const data = parseStopArrivalNotificationData(response.notification.request.content.data);
+  const action = getStopArrivalNotificationAction(
+    response.actionIdentifier,
+    Notifications.DEFAULT_ACTION_IDENTIFIER,
+  );
+  return data === null || action === null ? null : { action, data };
 }
 
 async function readDevicePushToken(): Promise<string | null> {

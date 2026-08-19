@@ -22,6 +22,7 @@ export type PersistedDriverAccess = {
 };
 
 export type PersistedActiveRouteSession = {
+  completedStopIds?: string[];
   navigationStepIndex: number;
   pickupCompletedAt?: string;
   routePlanId: string;
@@ -53,6 +54,7 @@ export type DriverAccessTokenStore = {
   loadActiveDriverAccess(): Promise<DriverAccessRestoreResult>;
   markActiveRouteStarted(routePlanId: string, startedAt: string): Promise<boolean>;
   saveActiveRouteSession(input: {
+    completedStopIds?: string[];
     navigationStepIndex: number;
     pickupCompleted?: boolean;
     routePlanId: string;
@@ -185,6 +187,9 @@ export function createDriverAccessTokenStore(input: {
       };
     })),
     saveActiveRouteSession: (activeRouteSession) => {
+      const completedStopIds = activeRouteSession.completedStopIds === undefined
+        ? undefined
+        : [...new Set(activeRouteSession.completedStopIds.map((stopId) => stopId.trim()).filter(Boolean))];
       const navigationStepIndex = Number.isInteger(activeRouteSession.navigationStepIndex) &&
         activeRouteSession.navigationStepIndex >= 0
         ? activeRouteSession.navigationStepIndex
@@ -208,6 +213,11 @@ export function createDriverAccessTokenStore(input: {
           ...payload,
           savedAt: now().toISOString(),
           activeRouteSession: {
+            ...(completedStopIds === undefined
+              ? currentSession?.completedStopIds === undefined
+                ? {}
+                : { completedStopIds: currentSession.completedStopIds }
+              : { completedStopIds }),
             navigationStepIndex,
             ...(currentSession?.pickupCompletedAt === undefined && activeRouteSession.pickupCompleted !== true
               ? {}
@@ -355,6 +365,10 @@ function isPersistedActiveRouteSession(value: unknown): value is PersistedActive
   return (
     session.status === 'active' &&
     typeof session.routePlanId === 'string' && session.routePlanId.trim() !== '' &&
+    (session.completedStopIds === undefined || (
+      Array.isArray(session.completedStopIds)
+      && session.completedStopIds.every((stopId) => typeof stopId === 'string' && stopId.trim() !== '')
+    )) &&
     Number.isInteger(session.navigationStepIndex) && (session.navigationStepIndex as number) >= 0 &&
     (session.pickupCompletedAt === undefined || (
       typeof session.pickupCompletedAt === 'string' && Number.isFinite(Date.parse(session.pickupCompletedAt))

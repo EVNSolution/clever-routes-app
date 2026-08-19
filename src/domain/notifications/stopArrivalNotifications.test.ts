@@ -3,11 +3,14 @@ import { describe, it } from 'node:test';
 
 import { sampleAssignedRoute } from '../route/assignedRoute';
 import {
+  getStopArrivalNotificationAction,
   getDriverRouteNotificationNavigation,
   parseDriverRouteNotificationData,
   formatStopArrivalNotificationContent,
   getStopArrivalNotificationCandidate,
   parseStopArrivalNotificationData,
+  STOP_ARRIVAL_ADD_PROOF_ACTION_IDENTIFIER,
+  STOP_ARRIVAL_NEXT_STOP_ACTION_IDENTIFIER,
   STOP_ARRIVAL_NOTIFICATION_TYPE,
 } from './stopArrivalNotifications';
 
@@ -69,6 +72,25 @@ describe('stop arrival notifications', () => {
 
     assert.equal(parseStopArrivalNotificationData({ deliveryStopId: 'stop-1', routePlanId: 'route-1' }), null);
     assert.equal(parseStopArrivalNotificationData({ deliveryStopId: '', routePlanId: 'route-1', type: 'stop_arrival' }), null);
+  });
+
+  it('maps the default tap and the two one-line arrival actions', () => {
+    assert.equal(getStopArrivalNotificationAction(
+      'expo.modules.notifications.actions.DEFAULT',
+      'expo.modules.notifications.actions.DEFAULT',
+    ), 'add_proof');
+    assert.equal(getStopArrivalNotificationAction(
+      STOP_ARRIVAL_ADD_PROOF_ACTION_IDENTIFIER,
+      'expo.modules.notifications.actions.DEFAULT',
+    ), 'add_proof');
+    assert.equal(getStopArrivalNotificationAction(
+      STOP_ARRIVAL_NEXT_STOP_ACTION_IDENTIFIER,
+      'expo.modules.notifications.actions.DEFAULT',
+    ), 'next_stop');
+    assert.equal(getStopArrivalNotificationAction(
+      'unknown-action',
+      'expo.modules.notifications.actions.DEFAULT',
+    ), null);
   });
 
   it('parses route assignment notifications without accepting customer data', () => {

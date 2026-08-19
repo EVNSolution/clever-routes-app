@@ -194,6 +194,7 @@ test('keeps a stable route-session generation and route-start acknowledgement', 
     true,
   );
   await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1'],
     navigationStepIndex: 1,
     pickupCompleted: true,
     routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
@@ -209,6 +210,7 @@ test('keeps a stable route-session generation and route-start acknowledgement', 
   assert.equal(restored.activeRouteSession?.startedAt, startedAt);
   assert.equal(restored.activeRouteSession?.pickupCompletedAt, '2026-05-12T06:45:00.000Z');
   assert.equal(restored.activeRouteSession?.routeStartedRecordedAt, '2026-05-12T06:45:00.000Z');
+  assert.deepEqual(restored.activeRouteSession?.completedStopIds, ['stop-1']);
   assert.equal(
     await store.clearActiveRouteSession(
       sampleInvitedRouteAccess.routeAccess.routePlanId,

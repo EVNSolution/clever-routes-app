@@ -8,6 +8,9 @@ import {
 export const STOP_ARRIVAL_NOTIFICATION_TYPE = 'stop_arrival';
 export const DRIVER_ROUTE_NOTIFICATION_TYPE = 'driver_route_changed';
 export const DEFAULT_STOP_ARRIVAL_RADIUS_METERS = 50;
+export const STOP_ARRIVAL_NOTIFICATION_CATEGORY_ID = 'stopArrivalActions';
+export const STOP_ARRIVAL_ADD_PROOF_ACTION_IDENTIFIER = 'addProof';
+export const STOP_ARRIVAL_NEXT_STOP_ACTION_IDENTIFIER = 'nextStop';
 
 export type DriverRouteNotificationAction = 'assigned' | 'cancelled' | 'changed' | 'released';
 
@@ -29,6 +32,13 @@ export type StopArrivalNotificationData = {
   deliveryStopId: string;
   routePlanId: string;
   type: typeof STOP_ARRIVAL_NOTIFICATION_TYPE;
+};
+
+export type StopArrivalNotificationAction = 'add_proof' | 'next_stop';
+
+export type StopArrivalNotificationResponse = {
+  action: StopArrivalNotificationAction;
+  data: StopArrivalNotificationData;
 };
 
 export type StopArrivalNotificationCandidate = {
@@ -61,14 +71,30 @@ export type StopArrivalNotificationRegistrationResult =
 export type StopArrivalNotificationService = {
   addDriverRouteNotificationReceivedListener(listener: (data: DriverRouteNotificationData) => Promise<void> | void): () => void;
   addDriverRouteNotificationResponseListener(listener: (data: DriverRouteNotificationData) => Promise<void> | void): () => void;
-  addStopArrivalResponseListener(listener: (data: StopArrivalNotificationData) => Promise<void> | void): () => void;
+  addStopArrivalResponseListener(listener: (response: StopArrivalNotificationResponse) => Promise<void> | void): () => void;
   consumePendingDriverRouteNotification(): Promise<DriverRouteNotificationData | null>;
   getDevicePushToken(): Promise<string | null>;
   getLastDriverRouteNotificationResponse(): Promise<DriverRouteNotificationData | null>;
-  getLastStopArrivalResponse(): Promise<StopArrivalNotificationData | null>;
+  getLastStopArrivalResponse(): Promise<StopArrivalNotificationResponse | null>;
   registerForStopArrivalNotifications(): Promise<StopArrivalNotificationRegistrationResult>;
   scheduleStopArrivalNotification(input: StopArrivalNotificationCandidate): Promise<void>;
 };
+
+export function getStopArrivalNotificationAction(
+  actionIdentifier: string,
+  defaultActionIdentifier: string,
+): StopArrivalNotificationAction | null {
+  if (
+    actionIdentifier === defaultActionIdentifier
+    || actionIdentifier === STOP_ARRIVAL_ADD_PROOF_ACTION_IDENTIFIER
+  ) {
+    return 'add_proof';
+  }
+  if (actionIdentifier === STOP_ARRIVAL_NEXT_STOP_ACTION_IDENTIFIER) {
+    return 'next_stop';
+  }
+  return null;
+}
 
 export function parseDriverRouteNotificationData(
   data: Record<string, unknown> | null | undefined,

@@ -88,6 +88,12 @@ describe('Expo continuous location wiring', () => {
     assert.match(patchSource, /\.setContentTitle\("CLEVER Routes"\)/u);
     assert.match(patchSource, /\.setVisibility\(Notification\.VISIBILITY_PRIVATE\)/u);
     assert.match(stopArrivalNotificationSource, /lockscreenVisibility: Notifications\.AndroidNotificationVisibility\.PRIVATE/u);
+    assert.match(stopArrivalNotificationSource, /Notifications\.setNotificationCategoryAsync/u);
+    assert.match(stopArrivalNotificationSource, /buttonTitle: 'Add Proof'/u);
+    assert.match(stopArrivalNotificationSource, /buttonTitle: 'Next Stop'/u);
+    assert.match(stopArrivalNotificationSource, /categoryIdentifier: STOP_ARRIVAL_NOTIFICATION_CATEGORY_ID/u);
+    assert.match(stopArrivalNotificationSource, /channelId: STOP_ARRIVAL_CHANNEL_ID/u);
+    assert.match(stopArrivalNotificationSource, /actionIdentifier/u);
     assert.doesNotMatch(moduleConfigSource, /"publication"/u);
     assert.match(mainActivitySource, /override fun onNewIntent\(intent: Intent\)/u);
     assert.match(mainActivitySource, /setIntent\(intent\)/u);
