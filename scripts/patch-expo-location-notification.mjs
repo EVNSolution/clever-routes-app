@@ -39,8 +39,13 @@ const patches = [
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `import android.content.pm.PackageManager\nimport android.graphics.Color`,
+    after: `import android.content.pm.PackageManager\nimport android.content.res.Configuration\nimport android.graphics.Color`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
     before: `import android.text.style.StyleSpan\n\nclass LocationTaskService`,
-    after: `import android.text.style.StyleSpan\nimport java.util.concurrent.ConcurrentHashMap\n\nclass LocationTaskService`,
+    after: `import android.text.style.StyleSpan\nimport android.widget.RemoteViews\nimport java.util.concurrent.ConcurrentHashMap\n\nclass LocationTaskService`,
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
@@ -79,8 +84,26 @@ const patches = [
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `      builder.setContentIntent(contentIntent)\n    }\n\n    val iconsResId = try {`,
+    after: `      builder.setContentIntent(contentIntent)\n    }\n\n    val notificationUri = notificationUrl?.let(Uri::parse)\n    if (notificationUri?.getQueryParameter("showStopActions") == "true") {\n      fun addStopAction(title: String, action: String): PendingIntent? {\n        return mParentContext.packageManager.getLaunchIntentForPackage(mParentContext.packageName)?.let {\n          val actionUri = notificationUri.buildUpon().appendQueryParameter("action", action).build()\n          it.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP\n          it.action = Intent.ACTION_VIEW\n          it.data = actionUri\n          it.addCategory(Intent.CATEGORY_BROWSABLE)\n          val actionIntent = PendingIntent.getActivity(\n            this,\n            actionUri.toString().hashCode(),\n            it,\n            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE\n          )\n          builder.addAction(0, title, actionIntent)\n          actionIntent\n        }\n      }\n      val addProofIntent = addStopAction("Add Proof", "add_proof")\n      val nextStopIntent = addStopAction("Next Stop", "next_stop")\n      val compactLayoutId = resources.getIdentifier("clever_route_notification_actions", "layout", mParentContext.packageName)\n      val titleViewId = resources.getIdentifier("notification_title", "id", mParentContext.packageName)\n      val addProofViewId = resources.getIdentifier("notification_add_proof", "id", mParentContext.packageName)\n      val nextStopViewId = resources.getIdentifier("notification_next_stop", "id", mParentContext.packageName)\n      if (compactLayoutId != 0 && titleViewId != 0 && addProofViewId != 0 && nextStopViewId != 0 && addProofIntent != null && nextStopIntent != null) {\n        val compactView = RemoteViews(mParentContext.packageName, compactLayoutId)\n        compactView.setTextViewText(titleViewId, title)\n        compactView.setOnClickPendingIntent(addProofViewId, addProofIntent)\n        compactView.setOnClickPendingIntent(nextStopViewId, nextStopIntent)\n        builder.setCustomContentView(compactView)\n      }\n    }\n\n    val iconsResId = try {`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `        val compactView = RemoteViews(mParentContext.packageName, compactLayoutId)\n        compactView.setTextViewText(titleViewId, title)`,
+    after: `        val compactView = RemoteViews(mParentContext.packageName, compactLayoutId)\n        val compactTextColor = if (\n          resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES\n        ) Color.WHITE else Color.rgb(32, 33, 36)\n        compactView.setTextViewText(titleViewId, title)\n        compactView.setTextColor(titleViewId, compactTextColor)\n        compactView.setTextColor(addProofViewId, compactTextColor)\n        compactView.setTextColor(nextStopViewId, compactTextColor)`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
     before: `  private fun colorStringToInteger(color: String?): Int? {`,
     after: `  private fun emphasizeNotificationLabels(text: String): CharSequence {\n    val styled = SpannableStringBuilder(text)\n    listOf("Address", "Customer note", "Items").forEach { label ->\n      val start = text.indexOf(label)\n      if (start >= 0) {\n        styled.setSpan(\n          StyleSpan(Typeface.BOLD),\n          start,\n          start + label.length,\n          Spannable.SPAN_EXCLUSIVE_EXCLUSIVE\n        )\n      }\n    }\n    return styled\n  }\n\n  private fun colorStringToInteger(color: String?): Int? {`,
+    satisfiedBy: `val firstLineEnd = text.indexOf('\\n')`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `  private fun emphasizeNotificationLabels(text: String): CharSequence {\n    val styled = SpannableStringBuilder(text)\n    listOf("Address", "Customer note", "Items").forEach { label ->\n      val start = text.indexOf(label)\n      if (start >= 0) {\n        styled.setSpan(\n          StyleSpan(Typeface.BOLD),\n          start,\n          start + label.length,\n          Spannable.SPAN_EXCLUSIVE_EXCLUSIVE\n        )\n      }\n    }\n    return styled\n  }`,
+    previous: `    listOf("Status", "Total").forEach { label ->`,
+    previousAfter: `    listOf("Status", "Total", "Customer note", "Items").forEach { label ->`,
+    after: `  private fun emphasizeNotificationLabels(text: String): CharSequence {\n    val styled = SpannableStringBuilder(text)\n    val firstLineEnd = text.indexOf('\\n')\n    if (firstLineEnd > 0) {\n      styled.setSpan(\n        StyleSpan(Typeface.BOLD),\n        0,\n        firstLineEnd,\n        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE\n      )\n    }\n    listOf("Status", "Total", "Customer note", "Items").forEach { label ->\n      val start = text.indexOf(label)\n      if (start >= 0) {\n        styled.setSpan(\n          StyleSpan(Typeface.BOLD),\n          start,\n          start + label.length,\n          Spannable.SPAN_EXCLUSIVE_EXCLUSIVE\n        )\n      }\n    }\n    return styled\n  }`,
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',

@@ -6,11 +6,10 @@ import { Platform } from 'react-native';
 import {
   formatStopArrivalNotificationContent,
   parseDriverRouteNotificationData,
-  parseStopArrivalNotificationData,
   type StopArrivalNotificationService,
 } from '../../../domain/notifications/stopArrivalNotifications';
 
-const STOP_ARRIVAL_CHANNEL_ID = 'stop-arrivals';
+const STOP_ARRIVAL_CHANNEL_ID = 'stop-arrivals-v2';
 const DRIVER_ROUTE_CHANNEL_ID = 'route-updates';
 const DRIVER_NOTIFICATION_BACKGROUND_TASK = 'clever-driver-route-notification';
 const PENDING_DRIVER_ROUTE_NOTIFICATION_KEY = 'clever.pendingDriverRouteNotification.v1';
@@ -67,16 +66,6 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
 
       return () => subscription.remove();
     },
-    addStopArrivalResponseListener: (listener) => {
-      const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-        const data = parseStopArrivalNotificationData(response.notification.request.content.data);
-        if (data !== null) {
-          void Promise.resolve(listener(data)).catch(() => undefined);
-        }
-      });
-
-      return () => subscription.remove();
-    },
     consumePendingDriverRouteNotification: async () => {
       const raw = await AsyncStorage.getItem(PENDING_DRIVER_ROUTE_NOTIFICATION_KEY);
       if (raw === null) {
@@ -97,10 +86,6 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
         await Notifications.clearLastNotificationResponseAsync();
       }
       return data;
-    },
-    getLastStopArrivalResponse: async () => {
-      const response = await Notifications.getLastNotificationResponseAsync();
-      return parseStopArrivalNotificationData(response?.notification.request.content.data);
     },
     registerForStopArrivalNotifications: async () => {
       try {
@@ -139,7 +124,9 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
           sound: true,
           title: content.title,
         },
-        trigger: null,
+        trigger: Platform.OS === 'android'
+          ? { channelId: STOP_ARRIVAL_CHANNEL_ID }
+          : null,
       });
       void candidate.distanceMeters;
       void candidate.radiusMeters;
@@ -153,10 +140,11 @@ async function ensureStopArrivalNotificationChannel(): Promise<void> {
   }
 
   await Notifications.setNotificationChannelAsync(STOP_ARRIVAL_CHANNEL_ID, {
-    importance: Notifications.AndroidImportance.HIGH,
+    enableVibrate: true,
+    importance: Notifications.AndroidImportance.MAX,
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
     name: 'Stop arrival alerts',
-    vibrationPattern: [0, 250, 250, 250],
+    vibrationPattern: [0, 400, 200, 400, 200, 700],
   });
   await Notifications.setNotificationChannelAsync(DRIVER_ROUTE_CHANNEL_ID, {
     importance: Notifications.AndroidImportance.HIGH,

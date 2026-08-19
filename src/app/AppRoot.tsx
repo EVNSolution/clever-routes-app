@@ -9,7 +9,6 @@ import {
   AppState,
   BackHandler,
   Image,
-  InteractionManager,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -92,9 +91,11 @@ import {
   type DriverEventService,
   type DriverRouteEtaUpdate,
   type RouteStartedRecordResult,
+  type StopArrivalEvidence,
   type StopArrivedRecordResult,
 } from '../domain/events/driverEvents';
 import { createExpoContinuousLocationStreamService, registerContinuousLocationTaskObserver } from '../platform/expo/location/expoContinuousLocationStreamService';
+import { createExpoForegroundLocationSnapshotService } from '../platform/expo/location/expoForegroundLocationSnapshotService';
 import { createExpoForegroundLocationPermissionService } from '../platform/expo/location/expoLocationPermissionService';
 import { getExpoOfflineSubmissionQueue } from '../platform/expo/storage/expoOfflineSubmissionQueueStorage';
 import { createExpoProofPhotoCaptureService } from '../platform/expo/camera/expoProofPhotoCaptureService';
@@ -182,8 +183,13 @@ import { buildRouteInventory } from './routeInventory';
 import {
   getDriverRouteNotificationNavigation,
   getStopArrivalNotificationCandidate,
+  getStopArrivalProximityEvidence,
+  STOP_ARRIVAL_NOTIFICATION_TYPE,
   type DriverRouteNotificationData,
   type StopArrivalNotificationData,
+  type StopArrivalNotificationAction,
+  type StopArrivalProximityEvidence,
+  type StopArrivalNotificationResponse,
 } from '../domain/notifications/stopArrivalNotifications';
 import { createExpoStopArrivalNotificationService } from '../platform/expo/notifications/expoStopArrivalNotificationService';
 import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
@@ -225,6 +231,7 @@ type ArrivalCheckReturnScreen = 'mainTabs' | 'routeSession' | 'stopDetails';
 type PendingDriverRouteNotification = {
   data: DriverRouteNotificationData;
   openRequested: boolean;
+  refreshRequired: boolean;
 };
 
 type StopProofDraft = {
@@ -262,7 +269,7 @@ const PULL_REFRESH_SPRING_CONFIG = {
 } as const;
 
 function runAfterUiInteractions(callback: () => void): void {
-  InteractionManager.runAfterInteractions(callback);
+  requestIdleCallback(callback);
 }
 
 export default function App() {
@@ -305,6 +312,7 @@ function DriverApp() {
   const [routeSyncState, setRouteSyncState] = useState<RouteSyncState>('idle');
   const [backgroundLocationPermission, setBackgroundLocationPermission] = useState<BackgroundLocationPermissionState>('checking');
   const [isDriverRestoreComplete, setIsDriverRestoreComplete] = useState(false);
+  const [isInitialRouteRestoreComplete, setIsInitialRouteRestoreComplete] = useState(false);
   const [driverRestoreProblem, setDriverRestoreProblem] = useState<string | null>(null);
   const [driverRestoreAttempt, setDriverRestoreAttempt] = useState(0);
   const [driverAppUpdateState, setDriverAppUpdateState] = useState<DriverAppUpdateState>({ kind: 'checking' });
@@ -312,7 +320,9 @@ function DriverApp() {
   const [explicitDriverAppUpdatePrompt, setExplicitDriverAppUpdatePrompt] = useState(false);
   const [pendingActiveRouteNotificationTarget, setPendingActiveRouteNotificationTarget] = useState<ActiveRouteNotificationTarget | null>(null);
   const pendingActiveRouteNotificationTargetRef = useRef<ActiveRouteNotificationTarget | null>(null);
-  const [pendingStopArrivalNotification, setPendingStopArrivalNotification] = useState<StopArrivalNotificationData | null>(null);
+  const [pendingStopArrivalNotification, setPendingStopArrivalNotification] = useState<StopArrivalNotificationResponse | null>(null);
+  const [pendingStopArrivalCompletion, setPendingStopArrivalCompletion] = useState<StopArrivalNotificationData | null>(null);
+  const [stopArrivalProximityByStopId, setStopArrivalProximityByStopId] = useState<Record<string, StopArrivalProximityEvidence | null>>({});
   const [pendingDriverRouteNotification, setPendingDriverRouteNotification] = useState<PendingDriverRouteNotification | null>(null);
 
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
@@ -385,7 +395,8 @@ function DriverApp() {
   const isPullRefreshingRef = useRef(false);
   const pullRefreshOffset = useSharedValue(0);
   const notifiedStopArrivalIdsRef = useRef<Set<string>>(new Set());
-  const hasCheckedInitialStopArrivalNotificationRef = useRef(false);
+  const isRecordingArrivalRef = useRef(false);
+  const completeStopFromNotificationRef = useRef<(data: StopArrivalNotificationData) => Promise<void>>(async () => undefined);
   const hasCheckedInitialDriverRouteNotificationRef = useRef(false);
   const networkState = Network.useNetworkState();
   const networkReachability = getNetworkReachability(networkState);
@@ -417,6 +428,7 @@ function DriverApp() {
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
+  const foregroundLocationSnapshotService = useMemo(() => createExpoForegroundLocationSnapshotService(), []);
   const continuousLocationStreamService = useMemo(() => createExpoContinuousLocationStreamService(), []);
   const stopArrivalNotificationService = useMemo(() => createExpoStopArrivalNotificationService(), []);
   const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
@@ -1083,7 +1095,7 @@ function DriverApp() {
       const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
       console.warn(`[location] Route notification could not be updated: ${errorMessage}`);
     });
-  }, [continuousLocationStreamService, isLiveLocationEnabled, navigationStepIndex, selectedRoute]);
+  }, [continuousLocationStreamService, currentStop, isLiveLocationEnabled, navigationStepIndex, selectedRoute]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1093,6 +1105,22 @@ function DriverApp() {
       }
       const target = parseActiveRouteNotificationUrl(url);
       if (target !== null) {
+        if (target.action !== undefined) {
+          if (isRecordingArrivalRef.current) {
+            setMessage('Arrival is already being recorded. The extra action was ignored.');
+            return;
+          }
+          const response: StopArrivalNotificationResponse = {
+            action: target.action,
+            data: {
+              deliveryStopId: target.deliveryStopId,
+              routePlanId: target.routePlanId,
+              type: STOP_ARRIVAL_NOTIFICATION_TYPE,
+            },
+          };
+          setPendingStopArrivalNotification((current) => current ?? response);
+          return;
+        }
         pendingActiveRouteNotificationTargetRef.current = target;
         setPendingActiveRouteNotificationTarget(target);
       }
@@ -1111,6 +1139,8 @@ function DriverApp() {
       pendingActiveRouteNotificationTarget === null
       || routeSessions.length === 0
       || !isDriverRestoreComplete
+      || !isInitialRouteRestoreComplete
+      || routeSyncState !== 'ready'
       || isNavigationInterruptionProtected
     ) {
       return undefined;
@@ -1154,9 +1184,11 @@ function DriverApp() {
     activeRoutePlanId,
     completedStopIds,
     isDriverRestoreComplete,
+    isInitialRouteRestoreComplete,
     isNavigationInterruptionProtected,
     navigationStepIndex,
     pendingActiveRouteNotificationTarget,
+    routeSyncState,
     routeSessions,
     setScreen,
   ]);
@@ -1188,6 +1220,7 @@ function DriverApp() {
   const submitStopArrivalForRouteStop = useCallback(async (
     routeSession: RouteSession,
     stop: AssignedRouteStop,
+    arrivalEvidence?: StopArrivalEvidence,
   ): Promise<StopArrivedRecordResult> => {
     if (deliveryStartResult === null) {
       return {
@@ -1204,6 +1237,7 @@ function DriverApp() {
 
     const routeSubmission = toCompanyGuidanceSubmission(routeSession);
     const result = await recordStopArrivedAfterDeliveryStart({
+      ...(arrivalEvidence === undefined ? {} : { arrivalEvidence }),
       deliveryStart: deliveryStartResult,
       deliveryStopId: stop.deliveryStopId,
       driverEventService: createRouteOrderedDriverEventService({
@@ -1240,17 +1274,108 @@ function DriverApp() {
     syncOfflineQueueState,
   ]);
 
-  const handleStopArrivalNotificationPress = useCallback(async (data: StopArrivalNotificationData) => {
+  const recordStopArrival = useCallback(async (
+    stop: AssignedRouteStop,
+    returnScreen: ArrivalCheckReturnScreen,
+    requestScreen = screenRef.current,
+    action: StopArrivalNotificationAction = 'add_proof',
+    routeSession = selectedRouteSession,
+  ): Promise<boolean> => {
+    if (routeSession === null) {
+      setMessage('The active route could not be confirmed. Refresh the route and try again.');
+      return false;
+    }
+    if (isRecordingArrivalRef.current) {
+      setMessage('Arrival is already being recorded. The extra action was ignored.');
+      return false;
+    }
+
+    isRecordingArrivalRef.current = true;
+    setIsRecordingArrival(true);
+    setMessage(null);
+    setStopArrivalProximityByStopId((current) => ({
+      ...current,
+      [stop.deliveryStopId]: null,
+    }));
+    try {
+      let arrivalEvidence: StopArrivalEvidence | undefined;
+      try {
+        const location = await foregroundLocationSnapshotService.getCurrentForegroundLocation();
+        const proximity = getStopArrivalProximityEvidence({
+          location,
+          route: routeSession.route,
+          stop,
+        });
+        setStopArrivalProximityByStopId((current) => ({
+          ...current,
+          [stop.deliveryStopId]: proximity,
+        }));
+        arrivalEvidence = {
+          ...(proximity === null ? {} : { distanceToPlannedStopMeters: proximity.distanceMeters }),
+          latitude: location.latitude,
+          longitude: location.longitude,
+          recordedAt: location.recordedAt,
+        };
+      } catch {
+        // Arrival must still be recorded when a fresh GPS fix is unavailable.
+      }
+
+      const result = await submitStopArrivalForRouteStop(routeSession, stop, arrivalEvidence);
+      if (result.kind === 'blocked') {
+        setMessage(result.message);
+        return false;
+      }
+      if (screenRef.current !== requestScreen) {
+        setMessage(result.kind === 'queued'
+          ? result.message
+          : 'Arrival was recorded. Open the stop again to continue.');
+        return false;
+      }
+      if (action === 'next_stop') {
+        setScreen('routeSession');
+        setPendingStopArrivalCompletion({
+          deliveryStopId: stop.deliveryStopId,
+          routePlanId: routeSession.route.id,
+          type: STOP_ARRIVAL_NOTIFICATION_TYPE,
+        });
+        setMessage(result.kind === 'queued'
+          ? `${result.message} Completing the stop next.`
+          : 'Arrival confirmed. Completing this stop and preparing next-stop navigation.');
+        return true;
+      }
+
+      setArrivalCheckReturnScreen(returnScreen);
+      setScreen('arrivalCheck');
+      setMessage(result.kind === 'queued'
+        ? result.message
+        : 'Arrival confirmed by server. Future stop ETAs were updated.');
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+      setMessage(`Arrival could not be recorded: ${errorMessage}`);
+      return false;
+    } finally {
+      isRecordingArrivalRef.current = false;
+      setIsRecordingArrival(false);
+    }
+  }, [foregroundLocationSnapshotService, selectedRouteSession, setScreen, submitStopArrivalForRouteStop]);
+
+  const handleStopArrivalNotificationPress = useCallback(async (response: StopArrivalNotificationResponse) => {
+    const { action, data } = response;
+    if (!isInitialRouteRestoreComplete || routeSyncState !== 'ready') {
+      setPendingStopArrivalNotification((current) => current ?? response);
+      return;
+    }
     if (isNavigationInterruptionProtected) {
-      setPendingStopArrivalNotification(data);
-      setMessage('Finish the current delivery action before opening the arrival alert.');
+      setPendingStopArrivalNotification(null);
+      setMessage('Finish the current delivery action first. The extra arrival action was ignored.');
       return;
     }
 
     const routeSession = routeSessions.find((session) => session.route.id === data.routePlanId) ?? null;
     if (routeSession === null) {
-      setPendingStopArrivalNotification(data);
-      setMessage('Arrival alert opened. Loading assigned route before opening proof.');
+      setPendingStopArrivalNotification((current) => current ?? response);
+      setMessage('Arrival alert opened. Loading the assigned route.');
       return;
     }
 
@@ -1289,44 +1414,23 @@ function DriverApp() {
     setSelectedStopDetailsId(null);
     setNavigationStepIndex(stopIndex + 1);
     const requestScreen = screenRef.current;
-    setIsRecordingArrival(true);
-    setMessage(null);
-    try {
-      const result = await submitStopArrivalForRouteStop(routeSession, routeSession.route.stops[stopIndex]);
-      if (result.kind === 'blocked') {
-        setScreen('routeSession');
-        setMessage(result.message);
-        return;
-      }
-      if (screenRef.current !== requestScreen) {
-        setMessage(result.kind === 'queued'
-          ? result.message
-          : 'Arrival was recorded. Open the stop again to continue.');
-        return;
-      }
-      setArrivalCheckReturnScreen('routeSession');
-      setScreen('arrivalCheck');
-      setMessage(result.kind === 'queued'
-        ? result.message
-        : 'Arrival confirmed by server. Add proof photo and delivery notes.');
-    } catch (error) {
-      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
-      if (screenRef.current === requestScreen) {
-        setScreen('routeSession');
-      }
-      setMessage(`Arrival could not be recorded: ${errorMessage}`);
-    } finally {
-      setIsRecordingArrival(false);
+    const stop = routeSession.route.stops[stopIndex];
+    if (stop === undefined) {
+      setMessage('Arrival alert opened, but the stop is no longer available on this route.');
+      return;
     }
+    await recordStopArrival(stop, 'routeSession', requestScreen, action, routeSession);
   }, [
     activeRoutePlanId,
     completedStopIds,
     deliveryStartResult?.kind,
+    isInitialRouteRestoreComplete,
     isNavigationInterruptionProtected,
     navigationStepIndex,
+    recordStopArrival,
+    routeSyncState,
     routeSessions,
     setScreen,
-    submitStopArrivalForRouteStop,
   ]);
 
   useEffect(() => {
@@ -1357,28 +1461,12 @@ function DriverApp() {
   }), [message]);
 
   useEffect(() => {
-    const removeStopArrivalListener = stopArrivalNotificationService.addStopArrivalResponseListener(handleStopArrivalNotificationPress);
-    if (!hasCheckedInitialStopArrivalNotificationRef.current) {
-      hasCheckedInitialStopArrivalNotificationRef.current = true;
-      void Linking.getInitialURL()
-        .catch(() => null)
-        .then((url) => (
-          url !== null && parseActiveRouteNotificationUrl(url) !== null
-            ? null
-            : stopArrivalNotificationService.getLastStopArrivalResponse()
-        ))
-        .then((data) => {
-          if (data !== null) {
-            handleStopArrivalNotificationPress(data);
-          }
-        });
-    }
-
-    return removeStopArrivalListener;
-  }, [stopArrivalNotificationService, handleStopArrivalNotificationPress]);
-
-  useEffect(() => {
-    if (pendingStopArrivalNotification !== null && routeSessions.length > 0) {
+    if (
+      pendingStopArrivalNotification !== null
+      && isInitialRouteRestoreComplete
+      && routeSyncState === 'ready'
+      && routeSessions.length > 0
+    ) {
       const timeout = setTimeout(() => {
         handleStopArrivalNotificationPress(pendingStopArrivalNotification);
       }, 0);
@@ -1387,7 +1475,36 @@ function DriverApp() {
     }
 
     return undefined;
-  }, [handleStopArrivalNotificationPress, pendingStopArrivalNotification, routeSessions.length]);
+  }, [
+    handleStopArrivalNotificationPress,
+    isInitialRouteRestoreComplete,
+    pendingStopArrivalNotification,
+    routeSessions.length,
+    routeSyncState,
+  ]);
+
+  useEffect(() => {
+    if (
+      pendingStopArrivalCompletion === null
+      || isNavigationInterruptionProtected
+      || selectedRoute?.id !== pendingStopArrivalCompletion.routePlanId
+      || currentStop?.deliveryStopId !== pendingStopArrivalCompletion.deliveryStopId
+    ) {
+      return undefined;
+    }
+
+    const completion = pendingStopArrivalCompletion;
+    const timeout = setTimeout(() => {
+      setPendingStopArrivalCompletion(null);
+      void completeStopFromNotificationRef.current(completion);
+    }, 0);
+    return () => clearTimeout(timeout);
+  }, [
+    currentStop?.deliveryStopId,
+    isNavigationInterruptionProtected,
+    pendingStopArrivalCompletion,
+    selectedRoute?.id,
+  ]);
 
   useEffect(() => {
     if (deliveryStartResult?.kind !== 'delivery_active' || deliveryFinishResult?.flowState === 'delivery_finished') {
@@ -1430,8 +1547,15 @@ function DriverApp() {
         route: selectedRoute,
       });
 
-      if (candidate !== null) {
+      if (candidate !== null && selectedRoute !== null) {
         notifiedStopArrivalIdsRef.current.add(candidate.stop.deliveryStopId);
+        await continuousLocationStreamService.updateLocationNotification?.({
+          notification: buildActiveRouteForegroundNotification({
+            currentStepIndex: navigationStepIndex,
+            route: selectedRoute,
+          }),
+          taskName: CONTINUOUS_LOCATION_TASK_NAME,
+        }).catch(() => undefined);
         await stopArrivalNotificationService.scheduleStopArrivalNotification(candidate);
       }
     });
@@ -1439,6 +1563,7 @@ function DriverApp() {
     return () => registerContinuousLocationTaskObserver(null);
   }, [
     completedStopIds,
+    continuousLocationStreamService,
     deliveryFinishResult,
     deliveryStartResult,
     navigationStepIndex,
@@ -1764,10 +1889,15 @@ function DriverApp() {
           restoredActiveSession.route,
         );
         setCompletedStopIds((current) => [
-          ...new Set([...current, ...restoredServerProgress.completedStopIds]),
+          ...new Set([
+            ...current,
+            ...(activeRouteSession?.completedStopIds ?? []),
+            ...restoredServerProgress.completedStopIds,
+          ]),
         ]);
         if (restoredFromServer && activeRouteSession !== null) {
           const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
+            completedStopIds: restoredServerProgress.completedStopIds,
             navigationStepIndex: restoredStepIndex,
             routePlanId: restoredActiveSession.route.id,
             startedAt: activeRouteSession.startedAt,
@@ -1787,7 +1917,9 @@ function DriverApp() {
         setDeliveryFinishResult(null);
         setActiveRoutePlanId(restoredActiveSession.route.id);
         setNavigationStepIndex(restoredStepIndex);
-        setScreen('mainTabs');
+        if (shouldNavigateOnSuccess) {
+          setScreen('mainTabs');
+        }
         if (AppState.currentState !== 'active') {
           setContinuousLocationResult(null);
           setMessage('Active route restored. Tracking will resume when the app is open; the server route remains active.');
@@ -1814,9 +1946,6 @@ function DriverApp() {
           setMessage(`Tracking could not resume (${errorMessage}); the server route remains active and tracking will retry when routes refresh.`);
           return;
         }
-        runAfterUiInteractions(() => {
-          setMessage('Active route session restored.');
-        });
         return;
       }
 
@@ -1845,6 +1974,7 @@ function DriverApp() {
       }
     } finally {
       setIsLoggingIn(false);
+      setIsInitialRouteRestoreComplete(true);
     }
   }, [
     buildDriverAccessRefresh,
@@ -1928,10 +2058,10 @@ function DriverApp() {
     if (!isDriverRestoreComplete || verifiedDriverPhoneE164 === null) {
       return undefined;
     }
-    const task = InteractionManager.runAfterInteractions(() => {
+    const task = requestIdleCallback(() => {
       void registerCurrentPushInstallation();
     });
-    return () => task.cancel();
+    return () => cancelIdleCallback(task);
   }, [
     isDriverRestoreComplete,
     registerCurrentPushInstallation,
@@ -1940,10 +2070,11 @@ function DriverApp() {
 
   useEffect(() => {
     const receiveRouteNotification = (data: DriverRouteNotificationData, openRequested: boolean) => {
-      setPendingDriverRouteNotification({ data, openRequested });
+      setPendingDriverRouteNotification({ data, openRequested, refreshRequired: true });
       if (verifiedDriverPhoneE164 !== null) {
-        setMessage('Route update received. Refreshing assigned routes...');
-        void handleRefreshRoutes();
+        setMessage(isNavigationInterruptionProtected
+          ? 'Route update received. Finish the current delivery action before routes refresh.'
+          : 'Route update received. Refreshing assigned routes...');
       }
     };
     const removeReceivedListener = stopArrivalNotificationService.addDriverRouteNotificationReceivedListener(
@@ -1972,7 +2103,7 @@ function DriverApp() {
       removeResponseListener();
     };
   }, [
-    handleRefreshRoutes,
+    isNavigationInterruptionProtected,
     stopArrivalNotificationService,
     verifiedDriverPhoneE164,
   ]);
@@ -1983,6 +2114,7 @@ function DriverApp() {
       || verifiedDriverPhoneE164 === null
       || isRefreshingRoutes
       || isLoggingIn
+      || isNavigationInterruptionProtected
     ) {
       return undefined;
     }
@@ -1997,6 +2129,16 @@ function DriverApp() {
         return;
       }
       if (routeSyncState !== 'ready') {
+        return;
+      }
+
+      if (pendingDriverRouteNotification.refreshRequired) {
+        setPendingDriverRouteNotification((current) => (
+          current === pendingDriverRouteNotification
+            ? { ...current, refreshRequired: false }
+            : current
+        ));
+        void handleRefreshRoutes();
         return;
       }
 
@@ -2039,6 +2181,7 @@ function DriverApp() {
     handleRefreshRoutes,
     isLoggingIn,
     isRefreshingRoutes,
+    isNavigationInterruptionProtected,
     pendingDriverRouteNotification,
     routeSessions,
     routeSyncState,
@@ -2270,10 +2413,10 @@ function DriverApp() {
   }, [driverRestoreProblem, isDriverRestoreComplete, networkReachability, retryDriverRestore]);
 
   useEffect(() => {
-    const task = InteractionManager.runAfterInteractions(() => {
+    const task = requestIdleCallback(() => {
       void checkForDriverAppUpdate(true);
     });
-    return () => task.cancel();
+    return () => cancelIdleCallback(task);
   }, [checkForDriverAppUpdate]);
 
   useEffect(() => {
@@ -2300,6 +2443,7 @@ function DriverApp() {
       }
       if (
         state === 'active' &&
+        isInitialRouteRestoreComplete &&
         !isStartingRoute &&
         screen === 'mainTabs' &&
         pendingActiveRouteNotificationTargetRef.current === null &&
@@ -2315,6 +2459,7 @@ function DriverApp() {
     driverRestoreProblem,
     handleRefreshRoutes,
     isDriverRestoreComplete,
+    isInitialRouteRestoreComplete,
     isStartingRoute,
     refreshBackgroundLocationPermission,
     registerCurrentPushInstallation,
@@ -2325,10 +2470,10 @@ function DriverApp() {
 
   useEffect(() => {
     if (isDriverRestoreComplete && screen === 'mainTabs' && verifiedDriverPhoneE164 !== null) {
-      const task = InteractionManager.runAfterInteractions(() => {
+      const task = requestIdleCallback(() => {
         void refreshBackgroundLocationPermission();
       });
-      return () => task.cancel();
+      return () => cancelIdleCallback(task);
     }
 
     return undefined;
@@ -2459,6 +2604,7 @@ function DriverApp() {
       const routeStartedAt = new Date();
       const initialStepIndex = COMPANY_STEP_INDEX;
       const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
+        completedStopIds: [],
         navigationStepIndex: initialStepIndex,
         routePlanId: routeSession.route.id,
         startedAt: routeStartedAt.toISOString(),
@@ -2471,7 +2617,10 @@ function DriverApp() {
       setActiveRoutePlanId(routeSession.route.id);
       const continuousResult = await startContinuousLocationUpdatesAfterDeliveryStart({
         deliveryStart,
-        notification: buildActiveRouteForegroundNotification({ currentStepIndex: initialStepIndex, route: routeSession.route }),
+        notification: buildActiveRouteForegroundNotification({
+          currentStepIndex: initialStepIndex,
+          route: routeSession.route,
+        }),
         routePlanId: routeSession.route.id,
         streamService: continuousLocationStreamService,
       });
@@ -2720,6 +2869,7 @@ function DriverApp() {
       }
 
       const pickupCompleted = await driverAccessTokenStore.saveActiveRouteSession({
+        completedStopIds: pickupProgress.completedStopIds,
         navigationStepIndex: pickupProgress.navigationStepIndex,
         pickupCompleted: true,
         routePlanId: selectedRoute.id,
@@ -2745,50 +2895,6 @@ function DriverApp() {
     await recordStopArrival(currentStop, 'routeSession');
   }
 
-  async function recordStopArrival(
-    stop: AssignedRouteStop,
-    returnScreen: ArrivalCheckReturnScreen,
-    requestScreen = screenRef.current,
-  ): Promise<boolean> {
-    if (deliveryStartResult === null) {
-      setMessage('The active delivery stop could not be confirmed. Refresh the route and try again.');
-      return false;
-    }
-
-    setIsRecordingArrival(true);
-    setMessage(null);
-    try {
-      if (selectedRouteSession === null) {
-        setMessage('The active route could not be confirmed. Refresh the route and try again.');
-        return false;
-      }
-      const result = await submitStopArrivalForRouteStop(selectedRouteSession, stop);
-      if (result.kind === 'blocked') {
-        setMessage(result.message);
-        return false;
-      }
-      if (screenRef.current !== requestScreen) {
-        setMessage(result.kind === 'queued'
-          ? result.message
-          : 'Arrival was recorded. Open the stop again to continue.');
-        return false;
-      }
-      setArrivalCheckReturnScreen(returnScreen);
-      setScreen('arrivalCheck');
-      setMessage(result.kind === 'queued'
-        ? result.message
-        : 'Arrival confirmed by server. Future stop ETAs were updated.');
-      return true;
-    } catch (error) {
-      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
-      setMessage(`Arrival could not be recorded: ${errorMessage}`);
-      return false;
-    } finally {
-      setIsRecordingArrival(false);
-      refreshOfflineQueueCount();
-    }
-  }
-
   async function activateAndRecordStopArrival(selectedStop: AssignedRouteStop) {
     const requestScreen = screenRef.current;
     if (
@@ -2808,6 +2914,7 @@ function DriverApp() {
     }
 
     const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
+      completedStopIds,
       navigationStepIndex: selectedStopIndex + 1,
       routePlanId: selectedRoute.id,
     });
@@ -3083,6 +3190,7 @@ function DriverApp() {
     options?: {
       failureNote?: string;
       failureReason?: StopProofFailureReason;
+      openNextNavigation?: boolean;
       switchToRoutePlanId?: string;
     },
   ) {
@@ -3207,6 +3315,7 @@ function DriverApp() {
         return;
       }
       const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
+        completedStopIds: nextCompletedStopIds,
         navigationStepIndex: nextNavigationStepIndex,
         routePlanId: selectedRoute.id,
       });
@@ -3218,6 +3327,25 @@ function DriverApp() {
       setNavigationStepIndex(nextNavigationStepIndex);
       if (screenRef.current === requestScreen) {
         setScreen('routeSession');
+      }
+      const nextStop = selectedRoute.stops[nextNavigationStepIndex - 1] ?? null;
+      if (options?.openNextNavigation === true && nextStop !== null) {
+        if (continuousLocationStreamService.updateLocationNotification !== undefined) {
+          try {
+            await continuousLocationStreamService.updateLocationNotification({
+              notification: buildActiveRouteForegroundNotification({
+                currentStepIndex: nextNavigationStepIndex,
+                route: selectedRoute,
+              }),
+              taskName: CONTINUOUS_LOCATION_TASK_NAME,
+            });
+          } catch (error) {
+            const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+            console.warn(`[location] Route notification could not be updated before navigation: ${errorMessage}`);
+          }
+        }
+        await handleOpenNavigationForStop(nextStop);
+        return;
       }
       setMessage(
         isSkipped
@@ -3235,6 +3363,18 @@ function DriverApp() {
       refreshOfflineQueueCount();
     }
   }
+
+  completeStopFromNotificationRef.current = async (data) => {
+    if (
+      selectedRoute?.id !== data.routePlanId
+      || currentStop?.deliveryStopId !== data.deliveryStopId
+      || completedStopIds.includes(data.deliveryStopId)
+    ) {
+      setMessage('The arrival alert is no longer for the current stop. No stop was completed.');
+      return;
+    }
+    await handleTerminalStop(currentStop, 'delivered', { openNextNavigation: true });
+  };
 
   async function finishActiveRouteForSwitch(
     activeRoute: AssignedRoute,
@@ -3428,8 +3568,11 @@ function DriverApp() {
     setRouteStartedEventResult(null);
     setContinuousLocationResult(null);
     notifiedStopArrivalIdsRef.current.clear();
-    hasCheckedInitialStopArrivalNotificationRef.current = false;
+    isRecordingArrivalRef.current = false;
+    setIsRecordingArrival(false);
     setPendingStopArrivalNotification(null);
+    setPendingStopArrivalCompletion(null);
+    setStopArrivalProximityByStopId({});
     setStopProofResults({});
     setProofDrafts({});
     setProofPhotoResults({});
@@ -3910,6 +4053,7 @@ function DriverApp() {
               onCompleteStop={handleCompleteCurrentStop}
               onDraftChange={updateCurrentStopDraft}
               photoUri={currentStopPhotoUri}
+              proximity={stopArrivalProximityByStopId[currentStop.deliveryStopId]}
               proofResult={stopProofResults[currentStop.deliveryStopId]}
               stop={currentStop}
             />
@@ -5144,6 +5288,7 @@ function ArrivalCheckScreen({
   onCompleteStop,
   onDraftChange,
   photoUri,
+  proximity,
   proofResult,
   stop,
 }: {
@@ -5155,16 +5300,40 @@ function ArrivalCheckScreen({
   onCompleteStop(): void;
   onDraftChange(patch: Partial<StopProofDraft>): void;
   photoUri?: string;
+  proximity?: StopArrivalProximityEvidence | null;
   proofResult?: StopProofEventResult;
   stop: AssignedRouteStop;
 }) {
+  const proximityTitle = proximity === null || proximity === undefined
+    ? 'Arrival distance unavailable'
+    : proximity.isWithinRadius
+      ? 'You’re near the destination'
+      : 'You’re far from the destination';
+  const proximityDetail = proximity === null || proximity === undefined
+    ? 'A fresh GPS position was unavailable. Voice tip is still available.'
+    : `${formatAssignedRouteDistance({ distanceMeters: proximity.distanceMeters, durationSeconds: null })} from the planned stop. Voice tip available.`;
+  const isFar = proximity?.isWithinRadius === false;
+  const isUnavailable = proximity === null || proximity === undefined;
+
   return (
     <View style={styles.screenStack}>
-      <Pressable accessibilityRole="button" onPress={onAnnounceTip} style={styles.nearbyBanner}>
-        <View style={styles.statusDot} />
+      <Pressable
+        accessibilityRole="button"
+        onPress={onAnnounceTip}
+        style={[
+          styles.nearbyBanner,
+          isFar && styles.nearbyBannerFar,
+          isUnavailable && styles.nearbyBannerUnavailable,
+        ]}
+      >
+        <View style={[
+          styles.statusDot,
+          isFar && styles.statusDotFar,
+          isUnavailable && styles.statusDotUnavailable,
+        ]} />
         <View style={styles.routeHeaderText}>
-          <Text style={styles.nearbyTitle}>You’re near the destination</Text>
-          <Text style={styles.helperText}>Voice tip available for this area.</Text>
+          <Text style={styles.nearbyTitle}>{proximityTitle}</Text>
+          <Text style={styles.helperText}>{proximityDetail}</Text>
         </View>
       </Pressable>
 
@@ -7270,6 +7439,12 @@ const styles = StyleSheet.create({
     height: 12,
     width: 12,
   },
+  statusDotFar: {
+    backgroundColor: '#d97706',
+  },
+  statusDotUnavailable: {
+    backgroundColor: '#6b7280',
+  },
   mapCanvas: {
     backgroundColor: '#f3f8fb',
     height: 430,
@@ -7981,6 +8156,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 14,
     padding: 16,
+  },
+  nearbyBannerFar: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fde68a',
+  },
+  nearbyBannerUnavailable: {
+    backgroundColor: '#f3f4f6',
+    borderColor: '#d1d5db',
   },
   nearbyTitle: {
     color: '#111827',

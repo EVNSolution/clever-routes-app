@@ -4,14 +4,78 @@ import { describe, it } from 'node:test';
 import { sampleAssignedRoute } from '../route/assignedRoute';
 import {
   getDriverRouteNotificationNavigation,
+  getStopArrivalProximityEvidence,
   parseDriverRouteNotificationData,
   formatStopArrivalNotificationContent,
   getStopArrivalNotificationCandidate,
-  parseStopArrivalNotificationData,
   STOP_ARRIVAL_NOTIFICATION_TYPE,
 } from './stopArrivalNotifications';
 
 describe('stop arrival notifications', () => {
+  it('classifies arrival distance against the existing fifty-metre stop radius', () => {
+    const firstStop = sampleAssignedRoute.stops[0];
+    const firstStopCoordinates = firstStop.coordinates;
+    if (firstStopCoordinates === null) {
+      assert.fail('sample stop must have coordinates');
+    }
+
+    const near = getStopArrivalProximityEvidence({
+      location: firstStopCoordinates,
+      route: sampleAssignedRoute,
+      stop: firstStop,
+    });
+    const far = getStopArrivalProximityEvidence({
+      location: { latitude: 0, longitude: 0 },
+      route: sampleAssignedRoute,
+      stop: firstStop,
+    });
+
+    assert.equal(near?.radiusMeters, 50);
+    assert.equal(near?.isWithinRadius, true);
+    assert.equal(near?.distanceMeters, 0);
+    assert.equal(far?.isWithinRadius, false);
+    assert.ok((far?.distanceMeters ?? 0) > 50);
+  });
+
+  it('reports unavailable proximity when neither the stop nor route geometry has a destination coordinate', () => {
+    const firstStop = { ...sampleAssignedRoute.stops[0], coordinates: null };
+    const routeWithoutStopPoint = {
+      ...sampleAssignedRoute,
+      routeStopPoints: sampleAssignedRoute.routeStopPoints.filter(
+        (point) => point.deliveryStopId !== firstStop.deliveryStopId,
+      ),
+      stops: [firstStop, ...sampleAssignedRoute.stops.slice(1)],
+    };
+
+    assert.equal(getStopArrivalProximityEvidence({
+      location: { latitude: 37.5133, longitude: 126.9428 },
+      route: routeWithoutStopPoint,
+      stop: firstStop,
+    }), null);
+  });
+
+  it('uses the snapped route stop point when the stop itself has no coordinates', () => {
+    const firstStop = { ...sampleAssignedRoute.stops[0], coordinates: null };
+    const stopPoint = sampleAssignedRoute.routeStopPoints.find(
+      (point) => point.deliveryStopId === firstStop.deliveryStopId,
+    );
+    assert.notEqual(stopPoint?.snappedCoordinates, null);
+    assert.notEqual(stopPoint?.snappedCoordinates, undefined);
+    const [longitude, latitude] = stopPoint!.snappedCoordinates!;
+
+    const proximity = getStopArrivalProximityEvidence({
+      location: { latitude, longitude },
+      route: {
+        ...sampleAssignedRoute,
+        stops: [firstStop, ...sampleAssignedRoute.stops.slice(1)],
+      },
+      stop: firstStop,
+    });
+
+    assert.equal(proximity?.distanceMeters, 0);
+    assert.equal(proximity?.isWithinRadius, true);
+  });
+
   it('creates a stop-arrival notification candidate when the active stop is within the allowed radius', () => {
     const firstStop = sampleAssignedRoute.stops[0];
     assert.notEqual(firstStop.coordinates, null);
@@ -31,7 +95,7 @@ describe('stop arrival notifications', () => {
     assert.equal(candidate?.data.deliveryStopId, firstStop.deliveryStopId);
     assert.equal(candidate?.stop.deliveryStopId, firstStop.deliveryStopId);
     assert.deepEqual(candidate === null ? null : formatStopArrivalNotificationContent(candidate), {
-      body: 'You have arrived near the destination: 100 King St W, Toronto, ON, M5X 1A9.\nTomato box (Size: Large): 2',
+      body: '100 King St W',
       title: 'Arrived near Stop 1',
     });
   });
@@ -54,21 +118,6 @@ describe('stop arrival notifications', () => {
     assert.equal(getStopArrivalNotificationCandidate({ ...base, completedStopIds: [firstStop.deliveryStopId] }), null);
     assert.equal(getStopArrivalNotificationCandidate({ ...base, notifiedStopIds: [firstStop.deliveryStopId] }), null);
     assert.equal(getStopArrivalNotificationCandidate({ ...base, lastLocation: { latitude: 0, longitude: 0 } }), null);
-  });
-
-  it('parses only the agreed server FCM stop-arrival payload', () => {
-    assert.deepEqual(parseStopArrivalNotificationData({
-      deliveryStopId: 'stop-1',
-      routePlanId: 'route-1',
-      type: 'stop_arrival',
-    }), {
-      deliveryStopId: 'stop-1',
-      routePlanId: 'route-1',
-      type: STOP_ARRIVAL_NOTIFICATION_TYPE,
-    });
-
-    assert.equal(parseStopArrivalNotificationData({ deliveryStopId: 'stop-1', routePlanId: 'route-1' }), null);
-    assert.equal(parseStopArrivalNotificationData({ deliveryStopId: '', routePlanId: 'route-1', type: 'stop_arrival' }), null);
   });
 
   it('parses route assignment notifications without accepting customer data', () => {

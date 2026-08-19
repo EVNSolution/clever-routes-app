@@ -97,7 +97,7 @@ describe('background location lifecycle wiring', () => {
     const restoreSource = getFunctionSource(
       loadSource,
       'if (restoredActiveSession !== null) {',
-      'if (shouldNavigateOnSuccess) {',
+      '\n      if (shouldNavigateOnSuccess) {',
     );
 
     assert.match(restoreSource, /setActiveRoutePlanId\(restoredActiveSession\.route\.id\)/u);

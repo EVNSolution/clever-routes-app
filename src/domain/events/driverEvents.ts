@@ -88,6 +88,13 @@ export type StopArrivedRecordResult =
   | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
   | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed'; requiresRouteLookup?: true };
 
+export type StopArrivalEvidence = {
+  distanceToPlannedStopMeters?: number;
+  latitude: number;
+  longitude: number;
+  recordedAt: Date;
+};
+
 export type PickupCompletedRecordResult =
   | DriverEventRecordResult & { kind: 'recorded' }
   | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
@@ -215,6 +222,7 @@ export function createRouteStartedClientEventId(occurredAt: Date): string {
 }
 
 export async function recordStopArrivedAfterDeliveryStart(input: {
+  arrivalEvidence?: StopArrivalEvidence;
   clientEventId?: string;
   deliveryStart: DeliveryStartResult;
   deliveryStopId: string;
@@ -231,12 +239,19 @@ export async function recordStopArrivedAfterDeliveryStart(input: {
     };
   }
 
-  const occurredAt = input.occurredAt ?? new Date();
+  const occurredAt = input.arrivalEvidence?.recordedAt ?? input.occurredAt ?? new Date();
   const event: DriverEventInput = {
     clientEventId: input.clientEventId ?? `stop-arrived-${input.deliveryStopId}-${occurredAt.getTime().toString(36)}`,
     deliveryStopId: input.deliveryStopId,
     eventType: 'STOP_ARRIVED',
+    ...(input.arrivalEvidence === undefined ? {} : {
+      latitude: input.arrivalEvidence.latitude,
+      longitude: input.arrivalEvidence.longitude,
+    }),
     occurredAt,
+    ...(input.arrivalEvidence?.distanceToPlannedStopMeters === undefined ? {} : {
+      payload: { distanceToPlannedStopMeters: input.arrivalEvidence.distanceToPlannedStopMeters },
+    }),
     routePlanId: input.routePlanId,
   };
 

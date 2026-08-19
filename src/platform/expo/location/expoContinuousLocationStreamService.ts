@@ -204,15 +204,12 @@ export function createExpoContinuousLocationStreamService(): ContinuousLocationS
         expoLocationNotificationModule !== null
         && await Location.hasStartedLocationUpdatesAsync(taskName)
       ) {
-        const updated = await expoLocationNotificationModule.updateLocationTaskNotificationAsync(taskName, {
+        await expoLocationNotificationModule.updateLocationTaskNotificationAsync(taskName, {
           notificationBody: notification.body,
           ...(notification.expandedBody === undefined ? {} : { notificationBigText: notification.expandedBody }),
           notificationTitle: notification.title,
           ...(notification.url === undefined ? {} : { notificationUrl: notification.url }),
         });
-        if (!updated) {
-          throw new Error('The active Android location notification service was not found.');
-        }
       }
     }),
   };

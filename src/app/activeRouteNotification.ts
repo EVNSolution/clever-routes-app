@@ -13,6 +13,7 @@ const CUSTOMER_NOTE_MAX_LENGTH = 72;
 const EXPANDED_CUSTOMER_NOTE_MAX_LENGTH = 160;
 
 export type ActiveRouteNotificationTarget = {
+  action?: 'add_proof' | 'next_stop';
   deliveryStopId: string;
   routePlanId: string;
 };
@@ -50,12 +51,11 @@ export function buildActiveRouteForegroundNotification(input: {
     : [
       `Status: ${payment.status.label}`,
       `Total: ${payment.amountLabel}`,
-      payment.methodLabel === 'Payment' ? null : `Method: ${payment.methodLabel}`,
     ];
   const body = [
     address,
     ...paymentLines,
-    customerNote === null ? null : `Note: ${customerNote}`,
+    customerNote === null ? null : `Customer note: ${customerNote}`,
     `Items ${itemSummary}`,
   ].filter((value): value is string => value !== null).join('\n');
 
@@ -73,12 +73,12 @@ export function buildActiveRouteForegroundNotification(input: {
     url: buildActiveRouteNotificationUrl({
       deliveryStopId: stop.deliveryStopId,
       routePlanId: input.route.id,
-    }),
+    }, true),
   };
 }
 
-export function buildActiveRouteNotificationUrl(target: ActiveRouteNotificationTarget): string {
-  return `clever-routes://route-stop?routePlanId=${encodeURIComponent(target.routePlanId)}&deliveryStopId=${encodeURIComponent(target.deliveryStopId)}`;
+export function buildActiveRouteNotificationUrl(target: ActiveRouteNotificationTarget, showStopActions = false): string {
+  return `clever-routes://route-stop?routePlanId=${encodeURIComponent(target.routePlanId)}&deliveryStopId=${encodeURIComponent(target.deliveryStopId)}${showStopActions ? '&showStopActions=true' : ''}`;
 }
 
 export function parseActiveRouteNotificationUrl(value: string): ActiveRouteNotificationTarget | null {
@@ -89,10 +89,18 @@ export function parseActiveRouteNotificationUrl(value: string): ActiveRouteNotif
     const searchParams = new URLSearchParams(value.slice(ACTIVE_ROUTE_NOTIFICATION_URL_PREFIX.length));
     const routePlanId = searchParams.get('routePlanId')?.trim() ?? '';
     const deliveryStopId = searchParams.get('deliveryStopId')?.trim() ?? '';
+    const action = searchParams.get('action');
     if (routePlanId === '' || deliveryStopId === '') {
       return null;
     }
-    return { deliveryStopId, routePlanId };
+    if (action !== null && action !== 'add_proof' && action !== 'next_stop') {
+      return null;
+    }
+    return {
+      ...(action === null ? {} : { action }),
+      deliveryStopId,
+      routePlanId,
+    };
   } catch {
     return null;
   }
@@ -144,6 +152,7 @@ function formatExpandedNotificationBody(input: {
 }): string {
   const note = truncateNotificationText(input.customerNote, EXPANDED_CUSTOMER_NOTE_MAX_LENGTH) ?? 'None';
   return [
+    input.address,
     ...(input.isPickupStop
       ? ['Order type', 'Pickup']
       : [
@@ -151,12 +160,7 @@ function formatExpandedNotificationBody(input: {
         input.payment.status.label,
         'Total',
         input.payment.amountLabel,
-        ...(input.payment.methodLabel === 'Payment'
-          ? []
-          : ['Method', input.payment.methodLabel]),
       ]),
-    'Address',
-    input.address,
     'Customer note',
     note,
     'Items',
