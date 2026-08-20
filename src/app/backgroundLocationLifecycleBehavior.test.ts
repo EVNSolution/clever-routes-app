@@ -22,7 +22,7 @@ describe('background location lifecycle wiring', () => {
     const startSource = getFunctionSource(
       source,
       'async function startRouteSessionAfterConfirmed(',
-      'function handleOpenRoutePreview(',
+      'function handleOpenRouteSession(',
     );
 
     const persistIndex = startSource.indexOf('saveActiveRouteSession');

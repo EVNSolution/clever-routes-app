@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
@@ -8,11 +8,12 @@ const appRootPath = join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx')
 const cameraCapturePath = join(dirname(fileURLToPath(import.meta.url)), '../platform/expo/camera/expoProofPhotoCaptureService.ts');
 const nativeMapPath = join(dirname(fileURLToPath(import.meta.url)), 'NativeRouteMapPreview.tsx');
 const routeVisualStatePath = join(dirname(fileURLToPath(import.meta.url)), 'routeVisualState.ts');
+const routePreviewBehaviorPath = join(dirname(fileURLToPath(import.meta.url)), 'routePreviewBehavior.ts');
 
 function getRouteSessionComponentSource(): string {
   const source = readFileSync(appRootPath, 'utf8');
   const start = source.indexOf('function RouteSessionScreen(');
-  const end = source.indexOf('function MapPreviewScreen(', start);
+  const end = source.indexOf('function StopDetailsScreen(', start);
 
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
@@ -21,6 +22,15 @@ function getRouteSessionComponentSource(): string {
 }
 
 describe('route session current task behavior', () => {
+  it('uses Route Session as the only route detail surface', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+
+    assert.equal(existsSync(routePreviewBehaviorPath), false);
+    assert.doesNotMatch(appSource, /'routePreview'|'mapPreview'|RoutePreviewScreen|MapPreviewScreen/u);
+    assert.doesNotMatch(appSource, /onOpenRoutePreview|handleOpenRoutePreview|openMapPreview/u);
+    assert.match(appSource, /<SecondaryButton compact label="Detail" onPress=\{\(\) => onContinueRoute\(session\.route\.id\)\} \/>/u);
+  });
+
   it('restores server in-progress routes instead of presenting them as Ready', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
 
@@ -44,7 +54,7 @@ describe('route session current task behavior', () => {
   it('clears previous route progress before a new route starts', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const start = appSource.indexOf('async function startRouteSessionAfterConfirmed(');
-    const end = appSource.indexOf('\n\n  function handleOpenRoutePreview(', start);
+    const end = appSource.indexOf('\n\n  function handleOpenRouteSession(', start);
     const startSource = appSource.slice(start, end);
 
     assert.notEqual(start, -1);
@@ -110,7 +120,7 @@ describe('route session current task behavior', () => {
     const componentSource = getRouteSessionComponentSource();
     const appSource = readFileSync(appRootPath, 'utf8');
     const startRouteSessionStart = appSource.indexOf('async function startRouteSessionAfterConfirmed(');
-    const startRouteSessionEnd = appSource.indexOf('\n\n  function handleOpenRoutePreview(', startRouteSessionStart);
+    const startRouteSessionEnd = appSource.indexOf('\n\n  function handleOpenRouteSession(', startRouteSessionStart);
     const startRouteSessionSource = appSource.slice(startRouteSessionStart, startRouteSessionEnd);
 
     assert.match(componentSource, /const isPickupTask = routeStatus === 'active' && currentNavigationStepIndex === COMPANY_STEP_INDEX/u);
@@ -333,7 +343,7 @@ describe('route session current task behavior', () => {
     assert.match(arrivalSource, /if \(screenRef\.current !== requestScreen\) \{[\s\S]*return false;[\s\S]*\}[\s\S]*setArrivalCheckReturnScreen\(returnScreen\);[\s\S]*setScreen\('arrivalCheck'\)/u);
   });
 
-  it('keeps preview and completed-route screens bound to the explicitly selected route', () => {
+  it('keeps completed-route screens bound to the explicitly selected route', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const contextStart = appSource.indexOf("const usesSelectedRouteContext = screen === 'completedDeliveries'");
     const contextEnd = appSource.indexOf('\n  const selectedRoute =', contextStart);
@@ -341,7 +351,8 @@ describe('route session current task behavior', () => {
 
     assert.notEqual(contextStart, -1);
     assert.notEqual(contextEnd, -1);
-    assert.match(contextSource, /const usesSelectedRouteContext = screen === 'completedDeliveries'[\s\S]*\|\| screen === 'mapPreview'[\s\S]*\|\| screen === 'routePreview'/u);
+    assert.match(contextSource, /const usesSelectedRouteContext = screen === 'completedDeliveries'[\s\S]*stopDetailsReturnScreen === 'completedDeliveries'/u);
+    assert.doesNotMatch(contextSource, /mapPreview|routePreview/u);
     assert.match(contextSource, /const selectedRouteContextId = usesSelectedRouteContext[\s\S]*\? selectedRouteId[\s\S]*: activeRoutePlanId \?\? selectedRouteId/u);
     assert.match(contextSource, /const selectedRouteSession = selectedRouteContextId === null[\s\S]*\? null[\s\S]*: routeSessions\.find\([\s\S]*\) \?\? null/u);
     assert.doesNotMatch(contextSource, /routeSessions\[0\] \?\? null/u);
@@ -364,7 +375,7 @@ describe('route session current task behavior', () => {
   it('does not let route start or stop completion override a newer global screen choice', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const startBegin = appSource.indexOf('async function startRouteSessionAfterConfirmed(');
-    const startEnd = appSource.indexOf('\n\n  function handleOpenRoutePreview(', startBegin);
+    const startEnd = appSource.indexOf('\n\n  function handleOpenRouteSession(', startBegin);
     const startSource = appSource.slice(startBegin, startEnd);
     const terminalBegin = appSource.indexOf('async function handleTerminalStop(');
     const terminalEnd = appSource.indexOf('\n\n  async function finishRoute(', terminalBegin);
@@ -444,7 +455,8 @@ describe('route session current task behavior', () => {
     assert.notEqual(recoveryStart, -1);
     assert.notEqual(recoveryEffectStart, -1);
     assert.notEqual(recoveryEnd, -1);
-    assert.match(recoverySource, /screen === 'arrivalCheck'[\s\S]*screen === 'completedDeliveries'[\s\S]*screen === 'proofCamera'[\s\S]*screen === 'routePreview'[\s\S]*screen === 'routeSession'[\s\S]*screen === 'stopDetails'/u);
+    assert.match(recoverySource, /screen === 'arrivalCheck'[\s\S]*screen === 'completedDeliveries'[\s\S]*screen === 'proofCamera'[\s\S]*screen === 'routeSession'[\s\S]*screen === 'stopDetails'/u);
+    assert.doesNotMatch(recoverySource, /mapPreview|routePreview/u);
     assert.match(recoverySource, /if \(isRouteBoundScreen && selectedRoute === null\) \{[\s\S]*setScreen\('mainTabs'\);[\s\S]*return;[\s\S]*\}/u);
     assert.match(recoverySource, /if \(screen === 'stopDetails' && stopDetailsStop === null\) \{[\s\S]*setScreen\(stopDetailsReturnScreen\);[\s\S]*return;/u);
     assert.match(recoverySource, /if \(\(screen === 'arrivalCheck' \|\| screen === 'proofCamera'\) && currentStop === null\) \{[\s\S]*setScreen\('routeSession'\)/u);
@@ -459,9 +471,14 @@ describe('route session current task behavior', () => {
   });
 
   it('shows only basic stop addresses in Route Sequence stop rows', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
     const componentSource = getRouteSessionComponentSource();
 
     assert.match(componentSource, /title=\{formatStopStreetAddress\(stop\)\}/u);
+    assert.match(componentSource, /onCopy=\{\(\) => onCopyAddress\(formatStopStreetAddress\(stop\)\)\}/u);
+    assert.match(componentSource, /copyAccessibilityLabel=\{`Copy Stop \$\{stop\.sequence\} address`\}/u);
+    assert.match(appSource, /hitSlop=\{8\}[\s\S]*onPress=\{onCopy\}/u);
+    assert.match(appSource, /timelineCopyButton:[\s\S]*height: 32,[\s\S]*width: 32/u);
     assert.doesNotMatch(componentSource, /formatRouteSequenceStopSubtitle/u);
     assert.doesNotMatch(componentSource, /subtitle=\{formatRouteSequenceStopSubtitle\(stop\)\}/u);
   });
@@ -515,7 +532,7 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(componentSource, /\| Duration/u);
     assert.match(appSource, /routeSessionMetaRow:[\s\S]*gap: 20,[\s\S]*justifyContent: 'center'/u);
     assert.match(appSource, /routeSessionMeta:[\s\S]*color: '#344054'/u);
-    assert.match(componentSource, /<View style=\{styles\.routeSessionMap\}>[\s\S]*<MapOverview[\s\S]*mapSize="session"[\s\S]*showUserLocation=\{routeStatus === 'active'\}/u);
+    assert.match(componentSource, /<View style=\{styles\.routeSessionMap\}>[\s\S]*<MapOverview[\s\S]*showUserLocation=\{routeStatus === 'active'\}/u);
     assert.doesNotMatch(componentSource, /Route Preview|Tap for full map/u);
     assert.doesNotMatch(componentSource, /<Pressable[\s\S]*<MapOverview/u);
     assert.doesNotMatch(componentSource, /pointerEvents="none"/u);
@@ -571,7 +588,7 @@ describe('route session current task behavior', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const nativeMapSource = readFileSync(nativeMapPath, 'utf8');
 
-    assert.match(appSource, /compactRouteFocus=\{mapSize === 'session'\}/u);
+    assert.match(appSource, /<NativeRouteMapPreview[\s\S]*compactRouteFocus/u);
     assert.doesNotMatch(nativeMapSource, /LIVE_ROUTE_DETAIL_MIN_ZOOM|ROUTE_MARKER_FOCUS_OPACITY|focusLabel/u);
     assert.match(nativeMapSource, /const ROUTE_MARKER_SESSION_FOCUS_LAYOUT = \{[\s\S]*'icon-allow-overlap': true,[\s\S]*'icon-ignore-placement': false,[\s\S]*'text-allow-overlap': true,[\s\S]*'text-ignore-placement': false/u);
     assert.match(nativeMapSource, /const ROUTE_MARKER_SESSION_CONTEXT_LAYOUT = \{[\s\S]*'icon-allow-overlap': false,[\s\S]*'icon-ignore-placement': false,[\s\S]*'text-allow-overlap': false,[\s\S]*'text-ignore-placement': false/u);
@@ -633,16 +650,10 @@ describe('route session current task behavior', () => {
     assert.match(nativeMapSource, /androidView="texture"/u);
   });
 
-  it('opens the large map as a full-screen surface instead of a card', () => {
+  it('does not keep the removed full-screen route preview surface', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
 
-    assert.match(appSource, /const isFullMapScreen = screen === 'mapPreview' && selectedRoute !== null/u);
-    assert.match(appSource, /function MapPreviewScreen\(/u);
-    assert.match(appSource, /style=\{styles\.fullScreenMap\}/u);
-    assert.match(appSource, /paddingTop: 34/u);
-    assert.match(appSource, /fullMapCanvas:[\s\S]*height: '100%'/u);
-    assert.doesNotMatch(appSource, /mapHeight/u);
-    assert.doesNotMatch(appSource, /liveMapPreviewCard/u);
+    assert.doesNotMatch(appSource, /isFullMapScreen|MapPreviewScreen|fullScreenMap|fullMapCanvas/u);
   });
 
   it('shows live GPS in active sessions and focuses map controls on the current trip', () => {

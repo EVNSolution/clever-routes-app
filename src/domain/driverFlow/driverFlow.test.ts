@@ -43,7 +43,6 @@ describe('driver app MVP flow', () => {
       [
         'login',
         'routeList',
-        'routeDetail',
         'routeSession',
         'stopDetails',
         'arrivalCheck',
@@ -56,7 +55,6 @@ describe('driver app MVP flow', () => {
       [
         'Login / Driver Verification',
         'My Routes',
-        'Route Details',
         'Route Session',
         'Stop Details',
         'Arrival Check',

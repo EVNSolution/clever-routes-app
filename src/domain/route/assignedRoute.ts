@@ -20,6 +20,8 @@ export type AssignedRouteCoordinates = {
   longitude: number;
 };
 
+export type AssignedRouteNavigationTarget = 'ADDRESS' | 'COORDINATES';
+
 export type AssignedRouteLngLat = [number, number];
 
 export type AssignedRouteGeometry = {
@@ -107,6 +109,7 @@ export type AssignedRouteStop = {
   distanceFromPreviousMeters?: number | null;
   estimatedArrivalAt?: string | null;
   items: AssignedRouteOrderItem[];
+  navigationTarget?: AssignedRouteNavigationTarget;
   normalizedPaymentStatus: NormalizedPaymentStatus | null;
   orderName: string;
   paymentMethodTitle?: string | null;
@@ -632,6 +635,7 @@ function normalizeAssignedRoute(route: AssignedRoute): AssignedRoute {
 function normalizeAssignedRouteStop(stop: AssignedRouteStop): AssignedRouteStop {
   return {
     ...stop,
+    coordinates: normalizeAssignedRouteCoordinates(stop.coordinates),
     customerNote: stop.customerNote ?? null,
     distanceFromPreviousMeters: stop.distanceFromPreviousMeters ?? null,
     durationFromPreviousSeconds: stop.durationFromPreviousSeconds ?? null,
@@ -787,7 +791,7 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
   const stop = value as Record<string, unknown>;
   return (
     isAssignedRouteAddress(stop.address) &&
-    (stop.coordinates === null || isAssignedRouteCoordinates(stop.coordinates)) &&
+    (stop.coordinates === null || isNullableAssignedRouteCoordinates(stop.coordinates)) &&
     (stop.currencyCode === undefined || nullableString(stop.currencyCode)) &&
     (stop.customerNote === undefined || nullableString(stop.customerNote)) &&
     (stop.deliverySession === undefined || nullableString(stop.deliverySession)) &&
@@ -797,6 +801,7 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
     (stop.estimatedArrivalAt === undefined || nullableString(stop.estimatedArrivalAt)) &&
     Array.isArray(stop.items) &&
     stop.items.every(isAssignedRouteOrderItem) &&
+    (stop.navigationTarget === undefined || isAssignedRouteNavigationTarget(stop.navigationTarget)) &&
     isNormalizedPaymentStatus(stop.normalizedPaymentStatus) &&
     typeof stop.orderName === 'string' &&
     (stop.paymentMethodTitle === undefined || nullableString(stop.paymentMethodTitle)) &&
@@ -865,7 +870,27 @@ function isAssignedRouteCoordinates(value: unknown): value is AssignedRouteCoord
   }
 
   const coordinates = value as Record<string, unknown>;
-  return typeof coordinates.latitude === 'number' && typeof coordinates.longitude === 'number';
+  return typeof coordinates.latitude === 'number'
+    && Number.isFinite(coordinates.latitude)
+    && typeof coordinates.longitude === 'number'
+    && Number.isFinite(coordinates.longitude);
+}
+
+function isNullableAssignedRouteCoordinates(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const coordinates = value as Record<string, unknown>;
+  return nullableFiniteNumber(coordinates.latitude) && nullableFiniteNumber(coordinates.longitude);
+}
+
+function normalizeAssignedRouteCoordinates(value: unknown): AssignedRouteCoordinates | null {
+  return isAssignedRouteCoordinates(value) ? value : null;
+}
+
+function isAssignedRouteNavigationTarget(value: unknown): value is AssignedRouteNavigationTarget {
+  return value === 'ADDRESS' || value === 'COORDINATES';
 }
 
 function isAssignedRouteLngLat(value: unknown): value is AssignedRouteLngLat {

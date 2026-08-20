@@ -1,6 +1,6 @@
 {
   "name": "clever-routes-app",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -32,6 +32,7 @@
     "expo": "~56.0.17",
     "expo-application": "~56.0.3",
     "expo-camera": "~56.0.8",
+    "expo-clipboard": "~56.0.4",
     "expo-dev-client": "~56.0.24",
     "expo-font": "~56.0.7",
     "expo-image-picker": "~56.0.22",

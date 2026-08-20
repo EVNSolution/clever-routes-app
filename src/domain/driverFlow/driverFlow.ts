@@ -20,7 +20,6 @@ export type DeliveryActiveGuardInput = {
 export type MvpScenarioScreenId =
   | 'login'
   | 'routeList'
-  | 'routeDetail'
   | 'routeSession'
   | 'stopDetails'
   | 'arrivalCheck'
@@ -77,14 +76,6 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
       purpose:
         'Show assigned routes from nearest date to farthest, grouped into Ready, In progress, and Completed tabs.',
       primaryAction: 'Start Session',
-    },
-    // routeDetail is metadata for the read-only preview entry; the live operational screen is routeSession.
-    {
-      id: 'routeDetail',
-      title: 'Route Details',
-      purpose:
-        'Show a compact read-only preview with date, map, region, stop count, distance, time, and sequence.',
-      primaryAction: 'Review Route',
     },
     {
       id: 'routeSession',
