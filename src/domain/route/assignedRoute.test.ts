@@ -224,6 +224,96 @@ describe('driver assigned route UX flow', () => {
     ]);
   });
 
+  it('accepts navigation targets and normalizes partial-null coordinate objects', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              stops: sampleAssignedRoute.stops.map((stop, index) => ({
+                ...stop,
+                coordinates: index === 0
+                  ? { latitude: null, longitude: -79.3817 }
+                  : { latitude: 43.6509, longitude: null },
+                navigationTarget: index === 0 ? 'ADDRESS' : 'COORDINATES',
+              })),
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await client.getAssignedRoute({ routeContext: sampleAssignedRoute.id });
+
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    assert.equal(result.route.stops[0]?.navigationTarget, 'ADDRESS');
+    assert.equal(result.route.stops[0]?.coordinates, null);
+    assert.equal(result.route.stops[1]?.navigationTarget, 'COORDINATES');
+    assert.equal(result.route.stops[1]?.coordinates, null);
+  });
+
+  it('rejects coordinate members other than numbers or null', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              stops: sampleAssignedRoute.stops.map((stop, index) => ({
+                ...stop,
+                ...(index === 0 ? { coordinates: { latitude: '43.6487', longitude: null } } : {}),
+              })),
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.getAssignedRoute({ routeContext: sampleAssignedRoute.id }),
+      /Invalid assigned route response/u,
+    );
+  });
+
+  it('rejects unknown navigation targets from assigned-route responses', async () => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: {
+            status: 'ASSIGNED_ROUTE',
+            route: {
+              ...sampleAssignedRoute,
+              stops: sampleAssignedRoute.stops.map((stop, index) => ({
+                ...stop,
+                ...(index === 0 ? { navigationTarget: 'POSTAL_CODE' } : {}),
+              })),
+            },
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => client.getAssignedRoute({ routeContext: sampleAssignedRoute.id }),
+      /Invalid assigned route response/u,
+    );
+  });
+
 
   it('accepts assigned routes when the server omits shop timezone', async () => {
     const client = createAssignedRouteApiClient({
