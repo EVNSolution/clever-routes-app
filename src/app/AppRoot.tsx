@@ -1,5 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import * as Clipboard from 'expo-clipboard';
 import * as Speech from 'expo-speech';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Network from 'expo-network';
@@ -199,12 +200,6 @@ import {
   createDriverReleasedRoutePayload,
   requestActiveRouteDeletionConfirmation,
 } from '../domain/route/routeDeletion';
-import {
-  buildRoutePreviewSequence,
-  buildRoutePreviewRegionItems,
-  ROUTE_PREVIEW_COPY,
-  ROUTE_PREVIEW_LABELS,
-} from './routePreviewBehavior';
 
 type AppScreen =
   | 'accountName'
@@ -214,9 +209,7 @@ type AppScreen =
   | 'loginPhone'
   | 'loginDetail'
   | 'mainTabs'
-  | 'mapPreview'
   | 'proofCamera'
-  | 'routePreview'
   | 'routeSession'
   | 'settings'
   | 'stopDetails';
@@ -984,8 +977,6 @@ function DriverApp() {
   ]);
 
   const usesSelectedRouteContext = screen === 'completedDeliveries'
-    || screen === 'mapPreview'
-    || screen === 'routePreview'
     || (screen === 'stopDetails' && stopDetailsReturnScreen === 'completedDeliveries');
   const selectedRouteContextId = usesSelectedRouteContext
     ? selectedRouteId
@@ -1026,9 +1017,7 @@ function DriverApp() {
   const currentCompany = selectedRouteSession?.companyGuidance ?? null;
   const isRouteBoundScreen = screen === 'arrivalCheck'
     || screen === 'completedDeliveries'
-    || screen === 'mapPreview'
     || screen === 'proofCamera'
-    || screen === 'routePreview'
     || screen === 'routeSession'
     || screen === 'stopDetails';
 
@@ -2156,7 +2145,7 @@ function DriverApp() {
         if (routeSession !== null) {
           setSelectedRouteId(routeSession.route.id);
           setSubmission(toCompanyGuidanceSubmission(routeSession));
-          setScreen('routePreview');
+          setScreen('routeSession');
         }
         setMessage(data.action === 'assigned' ? 'Assigned route loaded.' : 'Updated route loaded.');
         return;
@@ -2690,18 +2679,6 @@ function DriverApp() {
     }
   }
 
-  function handleOpenRoutePreview(routeId?: string) {
-    const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
-    if (routeSession === null) {
-      setMessage('No route is available to review.');
-      return;
-    }
-
-    setSelectedRouteId(routeSession.route.id);
-    setSubmission(toCompanyGuidanceSubmission(routeSession));
-    setScreen('routePreview');
-  }
-
   function handleOpenRouteSession(routeId?: string) {
     const routeSession = getRouteSessionForAction(routeSessions, routeId ?? selectedRouteId);
     if (routeSession === null) {
@@ -2766,10 +2743,6 @@ function DriverApp() {
     }
   }
 
-  function openMapPreview() {
-    setScreen('mapPreview');
-  }
-
   async function handleCallStop(stop: AssignedRouteStop | null) {
     const phone = stop?.phone?.trim();
     if (phone === undefined || phone.length === 0) {
@@ -2795,6 +2768,15 @@ function DriverApp() {
       await Linking.openURL(`sms:${phone}`);
     } catch {
       setMessage('The messaging app could not be opened.');
+    }
+  }
+
+  async function handleCopyAddress(address: string) {
+    try {
+      await Clipboard.setStringAsync(address);
+      setMessage('Address copied.');
+    } catch {
+      setMessage('Address could not be copied.');
     }
   }
 
@@ -3660,12 +3642,8 @@ function DriverApp() {
       case 'settings':
         setScreen('mainTabs');
         return true;
-      case 'routePreview':
       case 'routeSession':
         setScreen('mainTabs');
-        return true;
-      case 'mapPreview':
-        setScreen('routePreview');
         return true;
       case 'proofCamera':
         setScreen('arrivalCheck');
@@ -3732,7 +3710,6 @@ function DriverApp() {
     }],
   }));
   const isCountrySelectionScreen = screen === 'countrySelect';
-  const isFullMapScreen = screen === 'mapPreview' && selectedRoute !== null;
   const isProofCameraScreen = screen === 'proofCamera';
   const pendingDriverAppRelease = driverAppUpdateState.kind === 'optional_update'
     || driverAppUpdateState.kind === 'required_update'
@@ -3772,8 +3749,6 @@ function DriverApp() {
     <FixedScreenHeader onBack={handleAppBack} title="Settings" topInset={topInset} />
   ) : screen === 'accountName' ? (
     <FixedScreenHeader onBack={handleAppBack} title="Name" topInset={topInset} />
-  ) : screen === 'routePreview' ? (
-    <FixedScreenHeader onBack={handleAppBack} title={ROUTE_PREVIEW_COPY.title} topInset={topInset} />
   ) : screen === 'routeSession' ? (
     <FixedScreenHeader onBack={handleAppBack} title={selectedRoute?.name ?? 'Route'} topInset={topInset} />
   ) : screen === 'stopDetails' ? (
@@ -3829,14 +3804,6 @@ function DriverApp() {
             searchQuery={countrySearchQuery}
             selectedCountry={selectedPhoneCountry}
             selectedLocale={selectedDriverLocale}
-            topInset={topInset}
-          />
-        ) : isFullMapScreen ? (
-          <MapPreviewScreen
-            currentStepIndex={navigationStepIndex}
-            mapStyleUrl={driverMapStyleUrl}
-            onBack={() => setScreen('routePreview')}
-            route={selectedRoute}
             topInset={topInset}
           />
         ) : isProofCameraScreen ? (
@@ -3956,7 +3923,6 @@ function DriverApp() {
                 }
                 setScreen('completedDeliveries');
               }}
-              onOpenRoutePreview={handleOpenRoutePreview}
               onOpenBackgroundLocationSettings={() => { void handleOpenBackgroundLocationSettings(); }}
               onContinueRoute={handleOpenRouteSession}
               onClearRouteReconciliation={handleRequestRouteReconciliationClear}
@@ -4007,6 +3973,7 @@ function DriverApp() {
               isStartingRoute={isStartingRoute}
               mapStyleUrl={driverMapStyleUrl}
               onArrived={handleArrivedAtStep}
+              onCopyAddress={(address) => { void handleCopyAddress(address); }}
               onFinishRoute={handleManualFinishRoute}
               onOpenNavigation={() => handleOpenNavigationForStop(currentStop)}
               onOpenRouteNavigation={() => handleOpenRouteNavigation(selectedRoute)}
@@ -4019,14 +3986,6 @@ function DriverApp() {
             />
           ) : null}
 
-          {screen === 'routePreview' && selectedRoute !== null ? (
-            <RoutePreviewScreen
-              mapStyleUrl={driverMapStyleUrl}
-              onOpenMapPreview={openMapPreview}
-              route={selectedRoute}
-            />
-          ) : null}
-
           {screen === 'stopDetails' && stopDetailsStop !== null ? (
             <StopDetailsScreen
               canArrive={canArriveFromStopDetails}
@@ -4036,6 +3995,7 @@ function DriverApp() {
               isReadOnly={stopDetailsReturnScreen === 'completedDeliveries'}
               onArrive={handleArriveFromStopDetails}
               onCall={() => handleCallStop(stopDetailsStop)}
+              onCopyAddress={() => { void handleCopyAddress(formatStopStreetAddress(stopDetailsStop)); }}
               onMessage={() => handleMessageStop(stopDetailsStop)}
               onOpenNavigation={() => handleOpenNavigationForStop(stopDetailsStop)}
               onSkip={handleSkipStopFromDetails}
@@ -4282,7 +4242,6 @@ function MyRoutesPage({
   onDeleteRoute,
   onOpenCompletedDeliveries,
   onOpenBackgroundLocationSettings,
-  onOpenRoutePreview,
   onContinueRoute,
   onClearRouteReconciliation,
   onRetryRouteSync,
@@ -4304,7 +4263,6 @@ function MyRoutesPage({
   onDeleteRoute(routeId: string): void;
   onOpenCompletedDeliveries(routeId: string): void;
   onOpenBackgroundLocationSettings(): void;
-  onOpenRoutePreview(routeId: string): void;
   onContinueRoute(routeId: string): void;
   onClearRouteReconciliation(): void;
   onRetryRouteSync(): void;
@@ -4477,7 +4435,7 @@ function MyRoutesPage({
                       />
                     </View>
                     <View style={styles.routeActionButton}>
-                      <SecondaryButton compact label="Detail" onPress={() => onOpenRoutePreview(session.route.id)} />
+                      <SecondaryButton compact label="Detail" onPress={() => onContinueRoute(session.route.id)} />
                     </View>
                   </View>
                 )}
@@ -4681,74 +4639,6 @@ function AccountNamePage({
   );
 }
 
-
-
-function RoutePreviewRegionBlock({ items }: { items: string[] }) {
-  return (
-    <View style={styles.routePreviewRegionBlock}>
-      <Text style={styles.routePreviewRegionLabel}>{ROUTE_PREVIEW_LABELS.region}</Text>
-      <View style={styles.routePreviewRegionList}>
-        {items.map((item) => (
-          <Text key={item} style={styles.routePreviewRegionItem}>{item}</Text>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-function RoutePreviewScreen({
-  mapStyleUrl,
-  onOpenMapPreview,
-  route,
-}: {
-  mapStyleUrl: string;
-  onOpenMapPreview(): void;
-  route: AssignedRoute;
-}) {
-  const previewSequence = buildRoutePreviewSequence(route);
-
-  return (
-    <View style={styles.screenStack}>
-      <View style={styles.summaryCard}>
-        <DataRow label={ROUTE_PREVIEW_LABELS.date} value={route.deliveryDate} />
-        <RoutePreviewRegionBlock items={buildRoutePreviewRegionItems(route)} />
-        <View style={styles.summaryGrid}>
-          <MetricBlock label={ROUTE_PREVIEW_LABELS.stops} value={formatStopCount(route.stops.length)} />
-          <MetricBlock label={ROUTE_PREVIEW_LABELS.distance} value={formatAssignedRouteDistance(route.routeMetrics)} />
-          <MetricBlock label={ROUTE_PREVIEW_LABELS.time} value={formatAssignedRouteDuration(route.routeMetrics)} />
-        </View>
-      </View>
-
-      <View style={styles.routePreviewCard}>
-        <Text style={styles.sectionTitle}>{ROUTE_PREVIEW_LABELS.map}</Text>
-        <Pressable
-          accessibilityLabel={ROUTE_PREVIEW_COPY.mapAccessibilityLabel}
-          accessibilityRole="button"
-          onPress={onOpenMapPreview}
-          style={styles.routePreviewCanvas}
-        >
-          <View pointerEvents="none">
-            <MapOverview route={route} currentStepIndex={COMPANY_STEP_INDEX} mapStyleUrl={mapStyleUrl} />
-          </View>
-        </Pressable>
-      </View>
-
-      <View style={styles.summaryCard}>
-        <Text style={styles.sectionTitle}>{ROUTE_PREVIEW_LABELS.sequence}</Text>
-        {previewSequence.items.length > 0 ? previewSequence.items.map((item) => (
-          <View key={item.deliveryStopId} style={styles.routePreviewSequenceRow}>
-            <Text style={styles.routePreviewSequenceMarker}>{item.marker}</Text>
-            <Text numberOfLines={2} style={styles.routePreviewSequenceAddress}>{item.address}</Text>
-          </View>
-        )) : <Text style={styles.helperText}>No stops assigned.</Text>}
-        {previewSequence.overflowCount > 0 ? (
-          <Text style={styles.helperText}>+ {previewSequence.overflowCount} more stops</Text>
-        ) : null}
-      </View>
-    </View>
-  );
-}
-
 function RouteSessionScreen({
   allStopsCompleted,
   company,
@@ -4760,6 +4650,7 @@ function RouteSessionScreen({
   isStartingRoute,
   mapStyleUrl,
   onArrived,
+  onCopyAddress,
   onFinishRoute,
   onOpenNavigation,
   onOpenRouteNavigation,
@@ -4780,6 +4671,7 @@ function RouteSessionScreen({
   isStartingRoute: boolean;
   mapStyleUrl: string;
   onArrived(): void;
+  onCopyAddress(address: string): void;
   onFinishRoute(): void;
   onOpenNavigation(): void;
   onOpenRouteNavigation(): void;
@@ -4852,7 +4744,6 @@ function RouteSessionScreen({
         <MapOverview
           route={route}
           currentStepIndex={currentNavigationStepIndex}
-          mapSize="session"
           mapStyleUrl={mapStyleUrl}
           showUserLocation={routeStatus === 'active'}
         />
@@ -4967,13 +4858,15 @@ function RouteSessionScreen({
               const metaTone = completed ? 'neutral' : isProcessing ? 'green' : 'neutral';
               return (
                 <TimelineRow
+                  copyAccessibilityLabel={`Copy Stop ${stop.sequence} address`}
                   key={stop.deliveryStopId}
                   marker={String(stop.sequence).padStart(2, '0')}
+                  onCopy={() => onCopyAddress(formatStopStreetAddress(stop))}
+                  onPress={() => onOpenStop(stop)}
                   title={formatStopStreetAddress(stop)}
                   state={state}
                   meta={progressMeta}
                   metaTone={metaTone}
-                  onPress={() => onOpenStop(stop)}
                 />
               );
             })}
@@ -5042,35 +4935,6 @@ function RouteSessionScreen({
   );
 }
 
-function MapPreviewScreen({
-  currentStepIndex,
-  mapStyleUrl,
-  onBack,
-  route,
-  topInset,
-}: {
-  currentStepIndex: number;
-  mapStyleUrl: string;
-  onBack(): void;
-  route: AssignedRoute;
-  topInset: number;
-}) {
-  return (
-    <View style={styles.fullScreenMap}>
-      <MapOverview
-        mapSize="full"
-        route={route}
-        currentStepIndex={currentStepIndex}
-        mapStyleUrl={mapStyleUrl}
-        showUserLocation={false}
-      />
-      <View style={styles.fullScreenMapHeader}>
-        <FixedScreenHeader overlay onBack={onBack} title="Map Preview" topInset={topInset} />
-      </View>
-    </View>
-  );
-}
-
 function StopDetailsScreen({
   canArrive,
   canSkip,
@@ -5079,6 +4943,7 @@ function StopDetailsScreen({
   isSkipping,
   onArrive,
   onCall,
+  onCopyAddress,
   onMessage,
   onOpenNavigation,
   onSkip,
@@ -5091,6 +4956,7 @@ function StopDetailsScreen({
   isSkipping: boolean;
   onArrive(): void;
   onCall(): void;
+  onCopyAddress(): void;
   onMessage(): void;
   onOpenNavigation(): void;
   onSkip(): void;
@@ -5102,9 +4968,17 @@ function StopDetailsScreen({
   const isPickupStop = isAssignedRoutePickupStop(stop);
   const customerName = stop.recipientName?.trim() || null;
   const customerPhone = stop.phone?.trim() || null;
+  const stopAddress = formatStopStreetAddress(stop);
   return (
     <View style={styles.stopDetailsPage}>
-      <Text style={styles.stopDetailsAddress}>{formatStopStreetAddress(stop)}</Text>
+      <View style={styles.stopDetailsAddressRow}>
+        <Text style={styles.stopDetailsAddress}>{stopAddress}</Text>
+        <StopContactIconButton
+          accessibilityLabel="Copy address"
+          icon="copy-outline"
+          onPress={onCopyAddress}
+        />
+      </View>
 
       <View style={styles.stopDetailsSection}>
         <Text style={styles.stopDetailsSectionTitle}>Order</Text>
@@ -5226,7 +5100,7 @@ function StopContactIconButton({
   onPress,
 }: {
   accessibilityLabel: string;
-  icon: 'call-outline' | 'chatbubble-outline';
+  icon: 'call-outline' | 'chatbubble-outline' | 'copy-outline';
   onPress(): void;
 }) {
   return (
@@ -5761,59 +5635,58 @@ function StatusChip({
 }
 
 function TimelineRow({
+  copyAccessibilityLabel,
   marker,
   meta,
   metaTone = 'neutral',
+  onCopy,
   onPress,
   state,
   title,
 }: {
+  copyAccessibilityLabel: string;
   marker: string;
   meta?: string;
   metaTone?: 'blue' | 'green' | 'neutral';
-  onPress?: () => void;
+  onCopy(): void;
+  onPress(): void;
   state: 'completed' | 'current' | 'upcoming';
   title: string;
 }) {
-  const content = (
-    <>
-      <Text style={[styles.timelineIndex, state === 'completed' && styles.timelineIndexCompleted, state === 'current' && styles.timelineIndexCurrent]}>{marker}</Text>
-      <View style={styles.routeHeaderText}>
-        <Text style={[styles.timelineTitle, state === 'completed' && styles.timelineTitleCompleted, state === 'current' && styles.timelineTitleCurrent]}>{title}</Text>
-      </View>
-      {meta !== undefined ? <Text style={[styles.timelineMeta, metaTone === 'blue' && styles.timelineMetaBlue, metaTone === 'green' && styles.timelineMetaGreen]}>{meta}</Text> : null}
-    </>
-  );
-
-  if (onPress !== undefined) {
-    return (
+  return (
+    <View style={[styles.timelineRow, state === 'current' && styles.timelineRowCurrent]}>
       <Pressable
         accessibilityLabel={`${marker}. ${title}${meta === undefined ? '' : `. ${meta}`}.`}
         accessibilityRole="button"
         onPress={onPress}
-        style={({ pressed }) => [
-          styles.timelineRow,
-          state === 'current' && styles.timelineRowCurrent,
-          pressed && { opacity: 0.88 },
-        ]}
+        style={({ pressed }) => [styles.timelineRowMain, pressed && { opacity: 0.88 }]}
       >
-        {content}
+        <Text style={[styles.timelineIndex, state === 'completed' && styles.timelineIndexCompleted, state === 'current' && styles.timelineIndexCurrent]}>{marker}</Text>
+        <View style={styles.routeHeaderText}>
+          <Text style={[styles.timelineTitle, state === 'completed' && styles.timelineTitleCompleted, state === 'current' && styles.timelineTitleCurrent]}>{title}</Text>
+        </View>
+        {meta !== undefined ? <Text style={[styles.timelineMeta, metaTone === 'blue' && styles.timelineMetaBlue, metaTone === 'green' && styles.timelineMetaGreen]}>{meta}</Text> : null}
       </Pressable>
-    );
-  }
-
-  return <View style={[styles.timelineRow, state === 'current' && styles.timelineRowCurrent]}>{content}</View>;
+      <Pressable
+        accessibilityLabel={copyAccessibilityLabel}
+        accessibilityRole="button"
+        hitSlop={8}
+        onPress={onCopy}
+        style={({ pressed }) => [styles.timelineCopyButton, pressed && styles.timelineCopyButtonPressed]}
+      >
+        <Ionicons color="#0b57d0" name="copy-outline" size={16} />
+      </Pressable>
+    </View>
+  );
 }
 
 function MapOverview({
   currentStepIndex,
-  mapSize = 'preview',
   mapStyleUrl,
   route,
   showUserLocation = false,
 }: {
   currentStepIndex: number;
-  mapSize?: 'full' | 'live' | 'preview' | 'session';
   mapStyleUrl: string;
   route: AssignedRoute;
   showUserLocation?: boolean;
@@ -5833,18 +5706,13 @@ function MapOverview({
   const handleInteractiveMapUnavailable = useCallback(() => {
     setInteractiveMapState({ key: interactiveMapKey, status: 'failed' });
   }, [interactiveMapKey]);
-  const canvasStyle = [
-    styles.mapCanvas,
-    mapSize === 'live' ? styles.liveMapCanvas : null,
-    mapSize === 'full' ? styles.fullMapCanvas : null,
-    mapSize === 'session' ? styles.routeSessionMapCanvas : null,
-  ];
+  const canvasStyle = [styles.mapCanvas, styles.routeSessionMapCanvas];
 
   if (interactiveMapStatus === 'idle' && (showUserLocation || (route.routeGeometry !== null && route.routeGeometry.coordinates.length >= 2))) {
     return (
       <View style={canvasStyle}>
         <NativeRouteMapPreview
-          compactRouteFocus={mapSize === 'session'}
+          compactRouteFocus
           currentStepIndex={currentStepIndex}
           mapStyleUrl={mapStyleUrl}
           onUnavailable={handleInteractiveMapUnavailable}
@@ -7165,72 +7033,6 @@ const styles = StyleSheet.create({
     gap: 8,
     padding: 16,
   },
-  routePreviewCard: {
-    backgroundColor: '#ffffff',
-    borderColor: '#e5e7eb',
-    borderRadius: 18,
-    borderWidth: 1,
-    gap: 10,
-    padding: 16,
-  },
-  routePreviewHeader: {
-    alignItems: 'baseline',
-    flexDirection: 'row',
-    gap: 8,
-  },
-  routePreviewHint: {
-    color: '#667085',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  routePreviewRegionBlock: {
-    borderBottomColor: '#eef2f6',
-    borderBottomWidth: 1,
-    gap: 4,
-    paddingBottom: 8,
-  },
-  routePreviewRegionLabel: {
-    color: '#667085',
-    fontSize: 12,
-    fontWeight: '400',
-  },
-  routePreviewRegionList: {
-    gap: 2,
-  },
-  routePreviewRegionItem: {
-    color: '#475467',
-    fontSize: 13,
-    fontWeight: '400',
-    lineHeight: 18,
-  },
-  routePreviewCanvas: {
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  routePreviewSequenceRow: {
-    alignItems: 'flex-start',
-    flexDirection: 'row',
-    gap: 10,
-  },
-  routePreviewSequenceMarker: {
-    backgroundColor: '#eef2f6',
-    borderRadius: 999,
-    color: '#475467',
-    fontSize: 12,
-    fontWeight: '800',
-    minWidth: 28,
-    overflow: 'hidden',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    textAlign: 'center',
-  },
-  routePreviewSequenceAddress: {
-    color: '#111827',
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '700',
-    lineHeight: 20,
-  },
   currentTaskCard: {
     backgroundColor: '#ffffff',
     borderColor: '#bfdbfe',
@@ -7295,6 +7097,25 @@ const styles = StyleSheet.create({
     backgroundColor: ROUTE_VISUAL_STATE_SURFACES.current,
     marginHorizontal: -18,
     paddingHorizontal: 22,
+  },
+  timelineRowMain: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 32,
+  },
+  timelineCopyButton: {
+    alignItems: 'center',
+    borderColor: '#c7d7f5',
+    borderRadius: 16,
+    borderWidth: 1,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
+  timelineCopyButtonPressed: {
+    backgroundColor: '#eef4ff',
   },
   timelineIndex: {
     backgroundColor: ROUTE_VISUAL_STATE_COLORS.upcoming,
@@ -7422,17 +7243,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     width: 58,
   },
-  fullScreenMap: {
-    flex: 1,
-    overflow: 'hidden',
-  },
-  fullScreenMapHeader: {
-    left: 0,
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    zIndex: 2,
-  },
   statusDot: {
     backgroundColor: '#12b76a',
     borderRadius: 6,
@@ -7450,13 +7260,6 @@ const styles = StyleSheet.create({
     height: 430,
     overflow: 'hidden',
     position: 'relative',
-  },
-  liveMapCanvas: {
-    height: 540,
-  },
-  fullMapCanvas: {
-    flex: 1,
-    height: '100%',
   },
   routeSessionActions: {
     gap: 12,
@@ -7960,16 +7763,20 @@ const styles = StyleSheet.create({
     gap: 0,
     paddingBottom: 96,
   },
-  stopDetailsAddress: {
+  stopDetailsAddressRow: {
+    alignItems: 'center',
     borderBottomColor: '#d9dee8',
     borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 12,
+    paddingVertical: 12,
+  },
+  stopDetailsAddress: {
     color: '#111827',
-    flexShrink: 0,
+    flex: 1,
     fontSize: 20,
     fontWeight: '800',
     lineHeight: 28,
-    paddingVertical: 18,
-    width: '100%',
   },
   stopDetailsSection: {
     borderBottomColor: '#e4e7ec',

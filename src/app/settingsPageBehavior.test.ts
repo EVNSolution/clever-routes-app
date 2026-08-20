@@ -9,7 +9,7 @@ const appRootPath = join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx')
 function getSettingsPageSource(): string {
   const source = readFileSync(appRootPath, 'utf8');
   const start = source.indexOf('function SettingsPage(');
-  const end = source.indexOf('function RoutePreviewRegionBlock', start);
+  const end = source.indexOf('function RouteSessionScreen(', start);
 
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
@@ -20,7 +20,7 @@ function getSettingsPageSource(): string {
 function getAccountNamePageSource(): string {
   const source = readFileSync(appRootPath, 'utf8');
   const start = source.indexOf('function AccountNamePage(');
-  const end = source.indexOf('function RoutePreviewRegionBlock', start);
+  const end = source.indexOf('function RouteSessionScreen(', start);
 
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);

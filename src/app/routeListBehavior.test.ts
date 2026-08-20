@@ -164,7 +164,7 @@ describe('routes list behavior', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const deleteSource = source.slice(
       source.indexOf('async function deleteActiveRouteAfterConfirmed('),
-      source.indexOf('function openMapPreview()', source.indexOf('async function deleteActiveRouteAfterConfirmed(')),
+      source.indexOf('async function handleCallStop(', source.indexOf('async function deleteActiveRouteAfterConfirmed(')),
     );
     const finishSource = source.slice(
       source.indexOf('async function finishRoute('),

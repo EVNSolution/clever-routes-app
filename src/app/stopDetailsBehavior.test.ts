@@ -80,13 +80,28 @@ describe('stop details simplification', () => {
   it('keeps the full address visible and restores compact payment context beside the amount pill', () => {
     const source = getAppRootSource();
     const componentSource = getStopDetailsComponentSource();
-    const stylesSource = source.slice(source.indexOf('stopDetailsAddress:'), source.indexOf('stopDetailsItemHeader:'));
+    const stylesSource = source.slice(source.indexOf('stopDetailsAddressRow:'), source.indexOf('stopDetailsItemHeader:'));
 
-    assert.match(componentSource, /<Text style=\{styles\.stopDetailsAddress\}>\{formatStopStreetAddress\(stop\)\}<\/Text>/u);
-    assert.match(stylesSource, /stopDetailsAddress:[\s\S]*flexShrink: 0,[\s\S]*width: '100%'/u);
+    assert.match(componentSource, /<Text style=\{styles\.stopDetailsAddress\}>\{stopAddress\}<\/Text>/u);
+    assert.match(stylesSource, /stopDetailsAddressRow:[\s\S]*flexDirection: 'row'/u);
+    assert.match(stylesSource, /stopDetailsAddress:[\s\S]*flex: 1/u);
     assert.match(source, /statusChipLarge:[\s\S]*fontSize: 18,[\s\S]*paddingHorizontal: 14,[\s\S]*paddingVertical: 9/u);
     assert.match(stylesSource, /stopDetailsPaymentRow:[\s\S]*justifyContent: 'space-between'/u);
     assert.match(stylesSource, /stopDetailsPaymentContext:[\s\S]*flexDirection: 'row'/u);
+  });
+
+  it('copies the exact visible Stop Details address with an accessible shortcut', () => {
+    const source = getAppRootSource();
+    const componentSource = getStopDetailsComponentSource();
+
+    assert.match(source, /import \* as Clipboard from 'expo-clipboard'/u);
+    assert.match(source, /async function handleCopyAddress\(address: string\)/u);
+    assert.match(source, /await Clipboard\.setStringAsync\(address\)/u);
+    assert.match(source, /setMessage\('Address copied\.'\)/u);
+    assert.match(source, /setMessage\('Address could not be copied\.'\)/u);
+    assert.match(source, /onCopyAddress=\{\(\) => \{ void handleCopyAddress\(formatStopStreetAddress\(stopDetailsStop\)\); \}\}/u);
+    assert.match(componentSource, /const stopAddress = formatStopStreetAddress\(stop\)/u);
+    assert.match(componentSource, /<View style=\{styles\.stopDetailsAddressRow\}>[\s\S]*\{stopAddress\}[\s\S]*accessibilityLabel="Copy address"[\s\S]*icon="copy-outline"[\s\S]*onPress=\{onCopyAddress\}/u);
   });
 
   it('keeps call and message as customer icon shortcuts outside the delivery action hierarchy', () => {
