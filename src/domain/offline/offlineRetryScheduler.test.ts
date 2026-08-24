@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { createOfflineRetryScheduler } from './offlineRetryScheduler';
+import {
+  createInMemoryOfflineSubmissionQueue,
+  recoverPendingRouteEndReceipt,
+} from './offlineSubmissionQueue';
 
 describe('offline retry scheduler', () => {
   it('retries pending work while the app remains online and foregrounded', async () => {
@@ -96,5 +100,74 @@ describe('offline retry scheduler', () => {
     foreground = true;
     scheduler.notifyConditionsChanged();
     assert.deepEqual(delays, [1_000]);
+  });
+
+  it('backs off after a hung completion receipt and ignores late APPLIED until the next lookup', async () => {
+    const routePlanId = 'route-completion-pending';
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const item = queue.enqueueDriverEvent({
+      appVersion: '1.1.6',
+      assignmentGeneration: '11',
+      clientEventId: 'completion-pending-timeout',
+      driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'),
+      routePlanId,
+      versionCode: 116,
+    });
+    const retrySchedules: { delayMs: number; run: () => void }[] = [];
+    const attemptExpirations: (() => void)[] = [];
+    let lookupCount = 0;
+    let resolveLateApplied!: () => void;
+    const appliedReceipt = {
+      assignmentGeneration: '11', clientEventId: item.event.clientEventId, errorCode: null,
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', routePlanId,
+      routeStatus: 'COMPLETED', status: 'APPLIED',
+    } as const;
+    const lookupReceipt = () => {
+      lookupCount += 1;
+      if (lookupCount === 1) {
+        return new Promise<typeof appliedReceipt>((resolve) => {
+          resolveLateApplied = () => resolve(appliedReceipt);
+        });
+      }
+      return Promise.resolve(appliedReceipt);
+    };
+    const scheduler = createOfflineRetryScheduler({
+      cancel: () => undefined,
+      hasPendingSubmissions: () => queue.listPending().length > 0,
+      isForeground: () => true,
+      isOnline: () => true,
+      random: () => 0.5,
+      retry: async () => (await recoverPendingRouteEndReceipt({
+        attemptTimeoutMs: 100,
+        cancelAttemptTimeout: () => undefined,
+        driverEventReceiptService: { lookupReceipt },
+        queue,
+        routePlanId,
+        scheduleAttemptTimeout: (expire) => { attemptExpirations.push(expire); return expire; },
+      })) === 'acknowledged',
+      schedule: (run, delayMs) => { retrySchedules.push({ delayMs, run }); return run; },
+    });
+
+    scheduler.start();
+    const firstAttempt = retrySchedules.shift();
+    assert.equal(firstAttempt?.delayMs, 1_000);
+    firstAttempt?.run();
+    attemptExpirations.shift()?.();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
+    assert.equal(retrySchedules[0]?.delayMs, 2_000);
+
+    resolveLateApplied();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(queue.listPending().length, 1);
+    retrySchedules.shift()?.run();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(lookupCount, 2);
+    assert.equal(queue.listPending().length, 0);
+    assert.deepEqual(retrySchedules, []);
+    scheduler.stop();
   });
 });

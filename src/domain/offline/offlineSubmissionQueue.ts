@@ -4,7 +4,11 @@ import {
   type DriverEventService,
   type DriverEventType,
 } from '../events/driverEvents';
-import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
+import {
+  BoundedOperationTimeoutError,
+  OPERATION_TIMEOUT_CODE,
+  runBoundedAsyncOperation,
+} from '../async/boundedAsyncOperation';
 import { resolveCompletionReceipt, type DriverEventReceiptService } from '../events/driverEventReceipt';
 import {
   getDriverApiRequiresRouteLookup,
@@ -583,9 +587,12 @@ export function normalizePersistedOfflineSubmissionQueue(
 }
 
 export async function recoverPendingRouteEndReceipt(input: {
+  attemptTimeoutMs?: number;
+  cancelAttemptTimeout?: (handle: unknown) => void;
   driverEventReceiptService: DriverEventReceiptService;
   queue: OfflineSubmissionQueue;
   routePlanId: string;
+  scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
 }): Promise<'acknowledged' | 'none' | 'pending' | 'reconciliation'> {
   const item = input.queue.listPending().find((candidate): candidate is OfflineDriverEventQueueItem => (
     candidate.kind === 'driver_event'
@@ -594,10 +601,19 @@ export async function recoverPendingRouteEndReceipt(input: {
   ));
   if (item === undefined) return 'none';
 
-  const receipt = await input.driverEventReceiptService.lookupReceipt({
+  const receipt = await runBoundedAsyncOperation(() => input.driverEventReceiptService.lookupReceipt({
     clientEventId: item.event.clientEventId,
     routePlanId: input.routePlanId,
+  }), {
+    ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+    ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
+    timeoutMs: input.attemptTimeoutMs ?? 15_000,
+  }).catch((error: unknown) => {
+    if (!(error instanceof BoundedOperationTimeoutError)) throw error;
+    input.queue.recordRetryFailure(item.queueItemId, OPERATION_TIMEOUT_CODE);
+    return null;
   });
+  if (receipt === null) return 'pending';
   const resolution = resolveCompletionReceipt(item.event, receipt);
   if (resolution.kind === 'retry') return 'pending';
   if (resolution.kind === 'reconcile') {

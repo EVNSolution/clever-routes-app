@@ -1543,6 +1543,39 @@ describe('offline submission queue', () => {
     assert.equal((await createPersistentOfflineSubmissionQueue({ storage })).listPending().length, 0);
   });
 
+  it('keeps completion pending and handles a late receipt rejection after timeout', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const routePlanId = 'route-late-receipt-reject';
+    queue.enqueueDriverEvent({
+      appVersion: '1.1.6', assignmentGeneration: '11', clientEventId: 'late-receipt-reject',
+      driverContractVersion: 2, eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId, versionCode: 116,
+    });
+    const expirations: (() => void)[] = [];
+    let rejectLate!: (error: Error) => void;
+    const recovery = recoverPendingRouteEndReceipt({
+      attemptTimeoutMs: 100,
+      cancelAttemptTimeout: () => undefined,
+      driverEventReceiptService: {
+        lookupReceipt: () => new Promise((_resolve, reject) => { rejectLate = reject; }),
+      },
+      queue,
+      routePlanId,
+      scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+    });
+    expirations.shift()?.();
+
+    assert.equal(await recovery, 'pending');
+    assert.equal(queue.listPending()[0]?.firstErrorCode, 'OPERATION_TIMEOUT');
+    assert.equal(queue.listPending()[0]?.journal.at(-1)?.code, 'OPERATION_TIMEOUT');
+    rejectLate(new Error('late private transport failure'));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(queue.listPending().length, 1);
+    assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
+    assert.doesNotMatch(JSON.stringify(queue.listPending()[0]?.journal), /private transport/u);
+  });
+
   it('replays completion only for UNKNOWN plus IN_PROGRESS and quarantines a terminal South route', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     const event = queue.enqueueDriverEvent({
