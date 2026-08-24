@@ -2,6 +2,29 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const SUPPORTED_EXPO_LOCATION_VERSION = '56.0.24';
+const expoLocationPackagePath = resolve(
+  process.cwd(),
+  'node_modules/expo-location/package.json',
+);
+
+let expoLocationPackage;
+try {
+  expoLocationPackage = JSON.parse(readFileSync(expoLocationPackagePath, 'utf8'));
+} catch (error) {
+  throw new Error(
+    `Unable to verify installed expo-location package metadata at ${expoLocationPackagePath}`,
+    { cause: error },
+  );
+}
+
+if (
+  expoLocationPackage?.name !== 'expo-location'
+  || expoLocationPackage.version !== SUPPORTED_EXPO_LOCATION_VERSION
+) {
+  throw new Error(
+    `Unsupported expo-location package metadata: expected expo-location@${SUPPORTED_EXPO_LOCATION_VERSION}`,
+  );
+}
 
 const patches = [
   {
