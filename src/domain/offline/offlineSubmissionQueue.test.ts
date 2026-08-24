@@ -1808,6 +1808,50 @@ describe('offline submission queue', () => {
     });
   });
 
+  it('does not project an operator reconciliation clear as a server acknowledgement', () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'completion-reconciliation-clear',
+      eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'),
+      routePlanId: 'route-kitchener',
+    });
+    queue.blockRouteSubmissionsForReconciliation('route-kitchener');
+    assert.equal(queue.discardReconciliationRecords(), 1);
+
+    assert.deepEqual(queue.getRouteCompletionTelemetry('route-kitchener'), {
+      finishPending: true,
+      lastAcknowledgedAt: null,
+      locallyFinished: true,
+    });
+  });
+
+  it('isolates same-route completion acknowledgement telemetry by account owner', () => {
+    const ownerA = 'a'.repeat(64);
+    const ownerB = 'b'.repeat(64);
+    const queue = createInMemoryOfflineSubmissionQueue({
+      accountOwnerHash: ownerA,
+      now: () => new Date('2026-08-25T00:00:00.000Z'),
+    });
+    const ownerACompletion = queue.enqueueDriverEvent({
+      clientEventId: 'owner-a-completion', eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId: 'shared-route-id',
+    });
+    queue.acknowledge(ownerACompletion.queueItemId);
+    queue.bindAccountOwnerHash(ownerB);
+    queue.enqueueDriverEvent({
+      clientEventId: 'owner-b-completion', eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-08-22T19:43:10.000Z'), routePlanId: 'shared-route-id',
+    });
+
+    assert.deepEqual(queue.getRouteCompletionTelemetry('shared-route-id'), {
+      finishPending: true, lastAcknowledgedAt: null, locallyFinished: true,
+    });
+    queue.bindAccountOwnerHash(ownerA);
+    assert.equal(queue.getRouteCompletionTelemetry('shared-route-id').finishPending, false);
+    assert.equal(queue.getRouteCompletionTelemetry('shared-route-id').lastAcknowledgedAt, '2026-08-25T00:00:00.000Z');
+  });
+
   it('recovers an APPLIED completion receipt before assigned-route restoration is available', async () => {
     const storage = createMemoryStorage();
     const queue = await createPersistentOfflineSubmissionQueue({ storage });

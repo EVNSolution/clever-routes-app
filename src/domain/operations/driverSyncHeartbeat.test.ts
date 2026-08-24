@@ -153,6 +153,51 @@ describe('driver sync heartbeat', () => {
     scheduler.stop();
   });
 
+  it('does not lose an immediate request made before the scheduler starts', async () => {
+    let calls = 0;
+    const scheduler = createDriverSyncHeartbeatScheduler({
+      cancel: () => undefined,
+      hasActiveSession: () => true,
+      isForeground: () => true,
+      isOnline: () => true,
+      schedule: () => ({}),
+      sendHeartbeat: async () => { calls += 1; return true; },
+    });
+
+    scheduler.requestImmediate();
+    assert.equal(calls, 0);
+    scheduler.start();
+    assert.equal(calls, 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    scheduler.stop();
+  });
+
+  it('coalesces duplicate immediate requests while one heartbeat is running', async () => {
+    let calls = 0;
+    let resolveFirst!: (accepted: boolean) => void;
+    const scheduler = createDriverSyncHeartbeatScheduler({
+      cancel: () => undefined,
+      hasActiveSession: () => true,
+      isForeground: () => true,
+      isOnline: () => true,
+      schedule: () => ({}),
+      sendHeartbeat: () => {
+        calls += 1;
+        return calls === 1 ? new Promise<boolean>((resolve) => { resolveFirst = resolve; }) : Promise.resolve(true);
+      },
+    });
+
+    scheduler.start();
+    scheduler.requestImmediate();
+    scheduler.requestImmediate();
+    scheduler.requestImmediate();
+    assert.equal(calls, 1);
+    resolveFirst(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls, 2);
+    scheduler.stop();
+  });
+
   it('does not regress local sync projection when an older heartbeat response arrives late', () => {
     const current = { accepted: true, conflict: false, heartbeatSequence: 12, state: 'HEALTHY' as const };
     const late = { accepted: true, conflict: true, heartbeatSequence: 11, state: 'BLOCKED' as const };

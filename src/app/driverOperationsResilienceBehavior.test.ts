@@ -32,12 +32,33 @@ describe('driver operations resilience runtime', () => {
   });
 
   it('projects completion heartbeat state only from durable queue evidence and emits transition heartbeats', () => {
-    assert.match(source, /telemetryQueue\.getRouteCompletionTelemetry\(activeRoutePlanId\)/u);
-    assert.match(source, /finishPending: completionTelemetry\.finishPending/u);
-    assert.match(source, /lastAcknowledgedAt: completionTelemetry\.lastAcknowledgedAt/u);
-    assert.match(source, /locallyFinished: completionTelemetry\.locallyFinished/u);
+    assert.match(source, /projectDriverSyncQueueState\(telemetryQueue, activeRoutePlanId\)/u);
+    assert.match(source, /\.\.\.queueProjection/u);
     assert.doesNotMatch(source, /finishPending: routeSession === undefined/u);
-    assert.ok(source.match(/driverSyncHeartbeatSchedulerRef\.current\?\.requestImmediate\(\)/gu)?.length === 3);
+    assert.match(source, /requestImmediateDriverSyncHeartbeat/u);
+  });
+
+  it('sends cold-restart APPLIED acknowledgement telemetry before clearing the active session', () => {
+    const receiptRestoreIndex = source.indexOf('await restoreCompletionPendingBeforeRouteHydration({');
+    const onResolvedIndex = source.indexOf('onResolved: async (routePlanId, resolution)', receiptRestoreIndex);
+    const heartbeatIndex = source.indexOf('await sendCompletionAcknowledgedHeartbeatBeforeCleanup({', onResolvedIndex);
+    const clearIndex = source.indexOf('await clearAndStopActiveLocationSession(routePlanId);', onResolvedIndex);
+    assert.ok(receiptRestoreIndex > 0 && onResolvedIndex > receiptRestoreIndex);
+    assert.ok(heartbeatIndex > onResolvedIndex && heartbeatIndex < clearIndex);
+    assert.match(source.slice(onResolvedIndex, clearIndex), /resolution === 'acknowledged'/u);
+    assert.match(source, /pendingImmediateDriverSyncHeartbeatRef\.current/u);
+  });
+
+  it('orders both online acknowledgement paths before active-session cleanup', () => {
+    const replayAckIndex = source.indexOf('result.completionAcknowledgedRoutePlanIds?.includes(session.route.id)');
+    const replayHeartbeatIndex = source.indexOf('await sendCompletionAcknowledgedHeartbeatBeforeCleanup({', replayAckIndex);
+    const replayClearIndex = source.indexOf('await clearAndStopActiveLocationSession(session.route.id);', replayAckIndex);
+    assert.ok(replayAckIndex > 0 && replayHeartbeatIndex > replayAckIndex && replayHeartbeatIndex < replayClearIndex);
+
+    const receiptAckIndex = source.indexOf("if (recovery === 'acknowledged')");
+    const receiptHeartbeatIndex = source.indexOf('await sendCompletionAcknowledgedHeartbeatBeforeCleanup({', receiptAckIndex);
+    const receiptClearIndex = source.indexOf('await clearAndStopActiveLocationSession(routePlanId);', receiptAckIndex);
+    assert.ok(receiptAckIndex > 0 && receiptHeartbeatIndex > receiptAckIndex && receiptHeartbeatIndex < receiptClearIndex);
   });
 
   it('records native GPS accuracy rather than treating proximity as safe without metadata', () => {

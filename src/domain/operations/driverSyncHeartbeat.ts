@@ -1,4 +1,5 @@
 import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
+import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 
 export type DriverSyncRetryJournalEntry = {
   errorCode: string;
@@ -40,6 +41,49 @@ export type DriverSyncHeartbeatResult = {
 export type DriverSyncHeartbeatService = {
   recordHeartbeat(request: DriverSyncHeartbeatRequest): Promise<DriverSyncHeartbeatResult>;
 };
+
+export type DriverSyncQueueProjection = Pick<DriverSyncHeartbeatRequest,
+  | 'finishPending'
+  | 'firstErrorCode'
+  | 'firstFailedAt'
+  | 'lastAcknowledgedAt'
+  | 'lastErrorCode'
+  | 'lastRetryAt'
+  | 'locallyFinished'
+  | 'nextRetryAt'
+  | 'oldestQueuedAt'
+  | 'queueDepth'
+  | 'retryCount'
+  | 'retryJournal'
+>;
+
+export function projectDriverSyncQueueState(
+  queue: OfflineSubmissionQueue,
+  routePlanId: string,
+): DriverSyncQueueProjection {
+  const pending = queue.listPending().filter((item) => (
+    item.kind === 'driver_event' ? item.event.routePlanId === routePlanId : item.request.routePlanId === routePlanId
+  ));
+  const firstPending = pending[0];
+  const completion = queue.getRouteCompletionTelemetry(routePlanId);
+  return {
+    finishPending: completion.finishPending,
+    firstErrorCode: firstPending?.firstErrorCode ?? null,
+    firstFailedAt: firstPending?.journal.find((entry) => entry.kind === 'ATTEMPT')?.at ?? null,
+    lastAcknowledgedAt: completion.lastAcknowledgedAt,
+    lastErrorCode: pending.at(-1)?.lastErrorCode ?? null,
+    lastRetryAt: pending.flatMap((item) => item.journal).filter((entry) => entry.kind === 'ATTEMPT').at(-1)?.at ?? null,
+    locallyFinished: completion.locallyFinished,
+    nextRetryAt: null,
+    oldestQueuedAt: firstPending?.enqueuedAt ?? null,
+    queueDepth: pending.length,
+    retryCount: pending.reduce((total, item) => total + item.attempts, 0),
+    retryJournal: pending.flatMap((item) => item.journal)
+      .filter((entry) => entry.kind === 'ATTEMPT' || entry.kind === 'RECONCILIATION')
+      .slice(-8)
+      .map((entry) => ({ errorCode: entry.code, observedAt: entry.at })),
+  };
+}
 
 export class DriverSyncHeartbeatHttpError extends Error {
   constructor(readonly status: number) {
@@ -173,7 +217,11 @@ export function createDriverSyncHeartbeatScheduler(input: {
       immediateRequested = true;
       runNow();
     },
-    start() { started = true; scheduleNext(); },
+    start() {
+      started = true;
+      if (immediateRequested) runNow();
+      else scheduleNext();
+    },
     stop() { started = false; immediateRequested = false; cancelScheduled(); },
   };
 }

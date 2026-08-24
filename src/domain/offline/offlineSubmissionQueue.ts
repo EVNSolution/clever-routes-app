@@ -468,10 +468,12 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
         return { finishPending: false, lastAcknowledgedAt: null, locallyFinished: false };
       }
       const acknowledgedAt = completion.state === 'ACKNOWLEDGED'
-        ? [...completion.journal].reverse().find((entry) => entry.kind === 'ACK')?.at ?? null
+        ? [...completion.journal].reverse().find((entry) => (
+            entry.kind === 'ACK' && entry.code === 'SERVER_ACK'
+          ))?.at ?? null
         : null;
       return {
-        finishPending: completion.state === 'PENDING' || completion.state === 'QUARANTINED',
+        finishPending: acknowledgedAt === null,
         lastAcknowledgedAt: acknowledgedAt,
         locallyFinished: true,
       };
