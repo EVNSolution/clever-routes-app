@@ -2,16 +2,35 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
-import { sampleAssignedRoute } from '../domain/route/assignedRoute';
+import { sampleAssignedRoute, type AssignedRoute } from '../domain/route/assignedRoute';
 import {
-  buildActiveRouteForegroundNotification,
+  buildActiveRouteForegroundNotification as buildNotificationContent,
   isActiveRouteNotificationTargetCurrent,
   parseActiveRouteNotificationUrl,
 } from './activeRouteNotification';
 
 const operationalLines = 'Alert: None\nRoute: In progress\nGPS: Monitoring\nDevice: This device\nServer: Checking\nSync: Active';
+const defaultOperationalState = {
+  alert: 'None', device: 'This device', gps: 'Monitoring', route: 'In progress', server: 'Checking', sync: 'Active',
+};
+
+function buildActiveRouteForegroundNotification(input: { currentStepIndex: number; route: AssignedRoute }) {
+  return buildNotificationContent({ ...input, operationalState: defaultOperationalState });
+}
 
 describe('active route foreground notification', () => {
+  it('renders current Kitchener, unknown, and blocked operational states instead of static defaults', () => {
+    const notification = buildNotificationContent({
+      currentStepIndex: 11,
+      operationalState: {
+        alert: 'Action needed', device: 'Conflict', gps: 'Stale', route: 'Completion pending', server: 'UNKNOWN', sync: 'Storage blocked',
+      },
+      route: sampleAssignedRoute,
+    });
+    assert.match(notification.expandedBody ?? '', /Alert: Action needed\nRoute: Completion pending\nGPS: Stale\nDevice: Conflict\nServer: UNKNOWN\nSync: Storage blocked$/u);
+    assert.doesNotMatch(notification.expandedBody ?? '', /Alert: None|Server: Checking|Sync: Active/u);
+  });
+
   it('shows the server ETA, drop items, and customer note for the current stop', () => {
     const route = {
       ...sampleAssignedRoute,

@@ -127,7 +127,7 @@ describe('background location lifecycle wiring', () => {
     assert.ok(removedIndex < clearRemovedIndex);
     assert.match(
       loadSource,
-      /activeRouteLoadIsUnresolved = persistedActiveRouteSession !== null[\s\S]*restoredActiveSession === null[\s\S]*routeLoadFailed/u,
+      /activeRouteLoadIsUnresolved = effectivePersistedActiveRouteSession !== null[\s\S]*restoredActiveSession === null[\s\S]*routeLoadFailed/u,
     );
     assert.match(
       loadSource,

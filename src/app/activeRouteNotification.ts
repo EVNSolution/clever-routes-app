@@ -18,14 +18,24 @@ export type ActiveRouteNotificationTarget = {
   routePlanId: string;
 };
 
+export type ActiveRouteNotificationOperationalState = {
+  alert: string;
+  device: string;
+  gps: string;
+  route: string;
+  server: string;
+  sync: string;
+};
+
 export function buildActiveRouteForegroundNotification(input: {
   currentStepIndex: number;
+  operationalState: ActiveRouteNotificationOperationalState;
   route: AssignedRoute;
 }): ContinuousLocationNotificationContent {
   if (input.currentStepIndex <= 0) {
     return {
       body: 'Open CLEVER Routes to confirm pickup before the first delivery stop.',
-      expandedBody: formatOperationalNotificationLines().join('\n'),
+      expandedBody: formatOperationalNotificationLines(input.operationalState).join('\n'),
       title: 'Pickup & Start Route',
     };
   }
@@ -35,7 +45,7 @@ export function buildActiveRouteForegroundNotification(input: {
   if (stop === null) {
     return {
       body: 'Open CLEVER Routes for route details.',
-      expandedBody: formatOperationalNotificationLines().join('\n'),
+      expandedBody: formatOperationalNotificationLines(input.operationalState).join('\n'),
       title: 'Route in progress',
     };
   }
@@ -70,7 +80,7 @@ export function buildActiveRouteForegroundNotification(input: {
       itemTypeCount,
       isPickupStop,
       payment,
-    }), ...formatOperationalNotificationLines()].join('\n'),
+    }), ...formatOperationalNotificationLines(input.operationalState)].join('\n'),
     title: `Next stop ${stop.sequence}${eta === null ? '' : `  ETA ${eta}`}`,
     url: buildActiveRouteNotificationUrl({
       deliveryStopId: stop.deliveryStopId,
@@ -79,14 +89,14 @@ export function buildActiveRouteForegroundNotification(input: {
   };
 }
 
-function formatOperationalNotificationLines(): string[] {
+function formatOperationalNotificationLines(state: ActiveRouteNotificationOperationalState): string[] {
   return [
-    'Alert: None',
-    'Route: In progress',
-    'GPS: Monitoring',
-    'Device: This device',
-    'Server: Checking',
-    'Sync: Active',
+    `Alert: ${state.alert}`,
+    `Route: ${state.route}`,
+    `GPS: ${state.gps}`,
+    `Device: ${state.device}`,
+    `Server: ${state.server}`,
+    `Sync: ${state.sync}`,
   ];
 }
 

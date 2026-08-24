@@ -3,9 +3,17 @@ import { describe, it } from 'node:test';
 
 import type { ContinuousLocationStreamService } from '../location/continuousLocationStream';
 import { finishDeliveryAfterActive } from './deliveryFinish';
+import { createDriverApiClientsFromRouteAccess } from '../../api/deliveryServer/driverApiClients';
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createMockDriverEventService } from '../events/driverEvents';
-import { createInMemoryOfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
+import { sampleInvitedRouteAccess } from '../routeAccess/routeAccess';
+import {
+  createInMemoryOfflineSubmissionQueue,
+  createPersistentOfflineSubmissionQueue,
+  createRouteOrderedDriverEventService,
+  retryOfflineSubmissions,
+  type OfflineSubmissionQueueStorage,
+} from '../offline/offlineSubmissionQueue';
 
 function createMockStreamService() {
   const stoppedTasks: string[] = [];
@@ -24,6 +32,72 @@ function createMockStreamService() {
 }
 
 describe('delivery finish route cleanup', () => {
+  it('persists decorated completion before response loss and recovers APPLIED receipt after process restart', async () => {
+    const values = new Map<string, string>();
+    const storage: OfflineSubmissionQueueStorage = {
+      getItem: async (key) => values.get(key) ?? null,
+      removeItem: async (key) => { values.delete(key); },
+      setItem: async (key, value) => { values.set(key, value); },
+    };
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    const routePlanId = '11111111-1111-4111-8111-111111111111';
+    const contract = {
+      appVersion: '2.8.0',
+      assignmentGeneration: sampleInvitedRouteAccess.routeAccess.assignmentGeneration,
+      driverContractVersion: 2 as const,
+      expectedRouteVersionId: sampleInvitedRouteAccess.routeAccess.expectedRouteVersionId,
+      versionCode: 20800,
+    };
+    const live = createDriverApiClientsFromRouteAccess({
+      appVersion: contract.appVersion,
+      baseUrl: 'https://route.test',
+      fetchImpl: async () => { throw new TypeError('response lost'); },
+      refreshDriverAccess: async () => sampleInvitedRouteAccess.driverAccess,
+      routeAccess: sampleInvitedRouteAccess,
+      versionCode: contract.versionCode,
+    }).driverEventService;
+    const stream = createMockStreamService();
+    const finish = await finishDeliveryAfterActive({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: createRouteOrderedDriverEventService({ driverEventService: live, queue, routePlanId }),
+      now: new Date('2026-08-22T19:42:10.000Z'),
+      offlineQueue: queue,
+      routePlanId,
+      streamService: stream.service,
+    });
+    assert.equal(finish.kind, 'queued');
+
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    const persisted = restarted.listPending()[0];
+    assert.equal(persisted?.kind, 'driver_event');
+    if (persisted?.kind !== 'driver_event') throw new Error('Expected persisted completion');
+    assert.deepEqual({
+      appVersion: persisted.event.appVersion,
+      assignmentGeneration: persisted.event.assignmentGeneration,
+      driverContractVersion: persisted.event.driverContractVersion,
+      expectedRouteVersionId: persisted.event.expectedRouteVersionId,
+      versionCode: persisted.event.versionCode,
+    }, contract);
+
+    let replayed = false;
+    const recovery = await retryOfflineSubmissions({
+      driverEventReceiptService: { lookupReceipt: async () => ({
+        assignmentGeneration: contract.assignmentGeneration,
+        clientEventId: persisted.event.clientEventId,
+        errorCode: null,
+        expectedRouteVersionId: contract.expectedRouteVersionId,
+        routePlanId,
+        routeStatus: 'COMPLETED',
+        status: 'APPLIED',
+      }) },
+      driverEventService: { recordDriverEvent: async () => { replayed = true; throw new Error('must not replay'); } },
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue: restarted,
+    });
+    assert.equal(replayed, false);
+    assert.deepEqual(recovery.completionAcknowledgedRoutePlanIds, [routePlanId]);
+  });
+
   it('blocks route completion before delivery_active', async () => {
     const driverEvents = createMockDriverEventService();
     const stream = createMockStreamService();

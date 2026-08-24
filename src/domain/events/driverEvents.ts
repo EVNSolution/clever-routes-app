@@ -85,8 +85,16 @@ export type DriverRouteEtaUpdate = {
 };
 
 export type DriverEventService = {
+  prepareDriverEvent?(input: DriverEventInput): DriverEventInput;
   recordDriverEvent(input: DriverEventInput): Promise<DriverEventRecordResult>;
 };
+
+export function prepareDriverEventForPersistence(
+  service: DriverEventService,
+  event: DriverEventInput,
+): DriverEventInput {
+  return service.prepareDriverEvent?.(event) ?? event;
+}
 
 export type MockDriverEventService = DriverEventService & {
   recordedEvents: DriverEventInput[];
@@ -152,12 +160,17 @@ export function createDriverEventsApiClient(input: {
 }): DriverEventService {
   const baseUrl = input.baseUrl.replace(/\/$/u, '');
   const fetchImpl = input.fetchImpl ?? globalThis.fetch;
+  const prepareDriverEvent = (event: DriverEventInput): DriverEventInput => {
+    if (event.eventType !== 'LOCATION_UPDATED' && input.orderedEventContract !== undefined) {
+      Object.assign(event, input.orderedEventContract);
+    }
+    return event;
+  };
 
   return {
+    prepareDriverEvent,
     recordDriverEvent: async (event) => {
-      if (event.eventType !== 'LOCATION_UPDATED' && input.orderedEventContract !== undefined) {
-        Object.assign(event, input.orderedEventContract);
-      }
+      prepareDriverEvent(event);
       const response = await fetchImpl(`${baseUrl}/driver/events`, withNoStoreDriverApiRequest({
         body: JSON.stringify(toDriverEventRequestBody(event)),
         headers: {

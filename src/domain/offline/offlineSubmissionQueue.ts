@@ -1,4 +1,9 @@
-import type { DriverEventInput, DriverEventService, DriverEventType } from '../events/driverEvents';
+import {
+  prepareDriverEventForPersistence,
+  type DriverEventInput,
+  type DriverEventService,
+  type DriverEventType,
+} from '../events/driverEvents';
 import { resolveCompletionReceipt, type DriverEventReceiptService } from '../events/driverEventReceipt';
 import {
   getDriverApiRequiresRouteLookup,
@@ -173,7 +178,9 @@ export function createRouteOrderedDriverEventService(input: {
   routePlanId: string;
 }): DriverEventService {
   return {
+    prepareDriverEvent: (event) => prepareDriverEventForPersistence(input.driverEventService, event),
     recordDriverEvent: async (event) => {
+      prepareDriverEventForPersistence(input.driverEventService, event);
       if (
         ROUTE_WORKFLOW_EVENT_TYPES.has(event.eventType)
         && input.queue.listPending().some((item) => (
@@ -248,6 +255,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
   }
 
   function upsertDriverEvent(event: DriverEventInput): {
+    changed: boolean;
     inserted: boolean;
     item: OfflineDriverEventQueueItem;
   } {
@@ -255,7 +263,18 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
     const queueItemId = getDriverEventQueueItemId(event);
     const existing = findActiveItem(queueItemId);
     if (existing?.kind === 'driver_event') {
-      return { inserted: false, item: existing };
+      if (hasCompleteOrderedEventContract(event) && !hasSameOrderedEventContract(existing.event, event)) {
+        existing.event = {
+          ...existing.event,
+          appVersion: event.appVersion,
+          assignmentGeneration: event.assignmentGeneration,
+          driverContractVersion: event.driverContractVersion,
+          expectedRouteVersionId: event.expectedRouteVersionId,
+          versionCode: event.versionCode,
+        };
+        return { changed: true, inserted: false, item: existing };
+      }
+      return { changed: false, inserted: false, item: existing };
     }
 
     const item: OfflineDriverEventQueueItem = {
@@ -271,7 +290,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
     };
     nextQueueSequence += 1;
     items.set(getInternalItemKey(item), item);
-    return { inserted: true, item };
+    return { changed: true, inserted: true, item };
   }
 
   const initialDiscarded = trimOfflineSubmissionQueue(items, maxItems, activeAccountOwnerHash, now);
@@ -384,7 +403,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
     },
     enqueueDriverEvent: (event) => {
       const result = upsertDriverEvent(event);
-      if (result.inserted) {
+      if (result.changed) {
         trimOfflineSubmissionQueue(items, maxItems, activeAccountOwnerHash, now);
         emitChange();
       }
@@ -392,7 +411,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
     },
     enqueueDriverEvents: (events) => {
       const results = events.map(upsertDriverEvent);
-      if (results.some((result) => result.inserted)) {
+      if (results.some((result) => result.changed)) {
         trimOfflineSubmissionQueue(items, maxItems, activeAccountOwnerHash, now);
         emitChange();
       }
@@ -560,6 +579,34 @@ export function normalizePersistedOfflineSubmissionQueue(
   } catch {
     return null;
   }
+}
+
+export async function recoverPendingRouteEndReceipt(input: {
+  driverEventReceiptService: DriverEventReceiptService;
+  queue: OfflineSubmissionQueue;
+  routePlanId: string;
+}): Promise<'acknowledged' | 'none' | 'pending' | 'reconciliation'> {
+  const item = input.queue.listPending().find((candidate): candidate is OfflineDriverEventQueueItem => (
+    candidate.kind === 'driver_event'
+    && candidate.event.routePlanId === input.routePlanId
+    && (candidate.event.eventType === 'ROUTE_COMPLETED' || candidate.event.eventType === 'ROUTE_PAUSED')
+  ));
+  if (item === undefined) return 'none';
+
+  const receipt = await input.driverEventReceiptService.lookupReceipt({
+    clientEventId: item.event.clientEventId,
+    routePlanId: input.routePlanId,
+  });
+  const resolution = resolveCompletionReceipt(item.event, receipt);
+  if (resolution.kind === 'retry') return 'pending';
+  if (resolution.kind === 'reconcile') {
+    input.queue.blockRouteSubmissionsForReconciliation(input.routePlanId);
+    return 'reconciliation';
+  }
+
+  input.queue.acknowledge(item.queueItemId);
+  input.queue.discardRouteSubmissions(input.routePlanId);
+  return 'acknowledged';
 }
 
 export async function retryOfflineSubmissions(input: {
@@ -802,6 +849,29 @@ function getStableRetryErrorCode(message: string) {
 
 function getDriverEventQueueItemId(event: DriverEventInput): string {
   return `driver-event:${event.clientEventId}`;
+}
+
+function hasCompleteOrderedEventContract(event: DriverEventInput): event is DriverEventInput & {
+  appVersion: string;
+  assignmentGeneration: string;
+  driverContractVersion: 2;
+  expectedRouteVersionId: string;
+  versionCode: number;
+} {
+  return event.eventType !== 'LOCATION_UPDATED'
+    && typeof event.appVersion === 'string' && event.appVersion.trim() !== ''
+    && typeof event.assignmentGeneration === 'string' && /^\d+$/u.test(event.assignmentGeneration)
+    && event.driverContractVersion === 2
+    && typeof event.expectedRouteVersionId === 'string' && event.expectedRouteVersionId.trim() !== ''
+    && Number.isSafeInteger(event.versionCode) && (event.versionCode ?? 0) > 0;
+}
+
+function hasSameOrderedEventContract(left: DriverEventInput, right: DriverEventInput): boolean {
+  return left.appVersion === right.appVersion
+    && left.assignmentGeneration === right.assignmentGeneration
+    && left.driverContractVersion === right.driverContractVersion
+    && left.expectedRouteVersionId === right.expectedRouteVersionId
+    && left.versionCode === right.versionCode;
 }
 
 function getProofMediaQueueItemId(request: ProofMediaUploadRequest): string {

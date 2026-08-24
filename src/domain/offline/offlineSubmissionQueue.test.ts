@@ -12,6 +12,7 @@ import {
   createPersistentOfflineSubmissionQueue,
   getOfflineSubmissionQueueSummary,
   getPendingRouteEnd,
+  recoverPendingRouteEndReceipt,
   retryOfflineSubmissions,
   type OfflineSubmissionQueueStorage,
 } from './offlineSubmissionQueue';
@@ -77,6 +78,37 @@ describe('offline submission queue', () => {
 
     assert.equal(queue.listPending().length, 1);
     assert.equal(queue.listPending()[0]?.attempts, 0);
+  });
+
+  it('atomically upgrades an existing ordered event with full v2 lineage before replay', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    const base = {
+      clientEventId: 'completion-existing', eventType: 'ROUTE_COMPLETED' as const,
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId: 'route-1',
+    };
+    queue.enqueueDriverEvent(base);
+    await queue.whenPersisted();
+    queue.enqueueDriverEvent({
+      ...base, appVersion: '2.8.0', assignmentGeneration: '11', driverContractVersion: 2,
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', versionCode: 20800,
+    });
+    await queue.whenPersisted();
+
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    const item = restarted.listPending()[0];
+    assert.equal(item?.kind, 'driver_event');
+    if (item?.kind !== 'driver_event') throw new Error('Expected driver event');
+    assert.deepEqual({
+      appVersion: item.event.appVersion,
+      assignmentGeneration: item.event.assignmentGeneration,
+      driverContractVersion: item.event.driverContractVersion,
+      expectedRouteVersionId: item.event.expectedRouteVersionId,
+      versionCode: item.event.versionCode,
+    }, {
+      appVersion: '2.8.0', assignmentGeneration: '11', driverContractVersion: 2,
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', versionCode: 20800,
+    });
   });
 
   it('reports the newest queued terminal route transition', () => {
@@ -1400,6 +1432,42 @@ describe('offline submission queue', () => {
     assert.equal(replayed, 0);
     assert.deepEqual(result.completionAcknowledgedRoutePlanIds, ['11111111-1111-4111-8111-111111111111']);
     assert.deepEqual(restarted.listPending(), []);
+  });
+
+  it('recovers an APPLIED completion receipt before assigned-route restoration is available', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    queue.enqueueDriverEvent({
+      appVersion: '1.1.6',
+      assignmentGeneration: '11',
+      clientEventId: 'kitchener-complete-before-route-load',
+      driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'),
+      routePlanId: 'route-kitchener',
+      versionCode: 116,
+    });
+    await queue.whenPersisted();
+
+    const result = await recoverPendingRouteEndReceipt({
+      driverEventReceiptService: { lookupReceipt: async () => ({
+        assignmentGeneration: '11',
+        clientEventId: 'kitchener-complete-before-route-load',
+        errorCode: null,
+        expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+        routePlanId: 'route-kitchener',
+        routeStatus: 'COMPLETED',
+        status: 'APPLIED',
+      }) },
+      queue,
+      routePlanId: 'route-kitchener',
+    });
+    await queue.whenPersisted();
+
+    assert.equal(result, 'acknowledged');
+    assert.equal(getPendingRouteEnd(queue, 'route-kitchener'), null);
+    assert.equal((await createPersistentOfflineSubmissionQueue({ storage })).listPending().length, 0);
   });
 
   it('replays completion only for UNKNOWN plus IN_PROGRESS and quarantines a terminal South route', async () => {

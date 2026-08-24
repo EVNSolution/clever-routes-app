@@ -5,7 +5,7 @@ import {
   getDriverApiRequiresRouteLookup,
   getDriverApiRequiresRouteReconciliation,
 } from '../../api/deliveryServer/driverApiError';
-import type { DriverEventService } from '../events/driverEvents';
+import { prepareDriverEventForPersistence, type DriverEventService } from '../events/driverEvents';
 import type { DriverFlowState } from '../driverFlow/driverFlow';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 
@@ -65,13 +65,13 @@ export async function finishDeliveryAfterActive(input: {
 
   const occurredAt = input.now ?? new Date();
   const routeReleased = input.routeEnd === 'released';
-  const event = {
+  const event = prepareDriverEventForPersistence(input.driverEventService, {
     clientEventId: createRouteEndClientEventId(occurredAt, routeReleased),
     eventType: routeReleased ? 'ROUTE_PAUSED' as const : 'ROUTE_COMPLETED' as const,
     occurredAt,
     ...(input.eventPayload === undefined ? {} : { payload: input.eventPayload }),
     routePlanId: input.routePlanId,
-  };
+  });
   const preparedQueueItem = input.offlineQueue?.enqueueDriverEvent(event);
   if (preparedQueueItem !== undefined) {
     await input.offlineQueue?.whenPersisted();

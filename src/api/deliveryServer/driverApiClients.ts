@@ -167,6 +167,7 @@ function withDriverAccessRefresh(input: {
       recordDriverConsents: (request) => runWithRefresh((client) => client.driverConsentService.recordDriverConsents(request)),
     },
     driverEventService: {
+      prepareDriverEvent: (request) => clients.driverEventService.prepareDriverEvent?.(request) ?? request,
       recordDriverEvent: (request) => runWithRefresh((client) => client.driverEventService.recordDriverEvent(request)),
     },
     proofMediaUploadService: {
