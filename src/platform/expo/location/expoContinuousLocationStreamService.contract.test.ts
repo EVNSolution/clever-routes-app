@@ -138,6 +138,16 @@ describe('Expo continuous location wiring', () => {
     assert.match(patchSource, /Unsupported expo-location source/u);
   });
 
+  it('fails closed outside the exact supported Expo Location source version', () => {
+    const patchSource = readFileSync(patchScriptPath, 'utf8');
+
+    assert.match(patchSource, /SUPPORTED_EXPO_LOCATION_VERSION = '56\.0\.24'/u);
+    assert.match(patchSource, /"version": "\$\{SUPPORTED_EXPO_LOCATION_VERSION\}"/u);
+    assert.doesNotMatch(patchSource, /"version": "56\.0\.22"/u);
+    assert.match(patchSource, /source\.includes\(patch\.before\)/u);
+    assert.match(patchSource, /matchedSource === null[\s\S]*Unsupported expo-location source/u);
+  });
+
   it('shares one lazy persistent queue between AppRoot and the background task', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const locationSource = readFileSync(locationServicePath, 'utf8');

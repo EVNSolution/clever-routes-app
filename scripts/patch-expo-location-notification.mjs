@@ -1,10 +1,12 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+const SUPPORTED_EXPO_LOCATION_VERSION = '56.0.24';
+
 const patches = [
   {
     file: 'node_modules/expo-location/expo-module.config.json',
-    before: `  "android": {\n    "modules": ["expo.modules.location.LocationModule"],\n    "publication": {\n      "groupId": "host.exp.exponent",\n      "artifactId": "expo.modules.location",\n      "version": "56.0.22",\n      "repository": "local-maven-repo"\n    }\n  }`,
+    before: `  "android": {\n    "modules": ["expo.modules.location.LocationModule"],\n    "publication": {\n      "groupId": "host.exp.exponent",\n      "artifactId": "expo.modules.location",\n      "version": "${SUPPORTED_EXPO_LOCATION_VERSION}",\n      "repository": "local-maven-repo"\n    }\n  }`,
     after: `  "android": {\n    "modules": ["expo.modules.location.LocationModule"]\n  }`,
   },
   {
