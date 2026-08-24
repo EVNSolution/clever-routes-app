@@ -850,15 +850,14 @@ describe('offline submission queue', () => {
     assert.doesNotMatch(JSON.stringify(stored), /still offline/u);
   });
 
-  it('recovers from malformed durable storage without reusing corrupt payloads', async () => {
+  it('fails closed on malformed durable rows without deleting corrupt evidence', async () => {
     const storage = createMemoryStorage({
       [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]: '{"version":1,"items":[{"kind":"driver_event"}]}',
     });
 
-    const queue = await createPersistentOfflineSubmissionQueue({ storage });
-
-    assert.deepEqual(queue.listPending(), []);
-    assert.deepEqual(storage.removedKeys, [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]);
+    await assert.rejects(createPersistentOfflineSubmissionQueue({ storage }), /STORAGE_DEGRADED/u);
+    assert.deepEqual(storage.removedKeys, []);
+    assert.match(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '', /driver_event/u);
   });
 
   it('serializes durable writes so older persistence cannot overwrite newer queue state', async () => {
@@ -975,6 +974,19 @@ describe('offline submission queue', () => {
     assert.equal(await queue.recoverStorage(), true);
     assert.equal(queue.storageState(), 'READY');
     assert.match(persisted ?? '', /verify-reread/u);
+  });
+
+  it('fails closed without deleting an invalid persisted root envelope', async () => {
+    const storage = createMemoryStorage({
+      [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]: JSON.stringify({ items: 'invalid', version: 2 }),
+    });
+
+    await assert.rejects(
+      createPersistentOfflineSubmissionQueue({ storage }),
+      /STORAGE_DEGRADED/u,
+    );
+    assert.deepEqual(storage.removedKeys, []);
+    assert.match(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '', /invalid/u);
   });
 
   it('quarantines expired ordered evidence before retrying fresh work', async () => {

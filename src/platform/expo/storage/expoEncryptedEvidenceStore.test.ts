@@ -439,6 +439,68 @@ describe('encrypted driver evidence store', () => {
     assert.equal(db.tables.get('migration_quarantine')?.size ?? 0, 0);
   });
 
+  it('isolates JSON-valid schema-invalid rows without discarding valid replay evidence', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const owner = '6f'.repeat(32);
+    const now = () => new Date('2026-08-24T12:00:00.000Z');
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '70'.repeat(32), setItemAsync: async () => undefined },
+      now,
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const validKey = `${owner}:driver-event:valid-schema`;
+    await store.setItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY, JSON.stringify({
+      items: [{
+        accountOwnerHash: owner,
+        attempts: 0,
+        enqueuedAt: now().toISOString(),
+        event: {
+          clientEventId: 'valid-schema',
+          eventType: 'STOP_DELIVERED',
+          occurredAt: now().toISOString(),
+          payload: { note: 'private valid replay note' },
+          routePlanId: 'route-schema',
+        },
+        journal: [{ at: now().toISOString(), code: 'ENQUEUED', kind: 'ENQUEUED' }],
+        kind: 'driver_event',
+        queueItemId: 'driver-event:valid-schema',
+        queueSequence: 1,
+        state: 'PENDING',
+      }],
+      version: 2,
+    }));
+    const validSensitiveBefore = db.tables.get('sensitive_evidence')?.get(validKey);
+    const invalidKey = `${owner}:driver-event:json-valid-invalid`;
+    db.tables.get('workflow_evidence')?.set(invalidKey, '{}');
+    db.tables.get('sensitive_evidence')?.set(invalidKey, JSON.stringify({
+      kind: 'driver_event', payload: { note: 'private invalid replay note' },
+    }));
+    db.createdAtByRecordKey.set(invalidKey, now().toISOString());
+
+    const queue = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: owner, now, storage: store });
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), ['driver-event:valid-schema']);
+    assert.equal(db.tables.get('workflow_evidence')?.has(invalidKey), false);
+    assert.equal(db.tables.get('sensitive_evidence')?.has(invalidKey), false);
+    assert.equal(db.tables.get('sensitive_evidence')?.get(validKey), validSensitiveBefore);
+    assert.match([...(db.tables.get('migration_quarantine')?.values() ?? [])].join(''), /CORRUPT_ENCRYPTED_EVIDENCE_ROW/u);
+    assert.doesNotMatch(await store.exportDiagnostics(), /private valid replay note|private invalid replay note/u);
+    assert.equal(db.runCalls.some(({ sql }) => sql.includes("json_set(payload, '$.state', 'DISCARDED')")), false);
+    assert.equal(db.runCalls.some(({ sql }) => sql.includes('UPDATE sensitive_evidence SET expires_at')), false);
+
+    const replayed: string[] = [];
+    const result = await retryOfflineSubmissions({
+      driverEventService: { recordDriverEvent: async (event) => {
+        replayed.push(event.clientEventId);
+        return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+      } },
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue,
+    });
+    assert.deepEqual(replayed, ['valid-schema']);
+    assert.equal(result.succeeded, 1);
+  });
+
   it('keeps workflow envelopes redacted while sensitive replay data remains separately encrypted', async () => {
     const db = createDatabase();
     const store = await createEncryptedEvidenceStore({

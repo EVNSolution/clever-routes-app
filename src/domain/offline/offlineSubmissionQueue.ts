@@ -967,14 +967,13 @@ async function readPersistedOfflineSubmissionQueueItems(input: {
     const parsed = JSON.parse(raw) as unknown;
     const items = readPersistedEnvelope(parsed, input.now ?? (() => new Date()));
     if (items === null) {
-      await input.storage.removeItem(input.storageKey);
-      return [];
+      throw new Error('STORAGE_DEGRADED: persisted offline evidence contract is invalid and remains read-only.');
     }
 
     return items;
-  } catch {
-    await input.storage.removeItem(input.storageKey);
-    return [];
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('STORAGE_DEGRADED:')) throw error;
+    throw new Error('STORAGE_DEGRADED: persisted offline evidence envelope is unreadable and remains read-only.');
   }
 }
 

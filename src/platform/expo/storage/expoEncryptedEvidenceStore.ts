@@ -136,37 +136,56 @@ export async function createEncryptedEvidenceStore(input: {
     },
     getItem: async (storageKey) => {
       if (storageKey !== OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) return null;
-      await purgeExpiredEvidence(database, now());
-      const rows = (await Promise.all(RECORD_TABLES.map((table) => database.getAllAsync<StoredRow>(
-        `SELECT record_key AS recordKey, payload FROM ${table} ORDER BY created_at, record_key;`,
-      )))).flat();
+      const readAt = now();
+      await purgeExpiredEvidence(database, readAt);
+      const rows = (await Promise.all(RECORD_TABLES.map(async (sourceTable) => (
+        await database.getAllAsync<StoredRow>(
+          `SELECT record_key AS recordKey, payload, created_at AS createdAt FROM ${sourceTable} ORDER BY created_at, record_key;`,
+        )
+      ).map((row) => ({ ...row, sourceTable }))))).flat();
       const sensitiveRows = await database.getAllAsync<StoredRow>(
         'SELECT record_key AS recordKey, payload FROM sensitive_evidence WHERE expires_at > ? ORDER BY created_at, record_key;',
-        now().toISOString(),
+        readAt.toISOString(),
       );
       const sensitiveByKey = new Map(sensitiveRows.map((row) => [row.recordKey, row.payload]));
       if (rows.length === 0) return null;
-      const items = rows
-        .filter((row) => !row.recordKey.startsWith('legacy-corrupt:'))
-        .map((row) => {
-          const envelope = JSON.parse(row.payload) as Record<string, unknown>;
-          const normalizedEnvelope: Record<string, unknown> = {
-            ...envelope,
-            journal: normalizeJournalEntries(envelope.journal, now()),
-          };
-          const sensitive = sensitiveByKey.get(row.recordKey);
-          if (sensitive !== undefined) return hydrateSensitiveReplay(normalizedEnvelope, JSON.parse(sensitive) as unknown);
-          if (normalizedEnvelope.sensitiveReplay !== true) return normalizedEnvelope;
-          const request = typeof normalizedEnvelope.request === 'object' && normalizedEnvelope.request !== null
-            ? normalizedEnvelope.request as Record<string, unknown>
-            : null;
-          return {
-            ...normalizedEnvelope,
-            ...(request === null ? {} : { request: { ...request, fileName: 'expired', uri: 'expired://' } }),
-            state: 'DISCARDED',
-          };
-        })
-        .sort((left, right) => readQueueSequence(left) - readQueueSequence(right));
+      const items: Record<string, unknown>[] = [];
+      const invalidRows: typeof rows = [];
+      for (const row of rows) {
+        if (row.recordKey.startsWith('legacy-corrupt:')) continue;
+        const envelope = parseJsonObject(row.payload);
+        if (envelope === null) {
+          invalidRows.push(row);
+          continue;
+        }
+        const normalizedEnvelope: Record<string, unknown> = {
+          ...envelope,
+          journal: normalizeJournalEntries(envelope.journal, readAt),
+        };
+        const sensitive = sensitiveByKey.get(row.recordKey);
+        const parsedSensitive = sensitive === undefined ? undefined : parseJsonObject(sensitive);
+        if (sensitive !== undefined && parsedSensitive === null) {
+          invalidRows.push(row);
+          continue;
+        }
+        const hydrated = parsedSensitive === undefined
+          ? expireMissingSensitiveReplay(normalizedEnvelope)
+          : hydrateSensitiveReplay(normalizedEnvelope, parsedSensitive) as Record<string, unknown>;
+        const normalizedItem = normalizeEvidenceRow(hydrated, row, readAt);
+        if (normalizedItem === null) {
+          invalidRows.push(row);
+          continue;
+        }
+        items.push(normalizedItem);
+      }
+      if (invalidRows.length > 0) {
+        await database.withExclusiveTransactionAsync(async (transaction) => {
+          for (const [index, row] of invalidRows.entries()) {
+            await quarantineMalformedEvidenceRow(transaction, row.sourceTable, row, readAt, index + 1);
+          }
+        });
+      }
+      items.sort((left, right) => readQueueSequence(left) - readQueueSequence(right));
       return JSON.stringify({ items, version: 2 });
     },
     removeItem: async (storageKey) => {
@@ -860,6 +879,35 @@ function hydrateSensitiveReplay(envelope: Record<string, unknown>, sensitiveValu
     return { ...envelope, event: { ...event, payload: sensitive.payload } };
   }
   return envelope;
+}
+
+function expireMissingSensitiveReplay(envelope: Record<string, unknown>) {
+  if (envelope.sensitiveReplay !== true) return envelope;
+  const request = typeof envelope.request === 'object' && envelope.request !== null
+    ? envelope.request as Record<string, unknown>
+    : null;
+  return {
+    ...envelope,
+    ...(request === null ? {} : { request: { ...request, fileName: 'expired', uri: 'expired://' } }),
+    state: 'DISCARDED',
+  };
+}
+
+function normalizeEvidenceRow(
+  hydrated: Record<string, unknown>,
+  row: StoredRow & { sourceTable: (typeof RECORD_TABLES)[number] },
+  now: Date,
+) {
+  const normalized = normalizePersistedOfflineSubmissionQueue(
+    JSON.stringify({ items: [hydrated], version: 2 }),
+    () => now,
+  );
+  if (normalized === null) return null;
+  const item = (JSON.parse(normalized) as { items: Record<string, unknown>[] }).items[0];
+  if (item === undefined || getRecordKey(item) !== row.recordKey || classifyItem(item) !== row.sourceTable) {
+    return null;
+  }
+  return item;
 }
 
 function readQueueSequence(item: unknown) {
