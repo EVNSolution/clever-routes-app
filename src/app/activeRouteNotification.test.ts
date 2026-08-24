@@ -9,9 +9,9 @@ import {
   parseActiveRouteNotificationUrl,
 } from './activeRouteNotification';
 
-const operationalLines = 'Alert: None\nRoute: In progress\nGPS: Monitoring\nDevice: This device\nServer: Checking\nSync: Active';
+const operationalLines = 'Alert: None\nRoute: In progress\nGPS: Monitoring\nDevice: This device\nServer: Checking\nSync: Active\nGap: 0 stops';
 const defaultOperationalState = {
-  alert: 'None', device: 'This device', gps: 'Monitoring', route: 'In progress', server: 'Checking', sync: 'Active',
+  alert: 'None', device: 'This device', gap: '0 stops', gps: 'Monitoring', route: 'In progress', server: 'Checking', sync: 'Active',
 };
 
 function buildActiveRouteForegroundNotification(input: { currentStepIndex: number; route: AssignedRoute }) {
@@ -19,16 +19,22 @@ function buildActiveRouteForegroundNotification(input: { currentStepIndex: numbe
 }
 
 describe('active route foreground notification', () => {
-  it('renders current Kitchener, unknown, and blocked operational states instead of static defaults', () => {
+  it('renders the exact Kitchener progress gap as independent labeled operational lines', () => {
     const notification = buildNotificationContent({
       currentStepIndex: 11,
       operationalState: {
-        alert: 'Action needed', device: 'Conflict', gps: 'Stale', route: 'Completion pending', server: 'UNKNOWN', sync: 'Storage blocked',
+        alert: 'Action needed',
+        device: '11/11',
+        gap: '10 stops',
+        gps: 'Near stop 11',
+        route: 'Active',
+        server: '1/11',
+        sync: 'Blocked',
       },
       route: sampleAssignedRoute,
     });
-    assert.match(notification.expandedBody ?? '', /Alert: Action needed\nRoute: Completion pending\nGPS: Stale\nDevice: Conflict\nServer: UNKNOWN\nSync: Storage blocked$/u);
-    assert.doesNotMatch(notification.expandedBody ?? '', /Alert: None|Server: Checking|Sync: Active/u);
+    assert.match(notification.expandedBody ?? '', /Alert: Action needed\nRoute: Active\nGPS: Near stop 11\nDevice: 11\/11\nServer: 1\/11\nSync: Blocked\nGap: 10 stops$/u);
+    assert.doesNotMatch(notification.expandedBody ?? '', /Alert: None|Server: Checking|Sync: Active|[•·]/u);
   });
 
   it('shows the server ETA, drop items, and customer note for the current stop', () => {

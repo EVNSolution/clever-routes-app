@@ -21,6 +21,7 @@ export type ActiveRouteNotificationTarget = {
 export type ActiveRouteNotificationOperationalState = {
   alert: string;
   device: string;
+  gap: string;
   gps: string;
   route: string;
   server: string;
@@ -97,6 +98,7 @@ function formatOperationalNotificationLines(state: ActiveRouteNotificationOperat
     `Device: ${state.device}`,
     `Server: ${state.server}`,
     `Sync: ${state.sync}`,
+    `Gap: ${state.gap}`,
   ];
 }
 
