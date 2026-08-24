@@ -157,23 +157,24 @@ The app moves to `route_ready` only after an `ASSIGNED_ROUTE` response. Stop car
 
 ## Durable offline queue boundary
 
-`src/domain/offline/offlineSubmissionQueue.ts` owns queue identity, retry bookkeeping, malformed payload recovery, and storage serialization for pending driver events/proof media upload attempts. `src/platform/expo/storage/expoOfflineSubmissionQueueStorage.ts` adapts the queue to Expo-compatible AsyncStorage.
+`src/domain/offline/offlineSubmissionQueue.ts` owns queue identity, ordered workflow retry bookkeeping, quarantine, and storage serialization for pending driver events/proof media upload attempts. `src/platform/expo/storage/expoOfflineSubmissionQueueStorage.ts` opens the Expo SQLite database with SQLCipher and keeps the 256-bit database key in Expo SecureStore. `src/platform/expo/storage/expoEncryptedEvidenceStore.ts` separates schema-v2 diagnostic, workflow, sensitive proof, quarantine, and location records.
 
-The queue stores retry metadata, driver event payloads, and proof media file URI references. It does not store driver access tokens; token persistence remains isolated in Expo SecureStore through `src/platform/expo/secureStore/expoSecureDriverAccessTokenStore.ts`. AsyncStorage is treated as unencrypted app storage, so the queue is not a replacement for server-side proof storage or secret storage.
+The encrypted database stores retry metadata, driver event payloads, and proof media file URI references. It does not store driver access tokens; token persistence remains isolated under separate SecureStore entries through `src/platform/expo/secureStore/expoSecureDriverAccessTokenStore.ts`. Existing AsyncStorage queue data is only a legacy migration source: migration writes and verifies all rows in an exclusive transaction, records a keyed client-id manifest without exporting raw identifiers, advances the schema marker, and removes the legacy value only after commit. Corrupt legacy bytes are preserved only in the encrypted quarantine table.
 
 Production app-side discard policy is now explicit in `OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY`:
 
 - maximum retained retry attempts: `5`
 - maximum local queue age: `72 hours`
-- before each retry, items older than the policy window or already at the attempt limit are discarded without hitting the live server
-- after a failed retry reaches the attempt limit, the item is discarded instead of being retained indefinitely
+- before each retry, location samples older than the policy window or already at the attempt limit are discarded without hitting the live server
+- ordered workflow events and proof evidence that reach the age/attempt limit are quarantined for reconciliation instead of being deleted
+- retries run only while the app is online and foregrounded, with bounded exponential backoff and jitter; an ordered workflow failure blocks later workflow events for the same route in that pass
 - if a queued proof media upload receives `422 PROOF_MEDIA_REJECTED`, the app discards that queued file reference instead of retrying it again
 - delivery finish calls `finishDeliveryAfterActive()` to stop continuous tracking and record or queue a `ROUTE_COMPLETED` event
-- after route completion is recorded, delivery finish calls `discardRouteSubmissions(routePlanId)` to remove local retry items scoped to the completed route while leaving unrelated route or unscoped items intact
+- after route completion is recorded, delivery finish calls `discardRouteSubmissions(routePlanId)` to remove transient route/location items while preserving terminal stop evidence and proof for acknowledgement/reconciliation
 - if route completion recording fails, the `ROUTE_COMPLETED` event is queued and route-scoped items are not discarded in that branch
-- the runtime guard panel exposes `Reset driver session`, which stops continuous tracking, clears the secure driver access token, clears route/session UI state, and calls `clear()` to remove every pending local retry item from durable storage
+- explicit sign-out/session reset stops tracking, clears the secure driver access token and route/session UI state, discards account-bound location samples, and seals ordered workflow/proof evidence with `account_signed_out` quarantine instead of replaying it under another account
 
-This policy only governs app-side AsyncStorage metadata and file URI references. Server-side proof-media scan rejection hook support exists and the app handles that rejection as non-retryable, but production object storage, signed retrieval, deployed scanner evidence, and retention/deletion deployment evidence remain server/release work.
+This policy governs the app-side encrypted evidence database. Android app backup is disabled, SecureStore backup restoration is disabled, and the iOS SQLite directory is excluded from backup. Server-side proof-media scan rejection hook support exists and the app handles that rejection as non-retryable, but production object storage, signed retrieval, deployed scanner evidence, and retention/deletion deployment evidence remain server/release work.
 
 ## Proof media upload boundary
 
@@ -236,4 +237,4 @@ When a downstream consent, assigned-route, driver-event, proof-media, or offline
 
 Driver API calls are bearer-token based and must not rely on ambient browser or WebView cookies. The app request helper applies `credentials: 'omit'`, `cache: 'no-store'`, `Cache-Control: no-store`, and `Pragma: no-cache` to live account-auth, route lookup, consent, assigned-route, event, and proof-media requests. This keeps the native session tied to server-issued account and route tokens and avoids stale route/proof responses being reused by an intermediate cache.
 
-AsyncStorage remains limited to non-secret offline retry metadata and local file URI references. Account and route access stay in SecureStore; the app clears only route cache for deleted assignments and clears the whole account on expired refresh, malformed payload, unauthorized account access, or explicit session reset.
+AsyncStorage remains only as the transactional migration source for legacy queue data and is removed after verified commit. SQLCipher stores offline evidence with a separate SecureStore key; account and route access stay in their own SecureStore entries. The app clears only route cache for deleted assignments and clears the whole account on expired refresh, malformed payload, unauthorized account access, or explicit session reset.

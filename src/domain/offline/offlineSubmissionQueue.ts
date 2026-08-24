@@ -23,13 +23,14 @@ export type OfflineSubmissionQueueRetryPolicy = {
 
 export type OfflineSubmissionReconciliation = {
   blockedAt: string;
-  reason: 'route_not_in_progress';
+  reason: 'account_signed_out' | 'retry_policy_exceeded' | 'route_not_in_progress';
 };
 
 export type OfflineDriverEventQueueItem = {
   attempts: number;
   enqueuedAt: string;
   event: DriverEventInput;
+  firstError?: string;
   kind: 'driver_event';
   lastError?: string;
   queueItemId: string;
@@ -39,6 +40,7 @@ export type OfflineDriverEventQueueItem = {
 export type OfflineProofMediaQueueItem = {
   attempts: number;
   enqueuedAt: string;
+  firstError?: string;
   kind: 'proof_media';
   lastError?: string;
   queueItemId: string;
@@ -58,7 +60,9 @@ export type OfflineSubmissionQueue = {
   enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
   enqueueProofMediaUpload(request: ProofMediaUploadRequest): OfflineProofMediaQueueItem;
   listPending(): OfflineSubmissionQueueItem[];
+  quarantine(queueItemId: string, reason: OfflineSubmissionReconciliation['reason']): boolean;
   recordRetryFailure(queueItemId: string, lastError: string): boolean;
+  sealForAccountChange(): { discardedLocations: number; sealed: number };
   whenPersisted(): Promise<void>;
 };
 
@@ -186,7 +190,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
         if (getQueueItemRoutePlanId(item) !== routePlanId) {
           continue;
         }
-        if (isTerminalStopDriverEvent(item) || item.kind === 'proof_media') {
+        if (isOrderedWorkflowEvidence(item) || item.kind === 'proof_media') {
           if (item.reconciliation === undefined) {
             item.reconciliation = { blockedAt, reason: 'route_not_in_progress' };
             blocked += 1;
@@ -277,16 +281,42 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       return item;
     },
     listPending: () => Array.from(items.values()),
+    quarantine: (queueItemId, reason) => {
+      const item = items.get(queueItemId);
+      if (item === undefined || item.reconciliation !== undefined) return false;
+      item.reconciliation = { blockedAt: now().toISOString(), reason };
+      emitChange();
+      return true;
+    },
     recordRetryFailure: (queueItemId, lastError) => {
       const item = items.get(queueItemId);
       if (item === undefined) {
         return false;
       }
 
+      const boundedError = lastError.slice(0, 512);
       item.attempts += 1;
-      item.lastError = lastError;
+      item.firstError ??= boundedError;
+      item.lastError = boundedError;
       emitChange();
       return true;
+    },
+    sealForAccountChange: () => {
+      const blockedAt = now().toISOString();
+      let discardedLocations = 0;
+      let sealed = 0;
+      for (const item of Array.from(items.values())) {
+        if (isLocationDriverEvent(item)) {
+          items.delete(item.queueItemId);
+          discardedLocations += 1;
+          continue;
+        }
+        if (item.reconciliation !== undefined) continue;
+        item.reconciliation = { blockedAt, reason: 'account_signed_out' };
+        sealed += 1;
+      }
+      if (sealed > 0 || discardedLocations > 0) emitChange();
+      return { discardedLocations, sealed };
     },
     whenPersisted: async () => undefined,
   };
@@ -354,9 +384,13 @@ export async function retryOfflineSubmissions(input: {
   const now = input.now ?? (() => new Date());
   const completedRoutePlanIds = new Set<string>();
   const reconciliationRoutePlanIds = new Set<string>();
+  const workflowBlockedRoutePlanIds = new Set<string>();
 
   for (const item of pending) {
     const routePlanId = getQueueItemRoutePlanId(item);
+    if (routePlanId !== undefined && workflowBlockedRoutePlanIds.has(routePlanId) && isOrderedWorkflowEvidence(item)) {
+      continue;
+    }
     if (routePlanId !== undefined && reconciliationRoutePlanIds.has(routePlanId)) {
       continue;
     }
@@ -370,8 +404,10 @@ export async function retryOfflineSubmissions(input: {
     retried += 1;
 
     if (shouldDiscardOfflineSubmission(item, retryPolicy, now())) {
-      if (input.queue.discard(item.queueItemId)) {
-        discarded += 1;
+      if (isLocationDriverEvent(item)) {
+        if (input.queue.discard(item.queueItemId)) discarded += 1;
+      } else {
+        blocked += quarantineRetryPolicyEvidence(input.queue, item);
       }
       continue;
     }
@@ -422,10 +458,17 @@ export async function retryOfflineSubmissions(input: {
       input.queue.recordRetryFailure(item.queueItemId, error instanceof Error ? error.message : 'unknown error');
       const updatedItem = input.queue.listPending().find((pendingItem) => pendingItem.queueItemId === item.queueItemId);
       if (updatedItem !== undefined && shouldDiscardOfflineSubmission(updatedItem, retryPolicy, now())) {
-        input.queue.discard(updatedItem.queueItemId);
-        discarded += 1;
+        if (isLocationDriverEvent(updatedItem)) {
+          input.queue.discard(updatedItem.queueItemId);
+          discarded += 1;
+        } else {
+          blocked += quarantineRetryPolicyEvidence(input.queue, updatedItem);
+        }
       } else {
         failed += 1;
+      }
+      if (routePlanId !== undefined && isOrderedWorkflowEvidence(item)) {
+        workflowBlockedRoutePlanIds.add(routePlanId);
       }
     }
   }
@@ -475,8 +518,7 @@ function trimOfflineSubmissionQueue(
       && item.kind === 'driver_event'
       && item.event.eventType === 'LOCATION_UPDATED'
     ));
-    const oldestRetryable = Array.from(items.values()).find((item) => item.reconciliation === undefined);
-    const oldest = oldestLocation ?? oldestRetryable;
+    const oldest = oldestLocation;
     if (oldest === undefined) {
       break;
     }
@@ -502,6 +544,21 @@ function isTerminalStopDriverEvent(item: OfflineSubmissionQueueItem): boolean {
   return item.kind === 'driver_event' && (
     item.event.eventType === 'STOP_DELIVERED' || item.event.eventType === 'STOP_FAILED'
   );
+}
+
+function isLocationDriverEvent(item: OfflineSubmissionQueueItem): boolean {
+  return item.kind === 'driver_event' && item.event.eventType === 'LOCATION_UPDATED';
+}
+
+function isOrderedWorkflowEvidence(item: OfflineSubmissionQueueItem): boolean {
+  return item.kind === 'driver_event' && ROUTE_WORKFLOW_EVENT_TYPES.has(item.event.eventType);
+}
+
+function quarantineRetryPolicyEvidence(
+  queue: OfflineSubmissionQueue,
+  item: OfflineSubmissionQueueItem,
+): number {
+  return queue.quarantine(item.queueItemId, 'retry_policy_exceeded') ? 1 : 0;
 }
 
 function shouldDiscardOfflineSubmission(
@@ -556,6 +613,7 @@ function toPersistedQueueItem(item: OfflineSubmissionQueueItem): Record<string, 
   const base = {
     attempts: item.attempts,
     enqueuedAt: item.enqueuedAt,
+    ...(item.firstError === undefined ? {} : { firstError: item.firstError }),
     kind: item.kind,
     ...(item.lastError === undefined ? {} : { lastError: item.lastError }),
     queueItemId: item.queueItemId,
@@ -608,6 +666,7 @@ function readPersistedQueueItem(value: unknown): OfflineSubmissionQueueItem | nu
   const data = value as Record<string, unknown>;
   const attempts = readNonNegativeNumber(data.attempts);
   const enqueuedAt = readRequiredString(data.enqueuedAt);
+  const firstError = readOptionalString(data.firstError);
   const queueItemId = readRequiredString(data.queueItemId);
   const lastError = readOptionalString(data.lastError);
   const reconciliation = readOptionalReconciliation(data.reconciliation);
@@ -615,6 +674,7 @@ function readPersistedQueueItem(value: unknown): OfflineSubmissionQueueItem | nu
   if (
     attempts === null
     || enqueuedAt === null
+    || firstError === null
     || queueItemId === null
     || lastError === null
     || reconciliation === null
@@ -632,6 +692,7 @@ function readPersistedQueueItem(value: unknown): OfflineSubmissionQueueItem | nu
       attempts,
       enqueuedAt,
       event,
+      ...(firstError === undefined ? {} : { firstError }),
       kind: 'driver_event',
       ...(lastError === undefined ? {} : { lastError }),
       queueItemId,
@@ -648,6 +709,7 @@ function readPersistedQueueItem(value: unknown): OfflineSubmissionQueueItem | nu
     return {
       attempts,
       enqueuedAt,
+      ...(firstError === undefined ? {} : { firstError }),
       kind: 'proof_media',
       ...(lastError === undefined ? {} : { lastError }),
       queueItemId,
@@ -668,10 +730,13 @@ function readOptionalReconciliation(value: unknown): OfflineSubmissionReconcilia
   }
   const blockedAt = readRequiredString((value as Record<string, unknown>).blockedAt);
   const reason = (value as Record<string, unknown>).reason;
-  if (blockedAt === null || reason !== 'route_not_in_progress') {
+  if (
+    blockedAt === null
+    || !['account_signed_out', 'retry_policy_exceeded', 'route_not_in_progress'].includes(String(reason))
+  ) {
     return null;
   }
-  return { blockedAt, reason };
+  return { blockedAt, reason: reason as OfflineSubmissionReconciliation['reason'] };
 }
 
 function readPersistedDriverEvent(value: unknown): DriverEventInput | null {

@@ -190,7 +190,7 @@ describe('background location lifecycle wiring', () => {
 
     assert.match(source, /Network\.useNetworkState\(\)/u);
     assert.match(source, /shouldRetryOfflineSubmissionsAfterNetworkChange\(\{/u);
-    assert.match(recoverySource, /await retryOfflineSubmissionsForSessions\(routeSessions\)/u);
+    assert.match(recoverySource, /return retryOfflineSubmissionsForSessions\(routeSessions\)/u);
     assert.match(source, /requiresRouteReconciliation/u);
     assert.match(source, /setRouteRecoveryRefreshReason\('route_not_in_progress'\)/u);
     assert.match(source, /Route ended or released on server/u);

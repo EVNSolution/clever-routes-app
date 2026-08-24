@@ -191,10 +191,10 @@ Before production release, capture evidence on at least one real iPhone and one 
 | Proof photo capture from camera/library | pending | pending | Use synthetic proof media. |
 | Proof media scan rejection UX | pending | pending | Local mock mode now exposes `scan_rejected`; live mode can use server `PROOF_MEDIA_REJECTED`. Confirm rejected photos show recapture guidance and are not queued as retryable proof. |
 | Signature proof capture | pending | pending | Barcode proof capture is outside the current app scope. |
-| Offline queue retry/discard UI after network loss | pending | pending | Confirm app restart hydration. |
+| Encrypted offline retry/quarantine after network loss | pending | pending | Confirm SQLCipher restart hydration, ordered retry, retry backoff, and reconciliation state. |
 | Token expiry, invalid persisted token, or live downstream `401` recovery | pending | pending | App keeps account and route tokens separate, refreshes account access before reacquiring route access, and returns to phone + PIN only when account refresh/authentication fails. |
 | Deleted/unassigned route refresh | pending | pending | An authoritative empty/deleted assignment removes the route from the app without deleting the signed-in account; transient network failure keeps the last safe cache. |
-| Driver session reset/sign-out cleanup | pending | pending | Confirm reset stops tracking, clears SecureStore driver access, clears queued retry state, blanks lookup inputs, and returns to safe lookup state. |
+| Driver session reset/sign-out isolation | pending | pending | Confirm reset stops tracking, clears SecureStore driver access, removes location samples, seals ordered workflow/proof evidence, blanks lookup inputs, and prevents cross-account replay. |
 | Delivery finish or route completion cleanup | pending | pending | App-side finish now stops tracking, records/queues `ROUTE_COMPLETED`, and cleans route queue after recorded completion; confirm on devices. |
 
 ## Store and privacy disclosure checklist
@@ -207,8 +207,8 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 - Contacts/address book: current app uses manual E.164 phone entry and should not request Contacts permissions unless a future owner-approved feature changes that. `npm run check:native-release` rejects source-controlled Android Contacts permissions or iOS Contacts usage descriptions before EAS evidence builds.
 - Driver identifiers: E.164 phone account, server-issued account/refresh and route-scoped access tokens, route assignment identifiers.
 - Proof media: photo file, signature metadata, and related stop/route identifiers.
-- Offline queue: non-secret retry metadata and file URI references retained locally until retry/discard policy runs.
-- Offline queue app-side policy: pending driver event/proof-media retry items are discarded after five retained attempts, after 72 hours, when the completed route is explicitly purged, when driver sign-out/session reset clears local retry state, or when proof-media upload is rejected by the server scan hook.
+- Offline evidence: SQLCipher-encrypted retry payloads and file URI references are separated into workflow, sensitive, quarantine, and location tables; its key is separate in SecureStore and local backups are excluded.
+- Offline evidence policy: location samples can be discarded after five retained attempts, after 72 hours, route completion, or account change. Ordered workflow/proof items are quarantined at retry limits, route conflicts, or sign-out and require explicit reconciliation. Server-rejected proof media remains non-retryable.
 - Server proof-media rejection/retention support: `clever-delivery-server` now has a proof-media scan rejection hook, `DRIVER_PROOF_MEDIA_RETENTION_DAYS`, and `npm run driver:proof-media:cleanup` for local/manual or cron-style cleanup; production object storage, scanner backend, and scheduler deployment evidence are still pending.
 - Support contact: company/operator support contact must be available in route guidance or store support metadata.
 

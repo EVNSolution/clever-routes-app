@@ -114,6 +114,7 @@ import {
   getNetworkReachability,
   shouldRetryOfflineSubmissionsAfterNetworkChange,
 } from '../domain/offline/offlineRetryTrigger';
+import { createOfflineRetryScheduler } from '../domain/offline/offlineRetryScheduler';
 import { captureProofPhoto, type ProofPhotoCaptureResult, type ProofPhotoCaptureSource } from '../domain/proof/proofPhotoCapture';
 import {
   createMockProofMediaUploadService,
@@ -332,6 +333,7 @@ function DriverApp() {
   const [proofPhotoResults, setProofPhotoResults] = useState<Record<string, ProofPhotoCaptureResult>>({});
   const [proofMediaResults, setProofMediaResults] = useState<Record<string, ProofMediaUploadResult>>({});
   const [completedStopIds, setCompletedStopIds] = useState<string[]>([]);
+  const [, setServerConfirmedStopIds] = useState<string[]>([]);
   const [completedStopTimes, setCompletedStopTimes] = useState<Record<string, string>>({});
   const [offlineSubmissionQueue, setOfflineSubmissionQueue] = useState<OfflineSubmissionQueue | null>(null);
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
@@ -900,12 +902,13 @@ function DriverApp() {
       : undefined
   ), [refreshDriverAccessForSubmission]);
 
-  const retryOfflineSubmissionsForSessions = useCallback(async (sessions: RouteSession[]): Promise<void> => {
+  const retryOfflineSubmissionsForSessions = useCallback(async (sessions: RouteSession[]): Promise<boolean> => {
     if (isRetryingOfflineSubmissionsRef.current || sessions.length === 0) {
-      return;
+      return true;
     }
 
     isRetryingOfflineSubmissionsRef.current = true;
+    let completedWithoutRetainedFailures = true;
     try {
       const queue = await getExpoOfflineSubmissionQueue();
       for (const session of sessions) {
@@ -927,6 +930,9 @@ function DriverApp() {
           queue,
           routePlanId: session.route.id,
         });
+        if (result.failed > 0) {
+          completedWithoutRetainedFailures = false;
+        }
         if (result.reconciliationRoutePlanIds?.includes(session.route.id) === true) {
           if (activeRoutePlanId === session.route.id) {
             await clearAndStopActiveLocationSession(session.route.id);
@@ -960,11 +966,13 @@ function DriverApp() {
         pendingRouteEnd: getPendingRouteEnd(queue, session.route.id) ?? undefined,
       })));
     } catch (error) {
+      completedWithoutRetainedFailures = false;
       const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
       console.warn(`[offline-queue] Retry failed: ${errorMessage}`);
     } finally {
       isRetryingOfflineSubmissionsRef.current = false;
     }
+    return completedWithoutRetainedFailures;
   }, [
     activeRoutePlanId,
     buildDriverAccessRefresh,
@@ -1867,6 +1875,7 @@ function DriverApp() {
       void retryOfflineSubmissionsForSessions(loadedSessionsWithPendingEnds);
       if (restoredActiveSession !== null) {
         const restoredServerProgress = getAssignedRouteServerProgress(restoredActiveSession.route);
+        setServerConfirmedStopIds(restoredServerProgress.completedStopIds);
         const pickupIsUnconfirmed = restoredServerProgress.navigationStepIndex === COMPANY_STEP_INDEX
           && (restoredActiveSession.route.etaSnapshot?.status === undefined
             || restoredActiveSession.route.etaSnapshot?.status === 'PRE_PICKUP')
@@ -2209,7 +2218,7 @@ function DriverApp() {
   ]);
 
   const retryPendingSubmissionsAfterNetworkRecovery = useCallback(async () => {
-    await retryOfflineSubmissionsForSessions(routeSessions);
+    return retryOfflineSubmissionsForSessions(routeSessions);
   }, [retryOfflineSubmissionsForSessions, routeSessions]);
 
   useEffect(() => {
@@ -2252,6 +2261,35 @@ function DriverApp() {
     isDriverRestoreComplete,
     networkReachability,
     offlineQueueCount,
+    retryPendingSubmissionsAfterNetworkRecovery,
+    routeSessions.length,
+  ]);
+
+  useEffect(() => {
+    if (!isDriverRestoreComplete || routeSessions.length === 0) return;
+
+    const scheduler = createOfflineRetryScheduler({
+      cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      hasPendingSubmissions: () => offlineSubmissionQueue?.listPending().some(
+        (item) => item.reconciliation === undefined,
+      ) === true,
+      isForeground: () => AppState.currentState === 'active',
+      isOnline: () => networkReachability === 'online',
+      policy: { initialDelayMs: 15_000, jitterRatio: 0.2, maxDelayMs: 60_000 },
+      retry: retryPendingSubmissionsAfterNetworkRecovery,
+      schedule: (run, delayMs) => setTimeout(run, delayMs),
+    });
+    const subscription = AppState.addEventListener('change', () => scheduler.notifyConditionsChanged());
+    scheduler.start();
+    return () => {
+      subscription.remove();
+      scheduler.stop();
+    };
+  }, [
+    isDriverRestoreComplete,
+    networkReachability,
+    offlineQueueCount,
+    offlineSubmissionQueue,
     retryPendingSubmissionsAfterNetworkRecovery,
     routeSessions.length,
   ]);
@@ -3261,6 +3299,9 @@ function DriverApp() {
 
       const nextCompletedStopIds = [...new Set([...completedStopIds, stop.deliveryStopId])];
       setCompletedStopIds(nextCompletedStopIds);
+      if (result.kind === 'recorded') {
+        setServerConfirmedStopIds((current) => [...new Set([...current, stop.deliveryStopId])]);
+      }
       setCompletedStopTimes((current) => ({
         ...current,
         [stop.deliveryStopId]: formatLocalCompletedTime(new Date()),
@@ -3560,6 +3601,7 @@ function DriverApp() {
     setProofPhotoResults({});
     setProofMediaResults({});
     setCompletedStopIds([]);
+    setServerConfirmedStopIds([]);
     setCompletedStopTimes({});
     setNavigationStepIndex(COMPANY_STEP_INDEX);
     setSelectedStopDetailsId(null);
@@ -3591,10 +3633,14 @@ function DriverApp() {
         driverAccessTokenStore,
         offlineQueue: queue,
       });
-      setMessage(`Signed out. Cleared ${resetResult.clearedOfflineSubmissions} offline retry item${resetResult.clearedOfflineSubmissions === 1 ? '' : 's'}.`);
+      setMessage(resetResult.sealedOfflineSubmissions > 0
+        ? `Signed out. Preserved ${resetResult.sealedOfflineSubmissions} unsynced evidence item${resetResult.sealedOfflineSubmissions === 1 ? '' : 's'} for account-isolated reconciliation.`
+        : resetResult.clearedOfflineSubmissions > 0
+          ? `Signed out. Removed ${resetResult.clearedOfflineSubmissions} transient location sample${resetResult.clearedOfflineSubmissions === 1 ? '' : 's'}; no ordered delivery evidence was pending.`
+          : 'Signed out. No unsynced delivery evidence was pending.');
     } catch {
       await driverAccessTokenStore.clear();
-      setMessage('Signed out. Offline retry storage could not be cleared.');
+      setMessage('Signed out. Offline evidence storage could not be sealed; contact support before signing in with another account.');
     }
 
     resetRouteProgress();

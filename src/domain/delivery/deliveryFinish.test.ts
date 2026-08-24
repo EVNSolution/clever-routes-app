@@ -219,7 +219,7 @@ describe('delivery finish route cleanup', () => {
     assert.equal(result.kind, 'queued');
     assert.equal(result.requiresRouteLookup, undefined);
     assert.equal(result.requiresRouteReconciliation, true);
-    assert.equal(queue.listPending().length, 2);
+    assert.equal(queue.listPending().length, 3);
     assert.equal(queue.listPending().every((item) => (
       item.reconciliation?.reason === 'route_not_in_progress'
     )), true);

@@ -254,7 +254,7 @@ describe('offline submission queue', () => {
     assert.equal(queue.listPending().length, 0);
   });
 
-  it('retains failed retry items with attempt count and last error', async () => {
+  it('retains a bounded first-error record while updating the last retry error', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueProofMediaUpload({
       deliveryStopId: 'stop-1',
@@ -281,7 +281,45 @@ describe('offline submission queue', () => {
       succeeded: 0,
     });
     assert.equal(queue.listPending()[0]?.attempts, 1);
+    assert.equal(queue.listPending()[0]?.firstError, 'still offline');
     assert.equal(queue.listPending()[0]?.lastError, 'still offline');
+
+    queue.recordRetryFailure(queue.listPending()[0]!.queueItemId, `later failure ${'x'.repeat(600)}`);
+    assert.equal(queue.listPending()[0]?.attempts, 2);
+    assert.equal(queue.listPending()[0]?.firstError, 'still offline');
+    assert.equal(queue.listPending()[0]?.lastError?.length, 512);
+  });
+
+  it('seals ordered evidence and removes location samples when the account changes', () => {
+    const queue = createInMemoryOfflineSubmissionQueue({
+      now: () => new Date('2026-08-24T10:00:00.000Z'),
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-started',
+      eventType: 'ROUTE_STARTED',
+      occurredAt: new Date('2026-08-24T09:59:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'location',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-08-24T09:59:30.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'stop-1',
+      fileName: 'stop-1.jpg',
+      routePlanId: 'route-1',
+      source: 'camera',
+      uri: 'file:///proof/stop-1.jpg',
+    });
+
+    assert.deepEqual(queue.sealForAccountChange(), {
+      discardedLocations: 1,
+      sealed: 2,
+    });
+    assert.equal(queue.listPending().length, 2);
+    assert.equal(queue.listPending().every((item) => item.reconciliation?.reason === 'account_signed_out'), true);
   });
 
   it('marks offline retry failures as requiring route lookup when live retry returns unauthorized', async () => {
@@ -775,7 +813,7 @@ describe('offline submission queue', () => {
     ]);
   });
 
-  it('discards expired queued submissions before retrying live services', async () => {
+  it('quarantines expired ordered evidence before retrying fresh work', async () => {
     const queue = createInMemoryOfflineSubmissionQueue({
       initialItems: [
         {
@@ -827,17 +865,19 @@ describe('offline submission queue', () => {
     });
 
     assert.deepEqual(result, {
-      discarded: 1,
+      blocked: 1,
+      discarded: 0,
       failed: 0,
       retried: 2,
       succeeded: 1,
     });
     assert.deepEqual(recordedEventIds, ['fresh-event']);
-    assert.deepEqual(queue.listPending(), []);
+    assert.equal(queue.listPending().length, 1);
+    assert.equal(queue.listPending()[0]?.reconciliation?.reason, 'retry_policy_exceeded');
     assert.equal(OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY.maxAgeMs, 72 * 60 * 60 * 1000);
   });
 
-  it('discards queued submissions after the maximum retained retry attempts', async () => {
+  it('quarantines sensitive evidence after the maximum retained retry attempts', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueProofMediaUpload({
       deliveryStopId: 'stop-1',
@@ -862,12 +902,13 @@ describe('offline submission queue', () => {
     });
 
     assert.deepEqual(result, {
-      discarded: 1,
+      blocked: 1,
+      discarded: 0,
       failed: 0,
       retried: 1,
       succeeded: 0,
     });
-    assert.deepEqual(queue.listPending(), []);
+    assert.equal(queue.listPending()[0]?.reconciliation?.reason, 'retry_policy_exceeded');
   });
 
   it('discards transient route submissions but preserves terminal stop evidence and proof', () => {
@@ -912,7 +953,7 @@ describe('offline submission queue', () => {
     ]);
   });
 
-  it('clears every queued submission on driver sign-out or session reset and persists it', async () => {
+  it('supports explicit operator purge and persists it', async () => {
     const storage = createMemoryStorage();
     const queue = await createPersistentOfflineSubmissionQueue({ storage });
     queue.enqueueDriverEvent({

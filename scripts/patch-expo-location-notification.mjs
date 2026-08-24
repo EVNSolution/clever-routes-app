@@ -36,11 +36,13 @@ const patches = [
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
     before: `import android.content.pm.PackageManager\nimport android.graphics.Color\nimport android.os.Binder\nimport android.os.Build\nimport android.os.Bundle\nimport android.os.IBinder`,
     after: `import android.content.pm.PackageManager\nimport android.graphics.Color\nimport android.graphics.Typeface\nimport android.net.Uri\nimport android.os.Binder\nimport android.os.Build\nimport android.os.Bundle\nimport android.os.IBinder\nimport android.text.Spannable\nimport android.text.SpannableStringBuilder\nimport android.text.style.StyleSpan`,
+    satisfiedBy: `import android.graphics.Typeface`,
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
-    before: `import android.content.pm.PackageManager\nimport android.graphics.Color`,
-    after: `import android.content.pm.PackageManager\nimport android.content.res.Configuration\nimport android.graphics.Color`,
+    before: `import android.content.pm.PackageManager\nimport android.graphics.Color\nimport android.graphics.Typeface`,
+    after: `import android.content.pm.PackageManager\nimport android.content.res.Configuration\nimport android.graphics.Color\nimport android.graphics.Typeface`,
+    satisfiedBy: `import android.content.res.Configuration`,
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
@@ -86,6 +88,7 @@ const patches = [
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
     before: `      builder.setContentIntent(contentIntent)\n    }\n\n    val iconsResId = try {`,
     after: `      builder.setContentIntent(contentIntent)\n    }\n\n    val notificationUri = notificationUrl?.let(Uri::parse)\n    if (notificationUri?.getQueryParameter("showStopActions") == "true") {\n      fun addStopAction(title: String, action: String): PendingIntent? {\n        return mParentContext.packageManager.getLaunchIntentForPackage(mParentContext.packageName)?.let {\n          val actionUri = notificationUri.buildUpon().appendQueryParameter("action", action).build()\n          it.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP\n          it.action = Intent.ACTION_VIEW\n          it.data = actionUri\n          it.addCategory(Intent.CATEGORY_BROWSABLE)\n          val actionIntent = PendingIntent.getActivity(\n            this,\n            actionUri.toString().hashCode(),\n            it,\n            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE\n          )\n          builder.addAction(0, title, actionIntent)\n          actionIntent\n        }\n      }\n      val addProofIntent = addStopAction("Add Proof", "add_proof")\n      val nextStopIntent = addStopAction("Next Stop", "next_stop")\n      val compactLayoutId = resources.getIdentifier("clever_route_notification_actions", "layout", mParentContext.packageName)\n      val titleViewId = resources.getIdentifier("notification_title", "id", mParentContext.packageName)\n      val addProofViewId = resources.getIdentifier("notification_add_proof", "id", mParentContext.packageName)\n      val nextStopViewId = resources.getIdentifier("notification_next_stop", "id", mParentContext.packageName)\n      if (compactLayoutId != 0 && titleViewId != 0 && addProofViewId != 0 && nextStopViewId != 0 && addProofIntent != null && nextStopIntent != null) {\n        val compactView = RemoteViews(mParentContext.packageName, compactLayoutId)\n        compactView.setTextViewText(titleViewId, title)\n        compactView.setOnClickPendingIntent(addProofViewId, addProofIntent)\n        compactView.setOnClickPendingIntent(nextStopViewId, nextStopIntent)\n        builder.setCustomContentView(compactView)\n      }\n    }\n\n    val iconsResId = try {`,
+    satisfiedBy: `val notificationUri = notificationUrl?.let(Uri::parse)`,
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',

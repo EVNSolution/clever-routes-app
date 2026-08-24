@@ -62,7 +62,7 @@ Runtime source anchors for this worksheet:
 | Proof media references | Server returns media id, storage key, content type, upload time, optional hash/size; server-side scan rejection hook support exists before accepted media persistence, and rejected proof media is not queued as durable proof. | Identifiers / Other Data linked to proof media and route, purpose: App Functionality. | Files and docs or Other data, collected for App functionality depending on final Play form taxonomy. | Confirm production object storage, signed access, retention, deletion, deployed scanner backend, and monitoring evidence. |
 | Driver events | App sends route/stop events such as route started, location updated, stop delivered/failed, route completed. | Other Data / App Activity depending on final taxonomy; linked to driver, purpose: App Functionality. | App activity and/or Other data, collected for App functionality. | Confirm event retention and support/audit use. |
 | Secure account and route tokens | Account access/refresh and route-scoped driver access are stored separately in Expo SecureStore. Deleted assignments clear route cache; expired account refresh or session reset clears the account. | If tokens are treated as auth/session evidence, classify with identifiers only if the current store form requires it. | Device or other IDs / app-specific identifier only if the final form treats tokens as identifiers. | Confirm refresh-token logging, revocation, retention, and account recovery policy. |
-| Offline queue | AsyncStorage stores non-secret retry metadata, driver event payloads, proof media file URI references, attempts, timestamps, and errors until retry/discard/reset. | Disclose underlying data types represented in queued payloads; local-only queue metadata may not be collected until transmitted. | Disclose underlying collected data when retry sends it; local-only metadata still needs privacy review if included in backups/logs. | Confirm backup/exclusion policy and production log redaction. |
+| Offline evidence | SQLCipher stores retry metadata, driver event payloads, proof media file URI references, bounded first/latest errors, timestamps, and quarantine state in separate workflow/sensitive/location/quarantine tables. The database key is in SecureStore; Android app backup is disabled and the iOS SQLite directory is excluded from backup. AsyncStorage is read only for transactional legacy migration and removed after verified commit. | Disclose the underlying data types represented in queued payloads; local-only evidence may not be collected until transmitted. | Disclose underlying collected data when retry sends it; local-only evidence still needs privacy review even though it is backup-excluded. | Validate encryption and backup exclusions on physical release builds and confirm production log redaction. |
 
 ## Current collection and sharing assumptions
 
@@ -79,9 +79,10 @@ Runtime source anchors for this worksheet:
   endpoints. Owner must confirm whether hosting, storage, security scanning, or
   operations vendors count as service providers/processors in the final store
   forms and privacy policy.
-- Deletion: app-side local retry state can be cleared by session reset, route
-  completion cleanup, max attempt discard, 72-hour stale discard, or
-  proof-media scan rejection discard. Server-side
+- Deletion: transient location evidence can be cleared by route completion,
+  account change, retry limit, or the 72-hour age limit. Ordered workflow and
+  proof evidence is quarantined at retry limits or sign-out until explicit
+  reconciliation; proof-media scan rejection remains non-retryable. Server-side
   deletion/retention is not production-final until proof-media storage and
   scheduled cleanup evidence are approved.
 

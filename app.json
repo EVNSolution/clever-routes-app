@@ -13,6 +13,7 @@
       "icon": "./assets/icon.png"
     },
     "android": {
+      "allowBackup": false,
       "package": "com.evnsolution.clever.routes",
       "versionCode": 17,
       "icon": "./assets/icon.png",
@@ -34,7 +35,18 @@
     },
     "plugins": [
       "expo-notifications",
-      "expo-secure-store",
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": false
+        }
+      ],
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ],
       [
         "expo-location",
         {
