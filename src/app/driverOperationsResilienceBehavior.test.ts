@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 const source = readFileSync(new URL('./AppRoot.tsx', import.meta.url), 'utf8');
+const pillModelSource = readFileSync(new URL('../ui/components/operationalPillModel.ts', import.meta.url), 'utf8');
 
 describe('driver operations resilience runtime', () => {
   it('runs heartbeat independently while online and foreground and surfaces lease state', () => {
@@ -11,9 +12,9 @@ describe('driver operations resilience runtime', () => {
   });
 
   it('surfaces six independent operational values and keeps completion pending visible', () => {
-    assert.match(source, /alert:[\s\S]*device:[\s\S]*gps:[\s\S]*route:[\s\S]*server:[\s\S]*sync:/u);
-    assert.match(source, /hasDurablePendingRouteEnd \|\| input\.deliveryFinishResult\?\.kind === 'queued'[\s\S]*'Completion pending'/u);
-    assert.match(source, /formatGpsOperationalPill\(input\.gpsOperationalState\)/u);
+    assert.match(pillModelSource, /alert:[\s\S]*device:[\s\S]*gps:[\s\S]*route:[\s\S]*server:[\s\S]*sync:/u);
+    assert.match(pillModelSource, /hasDurablePendingRouteEnd \|\| input\.completionQueued[\s\S]*'Completion pending'/u);
+    assert.match(source, /buildDriverOperationalPillValues\(\{[\s\S]*currentStopSequence: currentStop\?\.sequence \?\? null,[\s\S]*routeProgress/u);
   });
 
   it('recovers a durable completion receipt before deciding whether to clear restored monitoring', () => {

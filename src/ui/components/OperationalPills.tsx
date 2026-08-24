@@ -15,7 +15,7 @@ export function OperationalPills({ onTakeover, values }: { onTakeover?: () => vo
           <Text style={{ color: '#0f172a', fontSize: 13, fontWeight: '700' }}>{pill.value}</Text>
         </View>
       ))}
-      {values.device === 'Conflict' && onTakeover !== undefined ? (
+      {values.deviceConflict === true && onTakeover !== undefined ? (
         <Pressable accessibilityLabel="Take over active route on this device" accessibilityRole="button" onPress={onTakeover}>
           <Text style={{ color: '#0b57d0', fontSize: 13, fontWeight: '800', padding: 8 }}>Use This Device</Text>
         </Pressable>

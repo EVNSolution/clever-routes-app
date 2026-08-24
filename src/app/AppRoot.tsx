@@ -121,7 +121,7 @@ import {
   shouldRetryOfflineSubmissionsAfterNetworkChange,
 } from '../domain/offline/offlineRetryTrigger';
 import { createOfflineRetryScheduler } from '../domain/offline/offlineRetryScheduler';
-import { classifyGpsOperationalState, type GpsOperationalState } from '../domain/location/gpsOperationalState';
+import { classifyGpsOperationalState } from '../domain/location/gpsOperationalState';
 import {
   createDriverSyncHeartbeatApiClient,
   createDriverSyncHeartbeatScheduler,
@@ -136,7 +136,7 @@ import {
 } from '../domain/operations/completionPendingRestore';
 import { getExpoDriverSyncIdentity } from '../platform/expo/secureStore/expoDriverSyncIdentity';
 import { OperationalPills } from '../ui/components/OperationalPills';
-import type { OperationalPillValues } from '../ui/components/operationalPillModel';
+import { buildDriverOperationalPillValues } from '../ui/components/operationalPillModel';
 import { captureProofPhoto, type ProofPhotoCaptureResult, type ProofPhotoCaptureSource } from '../domain/proof/proofPhotoCapture';
 import {
   createMockProofMediaUploadService,
@@ -1107,27 +1107,36 @@ function DriverApp() {
   }), [currentProximityDistanceMeters, latestGpsSample?.accuracyMeters, latestGpsSample?.capturedAt]);
   const hasDurablePendingRouteEnd = durableCompletionPendingRoutePlanId !== null
     || routeSessions.some((session) => session.pendingRouteEnd !== undefined);
+  const routeProgress = useMemo(() => projectRouteProgress({
+    localCompletedStopIds: completedStopIds,
+    serverConfirmedStopIds,
+    totalStops: selectedRoute?.stops.length ?? 0,
+  }), [completedStopIds, selectedRoute?.stops.length, serverConfirmedStopIds]);
   const operationalPillValues = useMemo(() => buildDriverOperationalPillValues({
     activeRoutePlanId,
-    backgroundLocationPermission,
-    deliveryFinishResult,
-    driverSyncHealth,
+    backgroundLocationGranted: backgroundLocationPermission === 'granted',
+    completionQueued: deliveryFinishResult?.kind === 'queued',
+    currentStopSequence: currentStop?.sequence ?? null,
+    deviceConflict: driverSyncHealth?.conflict === true,
     gpsOperationalState,
     hasDurablePendingRouteEnd,
     hasReconciliation: routeReconciliationCount > 0,
     offlineQueueCount,
     offlineStorageState,
+    routeProgress,
     routeReconciliationCount,
-    routeSyncState,
+    routeSyncReady: routeSyncState === 'ready',
   }), [
     activeRoutePlanId,
     backgroundLocationPermission,
+    currentStop?.sequence,
     deliveryFinishResult,
     driverSyncHealth,
     gpsOperationalState,
     hasDurablePendingRouteEnd,
     offlineQueueCount,
     offlineStorageState,
+    routeProgress,
     routeReconciliationCount,
     routeSyncState,
   ]);
@@ -1152,11 +1161,6 @@ function DriverApp() {
     && !isCompletingStop
     && !isRecordingArrival;
   const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => completedStopIds.includes(stop.deliveryStopId));
-  const routeProgress = useMemo(() => projectRouteProgress({
-    localCompletedStopIds: completedStopIds,
-    serverConfirmedStopIds,
-    totalStops: selectedRoute?.stops.length ?? 0,
-  }), [completedStopIds, selectedRoute?.stops.length, serverConfirmedStopIds]);
   const currentCompany = selectedRouteSession?.companyGuidance ?? null;
   const isRouteBoundScreen = screen === 'arrivalCheck'
     || screen === 'completedDeliveries'
@@ -6578,41 +6582,6 @@ function ProofCameraScreen({
 
 function StatusBanner({ text, tone }: { text: string; tone: 'green' | 'warning' }) {
   return <Text style={[styles.statusBanner, tone === 'green' ? styles.statusBannerGreen : styles.statusBannerWarning]}>{text}</Text>;
-}
-
-function formatGpsOperationalPill(state: GpsOperationalState): string {
-  if (state.freshness === 'unknown') return 'Waiting';
-  if (state.freshness === 'stale') return 'Stale';
-  if (state.accuracy === 'poor') return 'Low accuracy';
-  if (state.proximity === 'within') return 'Near stop';
-  return state.freshness === 'aging' ? 'Aging' : 'Fresh';
-}
-
-function buildDriverOperationalPillValues(input: {
-  activeRoutePlanId: string | null;
-  backgroundLocationPermission: BackgroundLocationPermissionState;
-  deliveryFinishResult: DeliveryFinishResult | null;
-  driverSyncHealth: DriverSyncHeartbeatResult | null;
-  gpsOperationalState: GpsOperationalState;
-  hasDurablePendingRouteEnd: boolean;
-  hasReconciliation: boolean;
-  offlineQueueCount: number;
-  offlineStorageState: 'READY' | 'STORAGE_DEGRADED';
-  routeReconciliationCount: number;
-  routeSyncState: RouteSyncState;
-}): OperationalPillValues {
-  return {
-    alert: input.routeReconciliationCount > 0 ? 'Action needed' : 'None',
-    device: input.driverSyncHealth?.conflict === true ? 'Conflict' : 'This device',
-    gps: input.backgroundLocationPermission === 'granted' ? formatGpsOperationalPill(input.gpsOperationalState) : 'Unavailable',
-    route: input.hasReconciliation
-      ? 'Reconciliation'
-      : input.hasDurablePendingRouteEnd || input.deliveryFinishResult?.kind === 'queued'
-        ? 'Completion pending'
-        : input.activeRoutePlanId === null ? 'Ready' : 'Active',
-    server: input.driverSyncHealth?.state ?? (input.routeSyncState === 'ready' ? 'Connected' : 'Unavailable'),
-    sync: input.offlineStorageState === 'STORAGE_DEGRADED' ? 'Storage blocked' : `${input.offlineQueueCount} pending`,
-  };
 }
 
 function EmptyState({ body, minimal = false, title }: { body: string; minimal?: boolean; title: string }) {
