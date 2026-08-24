@@ -17,12 +17,12 @@ describe('driver operations resilience runtime', () => {
   });
 
   it('recovers a durable completion receipt before deciding whether to clear restored monitoring', () => {
-    const receiptRecoveryIndex = source.indexOf('await recoverPendingRouteEndReceipt({');
-    const targetedClearIndex = source.indexOf('await clearAndStopActiveLocationSession(persistedActiveRouteSession.routePlanId)', receiptRecoveryIndex);
+    const receiptRecoveryIndex = source.indexOf('await restoreCompletionPendingBeforeRouteHydration({');
+    const hydrationIndex = source.indexOf('await submitAccountRouteAccess(accountAccess)', receiptRecoveryIndex);
     const retryIndex = source.indexOf('await retryOfflineSubmissionsForSessions([pendingSession])');
     const pendingProjectionIndex = source.indexOf('const loadedSessionsWithPendingEnds', retryIndex);
     const removalIndex = source.indexOf('const activeRouteWasRemoved', pendingProjectionIndex);
-    assert.ok(receiptRecoveryIndex > 0 && receiptRecoveryIndex < targetedClearIndex);
+    assert.ok(receiptRecoveryIndex > 0 && receiptRecoveryIndex < hydrationIndex);
     assert.ok(retryIndex > 0 && retryIndex < pendingProjectionIndex && pendingProjectionIndex < removalIndex);
     assert.match(source, /setDurableCompletionPendingRoutePlanId[\s\S]*pendingRouteEnd\?\.kind === 'driver_event'/u);
     assert.match(source, /Route completion is still pending server confirmation. Reduced monitoring remains active/u);
