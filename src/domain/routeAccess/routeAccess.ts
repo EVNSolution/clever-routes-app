@@ -41,6 +41,9 @@ export type DriverAccessToken = {
 
 export type RouteAccessRouteChoice = {
   routeAccess: {
+    assignmentGeneration: string;
+    driverContractVersion: 2;
+    expectedRouteVersionId: string;
     nextState: 'consent_required';
     routeContext: string;
     routePlanId: string;
@@ -116,6 +119,9 @@ export type FetchLike = (
 export const sampleInvitedRouteAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }> = {
   status: 'INVITED',
   routeAccess: {
+    assignmentGeneration: '7',
+    driverContractVersion: 2,
+    expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
     nextState: 'consent_required',
     routeContext: '11111111-1111-4111-8111-111111111111',
     routePlanId: '11111111-1111-4111-8111-111111111111',
@@ -373,10 +379,27 @@ function isRouteAccess(value: unknown): value is Extract<RouteAccessLookupResult
 
   const routeAccess = value as Record<string, unknown>;
   return (
+    isAssignmentGeneration(routeAccess.assignmentGeneration) &&
+    routeAccess.driverContractVersion === 2 &&
+    isUuid(routeAccess.expectedRouteVersionId) &&
     routeAccess.nextState === 'consent_required' &&
     typeof routeAccess.routeContext === 'string' &&
     typeof routeAccess.routePlanId === 'string'
   );
+}
+
+function isAssignmentGeneration(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^[1-9][0-9]*$/u.test(value)) return false;
+  try {
+    return BigInt(value) <= 9_223_372_036_854_775_807n;
+  } catch {
+    return false;
+  }
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
 }
 
 function isCompanyGuidance(value: unknown): value is RouteAccessCompanyGuidance {

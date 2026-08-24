@@ -2,14 +2,41 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
-import { sampleAssignedRoute } from '../domain/route/assignedRoute';
+import { sampleAssignedRoute, type AssignedRoute } from '../domain/route/assignedRoute';
 import {
-  buildActiveRouteForegroundNotification,
+  buildActiveRouteForegroundNotification as buildNotificationContent,
   isActiveRouteNotificationTargetCurrent,
   parseActiveRouteNotificationUrl,
 } from './activeRouteNotification';
 
+const operationalLines = 'Alert: None\nRoute: In progress\nGPS: Monitoring\nDevice: This device\nServer: Checking\nSync: Active\nGap: 0 stops';
+const defaultOperationalState = {
+  alert: 'None', device: 'This device', gap: '0 stops', gps: 'Monitoring', route: 'In progress', server: 'Checking', sync: 'Active',
+};
+
+function buildActiveRouteForegroundNotification(input: { currentStepIndex: number; route: AssignedRoute }) {
+  return buildNotificationContent({ ...input, operationalState: defaultOperationalState });
+}
+
 describe('active route foreground notification', () => {
+  it('renders the exact Kitchener progress gap as independent labeled operational lines', () => {
+    const notification = buildNotificationContent({
+      currentStepIndex: 11,
+      operationalState: {
+        alert: 'Action needed',
+        device: '11/11',
+        gap: '10 stops',
+        gps: 'Near stop 11',
+        route: 'Active',
+        server: '1/11',
+        sync: 'Blocked',
+      },
+      route: sampleAssignedRoute,
+    });
+    assert.match(notification.expandedBody ?? '', /Alert: Action needed\nRoute: Active\nGPS: Near stop 11\nDevice: 11\/11\nServer: 1\/11\nSync: Blocked\nGap: 10 stops$/u);
+    assert.doesNotMatch(notification.expandedBody ?? '', /Alert: None|Server: Checking|Sync: Active|[•·]/u);
+  });
+
   it('shows the server ETA, drop items, and customer note for the current stop', () => {
     const route = {
       ...sampleAssignedRoute,
@@ -20,7 +47,7 @@ describe('active route foreground notification', () => {
 
     assert.deepEqual(buildActiveRouteForegroundNotification({ currentStepIndex: 2, route }), {
       body: '200 Queen St W, Toronto\nStatus: Transfer pending\nTotal: CAD 52.00\nCustomer note: Please leave the order beside the loading entrance.\nItems 1 type, 1 EA',
-      expandedBody: '200 Queen St W, Toronto\nStatus\nTransfer pending\nTotal\nCAD 52.00\nCustomer note\nPlease leave the order beside the loading entrance.\nItems\n1 type, 1 EA',
+      expandedBody: `200 Queen St W, Toronto\nStatus\nTransfer pending\nTotal\nCAD 52.00\nCustomer note\nPlease leave the order beside the loading entrance.\nItems\n1 type, 1 EA\n${operationalLines}`,
       title: 'Next stop 2  ETA 7:19 AM',
       url: 'clever-routes://route-stop?routePlanId=11111111-1111-4111-8111-111111111111&deliveryStopId=33333333-3333-4333-8333-333333333333&showStopActions=true',
     });
@@ -31,6 +58,7 @@ describe('active route foreground notification', () => {
   it('keeps Store Pickup distinct from Stop 1 in the foreground notification', () => {
     assert.deepEqual(buildActiveRouteForegroundNotification({ currentStepIndex: 0, route: sampleAssignedRoute }), {
       body: 'Open CLEVER Routes to confirm pickup before the first delivery stop.',
+      expandedBody: operationalLines,
       title: 'Pickup & Start Route',
     });
   });
@@ -77,7 +105,7 @@ describe('active route foreground notification', () => {
 
     assert.deepEqual(buildActiveRouteForegroundNotification({ currentStepIndex: 1, route }), {
       body: '100 King St W, Toronto\nStatus: Collect cash\nTotal: CAD 84.50\nCustomer note: Call on arrival.\nItems 2 types, 7 EA',
-      expandedBody: '100 King St W, Toronto\nStatus\nCollect cash\nTotal\nCAD 84.50\nCustomer note\nCall on arrival.\nItems\n2 types, 7 EA',
+      expandedBody: `100 King St W, Toronto\nStatus\nCollect cash\nTotal\nCAD 84.50\nCustomer note\nCall on arrival.\nItems\n2 types, 7 EA\n${operationalLines}`,
       title: 'Next stop 1  ETA 7:08 AM',
       url: 'clever-routes://route-stop?routePlanId=11111111-1111-4111-8111-111111111111&deliveryStopId=22222222-2222-4222-8222-222222222222&showStopActions=true',
     });

@@ -27,14 +27,28 @@ export type DriverEventType =
   | 'STOP_FAILED';
 
 export type DriverEventInput = {
+  accuracyMeters?: number | null;
+  appVersion?: string;
+  assignmentGeneration?: string;
   clientEventId: string;
   deliveryStopId?: string | null;
+  driverContractVersion?: 2;
   eventType: DriverEventType;
+  expectedRouteVersionId?: string;
   latitude?: number | null;
   longitude?: number | null;
   occurredAt: Date;
   payload?: Record<string, unknown>;
   routePlanId?: string | null;
+  versionCode?: number;
+};
+
+export type DriverOrderedEventContract = {
+  appVersion: string;
+  assignmentGeneration: string;
+  driverContractVersion: 2;
+  expectedRouteVersionId: string;
+  versionCode: number;
 };
 
 export type DriverEventRecordResult = {
@@ -71,8 +85,16 @@ export type DriverRouteEtaUpdate = {
 };
 
 export type DriverEventService = {
+  prepareDriverEvent?(input: DriverEventInput): DriverEventInput;
   recordDriverEvent(input: DriverEventInput): Promise<DriverEventRecordResult>;
 };
+
+export function prepareDriverEventForPersistence(
+  service: DriverEventService,
+  event: DriverEventInput,
+): DriverEventInput {
+  return service.prepareDriverEvent?.(event) ?? event;
+}
 
 export type MockDriverEventService = DriverEventService & {
   recordedEvents: DriverEventInput[];
@@ -133,13 +155,22 @@ export function createMockDriverEventService(): MockDriverEventService {
 export function createDriverEventsApiClient(input: {
   accessToken: string;
   baseUrl: string;
+  orderedEventContract?: DriverOrderedEventContract;
   fetchImpl?: FetchLike;
 }): DriverEventService {
   const baseUrl = input.baseUrl.replace(/\/$/u, '');
   const fetchImpl = input.fetchImpl ?? globalThis.fetch;
+  const prepareDriverEvent = (event: DriverEventInput): DriverEventInput => {
+    if (event.eventType !== 'LOCATION_UPDATED' && input.orderedEventContract !== undefined) {
+      Object.assign(event, input.orderedEventContract);
+    }
+    return event;
+  };
 
   return {
+    prepareDriverEvent,
     recordDriverEvent: async (event) => {
+      prepareDriverEvent(event);
       const response = await fetchImpl(`${baseUrl}/driver/events`, withNoStoreDriverApiRequest({
         body: JSON.stringify(toDriverEventRequestBody(event)),
         headers: {
@@ -357,14 +388,20 @@ export function applyDriverRouteEtaUpdate(route: AssignedRoute, etaUpdate: Drive
 
 function toDriverEventRequestBody(event: DriverEventInput): Record<string, unknown> {
   return {
+    ...(event.accuracyMeters === undefined ? {} : { accuracyMeters: event.accuracyMeters }),
+    ...(event.appVersion === undefined ? {} : { appVersion: event.appVersion }),
+    ...(event.assignmentGeneration === undefined ? {} : { assignmentGeneration: event.assignmentGeneration }),
     clientEventId: event.clientEventId,
     ...(event.deliveryStopId === undefined ? {} : { deliveryStopId: event.deliveryStopId }),
+    ...(event.driverContractVersion === undefined ? {} : { driverContractVersion: event.driverContractVersion }),
     eventType: event.eventType,
+    ...(event.expectedRouteVersionId === undefined ? {} : { expectedRouteVersionId: event.expectedRouteVersionId }),
     ...(event.latitude === undefined ? {} : { latitude: event.latitude }),
     ...(event.longitude === undefined ? {} : { longitude: event.longitude }),
     occurredAt: event.occurredAt.toISOString(),
     ...(event.payload === undefined ? {} : event.payload),
     ...(event.routePlanId === undefined ? {} : { routePlanId: event.routePlanId }),
+    ...(event.versionCode === undefined ? {} : { versionCode: event.versionCode }),
   };
 }
 

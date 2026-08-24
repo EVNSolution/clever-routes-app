@@ -18,13 +18,25 @@ export type ActiveRouteNotificationTarget = {
   routePlanId: string;
 };
 
+export type ActiveRouteNotificationOperationalState = {
+  alert: string;
+  device: string;
+  gap: string;
+  gps: string;
+  route: string;
+  server: string;
+  sync: string;
+};
+
 export function buildActiveRouteForegroundNotification(input: {
   currentStepIndex: number;
+  operationalState: ActiveRouteNotificationOperationalState;
   route: AssignedRoute;
 }): ContinuousLocationNotificationContent {
   if (input.currentStepIndex <= 0) {
     return {
       body: 'Open CLEVER Routes to confirm pickup before the first delivery stop.',
+      expandedBody: formatOperationalNotificationLines(input.operationalState).join('\n'),
       title: 'Pickup & Start Route',
     };
   }
@@ -34,6 +46,7 @@ export function buildActiveRouteForegroundNotification(input: {
   if (stop === null) {
     return {
       body: 'Open CLEVER Routes for route details.',
+      expandedBody: formatOperationalNotificationLines(input.operationalState).join('\n'),
       title: 'Route in progress',
     };
   }
@@ -61,20 +74,32 @@ export function buildActiveRouteForegroundNotification(input: {
 
   return {
     body,
-    expandedBody: formatExpandedNotificationBody({
+    expandedBody: [formatExpandedNotificationBody({
       address,
       customerNote: stop.customerNote,
       itemCount,
       itemTypeCount,
       isPickupStop,
       payment,
-    }),
+    }), ...formatOperationalNotificationLines(input.operationalState)].join('\n'),
     title: `Next stop ${stop.sequence}${eta === null ? '' : `  ETA ${eta}`}`,
     url: buildActiveRouteNotificationUrl({
       deliveryStopId: stop.deliveryStopId,
       routePlanId: input.route.id,
     }, true),
   };
+}
+
+function formatOperationalNotificationLines(state: ActiveRouteNotificationOperationalState): string[] {
+  return [
+    `Alert: ${state.alert}`,
+    `Route: ${state.route}`,
+    `GPS: ${state.gps}`,
+    `Device: ${state.device}`,
+    `Server: ${state.server}`,
+    `Sync: ${state.sync}`,
+    `Gap: ${state.gap}`,
+  ];
 }
 
 export function buildActiveRouteNotificationUrl(target: ActiveRouteNotificationTarget, showStopActions = false): string {

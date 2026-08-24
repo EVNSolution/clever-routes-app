@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = join(currentDirectory, '..', '..', '..', '..');
 const locationServicePath = join(currentDirectory, 'expoContinuousLocationStreamService.ts');
 const foregroundLocationSnapshotServicePath = join(currentDirectory, 'expoForegroundLocationSnapshotService.ts');
 const locationTypesPath = join(currentDirectory, '..', '..', '..', '..', 'node_modules', 'expo-location', 'src', 'Location.types.ts');
@@ -136,6 +139,74 @@ describe('Expo continuous location wiring', () => {
     assert.match(mainActivitySource, /override fun onNewIntent\(intent: Intent\)/u);
     assert.match(mainActivitySource, /setIntent\(intent\)/u);
     assert.match(patchSource, /Unsupported expo-location source/u);
+  });
+
+  it('fails closed outside the exact supported Expo Location source version', () => {
+    const patchSource = readFileSync(patchScriptPath, 'utf8');
+
+    assert.match(patchSource, /SUPPORTED_EXPO_LOCATION_VERSION = '56\.0\.24'/u);
+    assert.match(patchSource, /"version": "\$\{SUPPORTED_EXPO_LOCATION_VERSION\}"/u);
+    assert.doesNotMatch(patchSource, /"version": "56\.0\.22"/u);
+    assert.match(patchSource, /source\.includes\(patch\.before\)/u);
+    assert.match(patchSource, /matchedSource === null[\s\S]*Unsupported expo-location source/u);
+  });
+
+  it('accepts an idempotent patch only for the exact installed Expo Location version', () => {
+    const result = spawnSync(process.execPath, [patchScriptPath], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  it('rejects a future Expo Location version even when the first source is already patched', () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'expo-location-future-'));
+    const packageRoot = join(fixtureRoot, 'node_modules', 'expo-location');
+    try {
+      mkdirSync(packageRoot, { recursive: true });
+      writeFileSync(
+        join(packageRoot, 'package.json'),
+        JSON.stringify({ name: 'expo-location', version: '56.0.25' }),
+      );
+      writeFileSync(
+        join(packageRoot, 'expo-module.config.json'),
+        '{\n  "android": {\n    "modules": ["expo.modules.location.LocationModule"]\n  }\n}\n',
+      );
+
+      const result = spawnSync(process.execPath, [patchScriptPath], {
+        cwd: fixtureRoot,
+        encoding: 'utf8',
+      });
+
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Unsupported expo-location package metadata/u);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects missing and invalid Expo Location package metadata', () => {
+    for (const packageJson of [undefined, '{invalid']) {
+      const fixtureRoot = mkdtempSync(join(tmpdir(), 'expo-location-metadata-'));
+      try {
+        if (packageJson !== undefined) {
+          const packageRoot = join(fixtureRoot, 'node_modules', 'expo-location');
+          mkdirSync(packageRoot, { recursive: true });
+          writeFileSync(join(packageRoot, 'package.json'), packageJson);
+        }
+
+        const result = spawnSync(process.execPath, [patchScriptPath], {
+          cwd: fixtureRoot,
+          encoding: 'utf8',
+        });
+
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /Unable to verify installed expo-location package metadata/u);
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    }
   });
 
   it('shares one lazy persistent queue between AppRoot and the background task', () => {

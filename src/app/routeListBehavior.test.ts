@@ -155,8 +155,7 @@ describe('routes list behavior', () => {
     assert.match(routesPage, />Clear Record<\/Text>/u);
     assert.doesNotMatch(routesPage, /Refresh routes after server route ended/u);
     assert.match(clearSource, /queue\.discardReconciliationRecords\(\)/u);
-    assert.match(clearSource, /await queue\.whenPersisted\(\)/u);
-    assert.match(clearSource, /syncOfflineQueueState\(queue\)/u);
+    assert.match(clearSource, /await waitForOfflineQueuePersistence\(queue\)/u);
     assert.doesNotMatch(clearSource, /handleRefreshRoutes|finishRoute|deleteActiveRoute/u);
   });
 

@@ -66,6 +66,9 @@ export async function processContinuousLocationTaskBatch(input: {
   }
 
   const routePlanId = persistedAccess.activeRouteSession.routePlanId;
+  if (persistedAccess.activeRouteSession.status === 'completion_pending') {
+    return { kind: 'processed', recordedCount: 0, routePlanId };
+  }
   const sessionGeneration = persistedAccess.activeRouteSession.startedAt
     ?? persistedAccess.activeRouteSession.updatedAt;
   let routeRevoked = false;

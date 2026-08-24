@@ -27,8 +27,13 @@ export type ProofMediaUploadRequest = {
   uri: string;
 };
 
+export type ProofMediaUploadOptions = {
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+};
+
 export type ProofMediaUploadService = {
-  uploadProofMedia(input: ProofMediaUploadRequest): Promise<ProofMediaReference>;
+  uploadProofMedia(input: ProofMediaUploadRequest, options?: ProofMediaUploadOptions): Promise<ProofMediaReference>;
 };
 
 export type ProofMediaUploadMockMode = 'failure' | 'scan_rejected' | 'success';
@@ -68,6 +73,7 @@ export type FetchLike = (
     credentials?: 'omit';
     headers?: Record<string, string>;
     method?: string;
+    signal?: AbortSignal;
   },
 ) => Promise<{
   json(): Promise<unknown>;
@@ -121,13 +127,16 @@ export function createProofMediaUploadApiClient(input: {
   const baseUrl = input.baseUrl.replace(/\/$/u, '');
 
   return {
-    uploadProofMedia: async (request) => {
+    uploadProofMedia: async (request, options) => {
       const url = `${baseUrl}/driver/proof-media`;
       const body = toProofMediaFormData(request);
+      const idempotencyKey = options?.idempotencyKey ?? getProofMediaUploadIdempotencyKey(request);
       const response = input.fetchImpl === undefined
         ? await postProofMediaFormDataWithXmlHttpRequest({
           accessToken: input.accessToken,
           body,
+          idempotencyKey,
+          signal: options?.signal,
           url,
           xmlHttpRequestFactory: input.xmlHttpRequestFactory,
         })
@@ -135,8 +144,10 @@ export function createProofMediaUploadApiClient(input: {
           body,
           headers: {
             Authorization: `Bearer ${input.accessToken}`,
+            'Idempotency-Key': idempotencyKey,
           },
           method: 'POST',
+          signal: options?.signal,
         }));
       const payload = await readResponseJson(response);
       if (!response.ok) {
@@ -160,6 +171,8 @@ export function createProofMediaUploadApiClient(input: {
 function postProofMediaFormDataWithXmlHttpRequest(input: {
   accessToken: string;
   body: FormData;
+  idempotencyKey: string;
+  signal?: AbortSignal;
   url: string;
   xmlHttpRequestFactory?: () => XMLHttpRequest;
 }): Promise<ProofMediaHttpResponse> {
@@ -167,22 +180,68 @@ function postProofMediaFormDataWithXmlHttpRequest(input: {
 
   return new Promise((resolve, reject) => {
     const request = createRequest();
+    let settled = false;
+    let abortRequest: () => void;
+    const finish = (complete: () => void) => {
+      if (settled) return;
+      settled = true;
+      input.signal?.removeEventListener('abort', abortRequest);
+      complete();
+    };
+    abortRequest = () => {
+      try {
+        request.abort();
+      } catch {
+        // The bounded caller still owns the timeout result when a transport cannot abort cleanly.
+      }
+      finish(() => reject(new Error('Proof media upload aborted')));
+    };
     request.open('POST', input.url);
     request.timeout = 30000;
     request.setRequestHeader('Authorization', `Bearer ${input.accessToken}`);
     request.setRequestHeader('Cache-Control', 'no-store');
+    request.setRequestHeader('Idempotency-Key', input.idempotencyKey);
     request.setRequestHeader('Pragma', 'no-cache');
     request.onload = () => {
-      resolve({
+      finish(() => resolve({
         ok: request.status >= 200 && request.status < 300,
         status: request.status,
         json: async () => parseJsonOrNull(request.responseText),
-      });
+      }));
     };
-    request.onerror = () => reject(new Error('Network request failed'));
-    request.ontimeout = () => reject(new Error('Network request timed out'));
+    request.onabort = () => finish(() => reject(new Error('Proof media upload aborted')));
+    request.onerror = () => finish(() => reject(new Error('Network request failed')));
+    request.ontimeout = () => finish(() => reject(new Error('Network request timed out')));
+    if (input.signal?.aborted === true) {
+      abortRequest();
+      return;
+    }
+    input.signal?.addEventListener('abort', abortRequest, { once: true });
     request.send(input.body);
   });
+}
+
+export function getProofMediaUploadIdempotencyKey(request: ProofMediaUploadRequest): string {
+  const identity = `${request.routePlanId}\u0000${request.deliveryStopId}\u0000${request.fileName}`;
+  return `proof-media-v1:${[
+    0x811c9dc5,
+    0x9e3779b9,
+    0x85ebca6b,
+    0xc2b2ae35,
+  ].map((seed) => stableIdentityHash(identity, seed)).join('')}`;
+}
+
+function stableIdentityHash(value: string, seed: number): string {
+  let hash = seed;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(hash ^ value.charCodeAt(index), 0x01000193);
+  }
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0x85ebca6b);
+  hash ^= hash >>> 13;
+  hash = Math.imul(hash, 0xc2b2ae35);
+  hash ^= hash >>> 16;
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 export async function uploadCapturedProofPhoto(input: {

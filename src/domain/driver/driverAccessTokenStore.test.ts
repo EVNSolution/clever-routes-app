@@ -332,3 +332,31 @@ test('invalidates legacy and malformed token payloads', async () => {
   assert.deepEqual(await store.loadActiveDriverAccess(), { kind: 'invalid' });
   assert.equal(storage.values[DRIVER_ACCESS_TOKEN_STORAGE_KEY], null);
 });
+
+test('persists completion_pending across restart until the server receipt is acknowledged', async () => {
+  const storage = createMemoryStorage();
+  const first = createDriverAccessTokenStore({
+    now: () => new Date('2026-08-22T19:42:10.000Z'),
+    storage,
+  });
+  await saveAccount(first, accountAccess({
+    expiresAt: '2026-08-23T07:00:00.000Z',
+    refreshTokenExpiresAt: '2026-09-12T07:00:00.000Z',
+  }));
+  await first.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await first.saveActiveRouteSession({ navigationStepIndex: 11, routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId });
+  assert.equal(await first.markActiveRouteCompletionPending({
+    clientEventId: '01K37KITCHENERCOMPLETE',
+    occurredAt: '2026-08-22T19:42:10.000Z',
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  }), true);
+
+  const restarted = createDriverAccessTokenStore({
+    now: () => new Date('2026-08-22T19:43:00.000Z'),
+    storage,
+  });
+  const restored = await restarted.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  assert.equal(restored.kind === 'active' ? restored.activeRouteSession?.status : null, 'completion_pending');
+  assert.equal(restored.kind === 'active' ? restored.activeRouteSession?.completionClientEventId : null, '01K37KITCHENERCOMPLETE');
+});

@@ -3,7 +3,11 @@ import { describe, it } from 'node:test';
 
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createMockDriverEventService } from '../events/driverEvents';
-import { createProofMediaRejectedError } from '../proof/proofMediaUpload';
+import {
+  createMockProofMediaUploadService,
+  createProofMediaRejectedError,
+  createProofMediaUploadApiClient,
+} from '../proof/proofMediaUpload';
 import {
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
   OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY,
@@ -12,6 +16,7 @@ import {
   createPersistentOfflineSubmissionQueue,
   getOfflineSubmissionQueueSummary,
   getPendingRouteEnd,
+  recoverPendingRouteEndReceipt,
   retryOfflineSubmissions,
   type OfflineSubmissionQueueStorage,
 } from './offlineSubmissionQueue';
@@ -65,6 +70,7 @@ describe('offline submission queue', () => {
 
     queue.enqueueDriverEvent({
       clientEventId: 'event-1',
+      deliveryStopId: 'stop-1',
       eventType: 'STOP_DELIVERED',
       occurredAt: new Date('2026-05-12T11:00:00.000Z'),
     });
@@ -76,6 +82,37 @@ describe('offline submission queue', () => {
 
     assert.equal(queue.listPending().length, 1);
     assert.equal(queue.listPending()[0]?.attempts, 0);
+  });
+
+  it('atomically upgrades an existing ordered event with full v2 lineage before replay', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    const base = {
+      clientEventId: 'completion-existing', eventType: 'ROUTE_COMPLETED' as const,
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId: 'route-1',
+    };
+    queue.enqueueDriverEvent(base);
+    await queue.whenPersisted();
+    queue.enqueueDriverEvent({
+      ...base, appVersion: '2.8.0', assignmentGeneration: '11', driverContractVersion: 2,
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', versionCode: 20800,
+    });
+    await queue.whenPersisted();
+
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    const item = restarted.listPending()[0];
+    assert.equal(item?.kind, 'driver_event');
+    if (item?.kind !== 'driver_event') throw new Error('Expected driver event');
+    assert.deepEqual({
+      appVersion: item.event.appVersion,
+      assignmentGeneration: item.event.assignmentGeneration,
+      driverContractVersion: item.event.driverContractVersion,
+      expectedRouteVersionId: item.event.expectedRouteVersionId,
+      versionCode: item.event.versionCode,
+    }, {
+      appVersion: '2.8.0', assignmentGeneration: '11', driverContractVersion: 2,
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', versionCode: 20800,
+    });
   });
 
   it('reports the newest queued terminal route transition', () => {
@@ -219,6 +256,7 @@ describe('offline submission queue', () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueDriverEvent({
       clientEventId: 'event-1',
+      deliveryStopId: 'stop-1',
       eventType: 'STOP_DELIVERED',
       occurredAt: new Date('2026-05-12T11:00:00.000Z'),
     });
@@ -249,12 +287,304 @@ describe('offline submission queue', () => {
       discarded: 0,
       failed: 0,
       retried: 2,
+      serverConfirmedStopIds: ['stop-1'],
       succeeded: 2,
     });
     assert.equal(queue.listPending().length, 0);
   });
 
-  it('retains failed retry items with attempt count and last error', async () => {
+  it('times out a hung ordered head, journals a stable code, and ignores late success without reordering', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    for (const [clientEventId, deliveryStopId] of [['south-head', 'south-1'], ['south-next', 'south-2']] as const) {
+      queue.enqueueDriverEvent({
+        clientEventId, deliveryStopId, eventType: 'STOP_DELIVERED',
+        occurredAt: new Date('2026-08-22T12:00:00.000Z'), routePlanId: 'route-south',
+      });
+    }
+    const expirations: (() => void)[] = [];
+    let resolveHung!: () => void;
+    const firstPass = retryOfflineSubmissions({
+      attemptTimeoutMs: 100,
+      cancelAttemptTimeout: () => undefined,
+      driverEventService: { recordDriverEvent: () => new Promise((resolve) => { resolveHung = () => resolve({ duplicate: false, eventId: 'late', status: 'recorded' }); }) },
+      proofMediaUploadService: createMockProofMediaUploadService(),
+      queue,
+      scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+    });
+    expirations.shift()?.();
+    const timedOut = await firstPass;
+    assert.equal(timedOut.failed, 1);
+    assert.equal(timedOut.retried, 1);
+    assert.equal(queue.listPending()[0]?.firstErrorCode, 'OPERATION_TIMEOUT');
+    assert.equal(queue.listPending()[0]?.journal.at(-1)?.code, 'OPERATION_TIMEOUT');
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+      'driver-event:south-head', 'driver-event:south-next',
+    ]);
+
+    resolveHung();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(queue.listPending().length, 2);
+
+    const replayOrder: string[] = [];
+    const recovered = await retryOfflineSubmissions({
+      driverEventService: { recordDriverEvent: async (event) => {
+        replayOrder.push(event.clientEventId);
+        return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+      } },
+      proofMediaUploadService: createMockProofMediaUploadService(),
+      queue,
+    });
+    assert.equal(recovered.succeeded, 2);
+    assert.deepEqual(replayOrder, ['south-head', 'south-next']);
+    assert.equal(queue.listPending().length, 0);
+  });
+
+  it('times out hung proof upload without false ACK and ignores a late media result', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'oshawa-1', fileName: 'proof.jpg', routePlanId: 'route-oshawa',
+      source: 'camera', uri: 'file:///proof.jpg',
+    });
+    const expirations: (() => void)[] = [];
+    let resolveHung!: () => void;
+    const retry = retryOfflineSubmissions({
+      attemptTimeoutMs: 100,
+      cancelAttemptTimeout: () => undefined,
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: { uploadProofMedia: (request) => new Promise((resolve) => { resolveHung = () => resolve({
+        contentType: 'image/jpeg', kind: 'photo', mediaId: 'late', source: request.source,
+        storageKey: 'late/proof.jpg', uploadedAt: '2026-08-22T12:00:00.000Z',
+      }); }) },
+      queue,
+      scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+    });
+    expirations.shift()?.();
+    assert.equal((await retry).failed, 1);
+    assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
+    resolveHung();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(queue.listPending().length, 1);
+  });
+
+  it('handles an abort-ignoring late proof rejection without an unhandled rejection or state mutation', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'late-reject-stop', fileName: 'proof.jpg', routePlanId: 'late-reject-route',
+      source: 'camera', uri: 'file:///proof.jpg',
+    });
+    const expirations: (() => void)[] = [];
+    const unhandled: unknown[] = [];
+    let rejectLate!: (error: Error) => void;
+    let attemptSignal: AbortSignal | undefined;
+    const onUnhandledRejection = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandledRejection);
+    try {
+      const retry = retryOfflineSubmissions({
+        attemptTimeoutMs: 100,
+        cancelAttemptTimeout: () => undefined,
+        driverEventService: createMockDriverEventService(),
+        proofMediaUploadService: {
+          uploadProofMedia: (_request, options) => {
+            attemptSignal = options?.signal;
+            return new Promise((_resolve, reject) => { rejectLate = reject; });
+          },
+        },
+        queue,
+        scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+      });
+      expirations.shift()?.();
+
+      assert.equal((await retry).failed, 1);
+      assert.equal(attemptSignal?.aborted, true);
+      const stateAfterTimeout = JSON.stringify(queue.listPending());
+      rejectLate(new Error('late transport rejection'));
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      assert.deepEqual(unhandled, []);
+      assert.equal(JSON.stringify(queue.listPending()), stateAfterTimeout);
+      assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+    }
+  });
+
+  it('propagates the queue deadline through the live proof client and aborts its XHR', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'xhr-stop', fileName: 'proof.jpg', routePlanId: 'xhr-route',
+      source: 'camera', uri: 'file:///proof.jpg',
+    });
+    const expirations: (() => void)[] = [];
+    const headers: Record<string, string> = {};
+    let abortCount = 0;
+    class HungXMLHttpRequest {
+      onabort: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onload: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      responseText = '';
+      status = 0;
+      timeout = 0;
+      abort() { abortCount += 1; this.onabort?.(); }
+      open() {}
+      send() {}
+      setRequestHeader(name: string, value: string) { headers[name] = value; }
+    }
+    const retry = retryOfflineSubmissions({
+      attemptTimeoutMs: 100,
+      cancelAttemptTimeout: () => undefined,
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: createProofMediaUploadApiClient({
+        accessToken: 'driver-token', baseUrl: 'https://delivery.example.com',
+        xmlHttpRequestFactory: () => new HungXMLHttpRequest() as unknown as XMLHttpRequest,
+      }),
+      queue,
+      scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+    });
+    expirations.shift()?.();
+
+    assert.equal((await retry).failed, 1);
+    assert.equal(abortCount, 1);
+    assert.match(headers['Idempotency-Key'] ?? '', /^proof-media-v1:[0-9a-f]{32}$/u);
+    assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
+  });
+
+  it('keeps proof upload-in-progress retryable without treating HTTP 409 as a route end', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'in-progress-stop', fileName: 'proof.jpg', routePlanId: 'in-progress-route',
+      source: 'camera', uri: 'file:///proof.jpg',
+    });
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => {
+          throw createDriverApiHttpError({
+            code: 'PROOF_MEDIA_UPLOAD_IN_PROGRESS', endpoint: 'Proof media upload', status: 409,
+          });
+        },
+      },
+      queue,
+    });
+
+    const pending = queue.listPending()[0];
+    assert.equal(result.failed, 1);
+    assert.equal(result.blocked, undefined);
+    assert.equal(result.reconciliationRoutePlanIds, undefined);
+    assert.equal(pending?.state, 'PENDING');
+    assert.equal(pending?.firstErrorCode, 'PROOF_MEDIA_UPLOAD_IN_PROGRESS');
+    assert.equal(pending?.lastErrorCode, 'PROOF_MEDIA_UPLOAD_IN_PROGRESS');
+    assert.deepEqual(getOfflineSubmissionQueueSummary(queue), {
+      blockedCount: 0, reconciliationRoutePlanIds: [], retryableCount: 1, totalCount: 1,
+    });
+    assert.doesNotMatch(JSON.stringify(pending), /ROUTE_NOT_IN_PROGRESS/u);
+  });
+
+  it('quarantines a proof idempotency conflict immediately with truthful blocked sync evidence', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'conflict-stop', fileName: 'proof.jpg', routePlanId: 'conflict-route',
+      source: 'camera', uri: 'file:///proof.jpg',
+    });
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => {
+          throw createDriverApiHttpError({
+            code: 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT', endpoint: 'Proof media upload', status: 409,
+          });
+        },
+      },
+      queue,
+    });
+    await queue.whenPersisted();
+
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    const blocked = restarted.listPending()[0];
+    assert.equal(result.failed, 0);
+    assert.equal(result.blocked, 1);
+    assert.equal(result.reconciliationRoutePlanIds, undefined);
+    assert.equal(blocked?.state, 'QUARANTINED');
+    assert.equal(blocked?.firstErrorCode, 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT');
+    assert.equal(blocked?.lastErrorCode, 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT');
+    assert.equal(blocked?.reconciliation?.reason, 'proof_idempotency_conflict');
+    assert.deepEqual(getOfflineSubmissionQueueSummary(restarted), {
+      blockedCount: 1,
+      reconciliationRoutePlanIds: ['conflict-route'],
+      retryableCount: 0,
+      totalCount: 1,
+    });
+    assert.doesNotMatch(JSON.stringify(blocked), /ROUTE_NOT_IN_PROGRESS/u);
+  });
+
+  it('retries a timeout with one idempotent server proof when transport ignores abort and settles late', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'oshawa-idempotent', fileName: 'proof.jpg', routePlanId: 'route-oshawa',
+      source: 'camera', uri: 'file:///proof.jpg',
+    });
+    const expirations: (() => void)[] = [];
+    const serverReservations = new Map<string, Promise<{
+      contentType: string; kind: 'photo'; mediaId: string; source: 'camera'; storageKey: string; uploadedAt: string;
+    }>>();
+    let completeUpload!: () => void;
+    let serverObjectCount = 0;
+    let uploadCalls = 0;
+    let firstSignal: AbortSignal | undefined;
+    const uploadProofMedia = (_request: unknown, options?: { idempotencyKey?: string; signal?: AbortSignal }) => {
+      uploadCalls += 1;
+      firstSignal ??= options?.signal;
+      const key = options?.idempotencyKey ?? '';
+      const existing = serverReservations.get(key);
+      if (existing !== undefined) return existing;
+      const reserved = new Promise<{
+        contentType: string; kind: 'photo'; mediaId: string; source: 'camera'; storageKey: string; uploadedAt: string;
+      }>((resolve) => {
+        completeUpload = () => {
+          serverObjectCount += 1;
+          resolve({
+            contentType: 'image/jpeg', kind: 'photo', mediaId: 'one-server-reference', source: 'camera',
+            storageKey: 'one/server/object.jpg', uploadedAt: '2026-08-22T12:00:00.000Z',
+          });
+        };
+      });
+      serverReservations.set(key, reserved);
+      return reserved;
+    };
+    const firstRetry = retryOfflineSubmissions({
+      attemptTimeoutMs: 100,
+      cancelAttemptTimeout: () => undefined,
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: { uploadProofMedia },
+      queue,
+      scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+    });
+    expirations.shift()?.();
+
+    assert.equal((await firstRetry).failed, 1);
+    assert.equal(firstSignal?.aborted, true);
+    assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
+
+    const immediateRetry = retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: { uploadProofMedia },
+      queue,
+    });
+    completeUpload();
+
+    assert.equal((await immediateRetry).succeeded, 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(uploadCalls, 2);
+    assert.equal(serverReservations.size, 1);
+    assert.equal(serverObjectCount, 1);
+    assert.equal(queue.listPending().length, 0);
+  });
+
+  it('retains a bounded first-error record while updating the last retry error', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueProofMediaUpload({
       deliveryStopId: 'stop-1',
@@ -281,7 +611,46 @@ describe('offline submission queue', () => {
       succeeded: 0,
     });
     assert.equal(queue.listPending()[0]?.attempts, 1);
-    assert.equal(queue.listPending()[0]?.lastError, 'still offline');
+    assert.equal(queue.listPending()[0]?.firstErrorCode, 'NETWORK_UNAVAILABLE');
+    assert.equal(queue.listPending()[0]?.lastErrorCode, 'NETWORK_UNAVAILABLE');
+
+    queue.recordRetryFailure(queue.listPending()[0]!.queueItemId, `later failure ${'x'.repeat(600)}`);
+    assert.equal(queue.listPending()[0]?.attempts, 2);
+    assert.equal(queue.listPending()[0]?.firstErrorCode, 'NETWORK_UNAVAILABLE');
+    assert.equal(queue.listPending()[0]?.lastErrorCode, 'RETRY_FAILED');
+    assert.doesNotMatch(JSON.stringify(queue.listPending()[0]), /later failure|x{20}/u);
+  });
+
+  it('seals ordered evidence and removes location samples when the account changes', () => {
+    const queue = createInMemoryOfflineSubmissionQueue({
+      now: () => new Date('2026-08-24T10:00:00.000Z'),
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-started',
+      eventType: 'ROUTE_STARTED',
+      occurredAt: new Date('2026-08-24T09:59:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'location',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-08-24T09:59:30.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'stop-1',
+      fileName: 'stop-1.jpg',
+      routePlanId: 'route-1',
+      source: 'camera',
+      uri: 'file:///proof/stop-1.jpg',
+    });
+
+    assert.deepEqual(queue.sealForAccountChange(), {
+      discardedLocations: 1,
+      sealed: 2,
+    });
+    assert.equal(queue.listPending().length, 2);
+    assert.equal(queue.listPending().every((item) => item.reconciliation?.reason === 'account_signed_out'), true);
   });
 
   it('marks offline retry failures as requiring route lookup when live retry returns unauthorized', async () => {
@@ -313,7 +682,7 @@ describe('offline submission queue', () => {
       succeeded: 0,
     });
     assert.equal(queue.listPending()[0]?.attempts, 1);
-    assert.equal(queue.listPending()[0]?.lastError, 'Proof media upload failed with HTTP 401');
+    assert.equal(queue.listPending()[0]?.lastErrorCode, 'AUTH_EXPIRED');
   });
 
   it('quarantines terminal stop evidence and proof after a route-not-in-progress retry', async () => {
@@ -473,6 +842,7 @@ describe('offline submission queue', () => {
     queue.blockRouteSubmissionsForReconciliation('route-1');
 
     assert.equal(queue.discardReconciliationRecords(), 1);
+    assert.equal(queue.discardReconciliationRecords(), 0);
     await queue.whenPersisted();
 
     assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
@@ -638,8 +1008,12 @@ describe('offline submission queue', () => {
     queue.discard(item.queueItemId);
     await queue.whenPersisted();
 
-    assert.equal(storage.values.has(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY), false);
-    assert.deepEqual(storage.removedKeys, [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]);
+    const stored = JSON.parse(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
+      items: { journal: { kind: string }[]; state: string }[];
+    };
+    assert.equal(stored.items[0]?.state, 'DISCARDED');
+    assert.equal(stored.items[0]?.journal.at(-1)?.kind, 'DISCARD');
+    assert.deepEqual(storage.removedKeys, []);
   });
 
   it('persists retry success removal and retry failure attempts', async () => {
@@ -671,32 +1045,41 @@ describe('offline submission queue', () => {
 
     assert.deepEqual(result, { discarded: 0, failed: 1, retried: 2, succeeded: 1 });
     const stored = JSON.parse(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
-      items: { attempts: number; kind: string; lastError?: string; queueItemId: string }[];
+      items: { attempts: number; kind: string; lastErrorCode?: string; queueItemId: string; state: string }[];
     };
     assert.deepEqual(stored.items.map((item) => ({
       attempts: item.attempts,
       kind: item.kind,
-      lastError: item.lastError,
+      lastErrorCode: item.lastErrorCode,
       queueItemId: item.queueItemId,
+      state: item.state,
     })), [
+      {
+        attempts: 0,
+        kind: 'driver_event',
+        lastErrorCode: undefined,
+        queueItemId: 'driver-event:event-1',
+        state: 'ACKNOWLEDGED',
+      },
       {
         attempts: 1,
         kind: 'proof_media',
-        lastError: 'still offline',
+        lastErrorCode: 'NETWORK_UNAVAILABLE',
         queueItemId: 'proof-media:route-1:stop-1:stop-1.jpg',
+        state: 'PENDING',
       },
     ]);
+    assert.doesNotMatch(JSON.stringify(stored), /still offline/u);
   });
 
-  it('recovers from malformed durable storage without reusing corrupt payloads', async () => {
+  it('fails closed on malformed durable rows without deleting corrupt evidence', async () => {
     const storage = createMemoryStorage({
       [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]: '{"version":1,"items":[{"kind":"driver_event"}]}',
     });
 
-    const queue = await createPersistentOfflineSubmissionQueue({ storage });
-
-    assert.deepEqual(queue.listPending(), []);
-    assert.deepEqual(storage.removedKeys, [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]);
+    await assert.rejects(createPersistentOfflineSubmissionQueue({ storage }), /STORAGE_DEGRADED/u);
+    assert.deepEqual(storage.removedKeys, []);
+    assert.match(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '', /driver_event/u);
   });
 
   it('serializes durable writes so older persistence cannot overwrite newer queue state', async () => {
@@ -704,7 +1087,7 @@ describe('offline submission queue', () => {
     let releaseFirstWrite: (() => void) | null = null;
     let writeCount = 0;
     const storage: OfflineSubmissionQueueStorage = {
-      getItem: async () => null,
+      getItem: async (key) => values.get(key) ?? null,
       removeItem: async (key) => {
         values.delete(key);
       },
@@ -734,10 +1117,13 @@ describe('offline submission queue', () => {
     release();
     await queue.whenPersisted();
 
-    assert.equal(values.has(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY), false);
+    const stored = JSON.parse(values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
+      items: { state: string }[];
+    };
+    assert.equal(stored.items[0]?.state, 'DISCARDED');
   });
 
-  it('surfaces a durable write failure and recovers on the next snapshot', async () => {
+  it('enters a read-only storage-degraded gate until the latest snapshot is recovered', async () => {
     const storage = createMemoryStorage();
     const baseSetItem = storage.setItem;
     let shouldFail = true;
@@ -757,7 +1143,16 @@ describe('offline submission queue', () => {
       routePlanId: 'route-1',
     });
     await assert.rejects(queue.whenPersisted(), /storage full/u);
+    assert.equal(queue.storageState(), 'STORAGE_DEGRADED');
 
+    assert.throws(() => queue.enqueueDriverEvent({
+      clientEventId: 'second',
+      eventType: 'LOCATION_UPDATED',
+      occurredAt: new Date('2026-07-16T09:01:00.000Z'),
+      routePlanId: 'route-1',
+    }), /STORAGE_DEGRADED/u);
+    assert.equal(await queue.recoverStorage(), true);
+    assert.equal(queue.storageState(), 'READY');
     queue.enqueueDriverEvent({
       clientEventId: 'second',
       eventType: 'LOCATION_UPDATED',
@@ -775,10 +1170,52 @@ describe('offline submission queue', () => {
     ]);
   });
 
-  it('discards expired queued submissions before retrying live services', async () => {
+  it('does not leave storage-degraded until the written snapshot passes a public reread', async () => {
+    let persisted: string | null = null;
+    let returnCorruptReread = false;
+    const storage: OfflineSubmissionQueueStorage = {
+      getItem: async () => returnCorruptReread ? '{"invalid":true}' : persisted,
+      removeItem: async () => undefined,
+      setItem: async (_key, value) => { persisted = value; },
+    };
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    returnCorruptReread = true;
+    queue.enqueueDriverEvent({
+      clientEventId: 'verify-reread',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-08-24T12:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+
+    await assert.rejects(queue.whenPersisted(), /persistence verification failed/u);
+    assert.equal(queue.storageState(), 'STORAGE_DEGRADED');
+    assert.equal(await queue.recoverStorage(), false);
+    assert.equal(queue.storageState(), 'STORAGE_DEGRADED');
+
+    returnCorruptReread = false;
+    assert.equal(await queue.recoverStorage(), true);
+    assert.equal(queue.storageState(), 'READY');
+    assert.match(persisted ?? '', /verify-reread/u);
+  });
+
+  it('fails closed without deleting an invalid persisted root envelope', async () => {
+    const storage = createMemoryStorage({
+      [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]: JSON.stringify({ items: 'invalid', version: 2 }),
+    });
+
+    await assert.rejects(
+      createPersistentOfflineSubmissionQueue({ storage }),
+      /STORAGE_DEGRADED/u,
+    );
+    assert.deepEqual(storage.removedKeys, []);
+    assert.match(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '', /invalid/u);
+  });
+
+  it('quarantines expired ordered evidence before retrying fresh work', async () => {
     const queue = createInMemoryOfflineSubmissionQueue({
       initialItems: [
         {
+          accountOwnerHash: 'test-account-owner',
           attempts: 0,
           enqueuedAt: '2026-05-09T10:59:59.999Z',
           event: {
@@ -787,10 +1224,14 @@ describe('offline submission queue', () => {
             occurredAt: new Date('2026-05-09T10:59:59.999Z'),
             routePlanId: 'route-1',
           },
+          journal: [{ at: '2026-05-09T10:59:59.999Z', code: 'ENQUEUED', kind: 'ENQUEUED' }],
           kind: 'driver_event',
+          queueSequence: 1,
           queueItemId: 'driver-event:old-event',
+          state: 'PENDING',
         },
         {
+          accountOwnerHash: 'test-account-owner',
           attempts: 0,
           enqueuedAt: '2026-05-12T10:00:00.000Z',
           event: {
@@ -799,8 +1240,11 @@ describe('offline submission queue', () => {
             occurredAt: new Date('2026-05-12T10:00:00.000Z'),
             routePlanId: 'route-1',
           },
+          journal: [{ at: '2026-05-12T10:00:00.000Z', code: 'ENQUEUED', kind: 'ENQUEUED' }],
           kind: 'driver_event',
+          queueSequence: 2,
           queueItemId: 'driver-event:fresh-event',
+          state: 'PENDING',
         },
       ],
     });
@@ -827,17 +1271,19 @@ describe('offline submission queue', () => {
     });
 
     assert.deepEqual(result, {
-      discarded: 1,
+      blocked: 1,
+      discarded: 0,
       failed: 0,
-      retried: 2,
-      succeeded: 1,
+      retried: 1,
+      succeeded: 0,
     });
-    assert.deepEqual(recordedEventIds, ['fresh-event']);
-    assert.deepEqual(queue.listPending(), []);
+    assert.deepEqual(recordedEventIds, []);
+    assert.equal(queue.listPending().length, 2);
+    assert.equal(queue.listPending()[0]?.reconciliation?.reason, 'retry_policy_exceeded');
     assert.equal(OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY.maxAgeMs, 72 * 60 * 60 * 1000);
   });
 
-  it('discards queued submissions after the maximum retained retry attempts', async () => {
+  it('quarantines sensitive evidence after the maximum retained retry attempts', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueProofMediaUpload({
       deliveryStopId: 'stop-1',
@@ -862,12 +1308,13 @@ describe('offline submission queue', () => {
     });
 
     assert.deepEqual(result, {
-      discarded: 1,
+      blocked: 1,
+      discarded: 0,
       failed: 0,
       retried: 1,
       succeeded: 0,
     });
-    assert.deepEqual(queue.listPending(), []);
+    assert.equal(queue.listPending()[0]?.reconciliation?.reason, 'retry_policy_exceeded');
   });
 
   it('discards transient route submissions but preserves terminal stop evidence and proof', () => {
@@ -912,7 +1359,7 @@ describe('offline submission queue', () => {
     ]);
   });
 
-  it('clears every queued submission on driver sign-out or session reset and persists it', async () => {
+  it('supports explicit operator purge and persists it', async () => {
     const storage = createMemoryStorage();
     const queue = await createPersistentOfflineSubmissionQueue({ storage });
     queue.enqueueDriverEvent({
@@ -933,8 +1380,11 @@ describe('offline submission queue', () => {
     await queue.whenPersisted();
 
     assert.deepEqual(queue.listPending(), []);
-    assert.equal(storage.values.has(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY), false);
-    assert.deepEqual(storage.removedKeys, [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]);
+    const stored = JSON.parse(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
+      items: { state: string }[];
+    };
+    assert.deepEqual(stored.items.map((item) => item.state), ['DISCARDED', 'DISCARDED']);
+    assert.deepEqual(storage.removedKeys, []);
   });
 
   it('trims oversized durable state by removing the oldest location before terminal evidence', async () => {
@@ -998,6 +1448,7 @@ describe('offline submission queue', () => {
     };
     assert.deepEqual(stored.items.map((item) => item.queueItemId), [
       'driver-event:terminal-stop',
+      'driver-event:old-location',
       'driver-event:new-location',
     ]);
   });
@@ -1071,9 +1522,341 @@ describe('offline submission queue', () => {
       routePlanId: 'route-1',
     });
 
-    assert.deepEqual(result, { discarded: 1, failed: 0, retried: 1, succeeded: 1 });
+    assert.deepEqual(result, {
+      completionAcknowledgedRoutePlanIds: ['route-1'],
+      discarded: 1,
+      failed: 0,
+      retried: 1,
+      succeeded: 1,
+    });
     assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
       'proof-media:route-1:stop-1:proof.jpg',
     ]);
+  });
+
+  it('keeps a quarantined ordered head as the route HOL blocker across restart until reconciliation ACK', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    queue.enqueueDriverEvent({
+      clientEventId: 'ordered-head',
+      eventType: 'STOP_ARRIVED',
+      occurredAt: new Date('2026-08-24T10:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.enqueueDriverEvent({
+      clientEventId: 'ordered-later',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-08-24T10:01:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.quarantine('driver-event:ordered-head', 'route_not_in_progress');
+    await queue.whenPersisted();
+
+    const restored = await createPersistentOfflineSubmissionQueue({ storage });
+    const recorded: string[] = [];
+    const blocked = await retryOfflineSubmissions({
+      driverEventService: {
+        recordDriverEvent: async (event) => {
+          recorded.push(event.clientEventId);
+          return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+        },
+      },
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unexpected upload'); } },
+      queue: restored,
+      routePlanId: 'route-1',
+    });
+    assert.deepEqual(blocked, { discarded: 0, failed: 0, retried: 0, succeeded: 0 });
+    assert.deepEqual(recorded.slice(), []);
+
+    assert.equal(restored.discardReconciliationRecords(), 1);
+    const reconciled = await retryOfflineSubmissions({
+      driverEventService: {
+        recordDriverEvent: async (event) => {
+          recorded.push(event.clientEventId);
+          return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+        },
+      },
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unexpected upload'); } },
+      queue: restored,
+      routePlanId: 'route-1',
+    });
+    assert.deepEqual(reconciled, { discarded: 0, failed: 0, retried: 1, succeeded: 1 });
+    assert.deepEqual(recorded, ['ordered-later']);
+  });
+
+  it('persists a monotonic queue sequence and never derives replay order from ids or timestamps', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    const first = queue.enqueueDriverEvent({
+      clientEventId: 'z-last-lexically',
+      eventType: 'STOP_ARRIVED',
+      occurredAt: new Date('2026-08-24T12:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    const second = queue.enqueueDriverEvent({
+      clientEventId: 'a-first-lexically',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-08-24T09:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    assert.equal(second.queueSequence, first.queueSequence + 1);
+    await queue.whenPersisted();
+
+    const restored = await createPersistentOfflineSubmissionQueue({ storage });
+    assert.deepEqual(restored.listPending().map((item) => item.queueItemId), [
+      'driver-event:z-last-lexically',
+      'driver-event:a-first-lexically',
+    ]);
+    const third = restored.enqueueDriverEvent({
+      clientEventId: 'middle-after-restart',
+      eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-08-23T09:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    assert.equal(third.queueSequence, second.queueSequence + 1);
+  });
+
+  it('isolates evidence mutations and replay by account owner hash', async () => {
+    const ownerA = 'aa'.repeat(32);
+    const ownerB = 'bb'.repeat(32);
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: null, storage });
+    queue.bindAccountOwnerHash(ownerA);
+    queue.enqueueDriverEvent({
+      clientEventId: 'same-client-id',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-08-24T10:00:00.000Z'),
+      routePlanId: 'route-a',
+    });
+    queue.sealForAccountChange();
+
+    queue.bindAccountOwnerHash(ownerB);
+    assert.deepEqual(queue.listPending(), []);
+    queue.enqueueDriverEvent({
+      clientEventId: 'same-client-id',
+      eventType: 'STOP_FAILED',
+      occurredAt: new Date('2026-08-24T11:00:00.000Z'),
+      routePlanId: 'route-b',
+    });
+    assert.equal(queue.clear(), 1);
+    assert.deepEqual(queue.listPending(), []);
+
+    queue.bindAccountOwnerHash(ownerA);
+    assert.deepEqual(queue.listPending().map((item) => ({
+      owner: item.accountOwnerHash,
+      routePlanId: item.kind === 'driver_event' ? item.event.routePlanId : null,
+      state: item.state,
+    })), [{ owner: ownerA, routePlanId: 'route-a', state: 'QUARANTINED' }]);
+  });
+
+  it('retains ACK and bounded stable-code attempt history without raw errors', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    const item = queue.enqueueDriverEvent({
+      clientEventId: 'journal-event',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-08-24T10:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    for (let attempt = 0; attempt < 70; attempt += 1) {
+      queue.recordRetryFailure(item.queueItemId, `network secret recipient ${attempt}`);
+    }
+    queue.acknowledge(item.queueItemId);
+    await queue.whenPersisted();
+
+    const raw = storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '';
+    const stored = JSON.parse(raw) as { items: { journal: unknown[]; lastErrorCode?: string; state: string }[] };
+    assert.equal(stored.items[0]?.state, 'ACKNOWLEDGED');
+    assert.equal(stored.items[0]?.lastErrorCode, 'NETWORK_UNAVAILABLE');
+    assert.equal(stored.items[0]?.journal.length, 64);
+    assert.doesNotMatch(raw, /secret recipient/u);
+  });
+
+  it('handles only the active account evidence after the server accepts account deletion', async () => {
+    const ownerA = '12'.repeat(32);
+    const ownerB = '34'.repeat(32);
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: null, storage });
+    queue.bindAccountOwnerHash(ownerA);
+    const acknowledged = queue.enqueueDriverEvent({
+      clientEventId: 'owner-a-ack',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-08-24T10:00:00.000Z'),
+      routePlanId: 'route-a',
+    });
+    queue.acknowledge(acknowledged.queueItemId);
+    queue.bindAccountOwnerHash(ownerB);
+    queue.enqueueDriverEvent({
+      clientEventId: 'owner-b-pending',
+      eventType: 'STOP_FAILED',
+      occurredAt: new Date('2026-08-24T11:00:00.000Z'),
+      routePlanId: 'route-b',
+    });
+
+    queue.bindAccountOwnerHash(ownerA);
+    assert.equal(queue.completeAccountDeletionAfterServerAudit(), 1);
+    await queue.whenPersisted();
+    queue.bindAccountOwnerHash(ownerB);
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), ['driver-event:owner-b-pending']);
+    const raw = storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '';
+    assert.match(raw, /ACCOUNT_DELETION_SERVER_AUDITED/u);
+  });
+
+  it('recovers Kitchener completion after restart from the account-token APPLIED receipt without replay', async () => {
+    const storage = createMemoryStorage();
+    const first = await createPersistentOfflineSubmissionQueue({ storage });
+    first.enqueueDriverEvent({
+      appVersion: '1.2.0',
+      assignmentGeneration: '7',
+      clientEventId: '01K37KITCHENERCOMPLETE',
+      deliveryStopId: null,
+      driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'),
+      routePlanId: '11111111-1111-4111-8111-111111111111',
+      versionCode: 120,
+    });
+    await first.whenPersisted();
+
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    let replayed = 0;
+    const result = await retryOfflineSubmissions({
+      driverEventReceiptService: { lookupReceipt: async () => ({
+        assignmentGeneration: '7',
+        clientEventId: '01K37KITCHENERCOMPLETE',
+        errorCode: null,
+        expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+        routePlanId: '11111111-1111-4111-8111-111111111111',
+        routeStatus: 'COMPLETED',
+        status: 'APPLIED',
+      }) },
+      driverEventService: { recordDriverEvent: async () => { replayed += 1; throw new Error('must not replay'); } },
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue: restarted,
+    });
+
+    assert.equal(replayed, 0);
+    assert.deepEqual(result.completionAcknowledgedRoutePlanIds, ['11111111-1111-4111-8111-111111111111']);
+    assert.deepEqual(restarted.listPending(), []);
+  });
+
+  it('recovers an APPLIED completion receipt before assigned-route restoration is available', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    queue.enqueueDriverEvent({
+      appVersion: '1.1.6',
+      assignmentGeneration: '11',
+      clientEventId: 'kitchener-complete-before-route-load',
+      driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'),
+      routePlanId: 'route-kitchener',
+      versionCode: 116,
+    });
+    await queue.whenPersisted();
+
+    const result = await recoverPendingRouteEndReceipt({
+      driverEventReceiptService: { lookupReceipt: async () => ({
+        assignmentGeneration: '11',
+        clientEventId: 'kitchener-complete-before-route-load',
+        errorCode: null,
+        expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+        routePlanId: 'route-kitchener',
+        routeStatus: 'COMPLETED',
+        status: 'APPLIED',
+      }) },
+      queue,
+      routePlanId: 'route-kitchener',
+    });
+    await queue.whenPersisted();
+
+    assert.equal(result, 'acknowledged');
+    assert.equal(getPendingRouteEnd(queue, 'route-kitchener'), null);
+    assert.equal((await createPersistentOfflineSubmissionQueue({ storage })).listPending().length, 0);
+  });
+
+  it('keeps completion pending and handles a late receipt rejection after timeout', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const routePlanId = 'route-late-receipt-reject';
+    queue.enqueueDriverEvent({
+      appVersion: '1.1.6', assignmentGeneration: '11', clientEventId: 'late-receipt-reject',
+      driverContractVersion: 2, eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId, versionCode: 116,
+    });
+    const expirations: (() => void)[] = [];
+    let rejectLate!: (error: Error) => void;
+    const recovery = recoverPendingRouteEndReceipt({
+      attemptTimeoutMs: 100,
+      cancelAttemptTimeout: () => undefined,
+      driverEventReceiptService: {
+        lookupReceipt: () => new Promise((_resolve, reject) => { rejectLate = reject; }),
+      },
+      queue,
+      routePlanId,
+      scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+    });
+    expirations.shift()?.();
+
+    assert.equal(await recovery, 'pending');
+    assert.equal(queue.listPending()[0]?.firstErrorCode, 'OPERATION_TIMEOUT');
+    assert.equal(queue.listPending()[0]?.journal.at(-1)?.code, 'OPERATION_TIMEOUT');
+    rejectLate(new Error('late private transport failure'));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(queue.listPending().length, 1);
+    assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
+    assert.doesNotMatch(JSON.stringify(queue.listPending()[0]?.journal), /private transport/u);
+  });
+
+  it('replays completion only for UNKNOWN plus IN_PROGRESS and quarantines a terminal South route', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const event = queue.enqueueDriverEvent({
+      assignmentGeneration: '7', clientEventId: 'south-complete', driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED', expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T20:00:00.000Z'), routePlanId: 'south-route',
+    }).event;
+    let routeStatus = 'IN_PROGRESS';
+    let replayed = 0;
+    const retry = () => retryOfflineSubmissions({
+      driverEventReceiptService: { lookupReceipt: async () => ({
+        assignmentGeneration: '7', clientEventId: event.clientEventId, errorCode: null,
+        expectedRouteVersionId: event.expectedRouteVersionId ?? null, routePlanId: 'south-route',
+        routeStatus, status: 'UNKNOWN',
+      }) },
+      driverEventService: { recordDriverEvent: async () => { replayed += 1; throw new Error('network offline'); } },
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue,
+    });
+    await retry();
+    assert.equal(replayed, 1);
+    routeStatus = 'COMPLETED';
+    const reconciled = await retry();
+    assert.deepEqual(reconciled.reconciliationRoutePlanIds, ['south-route']);
+    assert.equal(queue.listPending()[0]?.state, 'QUARANTINED');
+  });
+
+  it('recovers a queued route release receipt and clears reduced monitoring state without replay', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      assignmentGeneration: '8', clientEventId: 'release-lost-response', driverContractVersion: 2,
+      eventType: 'ROUTE_PAUSED', expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T20:10:00.000Z'), routePlanId: 'south-route',
+    });
+    let replayed = false;
+    const result = await retryOfflineSubmissions({
+      driverEventReceiptService: { lookupReceipt: async () => ({
+        assignmentGeneration: '8', clientEventId: 'release-lost-response', errorCode: null,
+        expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', routePlanId: 'south-route',
+        routeStatus: 'READY', status: 'APPLIED',
+      }) },
+      driverEventService: { recordDriverEvent: async () => { replayed = true; throw new Error('must not replay'); } },
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue,
+    });
+    assert.equal(replayed, false);
+    assert.deepEqual(result.completionAcknowledgedRoutePlanIds, ['south-route']);
+    assert.deepEqual(queue.listPending(), []);
   });
 });

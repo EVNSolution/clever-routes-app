@@ -13,6 +13,7 @@ class AppDelegate: ExpoAppDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+    excludeDriverEvidenceFromBackup()
     let delegate = ReactNativeDelegate()
     let factory = ExpoReactNativeFactory(delegate: delegate)
     delegate.dependencyProvider = RCTAppDependencyProvider()
@@ -29,6 +30,22 @@ class AppDelegate: ExpoAppDelegate {
 #endif
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  private func excludeDriverEvidenceFromBackup() {
+    guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+      return
+    }
+    let sqliteDirectory = documents.appendingPathComponent("SQLite", isDirectory: true)
+    do {
+      try FileManager.default.createDirectory(at: sqliteDirectory, withIntermediateDirectories: true)
+      var values = URLResourceValues()
+      values.isExcludedFromBackup = true
+      var mutableDirectory = sqliteDirectory
+      try mutableDirectory.setResourceValues(values)
+    } catch {
+      NSLog("[driver-evidence] Failed to exclude encrypted evidence directory from backup.")
+    }
   }
 
   // Linking API

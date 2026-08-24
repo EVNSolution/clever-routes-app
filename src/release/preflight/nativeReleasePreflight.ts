@@ -23,6 +23,7 @@ export type NativeReleasePreflightInput = {
   appConfig: {
     expo?: {
       android?: {
+        allowBackup?: boolean;
         package?: string;
         permissions?: string[];
         versionCode?: number;
@@ -169,8 +170,15 @@ function checkExpoPermissions(appConfig: NativeReleasePreflightInput['appConfig'
     return fail('expo.permissions', 'expo-image-picker camera/photos permission copy is required.');
   }
 
-  if (!plugins.includes('expo-secure-store')) {
+  if (!hasPlugin(plugins, 'expo-secure-store')) {
     return fail('expo.permissions', 'expo-secure-store plugin is required for native driver token storage.');
+  }
+  const sqlitePlugin = tuplePluginConfig(plugins, 'expo-sqlite');
+  if (sqlitePlugin?.useSQLCipher !== true) {
+    return fail('expo.permissions', 'expo-sqlite must enable SQLCipher for offline driver evidence.');
+  }
+  if (appConfig.expo?.android?.allowBackup !== false) {
+    return fail('expo.permissions', 'Android backup must stay disabled for encrypted driver evidence and device-only keys.');
   }
   if (hasForbiddenContactsAndroidPermission(appConfig.expo?.android?.permissions)) {
     return fail('expo.permissions', 'Contacts/address-book permissions must stay absent from the driver app native config.');
@@ -180,6 +188,12 @@ function checkExpoPermissions(appConfig: NativeReleasePreflightInput['appConfig'
   }
 
   return pass('expo.permissions', 'Native location, proof photo, and secure storage permissions are declared.');
+}
+
+function hasPlugin(plugins: unknown[], pluginName: string): boolean {
+  return plugins.some((plugin) => plugin === pluginName || (
+    Array.isArray(plugin) && plugin[0] === pluginName
+  ));
 }
 
 

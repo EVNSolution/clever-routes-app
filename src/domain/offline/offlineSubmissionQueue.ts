@@ -1,9 +1,22 @@
-import type { DriverEventInput, DriverEventService, DriverEventType } from '../events/driverEvents';
 import {
+  prepareDriverEventForPersistence,
+  type DriverEventInput,
+  type DriverEventService,
+  type DriverEventType,
+} from '../events/driverEvents';
+import {
+  BoundedOperationTimeoutError,
+  OPERATION_TIMEOUT_CODE,
+  runBoundedAsyncOperation,
+} from '../async/boundedAsyncOperation';
+import { resolveCompletionReceipt, type DriverEventReceiptService } from '../events/driverEventReceipt';
+import {
+  DriverApiHttpError,
   getDriverApiRequiresRouteLookup,
   getDriverApiRequiresRouteReconciliation,
 } from '../../api/deliveryServer/driverApiError';
 import {
+  getProofMediaUploadIdempotencyKey,
   isProofMediaRejectedError,
   type ProofMediaUploadRequest,
   type ProofMediaUploadService,
@@ -11,6 +24,7 @@ import {
 
 export const OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY = '@clever-routes/offline-submission-queue-v1';
 export const OFFLINE_SUBMISSION_QUEUE_MAX_ITEMS = 4_000;
+export const OFFLINE_EVIDENCE_AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY = {
   maxAgeMs: 72 * 60 * 60 * 1000,
   maxAttempts: 5,
@@ -23,24 +37,64 @@ export type OfflineSubmissionQueueRetryPolicy = {
 
 export type OfflineSubmissionReconciliation = {
   blockedAt: string;
-  reason: 'route_not_in_progress';
+  reason: 'account_signed_out' | 'proof_idempotency_conflict' | 'retry_policy_exceeded' | 'route_not_in_progress';
 };
 
-export type OfflineDriverEventQueueItem = {
+export type OfflineEvidenceState = 'ACKNOWLEDGED' | 'DISCARDED' | 'PENDING' | 'QUARANTINED';
+
+export type OfflineEvidenceJournalEntry = {
+  at: string;
+  code: string;
+  kind: 'ACK' | 'ATTEMPT' | 'DISCARD' | 'ENQUEUED' | 'RECONCILIATION';
+};
+
+export function retainOfflineEvidenceJournal(
+  journal: OfflineEvidenceJournalEntry[],
+  now: Date,
+): OfflineEvidenceJournalEntry[] {
+  const cutoff = now.getTime() - OFFLINE_EVIDENCE_AUDIT_RETENTION_MS;
+  return journal
+    .filter((entry) => {
+      const timestamp = Date.parse(entry.at);
+      return Number.isFinite(timestamp) && timestamp >= cutoff;
+    })
+    .slice(-64);
+}
+
+export function isOfflineTerminalEvidenceExpired(
+  item: Pick<OfflineEvidenceIdentity, 'journal' | 'state'> & { enqueuedAt: string },
+  now: Date,
+): boolean {
+  if (item.state !== 'ACKNOWLEDGED' && item.state !== 'DISCARDED') return false;
+  const terminalEntry = [...item.journal].reverse().find((entry) => entry.kind === 'ACK' || entry.kind === 'DISCARD');
+  const timestamp = Date.parse(terminalEntry?.at ?? item.enqueuedAt);
+  return Number.isFinite(timestamp) && now.getTime() - timestamp > OFFLINE_EVIDENCE_AUDIT_RETENTION_MS;
+}
+
+type OfflineEvidenceIdentity = {
+  accountOwnerHash: string;
+  journal: OfflineEvidenceJournalEntry[];
+  queueSequence: number;
+  state: OfflineEvidenceState;
+};
+
+export type OfflineDriverEventQueueItem = OfflineEvidenceIdentity & {
   attempts: number;
   enqueuedAt: string;
   event: DriverEventInput;
+  firstErrorCode?: string;
   kind: 'driver_event';
-  lastError?: string;
+  lastErrorCode?: string;
   queueItemId: string;
   reconciliation?: OfflineSubmissionReconciliation;
 };
 
-export type OfflineProofMediaQueueItem = {
+export type OfflineProofMediaQueueItem = OfflineEvidenceIdentity & {
   attempts: number;
   enqueuedAt: string;
+  firstErrorCode?: string;
   kind: 'proof_media';
-  lastError?: string;
+  lastErrorCode?: string;
   queueItemId: string;
   reconciliation?: OfflineSubmissionReconciliation;
   request: ProofMediaUploadRequest;
@@ -49,8 +103,11 @@ export type OfflineProofMediaQueueItem = {
 export type OfflineSubmissionQueueItem = OfflineDriverEventQueueItem | OfflineProofMediaQueueItem;
 
 export type OfflineSubmissionQueue = {
+  acknowledge(queueItemId: string): boolean;
+  bindAccountOwnerHash(accountOwnerHash: string): void;
   blockRouteSubmissionsForReconciliation(routePlanId: string): { blocked: number; discarded: number };
   clear(): number;
+  completeAccountDeletionAfterServerAudit(): number;
   discard(queueItemId: string): boolean;
   discardReconciliationRecords(): number;
   discardRouteSubmissions(routePlanId: string): number;
@@ -58,7 +115,11 @@ export type OfflineSubmissionQueue = {
   enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
   enqueueProofMediaUpload(request: ProofMediaUploadRequest): OfflineProofMediaQueueItem;
   listPending(): OfflineSubmissionQueueItem[];
-  recordRetryFailure(queueItemId: string, lastError: string): boolean;
+  quarantine(queueItemId: string, reason: OfflineSubmissionReconciliation['reason']): boolean;
+  recordRetryFailure(queueItemId: string, lastError: unknown): boolean;
+  sealForAccountChange(): { discardedLocations: number; sealed: number };
+  storageState(): 'READY' | 'STORAGE_DEGRADED';
+  recoverStorage(): Promise<boolean>;
   whenPersisted(): Promise<void>;
 };
 
@@ -70,11 +131,13 @@ export type OfflineSubmissionQueueStorage = {
 
 export type OfflineSubmissionRetryResult = {
   blocked?: number;
+  completionAcknowledgedRoutePlanIds?: string[];
   discarded: number;
   failed: number;
   reconciliationRoutePlanIds?: string[];
   requiresRouteLookup?: true;
   routeLookupReason?: 'driver_access_expired' | 'pickup_eta_snapshot_synced';
+  serverConfirmedStopIds?: string[];
   retried: number;
   succeeded: number;
 };
@@ -122,14 +185,15 @@ export function createRouteOrderedDriverEventService(input: {
   routePlanId: string;
 }): DriverEventService {
   return {
+    prepareDriverEvent: (event) => prepareDriverEventForPersistence(input.driverEventService, event),
     recordDriverEvent: async (event) => {
+      prepareDriverEventForPersistence(input.driverEventService, event);
       if (
         ROUTE_WORKFLOW_EVENT_TYPES.has(event.eventType)
         && input.queue.listPending().some((item) => (
           item.kind === 'driver_event'
           && item.event.routePlanId === input.routePlanId
           && item.event.clientEventId !== event.clientEventId
-          && item.reconciliation === undefined
           && ROUTE_WORKFLOW_EVENT_TYPES.has(item.event.eventType)
         ))
       ) {
@@ -142,58 +206,145 @@ export function createRouteOrderedDriverEventService(input: {
 }
 
 export function createInMemoryOfflineSubmissionQueue(input?: {
+  accountOwnerHash?: string | null;
   initialItems?: OfflineSubmissionQueueItem[];
+  isMutationAllowed?: () => boolean;
   maxItems?: number;
   now?: () => Date;
   onChange?: (items: OfflineSubmissionQueueItem[]) => void;
 }): OfflineSubmissionQueue {
-  const items = new Map((input?.initialItems ?? []).map((item) => [item.queueItemId, item]));
+  const items = new Map((input?.initialItems ?? []).map((item) => [getInternalItemKey(item), item]));
   const now = input?.now ?? (() => new Date());
   const maxItems = normalizeMaxItems(input?.maxItems);
+  let activeAccountOwnerHash = input?.accountOwnerHash === undefined ? 'test-account-owner' : input.accountOwnerHash;
+  let initialLegacyAdopted = false;
+  if (activeAccountOwnerHash !== null) {
+    for (const item of items.values()) {
+      if (item.accountOwnerHash !== 'legacy-unbound-owner') continue;
+      items.delete(getInternalItemKey(item));
+      item.accountOwnerHash = activeAccountOwnerHash;
+      items.set(getInternalItemKey(item), item);
+      initialLegacyAdopted = true;
+    }
+  }
+  let nextQueueSequence = Math.max(0, ...Array.from(items.values()).map((item) => item.queueSequence)) + 1;
+
+  function requireMutable() {
+    if (input?.isMutationAllowed?.() === false) throw new Error('STORAGE_DEGRADED: offline evidence is read-only until recovery succeeds.');
+    if (activeAccountOwnerHash === null || activeAccountOwnerHash.trim() === '') {
+      throw new Error('Offline evidence account owner is not bound.');
+    }
+  }
+
+  function activeItems() {
+    if (activeAccountOwnerHash === null) return [];
+    return Array.from(items.values()).filter((item) => item.accountOwnerHash === activeAccountOwnerHash);
+  }
+
+  function findActiveItem(queueItemId: string) {
+    return activeItems().find((item) => item.queueItemId === queueItemId);
+  }
+
+  function appendJournal(item: OfflineSubmissionQueueItem, kind: OfflineEvidenceJournalEntry['kind'], code: string) {
+    const cutoff = now().getTime() - 30 * 24 * 60 * 60 * 1000;
+    item.journal = [...item.journal, { at: now().toISOString(), code, kind }]
+      .filter((entry) => Date.parse(entry.at) >= cutoff)
+      .slice(-64);
+  }
+
+  function transition(item: OfflineSubmissionQueueItem, state: OfflineEvidenceState, kind: OfflineEvidenceJournalEntry['kind'], code: string) {
+    item.state = state;
+    appendJournal(item, kind, code);
+  }
 
   function emitChange() {
     input?.onChange?.(Array.from(items.values()));
   }
 
   function upsertDriverEvent(event: DriverEventInput): {
+    changed: boolean;
     inserted: boolean;
     item: OfflineDriverEventQueueItem;
   } {
+    requireMutable();
     const queueItemId = getDriverEventQueueItemId(event);
-    const existing = items.get(queueItemId);
+    const existing = findActiveItem(queueItemId);
     if (existing?.kind === 'driver_event') {
-      return { inserted: false, item: existing };
+      if (hasCompleteOrderedEventContract(event) && !hasSameOrderedEventContract(existing.event, event)) {
+        existing.event = {
+          ...existing.event,
+          appVersion: event.appVersion,
+          assignmentGeneration: event.assignmentGeneration,
+          driverContractVersion: event.driverContractVersion,
+          expectedRouteVersionId: event.expectedRouteVersionId,
+          versionCode: event.versionCode,
+        };
+        return { changed: true, inserted: false, item: existing };
+      }
+      return { changed: false, inserted: false, item: existing };
     }
 
     const item: OfflineDriverEventQueueItem = {
+      accountOwnerHash: activeAccountOwnerHash!,
       attempts: 0,
       enqueuedAt: now().toISOString(),
       event,
+      journal: [{ at: now().toISOString(), code: 'ENQUEUED', kind: 'ENQUEUED' }],
       kind: 'driver_event',
+      queueSequence: nextQueueSequence,
       queueItemId,
+      state: 'PENDING',
     };
-    items.set(queueItemId, item);
-    return { inserted: true, item };
+    nextQueueSequence += 1;
+    items.set(getInternalItemKey(item), item);
+    return { changed: true, inserted: true, item };
   }
 
-  const initialDiscarded = trimOfflineSubmissionQueue(items, maxItems);
+  const initialDiscarded = trimOfflineSubmissionQueue(items, maxItems, activeAccountOwnerHash, now);
   const queue: OfflineSubmissionQueue = {
+    acknowledge: (queueItemId) => {
+      requireMutable();
+      const item = findActiveItem(queueItemId);
+      if (item === undefined || item.state === 'ACKNOWLEDGED' || item.state === 'DISCARDED') return false;
+      transition(item, 'ACKNOWLEDGED', 'ACK', 'SERVER_ACK');
+      emitChange();
+      return true;
+    },
+    bindAccountOwnerHash: (accountOwnerHash) => {
+      if (!/^[0-9a-f]{64}$/u.test(accountOwnerHash) && accountOwnerHash !== 'test-account-owner') {
+        throw new Error('Offline evidence account owner hash is invalid.');
+      }
+      const legacyItems = Array.from(items.values()).filter((item) => item.accountOwnerHash === 'legacy-unbound-owner');
+      if (legacyItems.length > 0 && input?.isMutationAllowed?.() === false) {
+        throw new Error('STORAGE_DEGRADED: offline evidence is read-only until recovery succeeds.');
+      }
+      for (const item of legacyItems) {
+        items.delete(getInternalItemKey(item));
+        item.accountOwnerHash = accountOwnerHash;
+        items.set(getInternalItemKey(item), item);
+      }
+      activeAccountOwnerHash = accountOwnerHash;
+      if (legacyItems.length > 0) emitChange();
+    },
     blockRouteSubmissionsForReconciliation: (routePlanId) => {
+      requireMutable();
       const blockedAt = now().toISOString();
       let blocked = 0;
       let discarded = 0;
-      for (const item of Array.from(items.values())) {
+      for (const item of activeItems()) {
+        if (item.state === 'ACKNOWLEDGED' || item.state === 'DISCARDED') continue;
         if (getQueueItemRoutePlanId(item) !== routePlanId) {
           continue;
         }
-        if (isTerminalStopDriverEvent(item) || item.kind === 'proof_media') {
+        if (isOrderedWorkflowEvidence(item) || item.kind === 'proof_media') {
           if (item.reconciliation === undefined) {
             item.reconciliation = { blockedAt, reason: 'route_not_in_progress' };
+            transition(item, 'QUARANTINED', 'RECONCILIATION', 'ROUTE_NOT_IN_PROGRESS');
             blocked += 1;
           }
           continue;
         }
-        items.delete(item.queueItemId);
+        transition(item, 'DISCARDED', 'DISCARD', 'TRANSIENT_ROUTE_STATE');
         discarded += 1;
       }
       if (blocked > 0 || discarded > 0) {
@@ -202,25 +353,38 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       return { blocked, discarded };
     },
     clear: () => {
-      const count = items.size;
-      items.clear();
-      emitChange();
+      requireMutable();
+      const current = activeItems().filter((item) => item.state === 'PENDING' || item.state === 'QUARANTINED');
+      const count = current.length;
+      for (const item of current) transition(item, 'DISCARDED', 'DISCARD', 'EXPLICIT_OPERATOR_PURGE');
+      if (count > 0) emitChange();
       return count;
     },
-    discard: (queueItemId) => {
-      const deleted = items.delete(queueItemId);
-      if (deleted) {
-        emitChange();
+    completeAccountDeletionAfterServerAudit: () => {
+      requireMutable();
+      const ownRows = activeItems().filter((item) => item.state !== 'DISCARDED');
+      for (const item of ownRows) {
+        transition(item, 'DISCARDED', 'DISCARD', 'ACCOUNT_DELETION_SERVER_AUDITED');
       }
-      return deleted;
+      if (ownRows.length > 0) emitChange();
+      return ownRows.length;
+    },
+    discard: (queueItemId) => {
+      requireMutable();
+      const item = findActiveItem(queueItemId);
+      if (item === undefined || item.state === 'ACKNOWLEDGED' || item.state === 'DISCARDED') return false;
+      transition(item, 'DISCARDED', 'DISCARD', 'EXPLICIT_DISCARD');
+      emitChange();
+      return true;
     },
     discardReconciliationRecords: () => {
+      requireMutable();
       let discarded = 0;
-      for (const item of Array.from(items.values())) {
-        if (item.reconciliation === undefined) {
+      for (const item of activeItems()) {
+        if (item.reconciliation === undefined || item.state !== 'QUARANTINED') {
           continue;
         }
-        items.delete(item.queueItemId);
+        transition(item, 'ACKNOWLEDGED', 'ACK', 'RECONCILIATION_ACK');
         discarded += 1;
       }
       if (discarded > 0) {
@@ -229,75 +393,122 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       return discarded;
     },
     discardRouteSubmissions: (routePlanId) => {
-      const queueItemIds = Array.from(items.values())
+      requireMutable();
+      const routeItems = activeItems()
+        .filter((item) => item.state === 'PENDING')
         .filter((item) => getQueueItemRoutePlanId(item) === routePlanId)
-        .filter((item) => item.kind !== 'proof_media' && !isTerminalStopDriverEvent(item))
-        .map((item) => item.queueItemId);
-      for (const queueItemId of queueItemIds) {
-        items.delete(queueItemId);
-      }
-      if (queueItemIds.length > 0) {
+        .filter((item) => (
+          item.kind !== 'proof_media'
+          && !isTerminalStopDriverEvent(item)
+          && !isRouteEndDriverEvent(item)
+        ));
+      for (const item of routeItems) transition(item, 'DISCARDED', 'DISCARD', 'ROUTE_TRANSIENT_CLEANUP');
+      if (routeItems.length > 0) {
         emitChange();
       }
-      return queueItemIds.length;
+      return routeItems.length;
     },
     enqueueDriverEvent: (event) => {
       const result = upsertDriverEvent(event);
-      if (result.inserted) {
-        trimOfflineSubmissionQueue(items, maxItems);
+      if (result.changed) {
+        trimOfflineSubmissionQueue(items, maxItems, activeAccountOwnerHash, now);
         emitChange();
       }
       return result.item;
     },
     enqueueDriverEvents: (events) => {
       const results = events.map(upsertDriverEvent);
-      if (results.some((result) => result.inserted)) {
-        trimOfflineSubmissionQueue(items, maxItems);
+      if (results.some((result) => result.changed)) {
+        trimOfflineSubmissionQueue(items, maxItems, activeAccountOwnerHash, now);
         emitChange();
       }
       return results.map((result) => result.item);
     },
     enqueueProofMediaUpload: (request) => {
+      requireMutable();
       const queueItemId = getProofMediaQueueItemId(request);
-      const existing = items.get(queueItemId);
+      const existing = findActiveItem(queueItemId);
       if (existing?.kind === 'proof_media') {
         return existing;
       }
 
       const item: OfflineProofMediaQueueItem = {
+        accountOwnerHash: activeAccountOwnerHash!,
         attempts: 0,
         enqueuedAt: now().toISOString(),
+        journal: [{ at: now().toISOString(), code: 'ENQUEUED', kind: 'ENQUEUED' }],
         kind: 'proof_media',
+        queueSequence: nextQueueSequence,
         queueItemId,
         request,
+        state: 'PENDING',
       };
-      items.set(queueItemId, item);
-      trimOfflineSubmissionQueue(items, maxItems);
+      nextQueueSequence += 1;
+      items.set(getInternalItemKey(item), item);
+      trimOfflineSubmissionQueue(items, maxItems, activeAccountOwnerHash, now);
       emitChange();
       return item;
     },
-    listPending: () => Array.from(items.values()),
-    recordRetryFailure: (queueItemId, lastError) => {
-      const item = items.get(queueItemId);
-      if (item === undefined) {
-        return false;
-      }
-
-      item.attempts += 1;
-      item.lastError = lastError;
+    listPending: () => activeItems()
+      .filter((item) => item.state === 'PENDING' || item.state === 'QUARANTINED')
+      .sort((left, right) => left.queueSequence - right.queueSequence),
+    quarantine: (queueItemId, reason) => {
+      requireMutable();
+      const item = findActiveItem(queueItemId);
+      if (item === undefined || item.state !== 'PENDING' || item.reconciliation !== undefined) return false;
+      item.reconciliation = { blockedAt: now().toISOString(), reason };
+      transition(item, 'QUARANTINED', 'RECONCILIATION', reason.toUpperCase());
       emitChange();
       return true;
     },
+    recordRetryFailure: (queueItemId, lastError) => {
+      requireMutable();
+      const item = findActiveItem(queueItemId);
+      if (item === undefined || item.state !== 'PENDING') {
+        return false;
+      }
+
+      const errorCode = getStableRetryErrorCode(lastError);
+      item.attempts += 1;
+      item.firstErrorCode ??= errorCode;
+      item.lastErrorCode = errorCode;
+      appendJournal(item, 'ATTEMPT', errorCode);
+      emitChange();
+      return true;
+    },
+    sealForAccountChange: () => {
+      requireMutable();
+      const blockedAt = now().toISOString();
+      let discardedLocations = 0;
+      let sealed = 0;
+      for (const item of activeItems()) {
+        if (item.state !== 'PENDING') continue;
+        if (isLocationDriverEvent(item)) {
+          transition(item, 'DISCARDED', 'DISCARD', 'ACCOUNT_CHANGED_LOCATION');
+          discardedLocations += 1;
+          continue;
+        }
+        if (item.reconciliation !== undefined) continue;
+        item.reconciliation = { blockedAt, reason: 'account_signed_out' };
+        transition(item, 'QUARANTINED', 'RECONCILIATION', 'ACCOUNT_SIGNED_OUT');
+        sealed += 1;
+      }
+      if (sealed > 0 || discardedLocations > 0) emitChange();
+      return { discardedLocations, sealed };
+    },
+    storageState: () => 'READY',
+    recoverStorage: async () => true,
     whenPersisted: async () => undefined,
   };
 
-  if (initialDiscarded > 0) {
+  if (initialDiscarded > 0 || initialLegacyAdopted) {
     emitChange();
   }
   return queue;
 }
 
 export async function createPersistentOfflineSubmissionQueue(input: {
+  accountOwnerHash?: string | null;
   maxItems?: number;
   now?: () => Date;
   storage: OfflineSubmissionQueueStorage;
@@ -305,39 +516,129 @@ export async function createPersistentOfflineSubmissionQueue(input: {
 }): Promise<OfflineSubmissionQueue> {
   const storageKey = input.storageKey ?? OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY;
   const initialItems = await readPersistedOfflineSubmissionQueueItems({
+    now: input.now,
     storage: input.storage,
     storageKey,
   });
-  let persistQueue = Promise.resolve();
+  let persistQueue: Promise<void> = Promise.resolve();
+  let storageDegraded = false;
+  let latestItems = initialItems;
+
+  const persistLatest = async () => {
+    const rawPayload = JSON.stringify(toPersistedEnvelope(latestItems));
+    const payload = normalizePersistedOfflineSubmissionQueue(rawPayload, input.now);
+    if (payload === null) throw new Error('Offline evidence snapshot normalization failed.');
+    await input.storage.setItem(storageKey, payload);
+    const reread = await input.storage.getItem(storageKey);
+    const normalizedReread = reread === null
+      ? null
+      : normalizePersistedOfflineSubmissionQueue(reread, input.now);
+    if (normalizedReread !== payload) {
+      throw new Error('Offline evidence persistence verification failed.');
+    }
+  };
 
   const queue = createInMemoryOfflineSubmissionQueue({
+    accountOwnerHash: input.accountOwnerHash === undefined ? 'test-account-owner' : input.accountOwnerHash,
     initialItems,
+    isMutationAllowed: () => !storageDegraded,
     maxItems: input.maxItems,
     now: input.now,
     onChange: (items) => {
-      const payload = JSON.stringify(toPersistedEnvelope(items));
+      latestItems = items;
       persistQueue = persistQueue
         .catch(() => undefined)
-        .then(() => items.length === 0
-          ? input.storage.removeItem(storageKey)
-          : input.storage.setItem(storageKey, payload));
+        .then(persistLatest)
+        .catch((error: unknown) => {
+          storageDegraded = true;
+          throw error;
+        });
       void persistQueue.catch(() => undefined);
     },
   });
 
   return {
     ...queue,
+    recoverStorage: async () => {
+      try {
+        await persistLatest();
+        storageDegraded = false;
+        persistQueue = Promise.resolve();
+        return true;
+      } catch {
+        storageDegraded = true;
+        return false;
+      }
+    },
+    storageState: () => storageDegraded ? 'STORAGE_DEGRADED' : 'READY',
     whenPersisted: () => persistQueue,
   };
 }
 
+export function normalizePersistedOfflineSubmissionQueue(
+  raw: string,
+  now: () => Date = () => new Date(),
+): string | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const items = readPersistedEnvelope(parsed, now);
+    return items === null ? null : JSON.stringify(toPersistedEnvelope(items));
+  } catch {
+    return null;
+  }
+}
+
+export async function recoverPendingRouteEndReceipt(input: {
+  attemptTimeoutMs?: number;
+  cancelAttemptTimeout?: (handle: unknown) => void;
+  driverEventReceiptService: DriverEventReceiptService;
+  queue: OfflineSubmissionQueue;
+  routePlanId: string;
+  scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
+}): Promise<'acknowledged' | 'none' | 'pending' | 'reconciliation'> {
+  const item = input.queue.listPending().find((candidate): candidate is OfflineDriverEventQueueItem => (
+    candidate.kind === 'driver_event'
+    && candidate.event.routePlanId === input.routePlanId
+    && (candidate.event.eventType === 'ROUTE_COMPLETED' || candidate.event.eventType === 'ROUTE_PAUSED')
+  ));
+  if (item === undefined) return 'none';
+
+  const receipt = await runBoundedAsyncOperation(() => input.driverEventReceiptService.lookupReceipt({
+    clientEventId: item.event.clientEventId,
+    routePlanId: input.routePlanId,
+  }), {
+    ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+    ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
+    timeoutMs: input.attemptTimeoutMs ?? 15_000,
+  }).catch((error: unknown) => {
+    if (!(error instanceof BoundedOperationTimeoutError)) throw error;
+    input.queue.recordRetryFailure(item.queueItemId, OPERATION_TIMEOUT_CODE);
+    return null;
+  });
+  if (receipt === null) return 'pending';
+  const resolution = resolveCompletionReceipt(item.event, receipt);
+  if (resolution.kind === 'retry') return 'pending';
+  if (resolution.kind === 'reconcile') {
+    input.queue.blockRouteSubmissionsForReconciliation(input.routePlanId);
+    return 'reconciliation';
+  }
+
+  input.queue.acknowledge(item.queueItemId);
+  input.queue.discardRouteSubmissions(input.routePlanId);
+  return 'acknowledged';
+}
+
 export async function retryOfflineSubmissions(input: {
+  attemptTimeoutMs?: number;
+  cancelAttemptTimeout?: (handle: unknown) => void;
+  driverEventReceiptService?: DriverEventReceiptService;
   driverEventService: DriverEventService;
   now?: () => Date;
   proofMediaUploadService: ProofMediaUploadService;
   queue: OfflineSubmissionQueue;
   routePlanId?: string;
   retryPolicy?: OfflineSubmissionQueueRetryPolicy;
+  scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
 }): Promise<OfflineSubmissionRetryResult> {
   let blocked = 0;
   let discarded = 0;
@@ -346,17 +647,34 @@ export async function retryOfflineSubmissions(input: {
   let routeLookupReason: OfflineSubmissionRetryResult['routeLookupReason'];
   let retried = 0;
   let succeeded = 0;
-  const pending = input.queue.listPending().filter((item) => (
+  const allActive = input.queue.listPending();
+  const workflowBlockedRoutePlanIds = new Set(allActive.flatMap((item) => {
+    const routePlanId = getQueueItemRoutePlanId(item);
+    return item.reconciliation !== undefined && routePlanId !== undefined && isOrderedWorkflowEvidence(item)
+      ? [routePlanId]
+      : [];
+  }));
+  const pending = allActive.filter((item) => (
     item.reconciliation === undefined
     && (input.routePlanId === undefined || getQueueItemRoutePlanId(item) === input.routePlanId)
   ));
   const retryPolicy = input.retryPolicy ?? OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY;
   const now = input.now ?? (() => new Date());
   const completedRoutePlanIds = new Set<string>();
+  const completionAcknowledgedRoutePlanIds = new Set<string>();
   const reconciliationRoutePlanIds = new Set<string>();
+  const serverConfirmedStopIds = new Set<string>();
+  const runAttempt = <T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> => runBoundedAsyncOperation(operation, {
+    ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+    ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
+    timeoutMs: input.attemptTimeoutMs ?? 15_000,
+  });
 
   for (const item of pending) {
     const routePlanId = getQueueItemRoutePlanId(item);
+    if (routePlanId !== undefined && workflowBlockedRoutePlanIds.has(routePlanId) && isOrderedWorkflowEvidence(item)) {
+      continue;
+    }
     if (routePlanId !== undefined && reconciliationRoutePlanIds.has(routePlanId)) {
       continue;
     }
@@ -370,31 +688,70 @@ export async function retryOfflineSubmissions(input: {
     retried += 1;
 
     if (shouldDiscardOfflineSubmission(item, retryPolicy, now())) {
-      if (input.queue.discard(item.queueItemId)) {
-        discarded += 1;
+      if (isLocationDriverEvent(item)) {
+        if (input.queue.discard(item.queueItemId)) discarded += 1;
+      } else {
+        blocked += quarantineRetryPolicyEvidence(input.queue, item);
+        if (routePlanId !== undefined && isOrderedWorkflowEvidence(item)) {
+          workflowBlockedRoutePlanIds.add(routePlanId);
+        }
       }
       continue;
     }
 
     try {
       if (item.kind === 'driver_event') {
-        await input.driverEventService.recordDriverEvent(item.event);
+        if (
+          (item.event.eventType === 'ROUTE_COMPLETED' || item.event.eventType === 'ROUTE_PAUSED')
+          && item.event.routePlanId != null
+          && input.driverEventReceiptService !== undefined
+        ) {
+          const receiptRoutePlanId = item.event.routePlanId;
+          const receipt = await runAttempt(() => input.driverEventReceiptService!.lookupReceipt({
+            clientEventId: item.event.clientEventId,
+            routePlanId: receiptRoutePlanId,
+          }));
+          const resolution = resolveCompletionReceipt(item.event, receipt);
+          if (resolution.kind === 'reconcile') {
+            const recovery = input.queue.blockRouteSubmissionsForReconciliation(item.event.routePlanId);
+            blocked += recovery.blocked;
+            discarded += recovery.discarded;
+            reconciliationRoutePlanIds.add(item.event.routePlanId);
+            continue;
+          }
+          if (resolution.kind === 'acknowledge') {
+            input.queue.acknowledge(item.queueItemId);
+            succeeded += 1;
+            completedRoutePlanIds.add(item.event.routePlanId);
+            completionAcknowledgedRoutePlanIds.add(item.event.routePlanId);
+            discarded += input.queue.discardRouteSubmissions(item.event.routePlanId);
+            continue;
+          }
+        }
+        await runAttempt(() => input.driverEventService.recordDriverEvent(item.event));
         if (item.event.eventType === 'PICKUP_COMPLETED') {
           requiresRouteLookup = true;
           routeLookupReason = 'pickup_eta_snapshot_synced';
         }
       } else {
-        await input.proofMediaUploadService.uploadProofMedia(item.request);
+        await runAttempt((signal) => input.proofMediaUploadService.uploadProofMedia(item.request, {
+          idempotencyKey: getProofMediaUploadIdempotencyKey(item.request),
+          signal,
+        }));
       }
-      input.queue.discard(item.queueItemId);
+      input.queue.acknowledge(item.queueItemId);
       succeeded += 1;
+      if (item.kind === 'driver_event' && isTerminalStopDriverEvent(item) && item.event.deliveryStopId != null) {
+        serverConfirmedStopIds.add(item.event.deliveryStopId);
+      }
       if (
         item.kind === 'driver_event'
-        && item.event.eventType === 'ROUTE_COMPLETED'
+        && (item.event.eventType === 'ROUTE_COMPLETED' || item.event.eventType === 'ROUTE_PAUSED')
         && item.event.routePlanId !== null
         && item.event.routePlanId !== undefined
       ) {
         completedRoutePlanIds.add(item.event.routePlanId);
+        completionAcknowledgedRoutePlanIds.add(item.event.routePlanId);
         discarded += input.queue.discardRouteSubmissions(item.event.routePlanId);
       }
     } catch (error) {
@@ -414,24 +771,45 @@ export async function retryOfflineSubmissions(input: {
         }
         continue;
       }
+      if (
+        item.kind === 'proof_media'
+        && error instanceof DriverApiHttpError
+        && error.code === 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT'
+      ) {
+        input.queue.recordRetryFailure(item.queueItemId, error);
+        if (input.queue.quarantine(item.queueItemId, 'proof_idempotency_conflict')) {
+          blocked += 1;
+        }
+        continue;
+      }
 
       if (getDriverApiRequiresRouteLookup(error) === true) {
         requiresRouteLookup = true;
         routeLookupReason = 'driver_access_expired';
       }
-      input.queue.recordRetryFailure(item.queueItemId, error instanceof Error ? error.message : 'unknown error');
+      input.queue.recordRetryFailure(item.queueItemId, error);
       const updatedItem = input.queue.listPending().find((pendingItem) => pendingItem.queueItemId === item.queueItemId);
       if (updatedItem !== undefined && shouldDiscardOfflineSubmission(updatedItem, retryPolicy, now())) {
-        input.queue.discard(updatedItem.queueItemId);
-        discarded += 1;
+        if (isLocationDriverEvent(updatedItem)) {
+          input.queue.discard(updatedItem.queueItemId);
+          discarded += 1;
+        } else {
+          blocked += quarantineRetryPolicyEvidence(input.queue, updatedItem);
+        }
       } else {
         failed += 1;
+      }
+      if (routePlanId !== undefined && isOrderedWorkflowEvidence(item)) {
+        workflowBlockedRoutePlanIds.add(routePlanId);
       }
     }
   }
 
   return {
     ...(blocked === 0 ? {} : { blocked }),
+    ...(completionAcknowledgedRoutePlanIds.size === 0
+      ? {}
+      : { completionAcknowledgedRoutePlanIds: [...completionAcknowledgedRoutePlanIds] }),
     discarded,
     failed,
     ...(reconciliationRoutePlanIds.size === 0
@@ -439,6 +817,7 @@ export async function retryOfflineSubmissions(input: {
       : { reconciliationRoutePlanIds: [...reconciliationRoutePlanIds] }),
     ...(requiresRouteLookup === undefined ? {} : { requiresRouteLookup }),
     ...(routeLookupReason === undefined ? {} : { routeLookupReason }),
+    ...(serverConfirmedStopIds.size === 0 ? {} : { serverConfirmedStopIds: [...serverConfirmedStopIds] }),
     retried,
     succeeded,
   };
@@ -467,27 +846,83 @@ function normalizeMaxItems(maxItems: number | undefined): number {
 function trimOfflineSubmissionQueue(
   items: Map<string, OfflineSubmissionQueueItem>,
   maxItems: number,
+  accountOwnerHash: string | null,
+  now: () => Date,
 ): number {
   let discarded = 0;
-  while (items.size > maxItems) {
+  const activeCount = () => Array.from(items.values()).filter((item) => (
+    item.accountOwnerHash === accountOwnerHash && item.state === 'PENDING'
+  )).length;
+  while (activeCount() > maxItems) {
     const oldestLocation = Array.from(items.values()).find((item) => (
-      item.reconciliation === undefined
+      item.accountOwnerHash === accountOwnerHash
+      && item.state === 'PENDING'
+      && item.reconciliation === undefined
       && item.kind === 'driver_event'
       && item.event.eventType === 'LOCATION_UPDATED'
     ));
-    const oldestRetryable = Array.from(items.values()).find((item) => item.reconciliation === undefined);
-    const oldest = oldestLocation ?? oldestRetryable;
+    const oldest = oldestLocation;
     if (oldest === undefined) {
       break;
     }
-    items.delete(oldest.queueItemId);
+    oldest.state = 'DISCARDED';
+    oldest.journal = [...oldest.journal, {
+      at: now().toISOString(),
+      code: 'QUEUE_CAPACITY_LOCATION',
+      kind: 'DISCARD' as const,
+    }].slice(-64);
     discarded += 1;
   }
   return discarded;
 }
 
+function getInternalItemKey(item: Pick<OfflineSubmissionQueueItem, 'accountOwnerHash' | 'queueItemId'>) {
+  return `${item.accountOwnerHash}:${item.queueItemId}`;
+}
+
+function getStableRetryErrorCode(error: unknown) {
+  if (error instanceof DriverApiHttpError) {
+    if (error.code === 'PROOF_MEDIA_UPLOAD_IN_PROGRESS') return 'PROOF_MEDIA_UPLOAD_IN_PROGRESS';
+    if (error.code === 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT') return 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT';
+    if (error.code === 'ROUTE_NOT_IN_PROGRESS') return 'ROUTE_NOT_IN_PROGRESS';
+    if (error.status === 401) return 'AUTH_EXPIRED';
+    return 'RETRY_FAILED';
+  }
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : 'unknown error';
+  const normalized = message.toUpperCase();
+  if (normalized.includes('OPERATION_TIMEOUT')) return 'OPERATION_TIMEOUT';
+  if (normalized.includes('401') || normalized.includes('UNAUTHORIZED') || normalized.includes('EXPIRED')) return 'AUTH_EXPIRED';
+  if (normalized.includes('ROUTE_NOT_IN_PROGRESS')) return 'ROUTE_NOT_IN_PROGRESS';
+  if (normalized.includes('REJECT')) return 'PROOF_REJECTED';
+  if (normalized.includes('NETWORK') || normalized.includes('OFFLINE') || normalized.includes('FETCH')) return 'NETWORK_UNAVAILABLE';
+  return 'RETRY_FAILED';
+}
+
 function getDriverEventQueueItemId(event: DriverEventInput): string {
   return `driver-event:${event.clientEventId}`;
+}
+
+function hasCompleteOrderedEventContract(event: DriverEventInput): event is DriverEventInput & {
+  appVersion: string;
+  assignmentGeneration: string;
+  driverContractVersion: 2;
+  expectedRouteVersionId: string;
+  versionCode: number;
+} {
+  return event.eventType !== 'LOCATION_UPDATED'
+    && typeof event.appVersion === 'string' && event.appVersion.trim() !== ''
+    && typeof event.assignmentGeneration === 'string' && /^\d+$/u.test(event.assignmentGeneration)
+    && event.driverContractVersion === 2
+    && typeof event.expectedRouteVersionId === 'string' && event.expectedRouteVersionId.trim() !== ''
+    && Number.isSafeInteger(event.versionCode) && (event.versionCode ?? 0) > 0;
+}
+
+function hasSameOrderedEventContract(left: DriverEventInput, right: DriverEventInput): boolean {
+  return left.appVersion === right.appVersion
+    && left.assignmentGeneration === right.assignmentGeneration
+    && left.driverContractVersion === right.driverContractVersion
+    && left.expectedRouteVersionId === right.expectedRouteVersionId
+    && left.versionCode === right.versionCode;
 }
 
 function getProofMediaQueueItemId(request: ProofMediaUploadRequest): string {
@@ -502,6 +937,27 @@ function isTerminalStopDriverEvent(item: OfflineSubmissionQueueItem): boolean {
   return item.kind === 'driver_event' && (
     item.event.eventType === 'STOP_DELIVERED' || item.event.eventType === 'STOP_FAILED'
   );
+}
+
+function isRouteEndDriverEvent(item: OfflineSubmissionQueueItem): boolean {
+  return item.kind === 'driver_event' && (
+    item.event.eventType === 'ROUTE_COMPLETED' || item.event.eventType === 'ROUTE_PAUSED'
+  );
+}
+
+function isLocationDriverEvent(item: OfflineSubmissionQueueItem): boolean {
+  return item.kind === 'driver_event' && item.event.eventType === 'LOCATION_UPDATED';
+}
+
+function isOrderedWorkflowEvidence(item: OfflineSubmissionQueueItem): boolean {
+  return item.kind === 'driver_event' && ROUTE_WORKFLOW_EVENT_TYPES.has(item.event.eventType);
+}
+
+function quarantineRetryPolicyEvidence(
+  queue: OfflineSubmissionQueue,
+  item: OfflineSubmissionQueueItem,
+): number {
+  return queue.quarantine(item.queueItemId, 'retry_policy_exceeded') ? 1 : 0;
 }
 
 function shouldDiscardOfflineSubmission(
@@ -522,6 +978,7 @@ function shouldDiscardOfflineSubmission(
 }
 
 async function readPersistedOfflineSubmissionQueueItems(input: {
+  now?: () => Date;
   storage: OfflineSubmissionQueueStorage;
   storageKey: string;
 }): Promise<OfflineSubmissionQueueItem[]> {
@@ -532,34 +989,38 @@ async function readPersistedOfflineSubmissionQueueItems(input: {
 
   try {
     const parsed = JSON.parse(raw) as unknown;
-    const items = readPersistedEnvelope(parsed);
+    const items = readPersistedEnvelope(parsed, input.now ?? (() => new Date()));
     if (items === null) {
-      await input.storage.removeItem(input.storageKey);
-      return [];
+      throw new Error('STORAGE_DEGRADED: persisted offline evidence contract is invalid and remains read-only.');
     }
 
     return items;
-  } catch {
-    await input.storage.removeItem(input.storageKey);
-    return [];
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('STORAGE_DEGRADED:')) throw error;
+    throw new Error('STORAGE_DEGRADED: persisted offline evidence envelope is unreadable and remains read-only.');
   }
 }
 
 function toPersistedEnvelope(items: OfflineSubmissionQueueItem[]): Record<string, unknown> {
   return {
     items: items.map(toPersistedQueueItem),
-    version: 1,
+    version: 2,
   };
 }
 
 function toPersistedQueueItem(item: OfflineSubmissionQueueItem): Record<string, unknown> {
   const base = {
+    accountOwnerHash: item.accountOwnerHash,
     attempts: item.attempts,
     enqueuedAt: item.enqueuedAt,
+    ...(item.firstErrorCode === undefined ? {} : { firstErrorCode: item.firstErrorCode }),
+    journal: item.journal,
     kind: item.kind,
-    ...(item.lastError === undefined ? {} : { lastError: item.lastError }),
+    ...(item.lastErrorCode === undefined ? {} : { lastErrorCode: item.lastErrorCode }),
+    queueSequence: item.queueSequence,
     queueItemId: item.queueItemId,
     ...(item.reconciliation === undefined ? {} : { reconciliation: item.reconciliation }),
+    state: item.state,
   };
 
   if (item.kind === 'driver_event') {
@@ -578,46 +1039,66 @@ function toPersistedQueueItem(item: OfflineSubmissionQueueItem): Record<string, 
   };
 }
 
-function readPersistedEnvelope(value: unknown): OfflineSubmissionQueueItem[] | null {
+function readPersistedEnvelope(value: unknown, now: () => Date): OfflineSubmissionQueueItem[] | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return null;
   }
 
   const data = value as Record<string, unknown>;
-  if (data.version !== 1 || !Array.isArray(data.items)) {
+  if ((data.version !== 1 && data.version !== 2) || !Array.isArray(data.items)) {
     return null;
   }
 
   const items: OfflineSubmissionQueueItem[] = [];
-  for (const item of data.items) {
-    const parsed = readPersistedQueueItem(item);
+  for (const [index, item] of data.items.entries()) {
+    const parsed = readPersistedQueueItem(item, now, index + 1, data.version === 1);
     if (parsed === null) {
       return null;
     }
     items.push(parsed);
   }
 
-  return items;
+  const retainedAt = now();
+  return items.filter((item) => !isOfflineTerminalEvidenceExpired(item, retainedAt));
 }
 
-function readPersistedQueueItem(value: unknown): OfflineSubmissionQueueItem | null {
+function readPersistedQueueItem(
+  value: unknown,
+  now: () => Date,
+  legacySequence = 1,
+  legacy = false,
+): OfflineSubmissionQueueItem | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return null;
   }
 
   const data = value as Record<string, unknown>;
+  const accountOwnerHash = legacy ? 'legacy-unbound-owner' : readAccountOwnerHash(data.accountOwnerHash);
   const attempts = readNonNegativeNumber(data.attempts);
   const enqueuedAt = readRequiredString(data.enqueuedAt);
+  const firstErrorCode = readOptionalString(data.firstErrorCode);
+  const journal = legacy
+    ? [{ at: now().toISOString(), code: 'LEGACY_MIGRATED', kind: 'ENQUEUED' as const }]
+    : readJournal(data.journal, now);
+  const queueSequence = legacy ? legacySequence : readPositiveNumber(data.queueSequence);
   const queueItemId = readRequiredString(data.queueItemId);
-  const lastError = readOptionalString(data.lastError);
+  const lastErrorCode = readOptionalString(data.lastErrorCode);
   const reconciliation = readOptionalReconciliation(data.reconciliation);
+  const state = legacy
+    ? reconciliation === undefined ? 'PENDING' : 'QUARANTINED'
+    : readEvidenceState(data.state);
 
   if (
-    attempts === null
+    accountOwnerHash === null
+    || attempts === null
     || enqueuedAt === null
+    || firstErrorCode === null
+    || journal === null
+    || queueSequence === null
     || queueItemId === null
-    || lastError === null
+    || lastErrorCode === null
     || reconciliation === null
+    || state === null
   ) {
     return null;
   }
@@ -629,13 +1110,18 @@ function readPersistedQueueItem(value: unknown): OfflineSubmissionQueueItem | nu
     }
 
     return {
+      accountOwnerHash,
       attempts,
       enqueuedAt,
       event,
+      ...(firstErrorCode === undefined ? {} : { firstErrorCode }),
+      journal,
       kind: 'driver_event',
-      ...(lastError === undefined ? {} : { lastError }),
+      ...(lastErrorCode === undefined ? {} : { lastErrorCode }),
+      queueSequence,
       queueItemId,
       ...(reconciliation === undefined ? {} : { reconciliation }),
+      state,
     };
   }
 
@@ -646,13 +1132,18 @@ function readPersistedQueueItem(value: unknown): OfflineSubmissionQueueItem | nu
     }
 
     return {
+      accountOwnerHash,
       attempts,
       enqueuedAt,
+      ...(firstErrorCode === undefined ? {} : { firstErrorCode }),
+      journal,
       kind: 'proof_media',
-      ...(lastError === undefined ? {} : { lastError }),
+      ...(lastErrorCode === undefined ? {} : { lastErrorCode }),
+      queueSequence,
       queueItemId,
       ...(reconciliation === undefined ? {} : { reconciliation }),
       request,
+      state,
     };
   }
 
@@ -668,10 +1159,18 @@ function readOptionalReconciliation(value: unknown): OfflineSubmissionReconcilia
   }
   const blockedAt = readRequiredString((value as Record<string, unknown>).blockedAt);
   const reason = (value as Record<string, unknown>).reason;
-  if (blockedAt === null || reason !== 'route_not_in_progress') {
+  if (
+    blockedAt === null
+    || ![
+      'account_signed_out',
+      'proof_idempotency_conflict',
+      'retry_policy_exceeded',
+      'route_not_in_progress',
+    ].includes(String(reason))
+  ) {
     return null;
   }
-  return { blockedAt, reason };
+  return { blockedAt, reason: reason as OfflineSubmissionReconciliation['reason'] };
 }
 
 function readPersistedDriverEvent(value: unknown): DriverEventInput | null {
@@ -681,36 +1180,54 @@ function readPersistedDriverEvent(value: unknown): DriverEventInput | null {
 
   const data = value as Record<string, unknown>;
   const clientEventId = readRequiredString(data.clientEventId);
+  const accuracyMeters = readOptionalNullableNumber(data.accuracyMeters);
+  const appVersion = readOptionalString(data.appVersion);
+  const assignmentGeneration = readOptionalString(data.assignmentGeneration);
   const eventType = readDriverEventType(data.eventType);
+  const driverContractVersion = data.driverContractVersion === undefined ? undefined : data.driverContractVersion === 2 ? 2 : null;
+  const expectedRouteVersionId = readOptionalString(data.expectedRouteVersionId);
   const occurredAt = readDate(data.occurredAt);
   const deliveryStopId = readOptionalNullableString(data.deliveryStopId);
   const latitude = readOptionalNullableNumber(data.latitude);
   const longitude = readOptionalNullableNumber(data.longitude);
   const payload = readOptionalRecord(data.payload);
   const routePlanId = readOptionalNullableString(data.routePlanId);
+  const versionCode = readOptionalPositiveInteger(data.versionCode);
 
   if (
-    clientEventId === null
+    !isOptionalNullableNumber(data.accuracyMeters)
+    || appVersion === null
+    || assignmentGeneration === null
+    || clientEventId === null
+    || driverContractVersion === null
     || eventType === null
+    || expectedRouteVersionId === null
     || occurredAt === null
-    || deliveryStopId === null
-    || latitude === null
-    || longitude === null
+    || !isOptionalNullableString(data.deliveryStopId)
+    || !isOptionalNullableNumber(data.latitude)
+    || !isOptionalNullableNumber(data.longitude)
     || payload === null
-    || routePlanId === null
+    || !isOptionalNullableString(data.routePlanId)
+    || versionCode === null
   ) {
     return null;
   }
 
   return {
+    ...(accuracyMeters === undefined ? {} : { accuracyMeters }),
+    ...(appVersion === undefined ? {} : { appVersion }),
+    ...(assignmentGeneration === undefined ? {} : { assignmentGeneration }),
     clientEventId,
     ...(deliveryStopId === undefined ? {} : { deliveryStopId }),
+    ...(driverContractVersion === undefined ? {} : { driverContractVersion }),
     eventType,
+    ...(expectedRouteVersionId === undefined ? {} : { expectedRouteVersionId }),
     ...(latitude === undefined ? {} : { latitude }),
     ...(longitude === undefined ? {} : { longitude }),
     occurredAt,
     ...(payload === undefined ? {} : { payload }),
     ...(routePlanId === undefined ? {} : { routePlanId }),
+    ...(versionCode === undefined ? {} : { versionCode }),
   };
 }
 
@@ -766,8 +1283,43 @@ function readNonNegativeNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
+function readPositiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function readEvidenceState(value: unknown): OfflineEvidenceState | null {
+  return ['ACKNOWLEDGED', 'DISCARDED', 'PENDING', 'QUARANTINED'].includes(String(value))
+    ? value as OfflineEvidenceState
+    : null;
+}
+
+function readJournal(value: unknown, now: () => Date): OfflineEvidenceJournalEntry[] | null {
+  if (!Array.isArray(value)) return null;
+  const journal: OfflineEvidenceJournalEntry[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null;
+    const data = entry as Record<string, unknown>;
+    const at = readRequiredString(data.at);
+    const code = readRequiredString(data.code);
+    const kind = data.kind;
+    if (at === null || code === null || !['ACK', 'ATTEMPT', 'DISCARD', 'ENQUEUED', 'RECONCILIATION'].includes(String(kind))) return null;
+    journal.push({ at, code, kind: kind as OfflineEvidenceJournalEntry['kind'] });
+  }
+  return retainOfflineEvidenceJournal(journal, now());
+}
+
 function readRequiredString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
+function readAccountOwnerHash(value: unknown): string | null {
+  return typeof value === 'string' && (
+    /^[0-9a-f]{64}$/u.test(value)
+    || value === 'test-account-owner'
+    || value === 'legacy-unbound-owner'
+  )
+    ? value
+    : null;
 }
 
 function readOptionalString(value: unknown): string | undefined | null {
@@ -800,6 +1352,19 @@ function readOptionalNullableNumber(value: unknown): number | null | undefined {
   }
 
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function isOptionalNullableNumber(value: unknown): value is number | null | undefined {
+  return value === undefined || value === null || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function isOptionalNullableString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === 'string';
+}
+
+function readOptionalPositiveInteger(value: unknown): number | undefined | null {
+  if (value === undefined) return undefined;
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
 }
 
 function readOptionalRecord(value: unknown): Record<string, unknown> | undefined | null {

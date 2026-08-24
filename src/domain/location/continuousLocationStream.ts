@@ -56,6 +56,7 @@ export type ContinuousLocationStreamStartResult =
     };
 
 export type ContinuousLocationBatchItem = {
+  accuracyMeters?: number;
   latitude: number;
   longitude: number;
   occurredAt: Date;
@@ -184,6 +185,7 @@ export async function recordContinuousLocationUpdateBatch(input: {
       break;
     }
     const event: DriverEventInput = {
+      ...(location.accuracyMeters === undefined ? {} : { accuracyMeters: location.accuracyMeters }),
       clientEventId: createContinuousLocationClientEventId(location, index),
       eventType: 'LOCATION_UPDATED',
       latitude: location.latitude,

@@ -118,6 +118,28 @@ test('native release preflight rejects accidental iOS Contacts usage description
   ]);
 });
 
+test('native release preflight rejects unencrypted SQLite or Android backup drift', () => {
+  for (const mutate of [
+    (input: NativeReleasePreflightInput) => {
+      const expo = input.appConfig.expo as Record<string, unknown>;
+      expo.plugins = (expo.plugins as unknown[]).filter((plugin) => !(
+        Array.isArray(plugin) && plugin[0] === 'expo-sqlite'
+      ));
+    },
+    (input: NativeReleasePreflightInput) => {
+      const expo = input.appConfig.expo;
+      assert.ok(expo?.android);
+      expo.android.allowBackup = true;
+    },
+  ]) {
+    const input = currentInput();
+    mutate(input);
+    const result = runNativeReleasePreflight(input);
+    assert.equal(result.ok, false);
+    assert.equal(result.failures[0]?.id, 'expo.permissions');
+  }
+});
+
 test('native release preflight rejects production signing, bundle, and dev-client drift', () => {
   const input = currentInput();
   const cases = [
@@ -199,6 +221,7 @@ test('keeps the Expo 56 iOS deployment target aligned at 16.4', () => {
     .map((match) => match[1]);
 
   assert.equal(podfileProperties['ios.deploymentTarget'], '16.4');
+  assert.equal(podfileProperties['expo.sqlite.useSQLCipher'], 'true');
   assert.match(podfile, /podfile_properties\['ios\.deploymentTarget'\] \|\| '16\.4'/u);
   assert.ok(projectTargets.length > 0);
   assert.deepEqual([...new Set(projectTargets)], ['16.4']);
@@ -216,6 +239,8 @@ test('keeps the AppDelegate aligned with the Expo 56 Xcode 26 template', () => {
   assert.match(appDelegate, /^internal import Expo$/mu);
   assert.match(appDelegate, /^@main\nclass AppDelegate: ExpoAppDelegate \{$/mu);
   assert.doesNotMatch(appDelegate, /bindReactNativeFactory/u);
+  assert.match(appDelegate, /appendingPathComponent\("SQLite", isDirectory: true\)/u);
+  assert.match(appDelegate, /isExcludedFromBackup = true/u);
 });
 
 test('keeps the native iOS app icon synchronized and opaque', () => {

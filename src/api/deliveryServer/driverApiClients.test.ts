@@ -137,4 +137,32 @@ describe('driver API client token handoff', () => {
       ['Bearer fixture-driver-access-token', 'Bearer fresh-driver-token'],
     );
   });
+
+  it('preserves ordered-event lineage before a refresh-wrapped event can be queued', () => {
+    const clients = createDriverApiClientsFromRouteAccess({
+      appVersion: '1.1.6',
+      baseUrl: 'https://delivery.example.com/',
+      refreshDriverAccess: async () => sampleInvitedRouteAccess.driverAccess,
+      routeAccess: sampleInvitedRouteAccess,
+      versionCode: 116,
+    });
+    const event = clients.driverEventService.prepareDriverEvent?.({
+      clientEventId: 'route-completed-before-network',
+      eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-08-22T20:00:00.000Z'),
+      routePlanId: 'route-kitchener',
+    });
+
+    assert.deepEqual(event, {
+      appVersion: '1.1.6',
+      assignmentGeneration: sampleInvitedRouteAccess.routeAccess.assignmentGeneration,
+      clientEventId: 'route-completed-before-network',
+      driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: sampleInvitedRouteAccess.routeAccess.expectedRouteVersionId,
+      occurredAt: new Date('2026-08-22T20:00:00.000Z'),
+      routePlanId: 'route-kitchener',
+      versionCode: 116,
+    });
+  });
 });

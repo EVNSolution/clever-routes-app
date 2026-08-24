@@ -127,7 +127,7 @@ describe('background location lifecycle wiring', () => {
     assert.ok(removedIndex < clearRemovedIndex);
     assert.match(
       loadSource,
-      /activeRouteLoadIsUnresolved = persistedActiveRouteSession !== null[\s\S]*restoredActiveSession === null[\s\S]*routeLoadFailed/u,
+      /activeRouteLoadIsUnresolved = effectivePersistedActiveRouteSession !== null[\s\S]*restoredActiveSession === null[\s\S]*routeLoadFailed/u,
     );
     assert.match(
       loadSource,
@@ -161,7 +161,9 @@ describe('background location lifecycle wiring', () => {
       'async function handleManualFinishRoute(',
     );
 
-    assert.match(finishSource, /deactivateActiveRouteSession: async \(\) => \{[\s\S]*clearActiveRouteSession\(route\.id\)/u);
+    assert.match(finishSource, /deactivateActiveRouteSession: async \(completion\) => \{[\s\S]*markActiveRouteCompletionPending/u);
+    assert.match(finishSource, /finishResult\.kind === 'recorded'[\s\S]*clearActiveRouteSession\(route\.id\)/u);
+    assert.match(finishSource, /finishResult\.monitoringMode === 'stopped'/u);
     assert.doesNotMatch(finishSource, /catch \(error\) \{[\s\S]*clearAndStopActiveLocationSession\(route\.id\)/u);
     assert.match(source, /const isStartDisabled = isStartingRoute \|\| isFinishingRoute \|\| isSwitchingRoute/u);
     assert.doesNotMatch(source, /const isStartDisabled = [^\n]*activeRoutePlanId !== null/u);
@@ -190,7 +192,7 @@ describe('background location lifecycle wiring', () => {
 
     assert.match(source, /Network\.useNetworkState\(\)/u);
     assert.match(source, /shouldRetryOfflineSubmissionsAfterNetworkChange\(\{/u);
-    assert.match(recoverySource, /await retryOfflineSubmissionsForSessions\(routeSessions\)/u);
+    assert.match(recoverySource, /return retryOfflineSubmissionsForSessions\(routeSessions\)/u);
     assert.match(source, /requiresRouteReconciliation/u);
     assert.match(source, /setRouteRecoveryRefreshReason\('route_not_in_progress'\)/u);
     assert.match(source, /Route ended or released on server/u);
@@ -210,5 +212,35 @@ describe('background location lifecycle wiring', () => {
     assert.match(source, /activeRoutePlanId !== null && activeRoutePlanId !== routeSession\.route\.id/u);
     assert.match(source, /visibleRouteSessions\.map\(\(session, routeIndex\) =>/u);
     assert.doesNotMatch(source, /Previous Route|Next Route/u);
+  });
+
+  it('surfaces storage degradation, gates mutations and replay, and retries verified recovery only under safe conditions', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const retrySource = getFunctionSource(
+      source,
+      'const retryOfflineSubmissionsForSessions = useCallback(',
+      'const selectedRouteSession =',
+    );
+    const recoverySource = getFunctionSource(
+      source,
+      'const recoverOfflineEvidenceStorage = useCallback(',
+      'useEffect(() => {\n    const previous = previousRouteSyncNetworkRef.current;',
+    );
+
+    assert.match(source, /setOfflineStorageState\(queue\.storageState\(\)\)/u);
+    assert.match(source, /const waitForOfflineQueuePersistence = useCallback\([\s\S]*persistOfflineQueueAndSyncState\(queue, syncOfflineQueueState\)/u);
+    assert.match(retrySource, /queue\.storageState\(\) === 'STORAGE_DEGRADED'[\s\S]*return false/u);
+    assert.match(retrySource, /await waitForOfflineQueuePersistence\(queue\)/u);
+    assert.match(recoverySource, /await queue\.recoverStorage\(\)[\s\S]*syncOfflineQueueState\(queue\)/u);
+    assert.match(source, /offlineStorageState !== 'STORAGE_DEGRADED'/u);
+    assert.match(source, /isForeground: \(\) => AppState\.currentState === 'active'/u);
+    assert.match(source, /isOnline: \(\) => networkReachability === 'online'/u);
+    assert.match(source, /retry: recoverOfflineEvidenceStorage/u);
+    assert.match(source, /hasPendingSubmissions: \(\) => offlineStorageState === 'STORAGE_DEGRADED'/u);
+    assert.match(source, /finally \{[\s\S]*syncOfflineQueueState\(queueForStateSync\)/u);
+    assert.match(source, /Retry Storage/u);
+    assert.match(source, /Delivery updates are read-only until encrypted storage is safely persisted/u);
+    assert.match(source, /if \(blockMutationWhileStorageDegraded\(\)\) return/u);
+    assert.match(source, /offlineStorageState === 'STORAGE_DEGRADED'[\s\S]*disabled=\{isStartDisabled\}/u);
   });
 });

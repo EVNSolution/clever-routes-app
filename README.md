@@ -40,7 +40,7 @@ The app includes an interactive route access screen:
 - route started, foreground one-shot location update, continuous background-capable location streaming, native proof photo URI capture, proof media upload references, scanner-rejected proof photo recapture guidance, signature proof capture, richer stop delivered/failed proof-event mock/API boundaries, and route-completed delivery finish cleanup for delivery-server `POST /driver/events` after delivery_active succeeds
 - safe denial messages for `NOT_FOUND`, `DISABLED`, and `BLOCKED`
 - fail-closed live runtime selection with `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live` and `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` for account authentication and route lookup; local mocks require an explicit `mock` mode, preventing a misconfigured release from silently presenting fixture data
-- native secure storage with account and route credentials kept separate, account refresh plus one route-token retry on downstream `401`, and authoritative removal of cached routes when assignments disappear; durable app-side offline queue/retry for pending driver events and proof media using AsyncStorage-backed non-secret queue metadata, with explicit reset and cleanup behavior
+- native secure storage with account and route credentials kept separate, account refresh plus one route-token retry on downstream `401`, and authoritative removal of cached routes when assignments disappear; SQLCipher-backed durable offline evidence with a SecureStore key, transactional AsyncStorage migration, ordered retry/quarantine, and account-isolated sign-out behavior
 
 See `docs/route-access-flow.md` for the app-side route access, consent, assigned-route, native map handoff, and delivery evidence boundary.
 

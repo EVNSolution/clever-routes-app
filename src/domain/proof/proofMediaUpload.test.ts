@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { DriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import {
   createMockProofMediaUploadService,
   createProofMediaUploadApiClient,
   createProofMediaRejectedError,
+  getProofMediaUploadIdempotencyKey,
   shouldQueueFailedProofMediaUpload,
   uploadCapturedProofPhoto,
   type ProofMediaUploadRequest,
@@ -70,12 +72,49 @@ describe('proof media upload', () => {
     assert.equal(requests[0]?.timeout, 30000);
     assert.equal(requests[0]?.headers.Authorization, 'Bearer driver-token');
     assert.equal(requests[0]?.headers['Cache-Control'], 'no-store');
+    assert.match(requests[0]?.headers['Idempotency-Key'] ?? '', /^proof-media-v1:[0-9a-f]{32}$/u);
     assert.equal(requests[0]?.headers.Pragma, 'no-cache');
     assert.ok(requests[0]?.body instanceof FormData);
   });
 
+  it('aborts the live XMLHttpRequest when the caller deadline expires', async () => {
+    let aborted = false;
+    class MockXMLHttpRequest {
+      onabort: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onload: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      responseText = '';
+      status = 0;
+      timeout = 0;
+      abort() {
+        aborted = true;
+        this.onabort?.();
+      }
+      open() {}
+      send() {}
+      setRequestHeader() {}
+    }
+    const controller = new AbortController();
+    const service = createProofMediaUploadApiClient({
+      accessToken: 'driver-token',
+      baseUrl: 'https://delivery.example.com/',
+      xmlHttpRequestFactory: () => new MockXMLHttpRequest() as unknown as XMLHttpRequest,
+    });
+    const upload = service.uploadProofMedia({
+      deliveryStopId: 'stop-1', fileName: 'proof.jpg', routePlanId: 'route-1',
+      source: 'camera', uri: 'file:///proof.jpg',
+    }, { idempotencyKey: 'proof-media:route-1:stop-1:proof.jpg', signal: controller.signal });
+
+    controller.abort();
+
+    await assert.rejects(upload, /abort/u);
+    assert.equal(aborted, true);
+  });
+
   it('uploads captured proof photo with driver bearer token and returns durable media reference', async () => {
-    const requests: { body: FormData; cache?: string; credentials?: string; headers: Record<string, string>; method: string; url: string }[] = [];
+    const requests: { body: FormData; cache?: string; credentials?: string; headers: Record<string, string>; method: string; signal?: AbortSignal; url: string }[] = [];
+    const controller = new AbortController();
     const service = createProofMediaUploadApiClient({
       accessToken: 'driver-token',
       baseUrl: 'https://delivery.example.com/',
@@ -86,6 +125,7 @@ describe('proof media upload', () => {
           credentials: init?.credentials,
           headers: init?.headers ?? {},
           method: String(init?.method),
+          signal: init?.signal,
           url: String(url),
         });
         return {
@@ -114,7 +154,12 @@ describe('proof media upload', () => {
         fileName: 'stop-1.jpg',
         routePlanId: 'route-1',
       },
-      uploadService: service,
+      uploadService: {
+        uploadProofMedia: (request) => service.uploadProofMedia(request, {
+          idempotencyKey: getProofMediaUploadIdempotencyKey(request),
+          signal: controller.signal,
+        }),
+      },
     });
 
     assert.equal(result.kind, 'uploaded');
@@ -135,10 +180,28 @@ describe('proof media upload', () => {
     assert.equal(requests[0]?.headers['Cache-Control'], 'no-store');
     assert.equal(requests[0]?.headers.Pragma, 'no-cache');
     assert.equal(requests[0]?.headers.Authorization, 'Bearer driver-token');
+    assert.equal(requests[0]?.headers['Idempotency-Key'], getProofMediaUploadIdempotencyKey({
+      deliveryStopId: 'stop-1', fileName: 'stop-1.jpg', routePlanId: 'route-1',
+      source: 'camera', uri: 'file:///proof/stop-1.jpg',
+    }));
     assert.equal(requests[0]?.headers['Content-Type'], undefined);
+    assert.equal(requests[0]?.signal, controller.signal);
     assert.equal(requests[0]?.body.get('deliveryStopId'), 'stop-1');
     assert.equal(requests[0]?.body.get('routePlanId'), 'route-1');
     assert.equal(requests[0]?.body.get('source'), 'camera');
+  });
+
+  it('derives one bounded proof idempotency key from the durable proof identity', () => {
+    const request = {
+      deliveryStopId: 'stop-1', fileName: 'proof.jpg', routePlanId: 'route-1',
+      source: 'camera' as const, uri: 'file:///first/proof.jpg',
+    };
+    const key = getProofMediaUploadIdempotencyKey(request);
+
+    assert.match(key, /^proof-media-v1:[0-9a-f]{32}$/u);
+    assert.equal(key.length, 47);
+    assert.equal(getProofMediaUploadIdempotencyKey({ ...request, uri: 'file:///retry/proof.jpg' }), key);
+    assert.notEqual(getProofMediaUploadIdempotencyKey({ ...request, fileName: 'another.jpg' }), key);
   });
 
   it('does not upload proof media when photo capture did not produce a file URI', async () => {
@@ -241,6 +304,29 @@ describe('proof media upload', () => {
       kind: 'upload_failed',
       message: 'Photo upload failed (HTTP 400). Try again.',
     });
+  });
+
+  it('preserves the server proof idempotency 409 codes as typed API errors', async () => {
+    for (const code of ['PROOF_MEDIA_UPLOAD_IN_PROGRESS', 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT'] as const) {
+      const service = createProofMediaUploadApiClient({
+        accessToken: 'driver-token',
+        baseUrl: 'https://delivery.example.com/',
+        fetchImpl: async () => ({
+          ok: false,
+          status: 409,
+          json: async () => ({ data: null, error: { code, message: 'safe server message' } }),
+        }),
+      });
+
+      await assert.rejects(service.uploadProofMedia({
+        deliveryStopId: 'stop-1', fileName: 'proof.jpg', routePlanId: 'route-1',
+        source: 'camera', uri: 'file:///proof.jpg',
+      }), (error) => (
+        error instanceof DriverApiHttpError
+        && error.code === code
+        && error.status === 409
+      ));
+    }
   });
 
   it('distinguishes expired driver access from a generic proof upload failure', async () => {
