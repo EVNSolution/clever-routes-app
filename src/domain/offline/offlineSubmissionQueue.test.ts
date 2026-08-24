@@ -366,6 +366,49 @@ describe('offline submission queue', () => {
     assert.equal(queue.listPending().length, 1);
   });
 
+  it('handles an abort-ignoring late proof rejection without an unhandled rejection or state mutation', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'late-reject-stop', fileName: 'proof.jpg', routePlanId: 'late-reject-route',
+      source: 'camera', uri: 'file:///proof.jpg',
+    });
+    const expirations: (() => void)[] = [];
+    const unhandled: unknown[] = [];
+    let rejectLate!: (error: Error) => void;
+    let attemptSignal: AbortSignal | undefined;
+    const onUnhandledRejection = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandledRejection);
+    try {
+      const retry = retryOfflineSubmissions({
+        attemptTimeoutMs: 100,
+        cancelAttemptTimeout: () => undefined,
+        driverEventService: createMockDriverEventService(),
+        proofMediaUploadService: {
+          uploadProofMedia: (_request, options) => {
+            attemptSignal = options?.signal;
+            return new Promise((_resolve, reject) => { rejectLate = reject; });
+          },
+        },
+        queue,
+        scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+      });
+      expirations.shift()?.();
+
+      assert.equal((await retry).failed, 1);
+      assert.equal(attemptSignal?.aborted, true);
+      const stateAfterTimeout = JSON.stringify(queue.listPending());
+      rejectLate(new Error('late transport rejection'));
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      assert.deepEqual(unhandled, []);
+      assert.equal(JSON.stringify(queue.listPending()), stateAfterTimeout);
+      assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+    }
+  });
+
   it('propagates the queue deadline through the live proof client and aborts its XHR', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueProofMediaUpload({

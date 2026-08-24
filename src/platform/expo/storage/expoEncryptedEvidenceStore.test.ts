@@ -530,6 +530,81 @@ describe('encrypted driver evidence store', () => {
     assert.equal(result.succeeded, 2);
   });
 
+  it('restores a proof URI and reuses its idempotency key after an encrypted cold restart', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const owner = '71'.repeat(32);
+    const now = () => new Date('2026-08-24T12:00:00.000Z');
+    const openStore = () => createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '72'.repeat(32), setItemAsync: async () => undefined },
+      now,
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const queue = await createPersistentOfflineSubmissionQueue({
+      accountOwnerHash: owner,
+      now,
+      storage: await openStore(),
+    });
+    const request = {
+      deliveryStopId: 'proof-restart-stop',
+      fileName: 'proof-restart.jpg',
+      routePlanId: 'proof-restart-route',
+      source: 'camera' as const,
+      uri: 'file:///private/proof-restart.jpg',
+    };
+    const queued = queue.enqueueProofMediaUpload(request);
+    await queue.whenPersisted();
+    let beforeRestartKey: string | undefined;
+    await retryOfflineSubmissions({
+      driverEventService: { recordDriverEvent: async () => { throw new Error('unused'); } },
+      proofMediaUploadService: {
+        uploadProofMedia: async (_upload, options) => {
+          beforeRestartKey = options?.idempotencyKey;
+          throw new Error('response unavailable before restart');
+        },
+      },
+      queue,
+    });
+    await queue.whenPersisted();
+    assert.match(beforeRestartKey ?? '', /^proof-media-v1:[0-9a-f]{32}$/u);
+
+    const recordKey = `${owner}:${queued.queueItemId}`;
+    assert.doesNotMatch(db.tables.get('workflow_evidence')?.get(recordKey) ?? '', /private\/proof-restart/u);
+    assert.match(db.tables.get('sensitive_evidence')?.get(recordKey) ?? '', /private\/proof-restart/u);
+
+    const restartedQueue = await createPersistentOfflineSubmissionQueue({
+      accountOwnerHash: owner,
+      now,
+      storage: await openStore(),
+    });
+    const restored = restartedQueue.listPending()[0];
+    assert.equal(restored?.kind, 'proof_media');
+    assert.equal(restored?.kind === 'proof_media' ? restored.request.uri : null, request.uri);
+    let afterRestartKey: string | undefined;
+    const replay = await retryOfflineSubmissions({
+      driverEventService: { recordDriverEvent: async () => { throw new Error('unused'); } },
+      proofMediaUploadService: {
+        uploadProofMedia: async (upload, options) => {
+          afterRestartKey = options?.idempotencyKey;
+          return {
+            contentType: 'image/jpeg',
+            kind: 'photo',
+            mediaId: 'proof-restart-media',
+            source: upload.source,
+            storageKey: 'driver-proof/proof-restart-media.jpg',
+            uploadedAt: now().toISOString(),
+          };
+        },
+      },
+      queue: restartedQueue,
+    });
+    await restartedQueue.whenPersisted();
+
+    assert.equal(afterRestartKey, beforeRestartKey);
+    assert.equal(replay.succeeded, 1);
+    assert.deepEqual(restartedQueue.listPending(), []);
+  });
+
   it('keeps workflow envelopes redacted while sensitive replay data remains separately encrypted', async () => {
     const db = createDatabase();
     const store = await createEncryptedEvidenceStore({
