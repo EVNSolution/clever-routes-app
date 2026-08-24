@@ -56,7 +56,7 @@ function createDatabase(input?: {
           return { recordKey, payload: JSON.stringify(parsed) };
         }) as T[];
     },
-    getFirstAsync: async <T>(sql: string) => {
+    getFirstAsync: async <T>(sql: string, ...params: unknown[]) => {
       commands.push(sql);
       if (input?.failOn !== undefined && sql.includes(input.failOn)) {
         throw new Error('injected database failure');
@@ -73,6 +73,11 @@ function createDatabase(input?: {
       if (sql.includes('FROM migration_quarantine')) {
         const entry = tables.get('migration_quarantine')?.entries().next().value as [string, string] | undefined;
         return entry === undefined ? null : { payload: entry[1], recordKey: entry[0] } as T;
+      }
+      if (sql.includes('FROM support_export_markers')) {
+        const recordKey = String(params[0] ?? '');
+        const payload = tables.get('support_export_markers')?.get(recordKey);
+        return payload === undefined ? null : { payload, recordKey } as T;
       }
       return null;
     },
@@ -217,6 +222,149 @@ describe('encrypted driver evidence store', () => {
 
     assert.match(db.tables.get('migration_quarantine')?.values().next().value ?? '', /private migration evidence/u);
     assert.doesNotMatch(await store.exportDiagnostics(), /private migration evidence/u);
+  });
+
+  it('keeps recent corrupt migration evidence but expires the encrypted blob after the support window', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const clock = new Date('2026-08-24T12:00:00.000Z');
+    db.tables.set('migration_quarantine', new Map([
+      ['legacy-corrupt:1751328000000', JSON.stringify({
+        accountOwnerHash: 'legacy-unbound-owner',
+        encryptedLegacyPayload: 'old private migration bytes',
+        originalByteLength: 27,
+        quarantinedAt: '2026-07-01T00:00:00.000Z',
+        reason: 'corrupt_legacy_queue',
+        retainedUntil: '2026-07-31T00:00:00.000Z',
+        truncated: false,
+      })],
+      ['legacy-corrupt:1755648000000', JSON.stringify({
+        accountOwnerHash: 'legacy-unbound-owner',
+        encryptedLegacyPayload: 'recent private migration bytes',
+        originalByteLength: 30,
+        quarantinedAt: '2026-08-20T00:00:00.000Z',
+        reason: 'corrupt_legacy_queue',
+        retainedUntil: '2026-09-19T00:00:00.000Z',
+        truncated: false,
+      })],
+    ]));
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '68'.repeat(32), setItemAsync: async () => undefined },
+      now: () => clock,
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+
+    assert.deepEqual([...(db.tables.get('migration_quarantine')?.keys() ?? [])], ['legacy-corrupt:1755648000000']);
+    const diagnostics = await store.exportDiagnostics();
+    assert.match(diagnostics, /CORRUPT_LEGACY_QUEUE_BLOB_PURGED|"purgedBlobCount":1/u);
+    assert.doesNotMatch(diagnostics, /old private|recent private/u);
+  });
+
+  it('infers the support horizon for pre-policy corrupt rows and does not retain them forever', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const quarantinedAt = new Date('2026-07-01T00:00:00.000Z');
+    db.tables.set('migration_quarantine', new Map([[
+      `legacy-corrupt:${quarantinedAt.getTime()}`,
+      JSON.stringify({
+        encryptedLegacyPayload: 'old-format private bytes',
+        originalByteLength: 24,
+        reason: 'corrupt_legacy_queue',
+        truncated: false,
+      }),
+    ]]));
+    await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '69'.repeat(32), setItemAsync: async () => undefined },
+      now: () => new Date('2026-08-24T12:00:00.000Z'),
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+
+    assert.equal(db.tables.get('migration_quarantine')?.size ?? 0, 0);
+    const summary = [...(db.tables.get('diagnostic_records')?.values() ?? [])].join('');
+    assert.match(summary, /CORRUPT_LEGACY_QUEUE_BLOB_PURGED/u);
+    assert.doesNotMatch(summary, /old-format private bytes/u);
+  });
+
+  it('requires a durable support export before account or global quarantine purge', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const ownerA = 'a1'.repeat(32);
+    const ownerB = 'b2'.repeat(32);
+    db.tables.set('migration_quarantine', new Map([
+      [`${ownerA}:driver-event:a`, JSON.stringify({
+        accountOwnerHash: ownerA,
+        event: { clientEventId: 'a', payload: { note: 'owner A private note' } },
+        kind: 'driver_event',
+        queueItemId: 'driver-event:a',
+        queueSequence: 1,
+        reconciliation: { blockedAt: '2026-08-24T00:00:00.000Z', reason: 'route_not_in_progress' },
+        state: 'QUARANTINED',
+      })],
+      [`${ownerB}:driver-event:b`, JSON.stringify({
+        accountOwnerHash: ownerB,
+        event: { clientEventId: 'b', payload: { note: 'owner B private note' } },
+        kind: 'driver_event',
+        queueItemId: 'driver-event:b',
+        queueSequence: 2,
+        reconciliation: { blockedAt: '2026-08-24T00:00:00.000Z', reason: 'route_not_in_progress' },
+        state: 'QUARANTINED',
+      })],
+    ]));
+    let tokenByte = 1;
+    const openStore = () => createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '6a'.repeat(32), setItemAsync: async () => undefined },
+      now: () => new Date('2026-08-24T12:00:00.000Z'),
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async (length) => new Uint8Array(length).fill(tokenByte++),
+    });
+    const store = await openStore();
+
+    await assert.rejects(store.purgeExportedSupportQuarantine({
+      accountOwnerHash: ownerA,
+      exportToken: 'not-exported',
+    }), /requires a durable export marker/u);
+    const accountExport = await store.exportSupportQuarantine({ accountOwnerHash: ownerA });
+    assert.equal(accountExport.scope, 'account');
+    assert.deepEqual(accountExport.records.map((record) => record.recordKey), [`${ownerA}:driver-event:a`]);
+    const restarted = await openStore();
+    await assert.rejects(restarted.purgeExportedSupportQuarantine({
+      accountOwnerHash: ownerB,
+      exportToken: accountExport.exportToken,
+    }), /scope does not match/u);
+    assert.equal(await restarted.purgeExportedSupportQuarantine({
+      accountOwnerHash: ownerA,
+      exportToken: accountExport.exportToken,
+    }), 1);
+    assert.deepEqual([...(db.tables.get('migration_quarantine')?.keys() ?? [])], [`${ownerB}:driver-event:b`]);
+
+    const globalExport = await restarted.exportSupportQuarantine();
+    assert.equal(globalExport.scope, 'global');
+    assert.equal(await restarted.purgeExportedSupportQuarantine({ exportToken: globalExport.exportToken }), 1);
+    assert.equal(db.tables.get('migration_quarantine')?.size ?? 0, 0);
+    const diagnostics = await restarted.exportDiagnostics();
+    assert.match(diagnostics, /SUPPORT_QUARANTINE_EXPORTED_AND_PURGED/u);
+    assert.doesNotMatch(diagnostics, /private note|driver-event:a|driver-event:b/u);
+  });
+
+  it('does not purge recent corrupt evidence when the device clock rolls backward', async () => {
+    const db = createDatabase();
+    let clock = new Date('2026-08-24T12:00:00.000Z');
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '6b'.repeat(32), setItemAsync: async () => undefined },
+      legacyStorage: {
+        getItem: async () => '{"private":"clock rollback evidence"',
+        removeItem: async () => undefined,
+      },
+      now: () => clock,
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const beforeRollback = db.tables.get('migration_quarantine')?.size;
+    clock = new Date('2026-08-01T12:00:00.000Z');
+    await store.getItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY);
+
+    assert.equal(beforeRollback, 1);
+    assert.equal(db.tables.get('migration_quarantine')?.size, 1);
+    assert.doesNotMatch(await store.exportDiagnostics(), /clock rollback evidence/u);
   });
 
   it('keeps workflow envelopes redacted while sensitive replay data remains separately encrypted', async () => {
@@ -436,6 +584,7 @@ describe('encrypted driver evidence store', () => {
     const quarantined = db.tables.get('migration_quarantine')?.values().next().value ?? '{}';
     const parsed = JSON.parse(quarantined) as { encryptedLegacyPayload: string; originalByteLength: number; truncated: boolean };
     assert.equal(parsed.truncated, true);
+    assert.ok(new TextEncoder().encode(quarantined).byteLength <= 64 * 1024);
     assert.ok(new TextEncoder().encode(parsed.encryptedLegacyPayload).byteLength <= 64 * 1024);
     assert.ok(parsed.originalByteLength > 64 * 1024);
   });

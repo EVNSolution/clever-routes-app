@@ -1,5 +1,6 @@
 import {
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
+  OFFLINE_EVIDENCE_AUDIT_RETENTION_MS,
   isOfflineTerminalEvidenceExpired,
   normalizePersistedOfflineSubmissionQueue,
   retainOfflineEvidenceJournal,
@@ -11,6 +12,20 @@ import {
 export const DRIVER_EVIDENCE_DATABASE_NAME = 'clever_driver_evidence_v2.db';
 export const DRIVER_EVIDENCE_KEY_STORAGE_KEY = 'clever.driverEvidence.sqlcipherKey.v2';
 export const DRIVER_EVIDENCE_SCHEMA_VERSION = 2;
+export const LEGACY_CORRUPT_QUARANTINE_RETENTION_MS = OFFLINE_EVIDENCE_AUDIT_RETENTION_MS;
+
+export type SupportQuarantineExport = {
+  exportedAt: string;
+  exportToken: string;
+  records: { payload: unknown; recordKey: string }[];
+  scope: 'account' | 'global';
+};
+
+export type EncryptedEvidenceStore = OfflineSubmissionQueueStorage & {
+  exportDiagnostics(): Promise<string>;
+  exportSupportQuarantine(input?: { accountOwnerHash?: string }): Promise<SupportQuarantineExport>;
+  purgeExportedSupportQuarantine(input: { accountOwnerHash?: string; exportToken: string }): Promise<number>;
+};
 
 export type EvidenceDatabase = {
   execAsync(sql: string): Promise<void>;
@@ -47,7 +62,7 @@ export async function createEncryptedEvidenceStore(input: {
   now?: () => Date;
   randomBytes: (length: number) => Promise<Uint8Array>;
   sha256?: (value: Uint8Array) => Promise<Uint8Array>;
-}): Promise<OfflineSubmissionQueueStorage & { exportDiagnostics(): Promise<string> }> {
+}): Promise<EncryptedEvidenceStore> {
   const now = input.now ?? (() => new Date());
   const existingKey = await input.keyStore.getItemAsync(DRIVER_EVIDENCE_KEY_STORAGE_KEY);
   const generatedKey = existingKey === null;
@@ -95,6 +110,30 @@ export async function createEncryptedEvidenceStore(input: {
       );
       return JSON.stringify({ records: rows.map((row) => JSON.parse(row.payload) as unknown), schemaVersion: 2 });
     },
+    exportSupportQuarantine: async (exportInput = {}) => {
+      const exportedAt = now().toISOString();
+      const rows = await database.getAllAsync<StoredRow>(
+        'SELECT record_key AS recordKey, payload FROM migration_quarantine ORDER BY created_at, record_key;',
+      );
+      const scopedRows = rows.filter((row) => matchesSupportScope(row, exportInput.accountOwnerHash));
+      const exportToken = bytesToHex(await input.randomBytes(16));
+      await database.runAsync(
+        'INSERT OR REPLACE INTO support_export_markers (record_key, payload, created_at) VALUES (?, ?, ?);',
+        exportToken,
+        JSON.stringify({
+          accountOwnerHash: exportInput.accountOwnerHash ?? null,
+          exportedAt,
+          recordKeys: scopedRows.map((row) => row.recordKey),
+        }),
+        exportedAt,
+      );
+      return {
+        exportedAt,
+        exportToken,
+        records: scopedRows.map((row) => ({ payload: JSON.parse(row.payload) as unknown, recordKey: row.recordKey })),
+        scope: exportInput.accountOwnerHash === undefined ? 'global' : 'account',
+      };
+    },
     getItem: async (storageKey) => {
       if (storageKey !== OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) return null;
       await purgeExpiredEvidence(database, now());
@@ -137,6 +176,59 @@ export async function createEncryptedEvidenceStore(input: {
         await transaction.execAsync("UPDATE sensitive_evidence SET expires_at = CURRENT_TIMESTAMP;");
         await transaction.execAsync("UPDATE location_batches SET payload = json_set(payload, '$.state', 'DISCARDED');");
       });
+    },
+    purgeExportedSupportQuarantine: async (purgeInput) => {
+      let purged = 0;
+      await database.withExclusiveTransactionAsync(async (transaction) => {
+        let purgedLegacyCorrupt = false;
+        const marker = await transaction.getFirstAsync<StoredRow>(
+          'SELECT record_key AS recordKey, payload FROM support_export_markers WHERE record_key = ? LIMIT 1;',
+          purgeInput.exportToken,
+        );
+        if (marker === null) throw new Error('Support quarantine purge requires a durable export marker.');
+        const parsedMarker = parseSupportExportMarker(marker.payload);
+        const expectedOwner = purgeInput.accountOwnerHash ?? null;
+        if (parsedMarker === null || parsedMarker.accountOwnerHash !== expectedOwner) {
+          throw new Error('Support quarantine purge scope does not match the exported evidence.');
+        }
+        const currentRows = await transaction.getAllAsync<StoredRow>(
+          'SELECT record_key AS recordKey, payload FROM migration_quarantine ORDER BY created_at, record_key;',
+        );
+        const currentByKey = new Map(currentRows.map((row) => [row.recordKey, row]));
+        for (const recordKey of parsedMarker.recordKeys) {
+          const row = currentByKey.get(recordKey);
+          if (row === undefined || !matchesSupportScope(row, purgeInput.accountOwnerHash)) continue;
+          await transaction.runAsync('DELETE FROM migration_quarantine WHERE record_key = ?;', recordKey);
+          await transaction.runAsync('DELETE FROM sensitive_evidence WHERE record_key = ?;', recordKey);
+          if (recordKey.startsWith('legacy-corrupt:')) purgedLegacyCorrupt = true;
+          purged += 1;
+        }
+        const purgedAt = now().toISOString();
+        await transaction.runAsync(
+          'INSERT OR REPLACE INTO diagnostic_records (record_key, payload) VALUES (?, ?);',
+          `support-quarantine-purge:${purgeInput.exportToken}`,
+          JSON.stringify({
+            code: 'SUPPORT_QUARANTINE_EXPORTED_AND_PURGED',
+            purgedAt,
+            purgedBlobCount: purged,
+            scope: expectedOwner === null ? 'global' : 'account',
+          }),
+        );
+        if (purgedLegacyCorrupt) {
+          await transaction.runAsync(
+            'INSERT OR REPLACE INTO diagnostic_records (record_key, payload) VALUES (?, ?);',
+            'migration-corrupt-legacy',
+            JSON.stringify({
+              code: 'CORRUPT_LEGACY_QUEUE_BLOB_PURGED',
+              purgeMode: 'support_export',
+              purgedAt,
+              purgedBlobCount: 1,
+            }),
+          );
+        }
+        await transaction.runAsync('DELETE FROM support_export_markers WHERE record_key = ?;', purgeInput.exportToken);
+      });
+      return purged;
     },
     setItem: async (storageKey, value) => {
       if (storageKey !== OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) return;
@@ -190,6 +282,11 @@ async function createSchema(database: EvidenceDatabase) {
       payload TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS support_export_markers (
+      record_key TEXT PRIMARY KEY NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 }
 
@@ -209,19 +306,14 @@ async function migrateLegacyQueue(
     if (raw !== null) {
       const items = parsedItems;
       if (items === null) {
-        const encodedRaw = new TextEncoder().encode(raw);
-        const boundedRaw = new TextDecoder().decode(encodedRaw.slice(0, CORRUPT_LEGACY_QUARANTINE_MAX_BYTES - 4));
+        const quarantinedAt = now();
+        const quarantinePayload = createBoundedCorruptLegacyPayload(raw, quarantinedAt);
         await transaction.runAsync(
           'INSERT OR REPLACE INTO migration_quarantine (record_key, account_owner_hash, queue_sequence, payload) VALUES (?, ?, ?, ?);',
-          `legacy-corrupt:${Date.now()}`,
+          `legacy-corrupt:${quarantinedAt.getTime()}`,
           'legacy-unbound-owner',
           0,
-          JSON.stringify({
-            encryptedLegacyPayload: boundedRaw,
-            originalByteLength: encodedRaw.byteLength,
-            reason: 'corrupt_legacy_queue',
-            truncated: encodedRaw.byteLength > CORRUPT_LEGACY_QUARANTINE_MAX_BYTES,
-          }),
+          quarantinePayload,
         );
         await transaction.runAsync(
           'INSERT OR REPLACE INTO diagnostic_records (record_key, payload) VALUES (?, ?);',
@@ -232,12 +324,7 @@ async function migrateLegacyQueue(
           'SELECT record_key AS recordKey, payload FROM migration_quarantine WHERE record_key LIKE ? LIMIT 1;',
           'legacy-corrupt:%',
         );
-        if (quarantined === null || quarantined.payload !== JSON.stringify({
-          encryptedLegacyPayload: boundedRaw,
-          originalByteLength: encodedRaw.byteLength,
-          reason: 'corrupt_legacy_queue',
-          truncated: encodedRaw.byteLength > CORRUPT_LEGACY_QUARANTINE_MAX_BYTES,
-        })) {
+        if (quarantined === null || quarantined.payload !== quarantinePayload) {
           throw new Error('Corrupt legacy evidence quarantine verification failed.');
         }
       } else {
@@ -312,14 +399,32 @@ async function readHydratedItems(database: EvidenceDatabase, nowIso: string) {
 }
 
 async function purgeExpiredEvidence(database: EvidenceDatabase, now: Date) {
-  const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const cutoff = new Date(now.getTime() - OFFLINE_EVIDENCE_AUDIT_RETENTION_MS).toISOString();
   await database.withExclusiveTransactionAsync(async (transaction) => {
     for (const table of RECORD_TABLES) {
       const rows = await transaction.getAllAsync<StoredRow>(
         `SELECT record_key AS recordKey, payload FROM ${table};`,
       );
       for (const row of rows) {
-        if (row.recordKey.startsWith('legacy-corrupt:')) continue;
+        if (row.recordKey.startsWith('legacy-corrupt:')) {
+          const retention = readLegacyCorruptRetention(row);
+          if (retention === null || now.getTime() < retention.retainedUntil.getTime()) continue;
+          await transaction.runAsync(
+            'INSERT OR REPLACE INTO diagnostic_records (record_key, payload) VALUES (?, ?);',
+            'migration-corrupt-legacy',
+            JSON.stringify({
+              code: 'CORRUPT_LEGACY_QUEUE_BLOB_PURGED',
+              originalByteLength: retention.originalByteLength,
+              purgedAt: now.toISOString(),
+              purgedBlobCount: 1,
+              quarantinedAt: retention.quarantinedAt.toISOString(),
+              retainedUntil: retention.retainedUntil.toISOString(),
+              truncated: retention.truncated,
+            }),
+          );
+          await transaction.runAsync(`DELETE FROM ${table} WHERE record_key = ?;`, row.recordKey);
+          continue;
+        }
         const item = JSON.parse(row.payload) as Record<string, unknown>;
         if (!isExpiredTerminalEvidence(item, now)) continue;
         await transaction.runAsync(`DELETE FROM ${table} WHERE record_key = ?;`, row.recordKey);
@@ -327,6 +432,7 @@ async function purgeExpiredEvidence(database: EvidenceDatabase, now: Date) {
       }
     }
     await transaction.runAsync('DELETE FROM evidence_journal WHERE created_at < ?;', cutoff);
+    await transaction.runAsync('DELETE FROM support_export_markers WHERE created_at < ?;', cutoff);
     await transaction.runAsync('DELETE FROM sensitive_evidence WHERE expires_at <= ?;', now.toISOString());
   });
 }
@@ -352,8 +458,9 @@ async function replaceQueueRows(database: EvidenceDatabase, items: Record<string
       await transaction.runAsync('DELETE FROM sensitive_evidence WHERE record_key = ?;', recordKey);
     }
     await writeQueueRows(transaction, retainedItems, now);
-    const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const cutoff = new Date(now.getTime() - OFFLINE_EVIDENCE_AUDIT_RETENTION_MS).toISOString();
     await transaction.runAsync('DELETE FROM evidence_journal WHERE created_at < ?;', cutoff);
+    await transaction.runAsync('DELETE FROM support_export_markers WHERE created_at < ?;', cutoff);
     await transaction.runAsync('DELETE FROM sensitive_evidence WHERE expires_at <= ?;', now.toISOString());
   });
 }
@@ -450,6 +557,108 @@ function readJournalEntries(value: unknown): OfflineEvidenceJournalEntry[] {
 function readIsoTimestamp(value: unknown) {
   if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) return null;
   return new Date(value).toISOString();
+}
+
+function matchesSupportScope(row: StoredRow, accountOwnerHash: string | undefined) {
+  if (accountOwnerHash === undefined) return true;
+  try {
+    const payload = JSON.parse(row.payload) as Record<string, unknown>;
+    const ownerHash = typeof payload.accountOwnerHash === 'string'
+      ? payload.accountOwnerHash
+      : row.recordKey.startsWith('legacy-corrupt:')
+        ? 'legacy-unbound-owner'
+        : null;
+    return ownerHash === accountOwnerHash;
+  } catch {
+    return false;
+  }
+}
+
+function parseSupportExportMarker(value: string): { accountOwnerHash: string | null; recordKeys: string[] } | null {
+  try {
+    const marker = JSON.parse(value) as Record<string, unknown>;
+    if (
+      marker.accountOwnerHash !== null
+      && typeof marker.accountOwnerHash !== 'string'
+    ) return null;
+    if (readIsoTimestamp(marker.exportedAt) === null) return null;
+    if (!Array.isArray(marker.recordKeys) || !marker.recordKeys.every((recordKey) => typeof recordKey === 'string')) {
+      return null;
+    }
+    return {
+      accountOwnerHash: marker.accountOwnerHash,
+      recordKeys: marker.recordKeys,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readLegacyCorruptRetention(row: StoredRow): {
+  originalByteLength: number | null;
+  quarantinedAt: Date;
+  retainedUntil: Date;
+  truncated: boolean | null;
+} | null {
+  try {
+    const payload = JSON.parse(row.payload) as Record<string, unknown>;
+    const keyTimestamp = Number(row.recordKey.slice('legacy-corrupt:'.length));
+    const explicitQuarantinedAt = readIsoTimestamp(payload.quarantinedAt);
+    const quarantinedAt = explicitQuarantinedAt === null
+      ? Number.isFinite(keyTimestamp) && keyTimestamp >= 0
+        ? new Date(keyTimestamp)
+        : null
+      : new Date(explicitQuarantinedAt);
+    if (quarantinedAt === null || Number.isNaN(quarantinedAt.getTime())) return null;
+    const explicitRetainedUntil = readIsoTimestamp(payload.retainedUntil);
+    const candidateRetainedUntil = explicitRetainedUntil === null
+      ? new Date(quarantinedAt.getTime() + LEGACY_CORRUPT_QUARANTINE_RETENTION_MS)
+      : new Date(explicitRetainedUntil);
+    const retainedUntil = candidateRetainedUntil.getTime() < quarantinedAt.getTime()
+      ? new Date(quarantinedAt.getTime() + LEGACY_CORRUPT_QUARANTINE_RETENTION_MS)
+      : candidateRetainedUntil;
+    return {
+      originalByteLength: typeof payload.originalByteLength === 'number'
+        && Number.isSafeInteger(payload.originalByteLength)
+        && payload.originalByteLength >= 0
+        ? payload.originalByteLength
+        : null,
+      quarantinedAt,
+      retainedUntil,
+      truncated: typeof payload.truncated === 'boolean' ? payload.truncated : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function createBoundedCorruptLegacyPayload(raw: string, quarantinedAt: Date) {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const encodedRaw = encoder.encode(raw);
+  const retainedUntil = new Date(
+    quarantinedAt.getTime() + LEGACY_CORRUPT_QUARANTINE_RETENTION_MS,
+  ).toISOString();
+  const serialize = (retainedBytes: number) => JSON.stringify({
+    accountOwnerHash: 'legacy-unbound-owner',
+    encryptedLegacyPayload: decoder.decode(encodedRaw.slice(0, retainedBytes)),
+    originalByteLength: encodedRaw.byteLength,
+    quarantinedAt: quarantinedAt.toISOString(),
+    reason: 'corrupt_legacy_queue',
+    retainedUntil,
+    truncated: retainedBytes < encodedRaw.byteLength,
+  });
+  let lower = 0;
+  let upper = encodedRaw.byteLength;
+  while (lower < upper) {
+    const candidate = Math.ceil((lower + upper) / 2);
+    if (encoder.encode(serialize(candidate)).byteLength <= CORRUPT_LEGACY_QUARANTINE_MAX_BYTES) {
+      lower = candidate;
+    } else {
+      upper = candidate - 1;
+    }
+  }
+  return serialize(lower);
 }
 
 function redactReplayPayload(item: Record<string, unknown>) {
