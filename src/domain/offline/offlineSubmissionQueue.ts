@@ -4,6 +4,7 @@ import {
   type DriverEventService,
   type DriverEventType,
 } from '../events/driverEvents';
+import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
 import { resolveCompletionReceipt, type DriverEventReceiptService } from '../events/driverEventReceipt';
 import {
   getDriverApiRequiresRouteLookup,
@@ -610,6 +611,8 @@ export async function recoverPendingRouteEndReceipt(input: {
 }
 
 export async function retryOfflineSubmissions(input: {
+  attemptTimeoutMs?: number;
+  cancelAttemptTimeout?: (handle: unknown) => void;
   driverEventReceiptService?: DriverEventReceiptService;
   driverEventService: DriverEventService;
   now?: () => Date;
@@ -617,6 +620,7 @@ export async function retryOfflineSubmissions(input: {
   queue: OfflineSubmissionQueue;
   routePlanId?: string;
   retryPolicy?: OfflineSubmissionQueueRetryPolicy;
+  scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
 }): Promise<OfflineSubmissionRetryResult> {
   let blocked = 0;
   let discarded = 0;
@@ -642,6 +646,11 @@ export async function retryOfflineSubmissions(input: {
   const completionAcknowledgedRoutePlanIds = new Set<string>();
   const reconciliationRoutePlanIds = new Set<string>();
   const serverConfirmedStopIds = new Set<string>();
+  const runAttempt = <T>(operation: () => Promise<T>): Promise<T> => runBoundedAsyncOperation(operation, {
+    ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+    ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
+    timeoutMs: input.attemptTimeoutMs ?? 15_000,
+  });
 
   for (const item of pending) {
     const routePlanId = getQueueItemRoutePlanId(item);
@@ -679,10 +688,11 @@ export async function retryOfflineSubmissions(input: {
           && item.event.routePlanId != null
           && input.driverEventReceiptService !== undefined
         ) {
-          const receipt = await input.driverEventReceiptService.lookupReceipt({
+          const receiptRoutePlanId = item.event.routePlanId;
+          const receipt = await runAttempt(() => input.driverEventReceiptService!.lookupReceipt({
             clientEventId: item.event.clientEventId,
-            routePlanId: item.event.routePlanId,
-          });
+            routePlanId: receiptRoutePlanId,
+          }));
           const resolution = resolveCompletionReceipt(item.event, receipt);
           if (resolution.kind === 'reconcile') {
             const recovery = input.queue.blockRouteSubmissionsForReconciliation(item.event.routePlanId);
@@ -700,13 +710,13 @@ export async function retryOfflineSubmissions(input: {
             continue;
           }
         }
-        await input.driverEventService.recordDriverEvent(item.event);
+        await runAttempt(() => input.driverEventService.recordDriverEvent(item.event));
         if (item.event.eventType === 'PICKUP_COMPLETED') {
           requiresRouteLookup = true;
           routeLookupReason = 'pickup_eta_snapshot_synced';
         }
       } else {
-        await input.proofMediaUploadService.uploadProofMedia(item.request);
+        await runAttempt(() => input.proofMediaUploadService.uploadProofMedia(item.request));
       }
       input.queue.acknowledge(item.queueItemId);
       succeeded += 1;
@@ -840,6 +850,7 @@ function getInternalItemKey(item: Pick<OfflineSubmissionQueueItem, 'accountOwner
 
 function getStableRetryErrorCode(message: string) {
   const normalized = message.toUpperCase();
+  if (normalized.includes('OPERATION_TIMEOUT')) return 'OPERATION_TIMEOUT';
   if (normalized.includes('401') || normalized.includes('UNAUTHORIZED') || normalized.includes('EXPIRED')) return 'AUTH_EXPIRED';
   if (normalized.includes('ROUTE_NOT_IN_PROGRESS') || normalized.includes('409')) return 'ROUTE_NOT_IN_PROGRESS';
   if (normalized.includes('REJECT')) return 'PROOF_REJECTED';

@@ -127,6 +127,7 @@ import {
   createDriverSyncHeartbeatScheduler,
   createDriverSyncTakeoverApiClient,
   DriverSyncHeartbeatHttpError,
+  projectLatestDriverSyncHeartbeat,
   type DriverSyncHeartbeatResult,
 } from '../domain/operations/driverSyncHeartbeat';
 import {
@@ -2721,7 +2722,7 @@ function DriverApp() {
     let accessToken = routeSubmission?.driverAccess.accessToken ?? reducedIdentity!.driverAccess.accessToken;
     try {
       const result = await createDriverSyncHeartbeatApiClient({ accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl }).recordHeartbeat(request);
-      setDriverSyncHealth(result);
+      setDriverSyncHealth((current) => projectLatestDriverSyncHeartbeat(current, result));
       return result.accepted && !result.conflict;
     } catch (error) {
       if (!(error instanceof DriverSyncHeartbeatHttpError) || error.status !== 401) throw error;
@@ -2730,7 +2731,7 @@ function DriverApp() {
       if (refreshed === null) return false;
       accessToken = refreshed.accessToken;
       const result = await createDriverSyncHeartbeatApiClient({ accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl }).recordHeartbeat(request);
-      setDriverSyncHealth(result);
+      setDriverSyncHealth((current) => projectLatestDriverSyncHeartbeat(current, result));
       return result.accepted && !result.conflict;
     }
   }, [

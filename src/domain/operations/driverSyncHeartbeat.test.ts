@@ -5,6 +5,7 @@ import {
   createDriverSyncHeartbeatApiClient,
   createDriverSyncHeartbeatScheduler,
   createDriverSyncTakeoverApiClient,
+  projectLatestDriverSyncHeartbeat,
 } from './driverSyncHeartbeat';
 
 const request = {
@@ -94,6 +95,46 @@ describe('driver sync heartbeat', () => {
     assert.deepEqual(delays, [15_000, 30_000, 15_000]);
     assert.equal(calls, 2);
     scheduler.stop();
+  });
+
+  it('releases a wedged heartbeat attempt after timeout and ignores its late resolution', async () => {
+    const retries: { delayMs: number; run: () => void }[] = [];
+    const attemptExpirations: (() => void)[] = [];
+    let resolveHung!: (accepted: boolean) => void;
+    const scheduler = createDriverSyncHeartbeatScheduler({
+      attemptTimeoutMs: 100,
+      cancel: () => undefined,
+      cancelAttemptTimeout: () => undefined,
+      hasActiveSession: () => true,
+      isForeground: () => true,
+      isOnline: () => true,
+      random: () => 0.5,
+      schedule: (run, delayMs) => { retries.push({ delayMs, run }); return run; },
+      scheduleAttemptTimeout: (expire) => { attemptExpirations.push(expire); return expire; },
+      sendHeartbeat: () => new Promise<boolean>((resolve) => { resolveHung = resolve; }),
+    });
+
+    scheduler.start();
+    retries.shift()?.run();
+    attemptExpirations.shift()?.();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(retries.map(({ delayMs }) => delayMs), [30_000]);
+
+    resolveHung(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(retries.map(({ delayMs }) => delayMs), [30_000]);
+    scheduler.stop();
+  });
+
+  it('does not regress local sync projection when an older heartbeat response arrives late', () => {
+    const current = { accepted: true, conflict: false, heartbeatSequence: 12, state: 'HEALTHY' as const };
+    const late = { accepted: true, conflict: true, heartbeatSequence: 11, state: 'BLOCKED' as const };
+    assert.equal(projectLatestDriverSyncHeartbeat(current, late), current);
+    assert.deepEqual(projectLatestDriverSyncHeartbeat(current, {
+      accepted: true, conflict: false, heartbeatSequence: 13, state: 'DELAYED',
+    }), {
+      accepted: true, conflict: false, heartbeatSequence: 13, state: 'DELAYED',
+    });
   });
 
   it('requires an explicit account-token takeover request for a conflicting device lease', async () => {

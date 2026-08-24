@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createMockDriverEventService } from '../events/driverEvents';
-import { createProofMediaRejectedError } from '../proof/proofMediaUpload';
+import { createMockProofMediaUploadService, createProofMediaRejectedError } from '../proof/proofMediaUpload';
 import {
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
   OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY,
@@ -287,6 +287,79 @@ describe('offline submission queue', () => {
       succeeded: 2,
     });
     assert.equal(queue.listPending().length, 0);
+  });
+
+  it('times out a hung ordered head, journals a stable code, and ignores late success without reordering', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    for (const [clientEventId, deliveryStopId] of [['south-head', 'south-1'], ['south-next', 'south-2']] as const) {
+      queue.enqueueDriverEvent({
+        clientEventId, deliveryStopId, eventType: 'STOP_DELIVERED',
+        occurredAt: new Date('2026-08-22T12:00:00.000Z'), routePlanId: 'route-south',
+      });
+    }
+    const expirations: (() => void)[] = [];
+    let resolveHung!: () => void;
+    const firstPass = retryOfflineSubmissions({
+      attemptTimeoutMs: 100,
+      cancelAttemptTimeout: () => undefined,
+      driverEventService: { recordDriverEvent: () => new Promise((resolve) => { resolveHung = () => resolve({ duplicate: false, eventId: 'late', status: 'recorded' }); }) },
+      proofMediaUploadService: createMockProofMediaUploadService(),
+      queue,
+      scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+    });
+    expirations.shift()?.();
+    const timedOut = await firstPass;
+    assert.equal(timedOut.failed, 1);
+    assert.equal(timedOut.retried, 1);
+    assert.equal(queue.listPending()[0]?.firstErrorCode, 'OPERATION_TIMEOUT');
+    assert.equal(queue.listPending()[0]?.journal.at(-1)?.code, 'OPERATION_TIMEOUT');
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+      'driver-event:south-head', 'driver-event:south-next',
+    ]);
+
+    resolveHung();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(queue.listPending().length, 2);
+
+    const replayOrder: string[] = [];
+    const recovered = await retryOfflineSubmissions({
+      driverEventService: { recordDriverEvent: async (event) => {
+        replayOrder.push(event.clientEventId);
+        return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+      } },
+      proofMediaUploadService: createMockProofMediaUploadService(),
+      queue,
+    });
+    assert.equal(recovered.succeeded, 2);
+    assert.deepEqual(replayOrder, ['south-head', 'south-next']);
+    assert.equal(queue.listPending().length, 0);
+  });
+
+  it('times out hung proof upload without false ACK and ignores a late media result', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'oshawa-1', fileName: 'proof.jpg', routePlanId: 'route-oshawa',
+      source: 'camera', uri: 'file:///proof.jpg',
+    });
+    const expirations: (() => void)[] = [];
+    let resolveHung!: () => void;
+    const retry = retryOfflineSubmissions({
+      attemptTimeoutMs: 100,
+      cancelAttemptTimeout: () => undefined,
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: { uploadProofMedia: (request) => new Promise((resolve) => { resolveHung = () => resolve({
+        contentType: 'image/jpeg', kind: 'photo', mediaId: 'late', source: request.source,
+        storageKey: 'late/proof.jpg', uploadedAt: '2026-08-22T12:00:00.000Z',
+      }); }) },
+      queue,
+      scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+    });
+    expirations.shift()?.();
+    assert.equal((await retry).failed, 1);
+    assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
+    resolveHung();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(queue.listPending().length, 1);
   });
 
   it('retains a bounded first-error record while updating the last retry error', async () => {

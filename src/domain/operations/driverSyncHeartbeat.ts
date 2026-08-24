@@ -1,3 +1,5 @@
+import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
+
 export type DriverSyncRetryJournalEntry = {
   errorCode: string;
   observedAt: string;
@@ -106,12 +108,15 @@ export function createDriverSyncTakeoverApiClient(input: {
 }
 
 export function createDriverSyncHeartbeatScheduler(input: {
+  attemptTimeoutMs?: number;
   cancel(handle: unknown): void;
+  cancelAttemptTimeout?: (handle: unknown) => void;
   hasActiveSession(): boolean;
   isForeground(): boolean;
   isOnline(): boolean;
   random?: () => number;
   schedule(run: () => void, delayMs: number): unknown;
+  scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
   sendHeartbeat(): Promise<boolean>;
 }) {
   const random = input.random ?? Math.random;
@@ -133,7 +138,11 @@ export function createDriverSyncHeartbeatScheduler(input: {
     handle = input.schedule(() => {
       handle = undefined;
       running = true;
-      void input.sendHeartbeat()
+      void runBoundedAsyncOperation(input.sendHeartbeat, {
+        ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+        ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
+        timeoutMs: input.attemptTimeoutMs ?? 15_000,
+      })
         .then((accepted) => { failureCount = accepted ? 0 : failureCount + 1; })
         .catch(() => { failureCount += 1; })
         .finally(() => { running = false; scheduleNext(); });
@@ -145,6 +154,13 @@ export function createDriverSyncHeartbeatScheduler(input: {
     start() { started = true; scheduleNext(); },
     stop() { started = false; cancelScheduled(); },
   };
+}
+
+export function projectLatestDriverSyncHeartbeat(
+  current: DriverSyncHeartbeatResult | null,
+  incoming: DriverSyncHeartbeatResult,
+): DriverSyncHeartbeatResult {
+  return current !== null && current.heartbeatSequence > incoming.heartbeatSequence ? current : incoming;
 }
 
 function parseHeartbeatResponse(value: unknown): DriverSyncHeartbeatResult {
