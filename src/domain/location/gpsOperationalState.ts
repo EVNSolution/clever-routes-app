@@ -16,7 +16,7 @@ export function classifyGpsOperationalState(input: {
   const ageMs = (input.now ?? new Date()).getTime() - capturedAtMs;
   const freshness = !Number.isFinite(ageMs) || ageMs < 0
     ? 'unknown'
-    : ageMs <= 30_000 ? 'fresh' : ageMs <= 120_000 ? 'aging' : 'stale';
+    : ageMs <= 120_000 ? 'fresh' : ageMs <= 300_000 ? 'aging' : 'stale';
   const accuracy = input.accuracyMeters === null || !Number.isFinite(input.accuracyMeters)
     ? 'unknown'
     : input.accuracyMeters <= 100 ? 'accurate' : 'poor';
