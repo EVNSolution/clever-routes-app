@@ -201,6 +201,7 @@ import { createExpoStopArrivalNotificationService } from '../platform/expo/notif
 import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
 import { requestActiveRouteSwitchConfirmation } from './activeRouteSwitchConfirmation';
 import { requestRouteReconciliationClearConfirmation } from './routeReconciliationClearConfirmation';
+import { persistOfflineQueueAndSyncState } from './offlineQueuePersistence';
 import {
   createDriverReleasedRoutePayload,
   requestActiveRouteDeletionConfirmation,
@@ -429,6 +430,10 @@ function DriverApp() {
     setMessage('Delivery updates are read-only until encrypted offline storage recovers. Retry Storage from My Routes.');
     return true;
   }, [offlineStorageState]);
+
+  const waitForOfflineQueuePersistence = useCallback(async (queue: OfflineSubmissionQueue): Promise<void> => {
+    await persistOfflineQueueAndSyncState(queue, syncOfflineQueueState);
+  }, [syncOfflineQueueState]);
 
   useEffect(() => {
     selectedRouteIdRef.current = selectedRouteId;
@@ -799,13 +804,13 @@ function DriverApp() {
       let localAuditPersisted = false;
       try {
         queue.completeAccountDeletionAfterServerAudit();
-        await queue.whenPersisted();
+        await waitForOfflineQueuePersistence(queue);
         localAuditPersisted = true;
       } catch {
         try {
           if (await queue.recoverStorage()) {
             queue.completeAccountDeletionAfterServerAudit();
-            await queue.whenPersisted();
+            await waitForOfflineQueuePersistence(queue);
             localAuditPersisted = true;
           }
         } catch {
@@ -851,8 +856,7 @@ function DriverApp() {
         setOfflineSubmissionQueue(queue);
       }
       const discarded = queue.discardReconciliationRecords();
-      await queue.whenPersisted();
-      syncOfflineQueueState(queue);
+      await waitForOfflineQueuePersistence(queue);
       setRouteRecoveryRefreshReason(null);
       setMessage(discarded === 0
         ? 'No saved reconciliation records remain.'
@@ -1000,8 +1004,7 @@ function DriverApp() {
           );
         }
       }
-      await queue.whenPersisted();
-      syncOfflineQueueState(queue);
+      await waitForOfflineQueuePersistence(queue);
       setRouteSessions((current) => current.map((session) => ({
         ...session,
         pendingRouteEnd: getPendingRouteEnd(queue, session.route.id) ?? undefined,
@@ -1023,6 +1026,7 @@ function DriverApp() {
     runtimeConfig,
     setScreen,
     syncOfflineQueueState,
+    waitForOfflineQueuePersistence,
   ]);
 
   const usesSelectedRouteContext = screen === 'completedDeliveries'
@@ -1311,11 +1315,7 @@ function DriverApp() {
       applyEtaUpdateToRoute(routeSession.route.id, result.etaUpdate);
     }
     if (result.kind === 'queued') {
-      try {
-        await queue.whenPersisted();
-      } finally {
-        syncOfflineQueueState(queue);
-      }
+      await waitForOfflineQueuePersistence(queue);
     } else {
       syncOfflineQueueState(queue);
     }
@@ -1328,6 +1328,7 @@ function DriverApp() {
     offlineSubmissionQueue,
     runtimeConfig,
     syncOfflineQueueState,
+    waitForOfflineQueuePersistence,
   ]);
 
   const recordStopArrival = useCallback(async (
@@ -2034,6 +2035,11 @@ function DriverApp() {
         setMessage(failure.message);
       }
     } finally {
+      const currentQueue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue().catch(() => null);
+      if (currentQueue !== null) {
+        if (offlineSubmissionQueue === null) setOfflineSubmissionQueue(currentQueue);
+        syncOfflineQueueState(currentQueue);
+      }
       setIsLoggingIn(false);
       setIsInitialRouteRestoreComplete(true);
     }
@@ -2725,6 +2731,7 @@ function DriverApp() {
     setSubmission(activeSubmission);
     setIsStartingRoute(true);
     setMessage(null);
+    let queueForStateSync = offlineSubmissionQueue;
 
     try {
       const deliveryStart = await startDeliveryWithForegroundPermission({
@@ -2781,6 +2788,7 @@ function DriverApp() {
       }
 
       const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      queueForStateSync = queue;
       if (offlineSubmissionQueue === null) {
         setOfflineSubmissionQueue(queue);
       }
@@ -2815,7 +2823,7 @@ function DriverApp() {
           throw new Error('Active route changed before route start acknowledgement was saved.');
         }
       } else if (routeStartedResult.kind === 'queued') {
-        await queue.whenPersisted();
+        await waitForOfflineQueuePersistence(queue);
       }
 
       setNavigationStepIndex(initialStepIndex);
@@ -2834,7 +2842,7 @@ function DriverApp() {
       setMessage(`Route session could not start: ${errorMessage}`);
     } finally {
       setIsStartingRoute(false);
-      refreshOfflineQueueCount();
+      syncOfflineQueueState(queueForStateSync);
     }
   }
 
@@ -3000,7 +3008,7 @@ function DriverApp() {
       const pickupStopLabel = pickupStop === undefined ? 'the next stop' : `Stop ${pickupStop.sequence}`;
       let pickupMessage = `Store Pickup completed. Continue to ${pickupStopLabel}.`;
       if (result.kind === 'queued') {
-        await queue.whenPersisted();
+        await waitForOfflineQueuePersistence(queue);
         pickupMessage = `Store Pickup saved offline. Continue to ${pickupStopLabel} while syncing.`;
         if (result.requiresRouteLookup === true) {
           setRouteRecoveryRefreshReason('driver_access_expired');
@@ -3233,8 +3241,7 @@ function DriverApp() {
         if (requiresRouteReconciliation) {
           queue.blockRouteSubmissionsForReconciliation(route.id);
         }
-        await queue.whenPersisted();
-        syncOfflineQueueState(queue);
+        await waitForOfflineQueuePersistence(queue);
         if (requiresRouteReconciliation) {
           await clearAndStopActiveLocationSession(route.id);
           setActiveRoutePlanId(null);
@@ -3356,9 +3363,11 @@ function DriverApp() {
 
     setIsCompletingStop(true);
     setMessage(null);
+    let queueForStateSync = offlineSubmissionQueue;
 
     try {
       const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      queueForStateSync = queue;
       if (offlineSubmissionQueue === null) {
         setOfflineSubmissionQueue(queue);
       }
@@ -3509,7 +3518,7 @@ function DriverApp() {
       setMessage(`${isSkipped ? 'Stop skip' : 'Stop completion'} could not be saved: ${errorMessage}`);
     } finally {
       setIsCompletingStop(false);
-      refreshOfflineQueueCount();
+      syncOfflineQueueState(queueForStateSync);
     }
   }
 
@@ -3577,9 +3586,11 @@ function DriverApp() {
     }
 
     let routeSessionDeactivated = false;
+    let queueForStateSync = offlineSubmissionQueue;
     setIsFinishingRoute(true);
     try {
       const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      queueForStateSync = queue;
       if (offlineSubmissionQueue === null) {
         setOfflineSubmissionQueue(queue);
       }
@@ -3676,7 +3687,7 @@ function DriverApp() {
       return false;
     } finally {
       setIsFinishingRoute(false);
-      refreshOfflineQueueCount();
+      syncOfflineQueueState(queueForStateSync);
     }
   }
 
@@ -3754,8 +3765,10 @@ function DriverApp() {
     }
     registeredDevicePushTokenRef.current = null;
     await clearAndStopActiveLocationSession();
+    let queueForStateSync = offlineSubmissionQueue;
     try {
       const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      queueForStateSync = queue;
       const resetResult = await resetDriverSession({
         driverAccessTokenStore,
         offlineQueue: queue,
@@ -3768,6 +3781,8 @@ function DriverApp() {
     } catch {
       await driverAccessTokenStore.clear();
       setMessage('Signed out. Offline evidence storage could not be sealed; contact support before signing in with another account.');
+    } finally {
+      syncOfflineQueueState(queueForStateSync);
     }
 
     resetRouteProgress();

@@ -117,7 +117,7 @@ describe('Settings page behavior', () => {
     assert.match(handlerSource, /queueSummary\.totalCount > 0/u);
     assert.match(handlerSource, /driverAuthService\.requestAccountDeletion/u);
     assert.match(handlerSource, /queue\.completeAccountDeletionAfterServerAudit\(\)/u);
-    assert.match(handlerSource, /await queue\.whenPersisted\(\)/u);
+    assert.match(handlerSource, /await waitForOfflineQueuePersistence\(queue\)/u);
     assert.match(handlerSource, /await handleLogout\(\)/u);
     assert.match(handlerSource, /isDriverAccountDeletionActiveRouteError/u);
   });

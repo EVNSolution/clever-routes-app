@@ -1,6 +1,10 @@
 import {
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
+  isOfflineTerminalEvidenceExpired,
   normalizePersistedOfflineSubmissionQueue,
+  retainOfflineEvidenceJournal,
+  type OfflineEvidenceJournalEntry,
+  type OfflineEvidenceState,
   type OfflineSubmissionQueueStorage,
 } from '../../../domain/offline/offlineSubmissionQueue';
 
@@ -136,7 +140,7 @@ export async function createEncryptedEvidenceStore(input: {
     },
     setItem: async (storageKey, value) => {
       if (storageKey !== OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) return;
-      const items = parseLegacyItems(value);
+      const items = parseLegacyItems(value, now);
       if (items === null) throw new Error('Offline evidence payload is invalid and was not written.');
       await replaceQueueRows(database, items, now());
     },
@@ -407,28 +411,37 @@ function getRecordKey(item: Record<string, unknown>) {
 }
 
 function isExpiredTerminalEvidence(item: Record<string, unknown>, now: Date) {
-  if (item.state !== 'ACKNOWLEDGED' && item.state !== 'DISCARDED') return false;
-  const journal = Array.isArray(item.journal) ? item.journal : [];
-  const terminalAt = [...journal].reverse().find((entry) => (
-    typeof entry === 'object'
-    && entry !== null
-    && ((entry as Record<string, unknown>).kind === 'ACK' || (entry as Record<string, unknown>).kind === 'DISCARD')
-  ));
-  const terminalTimestamp = terminalAt === undefined
-    ? readIsoTimestamp(item.enqueuedAt)
-    : readIsoTimestamp((terminalAt as Record<string, unknown>).at);
-  return terminalTimestamp !== null
-    && now.getTime() - Date.parse(terminalTimestamp) > 30 * 24 * 60 * 60 * 1000;
+  if (
+    typeof item.enqueuedAt !== 'string'
+    || (item.state !== 'ACKNOWLEDGED' && item.state !== 'DISCARDED')
+  ) return false;
+  return isOfflineTerminalEvidenceExpired({
+    enqueuedAt: item.enqueuedAt,
+    journal: readJournalEntries(item.journal),
+    state: item.state as OfflineEvidenceState,
+  }, now);
 }
 
 function normalizeJournalEntries(value: unknown, now: Date) {
+  return retainOfflineEvidenceJournal(readJournalEntries(value), now);
+}
+
+function readJournalEntries(value: unknown): OfflineEvidenceJournalEntry[] {
   if (!Array.isArray(value)) return [];
-  const cutoff = now.getTime() - 30 * 24 * 60 * 60 * 1000;
-  return value.filter((entry) => {
-    if (typeof entry !== 'object' || entry === null) return false;
-    const timestamp = readIsoTimestamp((entry as Record<string, unknown>).at);
-    return timestamp !== null && Date.parse(timestamp) >= cutoff;
-  }).slice(-64) as Record<string, unknown>[];
+  return value.flatMap((entry) => {
+    if (typeof entry !== 'object' || entry === null) return [];
+    const candidate = entry as Record<string, unknown>;
+    if (
+      typeof candidate.at !== 'string'
+      || typeof candidate.code !== 'string'
+      || !['ACK', 'ATTEMPT', 'DISCARD', 'ENQUEUED', 'RECONCILIATION'].includes(String(candidate.kind))
+    ) return [];
+    return [{
+      at: candidate.at,
+      code: candidate.code,
+      kind: candidate.kind as OfflineEvidenceJournalEntry['kind'],
+    }];
+  });
 }
 
 function readIsoTimestamp(value: unknown) {

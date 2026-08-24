@@ -226,12 +226,16 @@ describe('background location lifecycle wiring', () => {
     );
 
     assert.match(source, /setOfflineStorageState\(queue\.storageState\(\)\)/u);
+    assert.match(source, /const waitForOfflineQueuePersistence = useCallback\([\s\S]*persistOfflineQueueAndSyncState\(queue, syncOfflineQueueState\)/u);
     assert.match(retrySource, /queue\.storageState\(\) === 'STORAGE_DEGRADED'[\s\S]*return false/u);
+    assert.match(retrySource, /await waitForOfflineQueuePersistence\(queue\)/u);
     assert.match(recoverySource, /await queue\.recoverStorage\(\)[\s\S]*syncOfflineQueueState\(queue\)/u);
     assert.match(source, /offlineStorageState !== 'STORAGE_DEGRADED'/u);
     assert.match(source, /isForeground: \(\) => AppState\.currentState === 'active'/u);
     assert.match(source, /isOnline: \(\) => networkReachability === 'online'/u);
     assert.match(source, /retry: recoverOfflineEvidenceStorage/u);
+    assert.match(source, /hasPendingSubmissions: \(\) => offlineStorageState === 'STORAGE_DEGRADED'/u);
+    assert.match(source, /finally \{[\s\S]*syncOfflineQueueState\(queueForStateSync\)/u);
     assert.match(source, /Retry Storage/u);
     assert.match(source, /Delivery updates are read-only until encrypted storage is safely persisted/u);
     assert.match(source, /if \(blockMutationWhileStorageDegraded\(\)\) return/u);

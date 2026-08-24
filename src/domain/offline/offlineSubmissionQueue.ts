@@ -11,6 +11,7 @@ import {
 
 export const OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY = '@clever-routes/offline-submission-queue-v1';
 export const OFFLINE_SUBMISSION_QUEUE_MAX_ITEMS = 4_000;
+export const OFFLINE_EVIDENCE_AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY = {
   maxAgeMs: 72 * 60 * 60 * 1000,
   maxAttempts: 5,
@@ -33,6 +34,29 @@ export type OfflineEvidenceJournalEntry = {
   code: string;
   kind: 'ACK' | 'ATTEMPT' | 'DISCARD' | 'ENQUEUED' | 'RECONCILIATION';
 };
+
+export function retainOfflineEvidenceJournal(
+  journal: OfflineEvidenceJournalEntry[],
+  now: Date,
+): OfflineEvidenceJournalEntry[] {
+  const cutoff = now.getTime() - OFFLINE_EVIDENCE_AUDIT_RETENTION_MS;
+  return journal
+    .filter((entry) => {
+      const timestamp = Date.parse(entry.at);
+      return Number.isFinite(timestamp) && timestamp >= cutoff;
+    })
+    .slice(-64);
+}
+
+export function isOfflineTerminalEvidenceExpired(
+  item: Pick<OfflineEvidenceIdentity, 'journal' | 'state'> & { enqueuedAt: string },
+  now: Date,
+): boolean {
+  if (item.state !== 'ACKNOWLEDGED' && item.state !== 'DISCARDED') return false;
+  const terminalEntry = [...item.journal].reverse().find((entry) => entry.kind === 'ACK' || entry.kind === 'DISCARD');
+  const timestamp = Date.parse(terminalEntry?.at ?? item.enqueuedAt);
+  return Number.isFinite(timestamp) && now.getTime() - timestamp > OFFLINE_EVIDENCE_AUDIT_RETENTION_MS;
+}
 
 type OfflineEvidenceIdentity = {
   accountOwnerHash: string;
@@ -473,14 +497,15 @@ export async function createPersistentOfflineSubmissionQueue(input: {
   let latestItems = initialItems;
 
   const persistLatest = async () => {
-    const payload = JSON.stringify(toPersistedEnvelope(latestItems));
+    const rawPayload = JSON.stringify(toPersistedEnvelope(latestItems));
+    const payload = normalizePersistedOfflineSubmissionQueue(rawPayload, input.now);
+    if (payload === null) throw new Error('Offline evidence snapshot normalization failed.');
     await input.storage.setItem(storageKey, payload);
     const reread = await input.storage.getItem(storageKey);
-    const normalizedExpected = normalizePersistedOfflineSubmissionQueue(payload, input.now);
     const normalizedReread = reread === null
       ? null
       : normalizePersistedOfflineSubmissionQueue(reread, input.now);
-    if (normalizedExpected === null || normalizedReread !== normalizedExpected) {
+    if (normalizedReread !== payload) {
       throw new Error('Offline evidence persistence verification failed.');
     }
   };
@@ -879,7 +904,8 @@ function readPersistedEnvelope(value: unknown, now: () => Date): OfflineSubmissi
     items.push(parsed);
   }
 
-  return items;
+  const retainedAt = now();
+  return items.filter((item) => !isOfflineTerminalEvidenceExpired(item, retainedAt));
 }
 
 function readPersistedQueueItem(
@@ -1106,13 +1132,7 @@ function readJournal(value: unknown, now: () => Date): OfflineEvidenceJournalEnt
 }
 
 function pruneJournal(journal: OfflineEvidenceJournalEntry[], now: () => Date) {
-  const cutoff = now().getTime() - 30 * 24 * 60 * 60 * 1000;
-  return journal
-    .filter((entry) => {
-      const timestamp = Date.parse(entry.at);
-      return Number.isFinite(timestamp) && timestamp >= cutoff;
-    })
-    .slice(-64);
+  return retainOfflineEvidenceJournal(journal, now());
 }
 
 function readRequiredString(value: unknown): string | null {

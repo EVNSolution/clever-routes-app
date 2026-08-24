@@ -508,4 +508,42 @@ describe('encrypted driver evidence store', () => {
     assert.equal(db.tables.get('sensitive_evidence')?.size ?? 0, 0);
     assert.equal(db.tables.get('migration_quarantine')?.size, 1);
   });
+
+  it('purges a 31-day ACK identically before a new public queue write and encrypted reread', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    let clock = new Date('2026-07-01T12:00:00.000Z');
+    const now = () => clock;
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '15'.repeat(32), setItemAsync: async () => undefined },
+      now,
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const queue = await createPersistentOfflineSubmissionQueue({ now, storage: store });
+    const acknowledged = queue.enqueueDriverEvent({
+      clientEventId: 'acknowledged-before-retention-cutoff',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: clock,
+      routePlanId: 'route-retention',
+    });
+    await queue.whenPersisted();
+    assert.equal(queue.acknowledge(acknowledged.queueItemId), true);
+    await queue.whenPersisted();
+
+    clock = new Date('2026-08-01T12:00:01.000Z');
+    queue.enqueueDriverEvent({
+      clientEventId: 'new-after-retention-cutoff',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: clock,
+      routePlanId: 'route-retention',
+    });
+    await queue.whenPersisted();
+
+    assert.equal(queue.storageState(), 'READY');
+    const reread = JSON.parse(await store.getItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
+      items: { queueItemId: string }[];
+    };
+    assert.deepEqual(reread.items.map((item) => item.queueItemId), ['driver-event:new-after-retention-cutoff']);
+    assert.equal(db.tables.get('workflow_evidence')?.size, 1);
+  });
 });

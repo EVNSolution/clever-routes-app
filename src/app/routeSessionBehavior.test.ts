@@ -397,7 +397,7 @@ describe('route session current task behavior', () => {
     const terminalSource = appSource.slice(terminalBegin, terminalEnd);
 
     assert.match(appSource, /const \[pendingRoutePlanId, setPendingRoutePlanId\] = useState<string \| null>\(null\)/u);
-    assert.match(appSource, /await queue\.whenPersisted\(\);[\s\S]*setRouteSessions\(\(current\) => current\.map\(\(session\)/u);
+    assert.match(appSource, /await waitForOfflineQueuePersistence\(queue\);[\s\S]*setRouteSessions\(\(current\) => current\.map\(\(session\)/u);
     assert.match(appSource, /pendingRouteEnd: getPendingRouteEnd\(queue, session\.route\.id\) \?\? undefined/u);
     assert.match(startSource, /requestActiveRouteSwitchConfirmation/u);
     assert.match(startSource, /const targetRoutePlanId = routeSession\.route\.id/u);
@@ -818,7 +818,7 @@ describe('stop completion proof copy', () => {
     assert.doesNotMatch(appSource, /Photo is not uploaded yet\. Add the photo again\./u);
     assert.match(appSource, /media: mediaResult\?\.kind === 'uploaded' \? \[mediaResult\.media\] : \[\]/u);
     assert.match(appSource, /photoUris: photoResult\?\.kind === 'captured' \? \[photoResult\.uri\] : \[\]/u);
-    assert.match(appSource, /queue\.enqueueProofMediaUpload\([\s\S]*?await queue\.whenPersisted\(\)/u);
+    assert.match(appSource, /queue\.enqueueProofMediaUpload\([\s\S]*?await waitForOfflineQueuePersistence\(queue\)/u);
     assert.match(appSource, /const queue = offlineSubmissionQueue \?\? await getExpoOfflineSubmissionQueue\(\)[\s\S]*?offlineQueue: queue/u);
   });
 

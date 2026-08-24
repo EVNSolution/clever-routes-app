@@ -16,7 +16,12 @@ describe('notification action behavior', () => {
       appRootSource.indexOf('const handleLoginAndLoadRoutes'),
       appRootSource.indexOf('const handleRefreshRoutes'),
     );
-    assert.match(routeLoadSource, /finally \{\s+setIsLoggingIn\(false\);\s+setIsInitialRouteRestoreComplete\(true\);\s+\}/u);
+    const restoreFinallySource = routeLoadSource.slice(routeLoadSource.lastIndexOf('finally {'));
+    assert.match(restoreFinallySource, /syncOfflineQueueState\(currentQueue\)/u);
+    assert.ok(
+      restoreFinallySource.indexOf('setIsLoggingIn(false)')
+        < restoreFinallySource.indexOf('setIsInitialRouteRestoreComplete(true)'),
+    );
   });
 
   it('does not route near-stop popup taps through the foreground action handler', () => {
