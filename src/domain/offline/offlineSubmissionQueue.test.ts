@@ -1741,6 +1741,73 @@ describe('offline submission queue', () => {
     assert.deepEqual(restarted.listPending(), []);
   });
 
+  it('preserves completion recovery telemetry across restart and acknowledgement within five minutes', async () => {
+    const storage = createMemoryStorage();
+    let currentTime = new Date('2026-08-22T19:42:10.000Z');
+    const first = await createPersistentOfflineSubmissionQueue({
+      now: () => currentTime,
+      storage,
+    });
+    const completion = first.enqueueDriverEvent({
+      appVersion: '1.2.0',
+      assignmentGeneration: '11',
+      clientEventId: 'kitchener-completion-telemetry',
+      driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: currentTime,
+      routePlanId: 'route-kitchener',
+      versionCode: 18,
+    });
+    await first.whenPersisted();
+
+    const restartedPending = await createPersistentOfflineSubmissionQueue({
+      now: () => currentTime,
+      storage,
+    });
+    assert.deepEqual(restartedPending.getRouteCompletionTelemetry('route-kitchener'), {
+      finishPending: true,
+      lastAcknowledgedAt: null,
+      locallyFinished: true,
+    });
+
+    currentTime = new Date('2026-08-22T19:46:59.000Z');
+    assert.equal(restartedPending.acknowledge(completion.queueItemId), true);
+    await restartedPending.whenPersisted();
+    const restartedAcknowledged = await createPersistentOfflineSubmissionQueue({
+      now: () => currentTime,
+      storage,
+    });
+    const telemetry = restartedAcknowledged.getRouteCompletionTelemetry('route-kitchener');
+    assert.deepEqual(telemetry, {
+      finishPending: false,
+      lastAcknowledgedAt: '2026-08-22T19:46:59.000Z',
+      locallyFinished: true,
+    });
+    assert.ok(Date.parse(telemetry.lastAcknowledgedAt!) - Date.parse(completion.enqueuedAt) <= 5 * 60 * 1000);
+  });
+
+  it('does not report a completion clear without durable completion evidence', () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-released-only',
+      eventType: 'ROUTE_PAUSED',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'),
+      routePlanId: 'route-kitchener',
+    });
+
+    assert.deepEqual(queue.getRouteCompletionTelemetry('route-kitchener'), {
+      finishPending: false,
+      lastAcknowledgedAt: null,
+      locallyFinished: false,
+    });
+    assert.deepEqual(queue.getRouteCompletionTelemetry('route-without-session'), {
+      finishPending: false,
+      lastAcknowledgedAt: null,
+      locallyFinished: false,
+    });
+  });
+
   it('recovers an APPLIED completion receipt before assigned-route restoration is available', async () => {
     const storage = createMemoryStorage();
     const queue = await createPersistentOfflineSubmissionQueue({ storage });

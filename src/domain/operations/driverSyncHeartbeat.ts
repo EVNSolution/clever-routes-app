@@ -122,6 +122,7 @@ export function createDriverSyncHeartbeatScheduler(input: {
   const random = input.random ?? Math.random;
   let failureCount = 0;
   let handle: unknown;
+  let immediateRequested = false;
   let running = false;
   let started = false;
 
@@ -137,22 +138,43 @@ export function createDriverSyncHeartbeatScheduler(input: {
     const delay = Math.max(1_000, Math.min(120_000, Math.round(base * jitter)));
     handle = input.schedule(() => {
       handle = undefined;
-      running = true;
-      void runBoundedAsyncOperation(input.sendHeartbeat, {
+      runNow();
+    }, delay);
+  }
+  function runNow() {
+    cancelScheduled();
+    if (!started || !input.hasActiveSession() || !input.isForeground() || !input.isOnline()) return;
+    if (running) {
+      immediateRequested = true;
+      return;
+    }
+    immediateRequested = false;
+    running = true;
+    void runBoundedAsyncOperation(input.sendHeartbeat, {
         ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
         ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
         timeoutMs: input.attemptTimeoutMs ?? 15_000,
       })
         .then((accepted) => { failureCount = accepted ? 0 : failureCount + 1; })
         .catch(() => { failureCount += 1; })
-        .finally(() => { running = false; scheduleNext(); });
-    }, delay);
+        .finally(() => {
+          running = false;
+          if (immediateRequested) runNow();
+          else scheduleNext();
+        });
   }
 
   return {
-    notifyConditionsChanged: scheduleNext,
+    notifyConditionsChanged() {
+      if (immediateRequested) runNow();
+      else scheduleNext();
+    },
+    requestImmediate() {
+      immediateRequested = true;
+      runNow();
+    },
     start() { started = true; scheduleNext(); },
-    stop() { started = false; cancelScheduled(); },
+    stop() { started = false; immediateRequested = false; cancelScheduled(); },
   };
 }
 

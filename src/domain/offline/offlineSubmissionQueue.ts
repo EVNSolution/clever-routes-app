@@ -114,6 +114,7 @@ export type OfflineSubmissionQueue = {
   enqueueDriverEvent(event: DriverEventInput): OfflineDriverEventQueueItem;
   enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
   enqueueProofMediaUpload(request: ProofMediaUploadRequest): OfflineProofMediaQueueItem;
+  getRouteCompletionTelemetry(routePlanId: string): OfflineRouteCompletionTelemetry;
   listPending(): OfflineSubmissionQueueItem[];
   quarantine(queueItemId: string, reason: OfflineSubmissionReconciliation['reason']): boolean;
   recordRetryFailure(queueItemId: string, lastError: unknown): boolean;
@@ -121,6 +122,12 @@ export type OfflineSubmissionQueue = {
   storageState(): 'READY' | 'STORAGE_DEGRADED';
   recoverStorage(): Promise<boolean>;
   whenPersisted(): Promise<void>;
+};
+
+export type OfflineRouteCompletionTelemetry = {
+  finishPending: boolean;
+  lastAcknowledgedAt: string | null;
+  locallyFinished: boolean;
 };
 
 export type OfflineSubmissionQueueStorage = {
@@ -448,6 +455,26 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       trimOfflineSubmissionQueue(items, maxItems, activeAccountOwnerHash, now);
       emitChange();
       return item;
+    },
+    getRouteCompletionTelemetry: (routePlanId) => {
+      const completion = activeItems()
+        .filter((item): item is OfflineDriverEventQueueItem => (
+          item.kind === 'driver_event'
+          && item.event.eventType === 'ROUTE_COMPLETED'
+          && item.event.routePlanId === routePlanId
+        ))
+        .sort((left, right) => right.queueSequence - left.queueSequence)[0];
+      if (completion === undefined || completion.state === 'DISCARDED') {
+        return { finishPending: false, lastAcknowledgedAt: null, locallyFinished: false };
+      }
+      const acknowledgedAt = completion.state === 'ACKNOWLEDGED'
+        ? [...completion.journal].reverse().find((entry) => entry.kind === 'ACK')?.at ?? null
+        : null;
+      return {
+        finishPending: completion.state === 'PENDING' || completion.state === 'QUARANTINED',
+        lastAcknowledgedAt: acknowledgedAt,
+        locallyFinished: true,
+      };
     },
     listPending: () => activeItems()
       .filter((item) => item.state === 'PENDING' || item.state === 'QUARANTINED')

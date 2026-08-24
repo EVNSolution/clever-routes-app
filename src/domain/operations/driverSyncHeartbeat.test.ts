@@ -126,6 +126,33 @@ describe('driver sync heartbeat', () => {
     scheduler.stop();
   });
 
+  it('sends an immediate heartbeat when durable completion state changes', async () => {
+    const scheduled: { delayMs: number; run: () => void }[] = [];
+    const cancelled: unknown[] = [];
+    let calls = 0;
+    const scheduler = createDriverSyncHeartbeatScheduler({
+      cancel: (handle) => { cancelled.push(handle); },
+      hasActiveSession: () => true,
+      isForeground: () => true,
+      isOnline: () => true,
+      random: () => 0.5,
+      schedule: (run, delayMs) => {
+        const handle = { delayMs, run };
+        scheduled.push(handle);
+        return handle;
+      },
+      sendHeartbeat: async () => { calls += 1; return true; },
+    });
+
+    scheduler.start();
+    scheduler.requestImmediate();
+    assert.equal(calls, 1);
+    assert.equal(cancelled.length, 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(scheduled.at(-1)?.delayMs, 15_000);
+    scheduler.stop();
+  });
+
   it('does not regress local sync projection when an older heartbeat response arrives late', () => {
     const current = { accepted: true, conflict: false, heartbeatSequence: 12, state: 'HEALTHY' as const };
     const late = { accepted: true, conflict: true, heartbeatSequence: 11, state: 'BLOCKED' as const };
