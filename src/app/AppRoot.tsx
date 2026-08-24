@@ -66,6 +66,7 @@ import {
   isStopCompleted,
   ROUTE_COMPANY_STEP_INDEX,
 } from '../domain/route/routeStepProgress';
+import { projectRouteProgress, type RouteProgressProjection } from '../domain/route/routeProgressProjection';
 import {
   clearAndStopContinuousLocationSession,
   CONTINUOUS_LOCATION_TASK_NAME,
@@ -98,7 +99,10 @@ import {
 import { createExpoContinuousLocationStreamService, registerContinuousLocationTaskObserver } from '../platform/expo/location/expoContinuousLocationStreamService';
 import { createExpoForegroundLocationSnapshotService } from '../platform/expo/location/expoForegroundLocationSnapshotService';
 import { createExpoForegroundLocationPermissionService } from '../platform/expo/location/expoLocationPermissionService';
-import { getExpoOfflineSubmissionQueue } from '../platform/expo/storage/expoOfflineSubmissionQueueStorage';
+import {
+  bindExpoOfflineSubmissionQueueAccount,
+  getExpoOfflineSubmissionQueue,
+} from '../platform/expo/storage/expoOfflineSubmissionQueueStorage';
 import { createExpoProofPhotoCaptureService } from '../platform/expo/camera/expoProofPhotoCaptureService';
 import { createExpoSecureDriverAccessTokenStore } from '../platform/expo/secureStore/expoSecureDriverAccessTokenStore';
 import { readInstalledDriverAppVersion } from '../platform/expo/application/expoAppVersionService';
@@ -333,7 +337,7 @@ function DriverApp() {
   const [proofPhotoResults, setProofPhotoResults] = useState<Record<string, ProofPhotoCaptureResult>>({});
   const [proofMediaResults, setProofMediaResults] = useState<Record<string, ProofMediaUploadResult>>({});
   const [completedStopIds, setCompletedStopIds] = useState<string[]>([]);
-  const [, setServerConfirmedStopIds] = useState<string[]>([]);
+  const [serverConfirmedStopIds, setServerConfirmedStopIds] = useState<string[]>([]);
   const [completedStopTimes, setCompletedStopTimes] = useState<Record<string, string>>({});
   const [offlineSubmissionQueue, setOfflineSubmissionQueue] = useState<OfflineSubmissionQueue | null>(null);
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
@@ -783,8 +787,26 @@ function DriverApp() {
       await driverAuthService.requestAccountDeletion({
         accountAccessToken: accountAccess.accessToken,
       });
+      let localAuditPersisted = false;
+      try {
+        queue.completeAccountDeletionAfterServerAudit();
+        await queue.whenPersisted();
+        localAuditPersisted = true;
+      } catch {
+        try {
+          if (await queue.recoverStorage()) {
+            queue.completeAccountDeletionAfterServerAudit();
+            await queue.whenPersisted();
+            localAuditPersisted = true;
+          }
+        } catch {
+          localAuditPersisted = false;
+        }
+      }
       await handleLogout();
-      setMessage('Account deletion request received. You have been signed out.');
+      setMessage(localAuditPersisted
+        ? 'Account deletion request received. You have been signed out.'
+        : 'Account deletion request received and you were signed out. Local evidence audit storage needs support review.');
     } catch (error) {
       setMessage(
         isDriverAccountDeletionActiveRouteError(error)
@@ -933,6 +955,10 @@ function DriverApp() {
         if (result.failed > 0) {
           completedWithoutRetainedFailures = false;
         }
+        const confirmedStopIds = result.serverConfirmedStopIds;
+        if (activeRoutePlanId === session.route.id && confirmedStopIds !== undefined) {
+          setServerConfirmedStopIds((current) => [...new Set([...current, ...confirmedStopIds])]);
+        }
         if (result.reconciliationRoutePlanIds?.includes(session.route.id) === true) {
           if (activeRoutePlanId === session.route.id) {
             await clearAndStopActiveLocationSession(session.route.id);
@@ -1022,6 +1048,11 @@ function DriverApp() {
     && !isCompletingStop
     && !isRecordingArrival;
   const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => completedStopIds.includes(stop.deliveryStopId));
+  const routeProgress = useMemo(() => projectRouteProgress({
+    localCompletedStopIds: completedStopIds,
+    serverConfirmedStopIds,
+    totalStops: selectedRoute?.stops.length ?? 0,
+  }), [completedStopIds, selectedRoute?.stops.length, serverConfirmedStopIds]);
   const currentCompany = selectedRouteSession?.companyGuidance ?? null;
   const isRouteBoundScreen = screen === 'arrivalCheck'
     || screen === 'completedDeliveries'
@@ -1713,6 +1744,9 @@ function DriverApp() {
     }
 
     try {
+      const accountQueue = await bindExpoOfflineSubmissionQueueAccount(phoneE164);
+      setOfflineSubmissionQueue(accountQueue);
+      syncOfflineQueueState(accountQueue);
       const lookupResult = await submitAccountRouteAccess(accountAccess);
       setSubmission(lookupResult);
 
@@ -1989,6 +2023,7 @@ function DriverApp() {
     runtimeConfig,
     setScreen,
     submitAccountRouteAccess,
+    syncOfflineQueueState,
   ]);
 
   const handleRefreshRoutes = useCallback(async () => {
@@ -4026,6 +4061,7 @@ function DriverApp() {
               onOpenStop={handleOpenStopFromRouteSession}
               onStartRoute={() => handleStartRoute(selectedRoute.id)}
               route={selectedRoute}
+              routeProgress={routeProgress}
               routeStartedEventResult={routeStartedEventResult}
               routeStatus={routeStatus}
               stop={currentStop}
@@ -4703,6 +4739,7 @@ function RouteSessionScreen({
   onOpenStop,
   onStartRoute,
   route,
+  routeProgress,
   routeStartedEventResult,
   routeStatus,
   stop,
@@ -4724,6 +4761,7 @@ function RouteSessionScreen({
   onOpenStop(stop: AssignedRouteStop): void;
   onStartRoute(): void;
   route: AssignedRoute;
+  routeProgress: RouteProgressProjection;
   routeStartedEventResult: RouteStartedRecordResult | null;
   routeStatus: RouteStatus;
   stop: AssignedRouteStop | null;
@@ -4900,7 +4938,8 @@ function RouteSessionScreen({
               const completed = completedStopIds.includes(stop.deliveryStopId);
               const isProcessing = routeStatus === 'active' && currentNavigationStepIndex === index + 1 && !completed;
               const state = completed ? 'completed' : isProcessing ? 'current' : 'upcoming';
-              const progressMeta = completed ? 'Done' : isProcessing ? 'Current' : undefined;
+              const serverConfirmed = routeProgress.serverConfirmedStopIds.includes(stop.deliveryStopId);
+              const progressMeta = completed ? serverConfirmed ? 'Done' : 'Syncing' : isProcessing ? 'Current' : undefined;
               const metaTone = completed ? 'neutral' : isProcessing ? 'green' : 'neutral';
               return (
                 <TimelineRow

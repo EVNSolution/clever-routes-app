@@ -93,7 +93,7 @@ export async function finishDeliveryAfterActive(input: {
   try {
     const result = await input.driverEventService.recordDriverEvent(event);
     if (preparedQueueItem !== undefined) {
-      input.offlineQueue?.discard(preparedQueueItem.queueItemId);
+      input.offlineQueue?.acknowledge(preparedQueueItem.queueItemId);
     }
     const discardedQueuedItems = input.routePlanId === null || input.offlineQueue === undefined
       ? 0

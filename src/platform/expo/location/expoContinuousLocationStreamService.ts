@@ -17,7 +17,10 @@ import {
 import { createDriverApiClientsFromPersistedDriverAccess } from '../../../api/deliveryServer/driverApiClients';
 import { createDriverRuntimeServices, readDriverRuntimeConfig } from '../../../app/config/driverRuntimeConfig';
 import { createExpoSecureDriverAccessTokenStore } from '../secureStore/expoSecureDriverAccessTokenStore';
-import { getExpoOfflineSubmissionQueue } from '../storage/expoOfflineSubmissionQueueStorage';
+import {
+  bindExpoOfflineSubmissionQueueAccount,
+  getExpoOfflineSubmissionQueue,
+} from '../storage/expoOfflineSubmissionQueueStorage';
 
 export type ContinuousLocationTaskObserver = (
   locations: ContinuousLocationBatchItem[],
@@ -129,6 +132,10 @@ async function executeContinuousLocationTask(input: {
     let taskResult: ContinuousLocationTaskResult | null = null;
     try {
       if (runtimeConfig.mode === 'live') {
+        const persistedAccess = await driverAccessTokenStore.loadActiveDriverAccess();
+        const offlineQueue = persistedAccess.kind === 'active' || persistedAccess.kind === 'refresh_required'
+          ? await bindExpoOfflineSubmissionQueueAccount(persistedAccess.driverProfile.phoneE164)
+          : await getExpoOfflineSubmissionQueue();
         taskResult = await processContinuousLocationTaskBatch({
           createDriverEventService: ({ persistedAccess, refreshDriverAccess }) => (
             createDriverApiClientsFromPersistedDriverAccess({
@@ -140,7 +147,7 @@ async function executeContinuousLocationTask(input: {
           driverAccessTokenStore,
           driverAuthService: runtimeServices.driverAuthService,
           locations,
-          offlineQueue: await getExpoOfflineSubmissionQueue(),
+          offlineQueue,
           routeAccessService: runtimeServices.routeAccessService,
         });
         if (taskResult.kind === 'deactivated' || taskResult.kind === 'ignored') {

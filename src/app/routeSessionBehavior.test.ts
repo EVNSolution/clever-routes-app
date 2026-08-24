@@ -620,6 +620,14 @@ describe('route session current task behavior', () => {
     assert.match(nativeMapSource, /'text-opacity': 1/u);
   });
 
+  it('keeps local completion distinct from server-confirmed progress in the runtime session', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+
+    assert.match(appSource, /projectRouteProgress\(\{[\s\S]*localCompletedStopIds: completedStopIds,[\s\S]*serverConfirmedStopIds/u);
+    assert.match(appSource, /result\.serverConfirmedStopIds/u);
+    assert.match(appSource, /const progressMeta = completed \? serverConfirmed \? 'Done' : 'Syncing'/u);
+  });
+
   it('keeps the inline session map adaptive and visually focused without disabling gestures', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const componentSource = getRouteSessionComponentSource();

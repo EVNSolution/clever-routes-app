@@ -37,13 +37,24 @@ export async function createExpoOfflineSubmissionQueueStorage() {
 export function getExpoOfflineSubmissionQueue(): Promise<OfflineSubmissionQueue> {
   if (offlineSubmissionQueuePromise === null) {
     offlineSubmissionQueuePromise = createExpoOfflineSubmissionQueueStorage()
-      .then((storage) => createPersistentOfflineSubmissionQueue({ storage }))
+      .then((storage) => createPersistentOfflineSubmissionQueue({ accountOwnerHash: null, storage }))
       .catch((error: unknown) => {
         offlineSubmissionQueuePromise = null;
         throw error;
       });
   }
   return offlineSubmissionQueuePromise;
+}
+
+export async function bindExpoOfflineSubmissionQueueAccount(phoneE164: string): Promise<OfflineSubmissionQueue> {
+  const ownerHash = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    `clever-driver-account:${phoneE164.trim()}`,
+  );
+  const queue = await getExpoOfflineSubmissionQueue();
+  queue.bindAccountOwnerHash(ownerHash.toLowerCase());
+  await queue.whenPersisted();
+  return queue;
 }
 
 function adaptDatabase(database: SQLite.SQLiteDatabase): EvidenceDatabase {

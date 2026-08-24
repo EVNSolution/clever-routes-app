@@ -26,10 +26,10 @@ type StoredRow = { payload: string; recordKey: string };
 
 const RECORD_TABLES = [
   'workflow_evidence',
-  'sensitive_evidence',
   'migration_quarantine',
   'location_batches',
 ] as const;
+const CORRUPT_LEGACY_QUARANTINE_MAX_BYTES = 64 * 1024;
 
 export async function createEncryptedEvidenceStore(input: {
   databaseName?: string;
@@ -73,6 +73,8 @@ export async function createEncryptedEvidenceStore(input: {
   await createSchema(database);
   if (userVersion < DRIVER_EVIDENCE_SCHEMA_VERSION) {
     await migrateLegacyQueue(database, input.legacyStorage, key, input.sha256);
+  } else {
+    await cleanupCommittedLegacyQueue(database, input.legacyStorage);
   }
 
   return {
@@ -87,16 +89,36 @@ export async function createEncryptedEvidenceStore(input: {
       const rows = (await Promise.all(RECORD_TABLES.map((table) => database.getAllAsync<StoredRow>(
         `SELECT record_key AS recordKey, payload FROM ${table} ORDER BY created_at, record_key;`,
       )))).flat();
+      const sensitiveRows = await database.getAllAsync<StoredRow>(
+        'SELECT record_key AS recordKey, payload FROM sensitive_evidence WHERE expires_at > CURRENT_TIMESTAMP ORDER BY created_at, record_key;',
+      );
+      const sensitiveByKey = new Map(sensitiveRows.map((row) => [row.recordKey, row.payload]));
       if (rows.length === 0) return null;
       const items = rows
         .filter((row) => !row.recordKey.startsWith('legacy-corrupt:'))
-        .map((row) => JSON.parse(row.payload) as unknown);
-      return JSON.stringify({ items, version: 1 });
+        .map((row) => {
+          const envelope = JSON.parse(row.payload) as Record<string, unknown>;
+          const sensitive = sensitiveByKey.get(row.recordKey);
+          if (sensitive !== undefined) return hydrateSensitiveReplay(envelope, JSON.parse(sensitive) as unknown);
+          if (envelope.sensitiveReplay !== true) return envelope;
+          const request = typeof envelope.request === 'object' && envelope.request !== null
+            ? envelope.request as Record<string, unknown>
+            : null;
+          return {
+            ...envelope,
+            ...(request === null ? {} : { request: { ...request, fileName: 'expired', uri: 'expired://' } }),
+            state: 'DISCARDED',
+          };
+        })
+        .sort((left, right) => readQueueSequence(left) - readQueueSequence(right));
+      return JSON.stringify({ items, version: 2 });
     },
     removeItem: async (storageKey) => {
       if (storageKey !== OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) return;
       await database.withExclusiveTransactionAsync(async (transaction) => {
-        for (const table of RECORD_TABLES) await transaction.execAsync(`DELETE FROM ${table};`);
+        await transaction.execAsync("UPDATE workflow_evidence SET payload = json_set(payload, '$.state', 'DISCARDED');");
+        await transaction.execAsync("UPDATE sensitive_evidence SET expires_at = CURRENT_TIMESTAMP;");
+        await transaction.execAsync("UPDATE location_batches SET payload = json_set(payload, '$.state', 'DISCARDED');");
       });
     },
     setItem: async (storageKey, value) => {
@@ -117,21 +139,37 @@ async function createSchema(database: EvidenceDatabase) {
     );
     CREATE TABLE IF NOT EXISTS workflow_evidence (
       record_key TEXT PRIMARY KEY NOT NULL,
+      account_owner_hash TEXT NOT NULL,
+      queue_sequence INTEGER NOT NULL,
       payload TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS sensitive_evidence (
       record_key TEXT PRIMARY KEY NOT NULL,
+      account_owner_hash TEXT NOT NULL,
+      queue_sequence INTEGER NOT NULL,
       payload TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS migration_quarantine (
       record_key TEXT PRIMARY KEY NOT NULL,
+      account_owner_hash TEXT NOT NULL,
+      queue_sequence INTEGER NOT NULL,
       payload TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS location_batches (
       record_key TEXT PRIMARY KEY NOT NULL,
+      account_owner_hash TEXT NOT NULL,
+      queue_sequence INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS evidence_journal (
+      record_key TEXT PRIMARY KEY NOT NULL,
+      account_owner_hash TEXT NOT NULL,
+      queue_sequence INTEGER NOT NULL,
       payload TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -153,10 +191,19 @@ async function migrateLegacyQueue(
     if (raw !== null) {
       const items = parsedItems;
       if (items === null) {
+        const encodedRaw = new TextEncoder().encode(raw);
+        const boundedRaw = new TextDecoder().decode(encodedRaw.slice(0, CORRUPT_LEGACY_QUARANTINE_MAX_BYTES - 4));
         await transaction.runAsync(
-          'INSERT OR REPLACE INTO migration_quarantine (record_key, payload) VALUES (?, ?);',
+          'INSERT OR REPLACE INTO migration_quarantine (record_key, account_owner_hash, queue_sequence, payload) VALUES (?, ?, ?, ?);',
           `legacy-corrupt:${Date.now()}`,
-          JSON.stringify({ encryptedLegacyPayload: raw, reason: 'corrupt_legacy_queue' }),
+          'legacy-unbound-owner',
+          0,
+          JSON.stringify({
+            encryptedLegacyPayload: boundedRaw,
+            originalByteLength: encodedRaw.byteLength,
+            reason: 'corrupt_legacy_queue',
+            truncated: encodedRaw.byteLength > CORRUPT_LEGACY_QUARANTINE_MAX_BYTES,
+          }),
         );
         await transaction.runAsync(
           'INSERT OR REPLACE INTO diagnostic_records (record_key, payload) VALUES (?, ?);',
@@ -170,6 +217,13 @@ async function migrateLegacyQueue(
         )))).flat().length;
         if (persistedCount !== items.length) throw new Error('Legacy evidence migration verification failed.');
         if (manifest === null) throw new Error('Legacy evidence migration HMAC manifest is unavailable.');
+        const rereadItems = (await Promise.all(RECORD_TABLES.map((table) => transaction.getAllAsync<StoredRow>(
+          `SELECT record_key AS recordKey, payload FROM ${table};`,
+        )))).flat().map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+        const rereadManifest = await createMigrationHmacManifest(rereadItems, hexToBytes(key), sha256!);
+        if (rereadManifest.clientIdHmac !== manifest.clientIdHmac || rereadManifest.itemCount !== manifest.itemCount) {
+          throw new Error('Legacy evidence migration client-id manifest verification failed.');
+        }
         await transaction.runAsync(
           'INSERT OR REPLACE INTO diagnostic_records (record_key, payload) VALUES (?, ?);',
           'migration-hmac-v2',
@@ -182,36 +236,164 @@ async function migrateLegacyQueue(
   if (raw !== null) await legacyStorage?.removeItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY);
 }
 
+async function cleanupCommittedLegacyQueue(
+  database: EvidenceDatabase,
+  legacyStorage: LegacyStorage | undefined,
+) {
+  if (legacyStorage === undefined) return;
+  const raw = await legacyStorage.getItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY);
+  if (raw === null) return;
+  const marker = await database.getFirstAsync<{ record_key?: string }>(
+    "SELECT record_key FROM diagnostic_records WHERE record_key IN ('migration-hmac-v2', 'migration-corrupt-legacy') LIMIT 1;",
+  );
+  if (marker?.record_key !== undefined) {
+    await legacyStorage.removeItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY);
+  }
+}
+
 async function replaceQueueRows(database: EvidenceDatabase, items: Record<string, unknown>[]) {
   await database.withExclusiveTransactionAsync(async (transaction) => {
-    for (const table of RECORD_TABLES) await transaction.execAsync(`DELETE FROM ${table};`);
+    await transaction.execAsync('DELETE FROM workflow_evidence;');
+    await transaction.execAsync('DELETE FROM location_batches;');
     await writeQueueRows(transaction, items);
+    await transaction.execAsync("DELETE FROM evidence_journal WHERE created_at < datetime('now', '-30 days');");
+    await transaction.execAsync('DELETE FROM sensitive_evidence WHERE expires_at <= CURRENT_TIMESTAMP;');
   });
 }
 
 async function writeQueueRows(database: EvidenceDatabase, items: Record<string, unknown>[]) {
   for (const item of items) {
-    const recordKey = typeof item.queueItemId === 'string' ? item.queueItemId : `invalid:${Date.now()}`;
+    const queueItemId = typeof item.queueItemId === 'string' ? item.queueItemId : `invalid:${Date.now()}`;
+    const ownerHash = typeof item.accountOwnerHash === 'string' ? item.accountOwnerHash : 'legacy-unbound-owner';
+    const recordKey = `${ownerHash}:${queueItemId}`;
     const table = classifyItem(item);
+    const envelope = redactReplayPayload(item);
+    const sequence = readQueueSequence(item);
     await database.runAsync(
-      `INSERT OR REPLACE INTO ${table} (record_key, payload) VALUES (?, ?);`,
+      `INSERT OR REPLACE INTO ${table} (record_key, account_owner_hash, queue_sequence, payload) VALUES (?, ?, ?, ?);`,
       recordKey,
-      JSON.stringify(item),
+      ownerHash,
+      sequence,
+      JSON.stringify(envelope),
     );
+    if (hasSensitiveReplayPayload(item)) {
+      await database.runAsync(
+        "INSERT OR IGNORE INTO sensitive_evidence (record_key, account_owner_hash, queue_sequence, payload, expires_at) VALUES (?, ?, ?, ?, datetime('now', '+7 days'));",
+        recordKey,
+        ownerHash,
+        sequence,
+        JSON.stringify(extractSensitiveReplay(item)),
+      );
+    }
+    const journal = Array.isArray(item.journal) ? item.journal : [];
+    for (const [index, entry] of journal.entries()) {
+      await database.runAsync(
+        'INSERT OR IGNORE INTO evidence_journal (record_key, account_owner_hash, queue_sequence, payload) VALUES (?, ?, ?, ?);',
+        `${recordKey}:${index}:${typeof (entry as Record<string, unknown>).at === 'string' ? (entry as Record<string, unknown>).at : ''}`,
+        ownerHash,
+        sequence,
+        JSON.stringify(entry),
+      );
+    }
   }
 }
 
 function classifyItem(item: Record<string, unknown>): (typeof RECORD_TABLES)[number] {
   if (item.reconciliation !== undefined) return 'migration_quarantine';
-  if (item.kind === 'proof_media') return 'sensitive_evidence';
   const event = typeof item.event === 'object' && item.event !== null ? item.event as Record<string, unknown> : null;
   return event?.eventType === 'LOCATION_UPDATED' ? 'location_batches' : 'workflow_evidence';
+}
+
+function redactReplayPayload(item: Record<string, unknown>) {
+  const identity = pickEvidenceIdentity(item);
+  if (item.kind === 'proof_media') {
+    const request = typeof item.request === 'object' && item.request !== null ? item.request as Record<string, unknown> : {};
+    return {
+      ...identity,
+      request: {
+        deliveryStopId: request.deliveryStopId,
+        routePlanId: request.routePlanId,
+        source: request.source,
+      },
+      sensitiveReplay: true,
+    };
+  }
+  const event = typeof item.event === 'object' && item.event !== null ? item.event as Record<string, unknown> : null;
+  if (event === null) return identity;
+  return {
+    ...identity,
+    event: {
+      clientEventId: event.clientEventId,
+      ...(event.deliveryStopId === undefined ? {} : { deliveryStopId: event.deliveryStopId }),
+      eventType: event.eventType,
+      ...(event.latitude === undefined ? {} : { latitude: event.latitude }),
+      ...(event.longitude === undefined ? {} : { longitude: event.longitude }),
+      occurredAt: event.occurredAt,
+      ...(event.routePlanId === undefined ? {} : { routePlanId: event.routePlanId }),
+    },
+    ...(event.payload === undefined ? {} : { sensitiveReplay: true }),
+  };
+}
+
+function pickEvidenceIdentity(item: Record<string, unknown>) {
+  return {
+    accountOwnerHash: item.accountOwnerHash,
+    attempts: item.attempts,
+    enqueuedAt: item.enqueuedAt,
+    ...(item.firstErrorCode === undefined ? {} : { firstErrorCode: item.firstErrorCode }),
+    journal: item.journal,
+    kind: item.kind,
+    ...(item.lastErrorCode === undefined ? {} : { lastErrorCode: item.lastErrorCode }),
+    queueItemId: item.queueItemId,
+    queueSequence: item.queueSequence,
+    ...(item.reconciliation === undefined ? {} : { reconciliation: item.reconciliation }),
+    state: item.state,
+  };
+}
+
+function hasSensitiveReplayPayload(item: Record<string, unknown>) {
+  if (item.kind === 'proof_media') return true;
+  const event = typeof item.event === 'object' && item.event !== null ? item.event as Record<string, unknown> : null;
+  return event?.payload !== undefined;
+}
+
+function extractSensitiveReplay(item: Record<string, unknown>) {
+  if (item.kind === 'proof_media') {
+    const request = typeof item.request === 'object' && item.request !== null ? item.request as Record<string, unknown> : {};
+    return { fileName: request.fileName, kind: 'proof_media', uri: request.uri };
+  }
+  const event = typeof item.event === 'object' && item.event !== null ? item.event as Record<string, unknown> : {};
+  return { kind: 'driver_event', payload: event.payload };
+}
+
+function hydrateSensitiveReplay(envelope: Record<string, unknown>, sensitiveValue: unknown) {
+  if (typeof sensitiveValue !== 'object' || sensitiveValue === null) return envelope;
+  const sensitive = sensitiveValue as Record<string, unknown>;
+  if (sensitive.kind === 'proof_media') {
+    const request = typeof envelope.request === 'object' && envelope.request !== null
+      ? envelope.request as Record<string, unknown>
+      : {};
+    return { ...envelope, request: { ...request, fileName: sensitive.fileName, uri: sensitive.uri } };
+  }
+  if (sensitive.kind === 'driver_event') {
+    const event = typeof envelope.event === 'object' && envelope.event !== null
+      ? envelope.event as Record<string, unknown>
+      : {};
+    return { ...envelope, event: { ...event, payload: sensitive.payload } };
+  }
+  return envelope;
+}
+
+function readQueueSequence(item: unknown) {
+  if (typeof item !== 'object' || item === null) return Number.MAX_SAFE_INTEGER;
+  const sequence = (item as Record<string, unknown>).queueSequence;
+  return typeof sequence === 'number' && Number.isInteger(sequence) ? sequence : Number.MAX_SAFE_INTEGER;
 }
 
 function parseLegacyItems(raw: string): Record<string, unknown>[] | null {
   try {
     const parsed = JSON.parse(raw) as { items?: unknown; version?: unknown };
-    if (parsed.version !== 1 || !Array.isArray(parsed.items)) return null;
+    if ((parsed.version !== 1 && parsed.version !== 2) || !Array.isArray(parsed.items)) return null;
     if (!parsed.items.every((item) => typeof item === 'object' && item !== null)) return null;
     return parsed.items as Record<string, unknown>[];
   } catch {
