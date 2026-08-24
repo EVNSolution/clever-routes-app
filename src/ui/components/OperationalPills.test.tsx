@@ -9,10 +9,10 @@ import {
 import { projectRouteProgress } from '../../domain/route/routeProgressProjection';
 
 describe('operational pills', () => {
-  it('keeps Alert, Route, GPS, Device, Server, and Sync independently labeled', () => {
+  it('keeps Alert, Route, GPS, Device, Server, Sync, and Gap independently labeled', () => {
     assert.deepEqual(buildOperationalPills({
-      alert: 'None', device: 'This device', gps: 'Fresh', route: 'Active', server: 'Healthy', sync: '1 pending',
-    }).map((pill) => pill.label), ['Alert', 'Route', 'GPS', 'Device', 'Server', 'Sync']);
+      alert: 'None', device: 'This device', gap: '0 stops', gps: 'Fresh', route: 'Active', server: 'Healthy', sync: '1 pending',
+    }).map((pill) => pill.label), ['Alert', 'Route', 'GPS', 'Device', 'Server', 'Sync', 'Gap']);
   });
 
   it('uses accessible pill values without separator-dot presentation', () => {
@@ -49,7 +49,8 @@ describe('operational pills', () => {
       GPS: 'Near stop 11',
       Route: 'Active',
       Server: '1/11',
-      Sync: 'Gap 10',
+      Sync: 'Blocked',
+      Gap: '10 stops',
     });
   });
 });

@@ -5,6 +5,7 @@ export type OperationalPillValues = {
   alert: string;
   device: string;
   deviceConflict?: boolean;
+  gap: string;
   gps: string;
   route: string;
   server: string;
@@ -39,6 +40,7 @@ export function buildDriverOperationalPillValues(input: {
       ? input.deviceConflict ? `Conflict (${localProgress})` : localProgress
       : input.deviceConflict ? 'Conflict' : 'This device',
     deviceConflict: input.deviceConflict,
+    gap: `${progressGap} stops`,
     gps: input.backgroundLocationGranted
       ? formatGpsOperationalPill(input.gpsOperationalState, input.currentStopSequence)
       : 'Unavailable',
@@ -50,7 +52,7 @@ export function buildDriverOperationalPillValues(input: {
     server: hasRouteProgress ? serverProgress : input.routeSyncReady ? 'Connected' : 'Unavailable',
     sync: input.offlineStorageState === 'STORAGE_DEGRADED'
       ? 'Storage blocked'
-      : progressGap > 0 ? `Gap ${progressGap}` : `${input.offlineQueueCount} pending`,
+      : progressGap > 0 ? 'Blocked' : `${input.offlineQueueCount} pending`,
   };
 }
 
@@ -62,6 +64,7 @@ export function buildOperationalPills(values: OperationalPillValues) {
     { label: 'Device', value: values.device },
     { label: 'Server', value: values.server },
     { label: 'Sync', value: values.sync },
+    { label: 'Gap', value: values.gap },
   ] as const;
 }
 

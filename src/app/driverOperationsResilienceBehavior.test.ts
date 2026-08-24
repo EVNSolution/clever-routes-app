@@ -11,8 +11,8 @@ describe('driver operations resilience runtime', () => {
     assert.match(source, /createDriverSyncTakeoverApiClient[\s\S]*accountAccessToken:[\s\S]*onDriverSyncTakeover/u);
   });
 
-  it('surfaces six independent operational values and keeps completion pending visible', () => {
-    assert.match(pillModelSource, /alert:[\s\S]*device:[\s\S]*gps:[\s\S]*route:[\s\S]*server:[\s\S]*sync:/u);
+  it('surfaces independent operational values including progress gap and keeps completion pending visible', () => {
+    assert.match(pillModelSource, /alert:[\s\S]*device:[\s\S]*gap:[\s\S]*gps:[\s\S]*route:[\s\S]*server:[\s\S]*sync:/u);
     assert.match(pillModelSource, /hasDurablePendingRouteEnd \|\| input\.completionQueued[\s\S]*'Completion pending'/u);
     assert.match(source, /buildDriverOperationalPillValues\(\{[\s\S]*currentStopSequence: currentStop\?\.sequence \?\? null,[\s\S]*routeProgress/u);
   });
