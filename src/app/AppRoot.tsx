@@ -77,6 +77,7 @@ import {
   type ContinuousLocationStreamStartResult,
 } from '../domain/location/continuousLocationStream';
 import { finishDeliveryAfterActive, type DeliveryFinishResult } from '../domain/delivery/deliveryFinish';
+import { createDriverEventReceiptApiClient } from '../domain/events/driverEventReceipt';
 import { startDeliveryWithForegroundPermission, type DeliveryStartResult } from '../domain/delivery/deliveryStart';
 import { createDriverApiClientsFromRouteAccess } from '../api/deliveryServer/driverApiClients';
 import { createDriverAppReleaseApiClient } from '../api/deliveryServer/driverAppReleaseApi';
@@ -119,6 +120,17 @@ import {
   shouldRetryOfflineSubmissionsAfterNetworkChange,
 } from '../domain/offline/offlineRetryTrigger';
 import { createOfflineRetryScheduler } from '../domain/offline/offlineRetryScheduler';
+import { classifyGpsOperationalState, type GpsOperationalState } from '../domain/location/gpsOperationalState';
+import {
+  createDriverSyncHeartbeatApiClient,
+  createDriverSyncHeartbeatScheduler,
+  createDriverSyncTakeoverApiClient,
+  DriverSyncHeartbeatHttpError,
+  type DriverSyncHeartbeatResult,
+} from '../domain/operations/driverSyncHeartbeat';
+import { getExpoDriverSyncIdentity } from '../platform/expo/secureStore/expoDriverSyncIdentity';
+import { OperationalPills } from '../ui/components/OperationalPills';
+import type { OperationalPillValues } from '../ui/components/operationalPillModel';
 import { captureProofPhoto, type ProofPhotoCaptureResult, type ProofPhotoCaptureSource } from '../domain/proof/proofPhotoCapture';
 import {
   createMockProofMediaUploadService,
@@ -322,6 +334,7 @@ function DriverApp() {
   const [pendingStopArrivalNotification, setPendingStopArrivalNotification] = useState<StopArrivalNotificationResponse | null>(null);
   const [pendingStopArrivalCompletion, setPendingStopArrivalCompletion] = useState<StopArrivalNotificationData | null>(null);
   const [stopArrivalProximityByStopId, setStopArrivalProximityByStopId] = useState<Record<string, StopArrivalProximityEvidence | null>>({});
+  const [latestGpsSample, setLatestGpsSample] = useState<{ accuracyMeters: number | null; capturedAt: string } | null>(null);
   const [pendingDriverRouteNotification, setPendingDriverRouteNotification] = useState<PendingDriverRouteNotification | null>(null);
 
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
@@ -344,6 +357,7 @@ function DriverApp() {
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
   const [offlineStorageState, setOfflineStorageState] = useState<'READY' | 'STORAGE_DEGRADED'>('READY');
   const [routeReconciliationCount, setRouteReconciliationCount] = useState(0);
+  const [driverSyncHealth, setDriverSyncHealth] = useState<DriverSyncHeartbeatResult | null>(null);
   const [routeRecoveryRefreshReason, setRouteRecoveryRefreshReason] = useState<RouteRecoveryRefreshReason | null>(null);
   const [lastRoutesUpdatedAt, setLastRoutesUpdatedAt] = useState<Date | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -952,10 +966,20 @@ function DriverApp() {
         setMessage('Offline evidence sync is paused until encrypted storage recovers.');
         return false;
       }
+      const receiptAccountAccess = runtimeConfig.mode === 'live' ? await getActiveAccountAccess() : null;
+      if (runtimeConfig.mode === 'live' && receiptAccountAccess === null) {
+        throw new Error('Account access is required before completion receipt recovery.');
+      }
       for (const session of sessions) {
         const routeSubmission = toCompanyGuidanceSubmission(session);
         const refreshDriverAccess = buildDriverAccessRefresh(routeSubmission);
         const result = await retryOfflineSubmissions({
+          ...(runtimeConfig.mode !== 'live' ? {} : {
+            driverEventReceiptService: createDriverEventReceiptApiClient({
+              accountAccessToken: receiptAccountAccess!.accessToken,
+              baseUrl: runtimeConfig.deliveryServerBaseUrl,
+            }),
+          }),
           driverEventService: getDriverEventServiceForCurrentSubmission({
             fallback: mockDriverEventService,
             refreshDriverAccess,
@@ -977,6 +1001,12 @@ function DriverApp() {
         const confirmedStopIds = result.serverConfirmedStopIds;
         if (activeRoutePlanId === session.route.id && confirmedStopIds !== undefined) {
           setServerConfirmedStopIds((current) => [...new Set([...current, ...confirmedStopIds])]);
+        }
+        if (result.completionAcknowledgedRoutePlanIds?.includes(session.route.id) === true) {
+          await clearAndStopActiveLocationSession(session.route.id);
+          setActiveRoutePlanId(null);
+          setDeliveryStartResult(null);
+          setContinuousLocationResult({ kind: 'stopped', taskName: CONTINUOUS_LOCATION_TASK_NAME });
         }
         if (result.reconciliationRoutePlanIds?.includes(session.route.id) === true) {
           if (activeRoutePlanId === session.route.id) {
@@ -1021,6 +1051,7 @@ function DriverApp() {
     activeRoutePlanId,
     buildDriverAccessRefresh,
     clearAndStopActiveLocationSession,
+    getActiveAccountAccess,
     mockDriverEventService,
     mockProofMediaUploadService,
     runtimeConfig,
@@ -1046,6 +1077,11 @@ function DriverApp() {
     && activeRoutePlanId === selectedRoute.id
     && deliveryFinishResult?.flowState !== 'delivery_finished';
   const currentStop = selectedRoute === null ? null : getCurrentRouteStop({ navigationStepIndex, route: selectedRoute });
+  const gpsOperationalState = classifyGpsOperationalState({
+    accuracyMeters: latestGpsSample?.accuracyMeters ?? null,
+    capturedAt: latestGpsSample?.capturedAt ?? null,
+    distanceMeters: currentStop === null ? null : stopArrivalProximityByStopId[currentStop.deliveryStopId]?.distanceMeters ?? null,
+  });
   const currentStopPhotoResult = currentStop === null ? undefined : proofPhotoResults[currentStop.deliveryStopId];
   const currentStopPhotoUri = currentStopPhotoResult?.kind === 'captured' ? currentStopPhotoResult.uri : undefined;
   const stopDetailsProgressState = selectedRoute === null
@@ -1596,6 +1632,12 @@ function DriverApp() {
       syncOfflineQueueState(offlineSubmissionQueue);
 
       const lastLocation = locations[locations.length - 1] ?? null;
+      if (lastLocation !== null) {
+        setLatestGpsSample({
+          accuracyMeters: lastLocation.accuracyMeters ?? null,
+          capturedAt: lastLocation.occurredAt.toISOString(),
+        });
+      }
       const candidate = getStopArrivalNotificationCandidate({
         completedStopIds,
         currentStepIndex: navigationStepIndex,
@@ -2418,6 +2460,120 @@ function DriverApp() {
     offlineStorageState,
     recoverOfflineEvidenceStorage,
   ]);
+
+  const sendDriverSyncHeartbeat = useCallback(async (): Promise<boolean> => {
+    if (runtimeConfig.mode !== 'live' || installedDriverAppVersion === null || activeRoutePlanId === null) return true;
+    const routeSession = routeSessions.find((session) => session.route.id === activeRoutePlanId);
+    if (routeSession === undefined) return true;
+    const routeSubmission = toCompanyGuidanceSubmission(routeSession);
+    const pending = offlineSubmissionQueue?.listPending().filter((item) => (
+      item.kind === 'driver_event' ? item.event.routePlanId === activeRoutePlanId : item.request.routePlanId === activeRoutePlanId
+    )) ?? [];
+    const firstPending = pending[0];
+    const retryEntries = pending.flatMap((item) => item.journal)
+      .filter((entry) => entry.kind === 'ATTEMPT' || entry.kind === 'RECONCILIATION')
+      .slice(-8)
+      .map((entry) => ({ errorCode: entry.code, observedAt: entry.at }));
+    const identity = await getExpoDriverSyncIdentity().next([
+      verifiedDriverPhoneE164 ?? 'authenticated',
+      activeRoutePlanId,
+      routeSession.routeAccess.assignmentGeneration,
+    ].join(':'));
+    const request = {
+      appVersion: installedDriverAppVersion.versionName,
+      clientOccurredAt: new Date().toISOString(),
+      completedStopCount: completedStopIds.length,
+      currentStopSequence: currentStop?.sequence ?? null,
+      deviceInstanceHash: identity.deviceInstanceHash,
+      driverContractVersion: routeSession.routeAccess.driverContractVersion,
+      finishPending: routeSession.pendingRouteEnd === 'completed',
+      firstErrorCode: firstPending?.firstErrorCode ?? null,
+      firstFailedAt: firstPending?.journal.find((entry) => entry.kind === 'ATTEMPT')?.at ?? null,
+      heartbeatSequence: identity.heartbeatSequence,
+      lastAcknowledgedAt: null,
+      lastErrorCode: pending.at(-1)?.lastErrorCode ?? null,
+      lastRetryAt: pending.flatMap((item) => item.journal).filter((entry) => entry.kind === 'ATTEMPT').at(-1)?.at ?? null,
+      locallyFinished: routeSession.pendingRouteEnd === 'completed',
+      nextRetryAt: null,
+      oldestQueuedAt: firstPending?.enqueuedAt ?? null,
+      queueDepth: pending.length,
+      retryCount: pending.reduce((total, item) => total + item.attempts, 0),
+      retryJournal: retryEntries,
+      sessionGeneration: identity.sessionGeneration,
+      totalStopCount: routeSession.route.stops.length,
+      versionCode: installedDriverAppVersion.versionCode,
+    };
+    let accessToken = routeSubmission.driverAccess.accessToken;
+    try {
+      const result = await createDriverSyncHeartbeatApiClient({ accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl }).recordHeartbeat(request);
+      setDriverSyncHealth(result);
+      return result.accepted && !result.conflict;
+    } catch (error) {
+      if (!(error instanceof DriverSyncHeartbeatHttpError) || error.status !== 401) throw error;
+      const refreshed = await refreshDriverAccessForSubmission(routeSubmission);
+      if (refreshed === null) return false;
+      accessToken = refreshed.accessToken;
+      const result = await createDriverSyncHeartbeatApiClient({ accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl }).recordHeartbeat(request);
+      setDriverSyncHealth(result);
+      return result.accepted && !result.conflict;
+    }
+  }, [
+    activeRoutePlanId,
+    completedStopIds.length,
+    currentStop?.sequence,
+    installedDriverAppVersion,
+    offlineSubmissionQueue,
+    refreshDriverAccessForSubmission,
+    routeSessions,
+    runtimeConfig,
+    verifiedDriverPhoneE164,
+  ]);
+
+  const handleDriverSyncTakeover = useCallback(async (): Promise<void> => {
+    if (runtimeConfig.mode !== 'live' || activeRoutePlanId === null) return;
+    const routeSession = routeSessions.find((session) => session.route.id === activeRoutePlanId);
+    const accountAccess = await getActiveAccountAccess();
+    if (routeSession === undefined || accountAccess === null) return;
+    const identity = await getExpoDriverSyncIdentity().next([
+      verifiedDriverPhoneE164 ?? 'authenticated', activeRoutePlanId, routeSession.routeAccess.assignmentGeneration,
+    ].join(':'));
+    try {
+      await createDriverSyncTakeoverApiClient({
+        accountAccessToken: accountAccess.accessToken,
+        baseUrl: runtimeConfig.deliveryServerBaseUrl,
+      }).takeover({
+        deviceInstanceHash: identity.deviceInstanceHash,
+        routePlanId: activeRoutePlanId,
+        sessionGeneration: identity.sessionGeneration,
+      });
+      setDriverSyncHealth((current) => current === null ? null : { ...current, conflict: false });
+      void sendDriverSyncHeartbeat();
+    } catch {
+      setMessage('This device could not take over the route. Check the connection and retry.');
+    }
+  }, [
+    activeRoutePlanId,
+    getActiveAccountAccess,
+    routeSessions,
+    runtimeConfig,
+    sendDriverSyncHeartbeat,
+    verifiedDriverPhoneE164,
+  ]);
+
+  useEffect(() => {
+    if (!isDriverRestoreComplete || activeRoutePlanId === null) return;
+    const scheduler = createDriverSyncHeartbeatScheduler({
+      cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      hasActiveSession: () => activeRoutePlanId !== null,
+      isForeground: () => AppState.currentState === 'active',
+      isOnline: () => networkReachability === 'online',
+      schedule: (run, delayMs) => setTimeout(run, delayMs),
+      sendHeartbeat: sendDriverSyncHeartbeat,
+    });
+    const subscription = AppState.addEventListener('change', scheduler.notifyConditionsChanged);
+    scheduler.start();
+    return () => { subscription.remove(); scheduler.stop(); };
+  }, [activeRoutePlanId, isDriverRestoreComplete, networkReachability, sendDriverSyncHeartbeat]);
 
   const handlePullRefresh = useCallback(async () => {
     if (isPullRefreshingRef.current) {
@@ -3595,13 +3751,12 @@ function DriverApp() {
         setOfflineSubmissionQueue(queue);
       }
       const finishResult = await finishDeliveryAfterActive({
-        deactivateActiveRouteSession: async () => {
-          const cleared = await driverAccessTokenStore.clearActiveRouteSession(route.id);
-          if (cleared) {
-            routeSessionDeactivated = true;
-            setActiveRoutePlanId(null);
-          }
-          return cleared;
+        deactivateActiveRouteSession: async (completion) => {
+          return driverAccessTokenStore.markActiveRouteCompletionPending({
+            clientEventId: completion.clientEventId,
+            occurredAt: completion.occurredAt,
+            routePlanId: route.id,
+          });
         },
         deliveryStart: deliveryStartResult,
         driverEventService: createRouteOrderedDriverEventService({
@@ -3626,6 +3781,13 @@ function DriverApp() {
         setMessage(finishResult.message);
         return false;
       }
+      if (finishResult.kind === 'recorded') {
+        routeSessionDeactivated = await driverAccessTokenStore.clearActiveRouteSession(route.id);
+        if (!routeSessionDeactivated) {
+          throw new Error('Completion was acknowledged but the persisted route session could not be cleared.');
+        }
+        setActiveRoutePlanId(null);
+      }
       if (finishResult.kind === 'queued' && finishResult.requiresRouteReconciliation === true) {
         syncOfflineQueueState(queue);
         setDeliveryStartResult(null);
@@ -3642,7 +3804,9 @@ function DriverApp() {
             }
           : session));
       }
-      setContinuousLocationResult({ kind: 'stopped', taskName: finishResult.stoppedTaskName });
+      if (finishResult.monitoringMode === 'stopped') {
+        setContinuousLocationResult({ kind: 'stopped', taskName: finishResult.stoppedTaskName });
+      }
       if (options?.returnToRoutes === true) {
         const readyRouteSessions = routeSessions.map((session): RouteSession => session.route.id === route.id
           ? {
@@ -4099,7 +4263,19 @@ function DriverApp() {
               isStartingRoute={isStartingRoute}
               isSwitchingRoute={pendingRoutePlanId !== null}
               offlineStorageState={offlineStorageState}
+              operationalPillValues={buildDriverOperationalPillValues({
+                activeRoutePlanId,
+                backgroundLocationPermission,
+                deliveryFinishResult,
+                driverSyncHealth,
+                gpsOperationalState,
+                offlineQueueCount,
+                offlineStorageState,
+                routeReconciliationCount,
+                routeSyncState,
+              })}
               onDeleteRoute={handleDeleteActiveRoute}
+              onDriverSyncTakeover={() => { void handleDriverSyncTakeover(); }}
               onOpenCompletedDeliveries={(routeId) => {
                 const routeSession = getRouteSessionForAction(routeSessions, routeId);
                 if (routeSession === null) {
@@ -4152,7 +4328,22 @@ function DriverApp() {
           ) : null}
 
           {screen === 'routeSession' && selectedRoute !== null ? (
-            <RouteSessionScreen
+            <>
+              <OperationalPills
+                onTakeover={() => { void handleDriverSyncTakeover(); }}
+                values={buildDriverOperationalPillValues({
+                  activeRoutePlanId,
+                  backgroundLocationPermission,
+                  deliveryFinishResult,
+                  driverSyncHealth,
+                  gpsOperationalState,
+                  offlineQueueCount,
+                  offlineStorageState,
+                  routeReconciliationCount,
+                  routeSyncState,
+                })}
+              />
+              <RouteSessionScreen
               allStopsCompleted={allStopsCompleted}
               company={currentCompany}
               completedStopIds={completedStopIds}
@@ -4174,7 +4365,8 @@ function DriverApp() {
               routeStartedEventResult={routeStartedEventResult}
               routeStatus={routeStatus}
               stop={currentStop}
-            />
+              />
+            </>
           ) : null}
 
           {screen === 'stopDetails' && stopDetailsStop !== null ? (
@@ -4431,7 +4623,9 @@ function MyRoutesPage({
   isStartingRoute,
   isSwitchingRoute,
   offlineStorageState,
+  operationalPillValues,
   onDeleteRoute,
+  onDriverSyncTakeover,
   onOpenCompletedDeliveries,
   onOpenBackgroundLocationSettings,
   onContinueRoute,
@@ -4454,7 +4648,9 @@ function MyRoutesPage({
   isStartingRoute: boolean;
   isSwitchingRoute: boolean;
   offlineStorageState: 'READY' | 'STORAGE_DEGRADED';
+  operationalPillValues: Parameters<typeof OperationalPills>[0]['values'];
   onDeleteRoute(routeId: string): void;
+  onDriverSyncTakeover(): void;
   onOpenCompletedDeliveries(routeId: string): void;
   onOpenBackgroundLocationSettings(): void;
   onContinueRoute(routeId: string): void;
@@ -4489,6 +4685,7 @@ function MyRoutesPage({
 
   return (
     <View style={styles.myRoutesPage}>
+      <OperationalPills onTakeover={onDriverSyncTakeover} values={operationalPillValues} />
       {offlineStorageState === 'STORAGE_DEGRADED' ? (
         <View accessibilityRole="alert" style={styles.backgroundLocationWarning}>
           <View style={styles.backgroundLocationWarningCopy}>
@@ -6181,6 +6378,35 @@ function StatusBanner({ text, tone }: { text: string; tone: 'green' | 'warning' 
   return <Text style={[styles.statusBanner, tone === 'green' ? styles.statusBannerGreen : styles.statusBannerWarning]}>{text}</Text>;
 }
 
+function formatGpsOperationalPill(state: GpsOperationalState): string {
+  if (state.freshness === 'unknown') return 'Waiting';
+  if (state.freshness === 'stale') return 'Stale';
+  if (state.accuracy === 'poor') return 'Low accuracy';
+  if (state.proximity === 'within') return 'Near stop';
+  return state.freshness === 'aging' ? 'Aging' : 'Fresh';
+}
+
+function buildDriverOperationalPillValues(input: {
+  activeRoutePlanId: string | null;
+  backgroundLocationPermission: BackgroundLocationPermissionState;
+  deliveryFinishResult: DeliveryFinishResult | null;
+  driverSyncHealth: DriverSyncHeartbeatResult | null;
+  gpsOperationalState: GpsOperationalState;
+  offlineQueueCount: number;
+  offlineStorageState: 'READY' | 'STORAGE_DEGRADED';
+  routeReconciliationCount: number;
+  routeSyncState: RouteSyncState;
+}): OperationalPillValues {
+  return {
+    alert: input.routeReconciliationCount > 0 ? 'Action needed' : 'None',
+    device: input.driverSyncHealth?.conflict === true ? 'Conflict' : 'This device',
+    gps: input.backgroundLocationPermission === 'granted' ? formatGpsOperationalPill(input.gpsOperationalState) : 'Unavailable',
+    route: input.activeRoutePlanId === null ? 'Ready' : (input.deliveryFinishResult?.kind === 'queued' ? 'Completion pending' : 'Active'),
+    server: input.driverSyncHealth?.state ?? (input.routeSyncState === 'ready' ? 'Connected' : 'Unavailable'),
+    sync: input.offlineStorageState === 'STORAGE_DEGRADED' ? 'Storage blocked' : `${input.offlineQueueCount} pending`,
+  };
+}
+
 function EmptyState({ body, minimal = false, title }: { body: string; minimal?: boolean; title: string }) {
   return (
     <View style={[styles.emptyCard, minimal && styles.emptyCardMinimal]}>
@@ -6234,7 +6460,12 @@ function getDriverEventServiceForCurrentSubmission(input: {
     return input.fallback;
   }
 
+  const installedVersion = readInstalledDriverAppVersion();
   return createDriverApiClientsFromRouteAccess({
+    ...(installedVersion === null ? {} : {
+      appVersion: installedVersion.versionName,
+      versionCode: installedVersion.versionCode,
+    }),
     baseUrl: input.runtimeConfig.deliveryServerBaseUrl,
     refreshDriverAccess: input.refreshDriverAccess,
     routeAccess: toInvitedRouteAccess(input.submission),

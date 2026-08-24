@@ -23,6 +23,7 @@ export type DeliveryFinishResult =
       flowState: 'delivery_finished';
       kind: 'recorded';
       message: string;
+      monitoringMode: 'stopped';
       stoppedTaskName: string;
     }
   | {
@@ -34,10 +35,15 @@ export type DeliveryFinishResult =
       requiresRouteLookup?: true;
       requiresRouteReconciliation?: true;
       stoppedTaskName: string;
+      monitoringMode: 'reduced';
     };
 
 export async function finishDeliveryAfterActive(input: {
-  deactivateActiveRouteSession?: () => Promise<boolean>;
+  deactivateActiveRouteSession?: (completion: {
+    clientEventId: string;
+    occurredAt: string;
+    routeEnd: 'completed' | 'released';
+  }) => Promise<boolean>;
   deliveryStart: DeliveryStartResult;
   driverEventService: DriverEventService;
   eventPayload?: Record<string, unknown>;
@@ -73,7 +79,11 @@ export async function finishDeliveryAfterActive(input: {
 
   if (
     input.deactivateActiveRouteSession !== undefined
-    && !await input.deactivateActiveRouteSession()
+    && !await input.deactivateActiveRouteSession({
+      clientEventId: event.clientEventId,
+      occurredAt: occurredAt.toISOString(),
+      routeEnd: routeReleased ? 'released' : 'completed',
+    })
   ) {
     if (preparedQueueItem !== undefined) {
       input.offlineQueue?.discard(preparedQueueItem.queueItemId);
@@ -88,8 +98,6 @@ export async function finishDeliveryAfterActive(input: {
   }
 
   const taskName = input.taskName ?? CONTINUOUS_LOCATION_TASK_NAME;
-  await input.streamService.stopLocationUpdates(taskName);
-
   try {
     const result = await input.driverEventService.recordDriverEvent(event);
     if (preparedQueueItem !== undefined) {
@@ -99,6 +107,7 @@ export async function finishDeliveryAfterActive(input: {
       ? 0
       : input.offlineQueue.discardRouteSubmissions(input.routePlanId);
     await input.offlineQueue?.whenPersisted();
+    await input.streamService.stopLocationUpdates(taskName);
 
     return {
       discardedQueuedItems,
@@ -111,6 +120,7 @@ export async function finishDeliveryAfterActive(input: {
         : discardedQueuedItems > 0
         ? `Delivery finished. ${discardedQueuedItems} queued route submission${discardedQueuedItems === 1 ? '' : 's'} discarded after route completion was recorded.`
         : 'Delivery finished and route completion was recorded.',
+      monitoringMode: 'stopped',
       stoppedTaskName: taskName,
     };
   } catch (error) {
@@ -140,6 +150,7 @@ export async function finishDeliveryAfterActive(input: {
         ? {}
         : { requiresRouteReconciliation: true as const }),
       stoppedTaskName: taskName,
+      monitoringMode: 'reduced',
     };
   }
 }

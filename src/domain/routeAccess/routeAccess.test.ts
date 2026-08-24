@@ -95,6 +95,7 @@ describe('driver route access UX flow', () => {
     const secondRoute = {
       ...sampleInvitedRouteAccess,
       routeAccess: {
+        ...sampleInvitedRouteAccess.routeAccess,
         nextState: 'consent_required' as const,
         routeContext: '22222222-2222-4222-8222-222222222222',
         routePlanId: '22222222-2222-4222-8222-222222222222',

@@ -278,7 +278,8 @@ describe('delivery finish route cleanup', () => {
     assert.equal(routeSessionDeactivated, true);
     assert.equal(result.kind, 'queued');
     assert.equal(result.flowState, 'delivery_finished');
-    assert.deepEqual(stream.stoppedTasks, ['clever-routes-continuous-location']);
+    assert.deepEqual(stream.stoppedTasks, []);
+    assert.equal(result.kind === 'queued' ? result.monitoringMode : null, 'reduced');
     const pending = queue.listPending();
     assert.equal(pending.length, 1);
     assert.equal(pending[0]?.kind, 'driver_event');

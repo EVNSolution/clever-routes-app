@@ -25,6 +25,7 @@ export function buildActiveRouteForegroundNotification(input: {
   if (input.currentStepIndex <= 0) {
     return {
       body: 'Open CLEVER Routes to confirm pickup before the first delivery stop.',
+      expandedBody: formatOperationalNotificationLines().join('\n'),
       title: 'Pickup & Start Route',
     };
   }
@@ -34,6 +35,7 @@ export function buildActiveRouteForegroundNotification(input: {
   if (stop === null) {
     return {
       body: 'Open CLEVER Routes for route details.',
+      expandedBody: formatOperationalNotificationLines().join('\n'),
       title: 'Route in progress',
     };
   }
@@ -61,20 +63,31 @@ export function buildActiveRouteForegroundNotification(input: {
 
   return {
     body,
-    expandedBody: formatExpandedNotificationBody({
+    expandedBody: [formatExpandedNotificationBody({
       address,
       customerNote: stop.customerNote,
       itemCount,
       itemTypeCount,
       isPickupStop,
       payment,
-    }),
+    }), ...formatOperationalNotificationLines()].join('\n'),
     title: `Next stop ${stop.sequence}${eta === null ? '' : `  ETA ${eta}`}`,
     url: buildActiveRouteNotificationUrl({
       deliveryStopId: stop.deliveryStopId,
       routePlanId: input.route.id,
     }, true),
   };
+}
+
+function formatOperationalNotificationLines(): string[] {
+  return [
+    'Alert: None',
+    'Route: In progress',
+    'GPS: Monitoring',
+    'Device: This device',
+    'Server: Checking',
+    'Sync: Active',
+  ];
 }
 
 export function buildActiveRouteNotificationUrl(target: ActiveRouteNotificationTarget, showStopActions = false): string {

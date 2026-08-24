@@ -1183,7 +1183,13 @@ describe('offline submission queue', () => {
       routePlanId: 'route-1',
     });
 
-    assert.deepEqual(result, { discarded: 1, failed: 0, retried: 1, succeeded: 1 });
+    assert.deepEqual(result, {
+      completionAcknowledgedRoutePlanIds: ['route-1'],
+      discarded: 1,
+      failed: 0,
+      retried: 1,
+      succeeded: 1,
+    });
     assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
       'proof-media:route-1:stop-1:proof.jpg',
     ]);
@@ -1355,5 +1361,94 @@ describe('offline submission queue', () => {
     assert.deepEqual(queue.listPending().map((item) => item.queueItemId), ['driver-event:owner-b-pending']);
     const raw = storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '';
     assert.match(raw, /ACCOUNT_DELETION_SERVER_AUDITED/u);
+  });
+
+  it('recovers Kitchener completion after restart from the account-token APPLIED receipt without replay', async () => {
+    const storage = createMemoryStorage();
+    const first = await createPersistentOfflineSubmissionQueue({ storage });
+    first.enqueueDriverEvent({
+      appVersion: '1.2.0',
+      assignmentGeneration: '7',
+      clientEventId: '01K37KITCHENERCOMPLETE',
+      deliveryStopId: null,
+      driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'),
+      routePlanId: '11111111-1111-4111-8111-111111111111',
+      versionCode: 120,
+    });
+    await first.whenPersisted();
+
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    let replayed = 0;
+    const result = await retryOfflineSubmissions({
+      driverEventReceiptService: { lookupReceipt: async () => ({
+        assignmentGeneration: '7',
+        clientEventId: '01K37KITCHENERCOMPLETE',
+        errorCode: null,
+        expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+        routePlanId: '11111111-1111-4111-8111-111111111111',
+        routeStatus: 'COMPLETED',
+        status: 'APPLIED',
+      }) },
+      driverEventService: { recordDriverEvent: async () => { replayed += 1; throw new Error('must not replay'); } },
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue: restarted,
+    });
+
+    assert.equal(replayed, 0);
+    assert.deepEqual(result.completionAcknowledgedRoutePlanIds, ['11111111-1111-4111-8111-111111111111']);
+    assert.deepEqual(restarted.listPending(), []);
+  });
+
+  it('replays completion only for UNKNOWN plus IN_PROGRESS and quarantines a terminal South route', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const event = queue.enqueueDriverEvent({
+      assignmentGeneration: '7', clientEventId: 'south-complete', driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED', expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T20:00:00.000Z'), routePlanId: 'south-route',
+    }).event;
+    let routeStatus = 'IN_PROGRESS';
+    let replayed = 0;
+    const retry = () => retryOfflineSubmissions({
+      driverEventReceiptService: { lookupReceipt: async () => ({
+        assignmentGeneration: '7', clientEventId: event.clientEventId, errorCode: null,
+        expectedRouteVersionId: event.expectedRouteVersionId ?? null, routePlanId: 'south-route',
+        routeStatus, status: 'UNKNOWN',
+      }) },
+      driverEventService: { recordDriverEvent: async () => { replayed += 1; throw new Error('network offline'); } },
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue,
+    });
+    await retry();
+    assert.equal(replayed, 1);
+    routeStatus = 'COMPLETED';
+    const reconciled = await retry();
+    assert.deepEqual(reconciled.reconciliationRoutePlanIds, ['south-route']);
+    assert.equal(queue.listPending()[0]?.state, 'QUARANTINED');
+  });
+
+  it('recovers a queued route release receipt and clears reduced monitoring state without replay', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      assignmentGeneration: '8', clientEventId: 'release-lost-response', driverContractVersion: 2,
+      eventType: 'ROUTE_PAUSED', expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T20:10:00.000Z'), routePlanId: 'south-route',
+    });
+    let replayed = false;
+    const result = await retryOfflineSubmissions({
+      driverEventReceiptService: { lookupReceipt: async () => ({
+        assignmentGeneration: '8', clientEventId: 'release-lost-response', errorCode: null,
+        expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', routePlanId: 'south-route',
+        routeStatus: 'READY', status: 'APPLIED',
+      }) },
+      driverEventService: { recordDriverEvent: async () => { replayed = true; throw new Error('must not replay'); } },
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue,
+    });
+    assert.equal(replayed, false);
+    assert.deepEqual(result.completionAcknowledgedRoutePlanIds, ['south-route']);
+    assert.deepEqual(queue.listPending(), []);
   });
 });

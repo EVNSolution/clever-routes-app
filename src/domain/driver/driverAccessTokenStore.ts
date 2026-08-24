@@ -22,13 +22,15 @@ export type PersistedDriverAccess = {
 };
 
 export type PersistedActiveRouteSession = {
+  completionClientEventId?: string;
+  completionRequestedAt?: string;
   completedStopIds?: string[];
   navigationStepIndex: number;
   pickupCompletedAt?: string;
   routePlanId: string;
   routeStartedRecordedAt?: string;
   startedAt?: string;
-  status: 'active';
+  status: 'active' | 'completion_pending';
   updatedAt: string;
 };
 
@@ -53,6 +55,11 @@ export type DriverAccessTokenStore = {
   clearCachedRouteAccess(routePlanId?: string): Promise<boolean>;
   loadActiveDriverAccess(): Promise<DriverAccessRestoreResult>;
   markActiveRouteStarted(routePlanId: string, startedAt: string): Promise<boolean>;
+  markActiveRouteCompletionPending(input: {
+    clientEventId: string;
+    occurredAt: string;
+    routePlanId: string;
+  }): Promise<boolean>;
   saveActiveRouteSession(input: {
     completedStopIds?: string[];
     navigationStepIndex: number;
@@ -182,6 +189,25 @@ export function createDriverAccessTokenStore(input: {
         activeRouteSession: {
           ...activeRouteSession,
           routeStartedRecordedAt: now().toISOString(),
+        },
+        savedAt: now().toISOString(),
+      };
+    })),
+    markActiveRouteCompletionPending: (completion) => runSerialized(() => updateStoredPayload((payload) => {
+      const activeRouteSession = payload.activeRouteSession;
+      if (
+        activeRouteSession?.routePlanId !== completion.routePlanId
+        || !completion.clientEventId.trim()
+        || !Number.isFinite(Date.parse(completion.occurredAt))
+      ) return null;
+      return {
+        ...payload,
+        activeRouteSession: {
+          ...activeRouteSession,
+          completionClientEventId: completion.clientEventId,
+          completionRequestedAt: completion.occurredAt,
+          status: 'completion_pending',
+          updatedAt: now().toISOString(),
         },
         savedAt: now().toISOString(),
       };
@@ -363,8 +389,18 @@ function isPersistedActiveRouteSession(value: unknown): value is PersistedActive
 
   const session = value as Record<string, unknown>;
   return (
-    session.status === 'active' &&
+    (session.status === 'active' || session.status === 'completion_pending') &&
     typeof session.routePlanId === 'string' && session.routePlanId.trim() !== '' &&
+    (session.completionClientEventId === undefined || (
+      typeof session.completionClientEventId === 'string' && session.completionClientEventId.trim() !== ''
+    )) &&
+    (session.completionRequestedAt === undefined || (
+      typeof session.completionRequestedAt === 'string' && Number.isFinite(Date.parse(session.completionRequestedAt))
+    )) &&
+    (session.status !== 'completion_pending' || (
+      typeof session.completionClientEventId === 'string'
+      && typeof session.completionRequestedAt === 'string'
+    )) &&
     (session.completedStopIds === undefined || (
       Array.isArray(session.completedStopIds)
       && session.completedStopIds.every((stopId) => typeof stopId === 'string' && stopId.trim() !== '')

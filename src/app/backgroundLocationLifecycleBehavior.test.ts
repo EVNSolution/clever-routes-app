@@ -161,7 +161,9 @@ describe('background location lifecycle wiring', () => {
       'async function handleManualFinishRoute(',
     );
 
-    assert.match(finishSource, /deactivateActiveRouteSession: async \(\) => \{[\s\S]*clearActiveRouteSession\(route\.id\)/u);
+    assert.match(finishSource, /deactivateActiveRouteSession: async \(completion\) => \{[\s\S]*markActiveRouteCompletionPending/u);
+    assert.match(finishSource, /finishResult\.kind === 'recorded'[\s\S]*clearActiveRouteSession\(route\.id\)/u);
+    assert.match(finishSource, /finishResult\.monitoringMode === 'stopped'/u);
     assert.doesNotMatch(finishSource, /catch \(error\) \{[\s\S]*clearAndStopActiveLocationSession\(route\.id\)/u);
     assert.match(source, /const isStartDisabled = isStartingRoute \|\| isFinishingRoute \|\| isSwitchingRoute/u);
     assert.doesNotMatch(source, /const isStartDisabled = [^\n]*activeRoutePlanId !== null/u);

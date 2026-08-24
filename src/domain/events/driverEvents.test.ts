@@ -12,8 +12,38 @@ import {
 import { DriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createInMemoryOfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 import { sampleAssignedRoute } from '../route/assignedRoute';
+import routeCompletedRequest from '../../test/contractFixtures/routeOperations/v1/fixtures/route-completed.request.json';
 
 describe('driver event API boundary', () => {
+  it('sends the canonical v2 lineage and build contract on every ordered event', async () => {
+    let body: unknown;
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      orderedEventContract: {
+        appVersion: routeCompletedRequest.appVersion,
+        assignmentGeneration: routeCompletedRequest.assignmentGeneration,
+        driverContractVersion: 2,
+        expectedRouteVersionId: routeCompletedRequest.expectedRouteVersionId,
+        versionCode: routeCompletedRequest.versionCode,
+      },
+      fetchImpl: async (_url, init) => {
+        body = JSON.parse(init?.body ?? '{}');
+        return { json: async () => ({ data: { duplicate: false, eventId: 'event-id' }, error: null }), ok: true, status: 202 };
+      },
+    });
+
+    await service.recordDriverEvent({
+      clientEventId: routeCompletedRequest.clientEventId,
+      deliveryStopId: null,
+      eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date(routeCompletedRequest.occurredAt),
+      routePlanId: routeCompletedRequest.routePlanId,
+    });
+
+    assert.deepEqual(body, routeCompletedRequest);
+  });
+
   it('posts route started events with driver bearer token evidence', async () => {
     const requests: { body: unknown; cache?: string; credentials?: string; headers: Record<string, string>; method: string; url: string }[] = [];
     const service = createDriverEventsApiClient({

@@ -1,4 +1,5 @@
 import type { DriverEventInput, DriverEventService, DriverEventType } from '../events/driverEvents';
+import { resolveCompletionReceipt, type DriverEventReceiptService } from '../events/driverEventReceipt';
 import {
   getDriverApiRequiresRouteLookup,
   getDriverApiRequiresRouteReconciliation,
@@ -118,6 +119,7 @@ export type OfflineSubmissionQueueStorage = {
 
 export type OfflineSubmissionRetryResult = {
   blocked?: number;
+  completionAcknowledgedRoutePlanIds?: string[];
   discarded: number;
   failed: number;
   reconciliationRoutePlanIds?: string[];
@@ -561,6 +563,7 @@ export function normalizePersistedOfflineSubmissionQueue(
 }
 
 export async function retryOfflineSubmissions(input: {
+  driverEventReceiptService?: DriverEventReceiptService;
   driverEventService: DriverEventService;
   now?: () => Date;
   proofMediaUploadService: ProofMediaUploadService;
@@ -589,6 +592,7 @@ export async function retryOfflineSubmissions(input: {
   const retryPolicy = input.retryPolicy ?? OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY;
   const now = input.now ?? (() => new Date());
   const completedRoutePlanIds = new Set<string>();
+  const completionAcknowledgedRoutePlanIds = new Set<string>();
   const reconciliationRoutePlanIds = new Set<string>();
   const serverConfirmedStopIds = new Set<string>();
 
@@ -623,6 +627,32 @@ export async function retryOfflineSubmissions(input: {
 
     try {
       if (item.kind === 'driver_event') {
+        if (
+          (item.event.eventType === 'ROUTE_COMPLETED' || item.event.eventType === 'ROUTE_PAUSED')
+          && item.event.routePlanId != null
+          && input.driverEventReceiptService !== undefined
+        ) {
+          const receipt = await input.driverEventReceiptService.lookupReceipt({
+            clientEventId: item.event.clientEventId,
+            routePlanId: item.event.routePlanId,
+          });
+          const resolution = resolveCompletionReceipt(item.event, receipt);
+          if (resolution.kind === 'reconcile') {
+            const recovery = input.queue.blockRouteSubmissionsForReconciliation(item.event.routePlanId);
+            blocked += recovery.blocked;
+            discarded += recovery.discarded;
+            reconciliationRoutePlanIds.add(item.event.routePlanId);
+            continue;
+          }
+          if (resolution.kind === 'acknowledge') {
+            input.queue.acknowledge(item.queueItemId);
+            succeeded += 1;
+            completedRoutePlanIds.add(item.event.routePlanId);
+            completionAcknowledgedRoutePlanIds.add(item.event.routePlanId);
+            discarded += input.queue.discardRouteSubmissions(item.event.routePlanId);
+            continue;
+          }
+        }
         await input.driverEventService.recordDriverEvent(item.event);
         if (item.event.eventType === 'PICKUP_COMPLETED') {
           requiresRouteLookup = true;
@@ -638,11 +668,12 @@ export async function retryOfflineSubmissions(input: {
       }
       if (
         item.kind === 'driver_event'
-        && item.event.eventType === 'ROUTE_COMPLETED'
+        && (item.event.eventType === 'ROUTE_COMPLETED' || item.event.eventType === 'ROUTE_PAUSED')
         && item.event.routePlanId !== null
         && item.event.routePlanId !== undefined
       ) {
         completedRoutePlanIds.add(item.event.routePlanId);
+        completionAcknowledgedRoutePlanIds.add(item.event.routePlanId);
         discarded += input.queue.discardRouteSubmissions(item.event.routePlanId);
       }
     } catch (error) {
@@ -687,6 +718,9 @@ export async function retryOfflineSubmissions(input: {
 
   return {
     ...(blocked === 0 ? {} : { blocked }),
+    ...(completionAcknowledgedRoutePlanIds.size === 0
+      ? {}
+      : { completionAcknowledgedRoutePlanIds: [...completionAcknowledgedRoutePlanIds] }),
     discarded,
     failed,
     ...(reconciliationRoutePlanIds.size === 0
@@ -1021,36 +1055,54 @@ function readPersistedDriverEvent(value: unknown): DriverEventInput | null {
 
   const data = value as Record<string, unknown>;
   const clientEventId = readRequiredString(data.clientEventId);
+  const accuracyMeters = readOptionalNullableNumber(data.accuracyMeters);
+  const appVersion = readOptionalString(data.appVersion);
+  const assignmentGeneration = readOptionalString(data.assignmentGeneration);
   const eventType = readDriverEventType(data.eventType);
+  const driverContractVersion = data.driverContractVersion === undefined ? undefined : data.driverContractVersion === 2 ? 2 : null;
+  const expectedRouteVersionId = readOptionalString(data.expectedRouteVersionId);
   const occurredAt = readDate(data.occurredAt);
   const deliveryStopId = readOptionalNullableString(data.deliveryStopId);
   const latitude = readOptionalNullableNumber(data.latitude);
   const longitude = readOptionalNullableNumber(data.longitude);
   const payload = readOptionalRecord(data.payload);
   const routePlanId = readOptionalNullableString(data.routePlanId);
+  const versionCode = readOptionalPositiveInteger(data.versionCode);
 
   if (
-    clientEventId === null
+    !isOptionalNullableNumber(data.accuracyMeters)
+    || appVersion === null
+    || assignmentGeneration === null
+    || clientEventId === null
+    || driverContractVersion === null
     || eventType === null
+    || expectedRouteVersionId === null
     || occurredAt === null
-    || deliveryStopId === null
-    || latitude === null
-    || longitude === null
+    || !isOptionalNullableString(data.deliveryStopId)
+    || !isOptionalNullableNumber(data.latitude)
+    || !isOptionalNullableNumber(data.longitude)
     || payload === null
-    || routePlanId === null
+    || !isOptionalNullableString(data.routePlanId)
+    || versionCode === null
   ) {
     return null;
   }
 
   return {
+    ...(accuracyMeters === undefined ? {} : { accuracyMeters }),
+    ...(appVersion === undefined ? {} : { appVersion }),
+    ...(assignmentGeneration === undefined ? {} : { assignmentGeneration }),
     clientEventId,
     ...(deliveryStopId === undefined ? {} : { deliveryStopId }),
+    ...(driverContractVersion === undefined ? {} : { driverContractVersion }),
     eventType,
+    ...(expectedRouteVersionId === undefined ? {} : { expectedRouteVersionId }),
     ...(latitude === undefined ? {} : { latitude }),
     ...(longitude === undefined ? {} : { longitude }),
     occurredAt,
     ...(payload === undefined ? {} : { payload }),
     ...(routePlanId === undefined ? {} : { routePlanId }),
+    ...(versionCode === undefined ? {} : { versionCode }),
   };
 }
 
@@ -1179,6 +1231,19 @@ function readOptionalNullableNumber(value: unknown): number | null | undefined {
   }
 
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function isOptionalNullableNumber(value: unknown): value is number | null | undefined {
+  return value === undefined || value === null || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function isOptionalNullableString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === 'string';
+}
+
+function readOptionalPositiveInteger(value: unknown): number | undefined | null {
+  if (value === undefined) return undefined;
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
 }
 
 function readOptionalRecord(value: unknown): Record<string, unknown> | undefined | null {
