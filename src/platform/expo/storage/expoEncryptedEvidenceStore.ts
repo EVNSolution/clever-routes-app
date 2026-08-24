@@ -101,7 +101,7 @@ export async function createEncryptedEvidenceStore(input: {
   } else {
     await cleanupCommittedLegacyQueue(database, input.legacyStorage);
   }
-  await purgeExpiredEvidence(database, now());
+  await purgeExpiredEvidence(database, now(), hexToBytes(key), input.sha256);
 
   return {
     exportDiagnostics: async () => {
@@ -130,14 +130,14 @@ export async function createEncryptedEvidenceStore(input: {
       return {
         exportedAt,
         exportToken,
-        records: scopedRows.map((row) => ({ payload: JSON.parse(row.payload) as unknown, recordKey: row.recordKey })),
+        records: scopedRows.map((row) => ({ payload: redactSupportQuarantinePayload(row), recordKey: row.recordKey })),
         scope: exportInput.accountOwnerHash === undefined ? 'global' : 'account',
       };
     },
     getItem: async (storageKey) => {
       if (storageKey !== OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) return null;
       const readAt = now();
-      await purgeExpiredEvidence(database, readAt);
+      await purgeExpiredEvidence(database, readAt, hexToBytes(key), input.sha256);
       const rows = (await Promise.all(RECORD_TABLES.map(async (sourceTable) => (
         await database.getAllAsync<StoredRow>(
           `SELECT record_key AS recordKey, payload, created_at AS createdAt FROM ${sourceTable} ORDER BY created_at, record_key;`,
@@ -321,29 +321,41 @@ async function migrateLegacyQueue(
   const manifest = parsedItems === null || sha256 === undefined
     ? null
     : await createMigrationHmacManifest(parsedItems, hexToBytes(key), sha256);
+  let corruptQuarantinedAt: Date | null = null;
+  let corruptManifest: string | null = null;
+  if (raw !== null && parsedItems === null) {
+    corruptQuarantinedAt = now();
+    corruptManifest = await createRedactedCorruptLegacyPayload({
+      key: hexToBytes(key),
+      quarantinedAt: corruptQuarantinedAt,
+      raw,
+      sha256,
+    });
+  }
   await database.withExclusiveTransactionAsync(async (transaction) => {
     if (raw !== null) {
       const items = parsedItems;
       if (items === null) {
-        const quarantinedAt = now();
-        const quarantinePayload = createBoundedCorruptLegacyPayload(raw, quarantinedAt);
+        if (corruptManifest === null || corruptQuarantinedAt === null) {
+          throw new Error('Corrupt legacy evidence manifest is unavailable.');
+        }
         await transaction.runAsync(
           'INSERT OR REPLACE INTO migration_quarantine (record_key, account_owner_hash, queue_sequence, payload) VALUES (?, ?, ?, ?);',
-          `legacy-corrupt:${quarantinedAt.getTime()}`,
+          `legacy-corrupt:${corruptQuarantinedAt.getTime()}`,
           'legacy-unbound-owner',
           0,
-          quarantinePayload,
+          corruptManifest,
         );
         await transaction.runAsync(
           'INSERT OR REPLACE INTO diagnostic_records (record_key, payload) VALUES (?, ?);',
           'migration-corrupt-legacy',
-          JSON.stringify({ code: 'CORRUPT_LEGACY_QUEUE', preserved: true }),
+          JSON.stringify({ code: 'CORRUPT_LEGACY_QUEUE', redactedManifestPreserved: true }),
         );
         const quarantined = await transaction.getFirstAsync<StoredRow>(
           'SELECT record_key AS recordKey, payload FROM migration_quarantine WHERE record_key LIKE ? LIMIT 1;',
           'legacy-corrupt:%',
         );
-        if (quarantined === null || quarantined.payload !== quarantinePayload) {
+        if (quarantined === null || quarantined.payload !== corruptManifest) {
           throw new Error('Corrupt legacy evidence quarantine verification failed.');
         }
       } else {
@@ -417,7 +429,12 @@ async function readHydratedItems(database: EvidenceDatabase, nowIso: string) {
     .sort((left, right) => readQueueSequence(left) - readQueueSequence(right));
 }
 
-async function purgeExpiredEvidence(database: EvidenceDatabase, now: Date) {
+async function purgeExpiredEvidence(
+  database: EvidenceDatabase,
+  now: Date,
+  key: Uint8Array,
+  sha256: ((value: Uint8Array) => Promise<Uint8Array>) | undefined,
+) {
   const cutoff = new Date(now.getTime() - OFFLINE_EVIDENCE_AUDIT_RETENTION_MS).toISOString();
   await database.withExclusiveTransactionAsync(async (transaction) => {
     let malformedRowIndex = 0;
@@ -428,13 +445,25 @@ async function purgeExpiredEvidence(database: EvidenceDatabase, now: Date) {
       for (const row of rows) {
         if (row.recordKey.startsWith('legacy-corrupt:')) {
           const retention = readLegacyCorruptRetention(row, now);
-          if (retention.normalizedPayload !== null) {
+          const normalizedPayload = retention.legacyRawPayload === null
+            ? retention.normalizedPayload
+            : await createRedactedCorruptLegacyPayload({
+              digestScope: retention.truncated === true ? 'retained-fragment' : 'full-source',
+              key,
+              originalByteLength: retention.originalByteLength,
+              quarantinedAt: retention.quarantinedAt,
+              raw: retention.legacyRawPayload,
+              retainedUntil: retention.retainedUntil,
+              sha256,
+              truncated: retention.truncated ?? false,
+            });
+          if (normalizedPayload !== null) {
             await transaction.runAsync(
               'INSERT OR REPLACE INTO migration_quarantine (record_key, account_owner_hash, queue_sequence, payload) VALUES (?, ?, ?, ?);',
               row.recordKey,
               'legacy-unbound-owner',
               0,
-              retention.normalizedPayload,
+              normalizedPayload,
             );
           }
           if (now.getTime() < retention.retainedUntil.getTime()) continue;
@@ -596,6 +625,39 @@ function matchesSupportScope(row: StoredRow, accountOwnerHash: string | undefine
   }
 }
 
+function redactSupportQuarantinePayload(row: StoredRow) {
+  const payload = parseJsonObject(row.payload);
+  if (payload === null) {
+    return {
+      code: 'CORRUPT_SUPPORT_QUARANTINE_RECORD',
+      originalByteLength: new TextEncoder().encode(row.payload).byteLength,
+      rawPayloadRetained: false,
+    };
+  }
+  if (!row.recordKey.startsWith('legacy-corrupt:')) return redactReplayPayload(payload);
+  const payloadHmac = typeof payload.payloadHmac === 'string' && /^[0-9a-f]{64}$/u.test(payload.payloadHmac)
+    ? payload.payloadHmac
+    : null;
+  return {
+    accountOwnerHash: 'legacy-unbound-owner',
+    algorithm: payloadHmac === null ? null : 'HMAC-SHA256',
+    code: 'CORRUPT_LEGACY_QUEUE',
+    digestDomain: 'clever-driver-corrupt-legacy-v1',
+    digestScope: payload.digestScope === 'retained-fragment' ? 'retained-fragment' : 'full-source',
+    originalByteLength: typeof payload.originalByteLength === 'number'
+      && Number.isSafeInteger(payload.originalByteLength)
+      && payload.originalByteLength >= 0
+      ? payload.originalByteLength
+      : null,
+    payloadHmac,
+    quarantinedAt: readIsoTimestamp(payload.quarantinedAt),
+    rawPayloadRetained: false,
+    reason: 'corrupt_legacy_queue',
+    retainedUntil: readIsoTimestamp(payload.retainedUntil),
+    truncated: typeof payload.truncated === 'boolean' ? payload.truncated : null,
+  };
+}
+
 function parseSupportExportMarker(value: string): { accountOwnerHash: string | null; recordKeys: string[] } | null {
   try {
     const marker = JSON.parse(value) as Record<string, unknown>;
@@ -617,6 +679,7 @@ function parseSupportExportMarker(value: string): { accountOwnerHash: string | n
 }
 
 function readLegacyCorruptRetention(row: StoredRow, now: Date): {
+  legacyRawPayload: string | null;
   originalByteLength: number | null;
   quarantinedAt: Date;
   retainedUntil: Date;
@@ -649,9 +712,14 @@ function readLegacyCorruptRetention(row: StoredRow, now: Date): {
     ? payload.originalByteLength
     : new TextEncoder().encode(row.payload).byteLength;
   const truncated = typeof payload.truncated === 'boolean' ? payload.truncated : null;
+  const legacyRawPayload = typeof payload.encryptedLegacyPayload === 'string'
+    ? payload.encryptedLegacyPayload
+    : null;
   const metadataIsValid = parsedPayload !== null
-    && (explicitQuarantinedAt !== null || validKeyDate !== null);
+    && (explicitQuarantinedAt !== null || validKeyDate !== null)
+    && legacyRawPayload === null;
   return {
+    legacyRawPayload,
     normalizedPayload: metadataIsValid ? null : createCorruptEvidenceSummary({
       originalByteLength,
       quarantinedAt,
@@ -767,33 +835,42 @@ async function writeCorruptEvidencePurgeDiagnostic(
   );
 }
 
-function createBoundedCorruptLegacyPayload(raw: string, quarantinedAt: Date) {
+async function createRedactedCorruptLegacyPayload(input: {
+  digestScope?: 'full-source' | 'retained-fragment';
+  key: Uint8Array;
+  originalByteLength?: number | null;
+  quarantinedAt: Date;
+  raw: string;
+  retainedUntil?: Date;
+  sha256: ((value: Uint8Array) => Promise<Uint8Array>) | undefined;
+  truncated?: boolean;
+}) {
   const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
-  const encodedRaw = encoder.encode(raw);
-  const retainedUntil = new Date(
-    quarantinedAt.getTime() + LEGACY_CORRUPT_QUARANTINE_RETENTION_MS,
-  ).toISOString();
-  const serialize = (retainedBytes: number) => JSON.stringify({
+  const encodedRaw = encoder.encode(input.raw);
+  const digestDomain = 'clever-driver-corrupt-legacy-v1';
+  const payloadHmac = input.sha256 === undefined
+    ? null
+    : bytesToHex(await hmacSha256(
+      concatBytes(encoder.encode(`${digestDomain}\0`), encodedRaw),
+      input.key,
+      input.sha256,
+    ));
+  return JSON.stringify({
     accountOwnerHash: 'legacy-unbound-owner',
-    encryptedLegacyPayload: decoder.decode(encodedRaw.slice(0, retainedBytes)),
-    originalByteLength: encodedRaw.byteLength,
-    quarantinedAt: quarantinedAt.toISOString(),
+    algorithm: payloadHmac === null ? null : 'HMAC-SHA256',
+    code: 'CORRUPT_LEGACY_QUEUE',
+    digestDomain,
+    digestScope: input.digestScope ?? 'full-source',
+    originalByteLength: input.originalByteLength ?? encodedRaw.byteLength,
+    payloadHmac,
+    quarantinedAt: input.quarantinedAt.toISOString(),
+    rawPayloadRetained: false,
     reason: 'corrupt_legacy_queue',
-    retainedUntil,
-    truncated: retainedBytes < encodedRaw.byteLength,
+    retainedUntil: (input.retainedUntil ?? new Date(
+      input.quarantinedAt.getTime() + LEGACY_CORRUPT_QUARANTINE_RETENTION_MS,
+    )).toISOString(),
+    truncated: input.truncated ?? encodedRaw.byteLength > CORRUPT_LEGACY_QUARANTINE_MAX_BYTES,
   });
-  let lower = 0;
-  let upper = encodedRaw.byteLength;
-  while (lower < upper) {
-    const candidate = Math.ceil((lower + upper) / 2);
-    if (encoder.encode(serialize(candidate)).byteLength <= CORRUPT_LEGACY_QUARANTINE_MAX_BYTES) {
-      lower = candidate;
-    } else {
-      upper = candidate - 1;
-    }
-  }
-  return serialize(lower);
 }
 
 function redactReplayPayload(item: Record<string, unknown>) {
@@ -960,20 +1037,28 @@ async function createMigrationHmacManifest(
     if (sequenceDifference !== 0) return sequenceDifference;
     return String(left.queueItemId).localeCompare(String(right.queueItemId));
   });
+  const message = encoder.encode(JSON.stringify(canonicalEvidence));
+  const hmac = await hmacSha256(message, key, sha256);
+  return {
+    algorithm: 'HMAC-SHA256',
+    canonicalEvidenceHmac: bytesToHex(hmac),
+    itemCount: items.length,
+  };
+}
+
+async function hmacSha256(
+  message: Uint8Array,
+  key: Uint8Array,
+  sha256: (value: Uint8Array) => Promise<Uint8Array>,
+) {
   const blockSize = 64;
   const normalizedKey = key.length > blockSize ? await sha256(key) : key;
   const keyBlock = new Uint8Array(blockSize);
   keyBlock.set(normalizedKey.slice(0, blockSize));
   const innerPad = keyBlock.map((byte) => byte ^ 0x36);
   const outerPad = keyBlock.map((byte) => byte ^ 0x5c);
-  const message = encoder.encode(JSON.stringify(canonicalEvidence));
   const innerHash = await sha256(concatBytes(innerPad, message));
-  const hmac = await sha256(concatBytes(outerPad, innerHash));
-  return {
-    algorithm: 'HMAC-SHA256',
-    canonicalEvidenceHmac: bytesToHex(hmac),
-    itemCount: items.length,
-  };
+  return sha256(concatBytes(outerPad, innerHash));
 }
 
 function concatBytes(left: Uint8Array, right: Uint8Array) {

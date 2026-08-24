@@ -211,17 +211,28 @@ describe('encrypted driver evidence store', () => {
     assert.doesNotMatch(diagnostics, /secret-client-id|private note|private recipient/u);
   });
 
-  it('preserves a corrupt legacy blob only inside encrypted quarantine', async () => {
+  it('stores and exports only a keyed redacted manifest for corrupt legacy evidence', async () => {
     const db = createDatabase();
-    const corrupt = '{"note":"private migration evidence"';
+    const corrupt = '{"note":"private migration evidence","recipient":"secret recipient","uri":"file://proof.jpg"';
     const store = await createEncryptedEvidenceStore({
       keyStore: { getItemAsync: async () => '66'.repeat(32), setItemAsync: async () => undefined },
       legacyStorage: { getItem: async () => corrupt, removeItem: async () => undefined },
       openDatabaseAsync: async () => db.database,
       randomBytes: async () => new Uint8Array(32),
+      sha256: async (value) => {
+        const result = new Uint8Array(32);
+        result.fill(value.reduce((sum, byte) => (sum + byte) % 256, 0));
+        return result;
+      },
     });
 
-    assert.match(db.tables.get('migration_quarantine')?.values().next().value ?? '', /private migration evidence/u);
+    const stored = db.tables.get('migration_quarantine')?.values().next().value ?? '';
+    const exported = JSON.stringify(await store.exportSupportQuarantine());
+    assert.match(stored, /"algorithm":"HMAC-SHA256"/u);
+    assert.match(stored, /"payloadHmac":"[0-9a-f]{64}"/u);
+    assert.match(stored, /"originalByteLength":/u);
+    assert.match(stored, /"rawPayloadRetained":false/u);
+    assert.doesNotMatch(`${stored}${exported}`, /private migration evidence|secret recipient|file:\/\/proof\.jpg/u);
     assert.doesNotMatch(await store.exportDiagnostics(), /private migration evidence/u);
   });
 
@@ -256,6 +267,13 @@ describe('encrypted driver evidence store', () => {
     });
 
     assert.deepEqual([...(db.tables.get('migration_quarantine')?.keys() ?? [])], ['legacy-corrupt:1755648000000']);
+    const retainedManifest = [...(db.tables.get('migration_quarantine')?.values() ?? [])].join('');
+    assert.match(retainedManifest, /"rawPayloadRetained":false/u);
+    assert.doesNotMatch(retainedManifest, /old private migration bytes|recent private migration bytes/u);
+    assert.doesNotMatch(
+      JSON.stringify(await store.exportSupportQuarantine()),
+      /old private migration bytes|recent private migration bytes/u,
+    );
     const diagnostics = await store.exportDiagnostics();
     assert.match(diagnostics, /CORRUPT_LEGACY_QUEUE_BLOB_PURGED|"purgedBlobCount":1/u);
     assert.doesNotMatch(diagnostics, /old private|recent private/u);
@@ -326,6 +344,7 @@ describe('encrypted driver evidence store', () => {
     const accountExport = await store.exportSupportQuarantine({ accountOwnerHash: ownerA });
     assert.equal(accountExport.scope, 'account');
     assert.deepEqual(accountExport.records.map((record) => record.recordKey), [`${ownerA}:driver-event:a`]);
+    assert.doesNotMatch(JSON.stringify(accountExport), /owner A private note/u);
     const restarted = await openStore();
     await assert.rejects(restarted.purgeExportedSupportQuarantine({
       accountOwnerHash: ownerB,
@@ -817,13 +836,22 @@ describe('encrypted driver evidence store', () => {
       legacyStorage: { getItem: async () => corrupt, removeItem: async () => undefined },
       openDatabaseAsync: async () => db.database,
       randomBytes: async () => new Uint8Array(32),
+      sha256: async () => new Uint8Array(32).fill(7),
     });
 
     const quarantined = db.tables.get('migration_quarantine')?.values().next().value ?? '{}';
-    const parsed = JSON.parse(quarantined) as { encryptedLegacyPayload: string; originalByteLength: number; truncated: boolean };
+    const parsed = JSON.parse(quarantined) as {
+      encryptedLegacyPayload?: string;
+      originalByteLength: number;
+      payloadHmac: string;
+      rawPayloadRetained: boolean;
+      truncated: boolean;
+    };
     assert.equal(parsed.truncated, true);
     assert.ok(new TextEncoder().encode(quarantined).byteLength <= 64 * 1024);
-    assert.ok(new TextEncoder().encode(parsed.encryptedLegacyPayload).byteLength <= 64 * 1024);
+    assert.equal(parsed.encryptedLegacyPayload, undefined);
+    assert.equal(parsed.payloadHmac, '07'.repeat(32));
+    assert.equal(parsed.rawPayloadRetained, false);
     assert.ok(parsed.originalByteLength > 64 * 1024);
   });
 
@@ -1041,10 +1069,13 @@ describe('encrypted driver evidence store', () => {
       },
       openDatabaseAsync: async () => db.database,
       randomBytes: async () => new Uint8Array(32),
+      sha256: async () => new Uint8Array(32).fill(8),
     });
 
     assert.deepEqual(removed, [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]);
-    assert.match(db.tables.get('migration_quarantine')?.values().next().value ?? '', /tampered-lineage/u);
+    const quarantined = db.tables.get('migration_quarantine')?.values().next().value ?? '';
+    assert.equal((JSON.parse(quarantined) as { payloadHmac: string }).payloadHmac, '08'.repeat(32));
+    assert.doesNotMatch(quarantined, /tampered-lineage|route-tampered/u);
   });
 
   it('uses original audit timestamps, bounds journals, purges old terminal rows, and retains unresolved quarantine', async () => {
