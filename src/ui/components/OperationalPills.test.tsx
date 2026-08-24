@@ -53,4 +53,63 @@ describe('operational pills', () => {
       Gap: '10 stops',
     });
   });
+
+  it('blocks equal-count progress when the device and server completed different stops', () => {
+    const input: Parameters<typeof buildDriverOperationalPillValues>[0] = {
+      activeRoutePlanId: 'route-mismatch',
+      backgroundLocationGranted: true,
+      completionQueued: false,
+      currentStopSequence: 2,
+      deviceConflict: false,
+      gpsOperationalState: {
+        accuracy: 'accurate', freshness: 'fresh', proximity: 'outside', safeForProximity: true,
+      },
+      hasDurablePendingRouteEnd: false,
+      hasReconciliation: false,
+      offlineQueueCount: 0,
+      offlineStorageState: 'READY',
+      routeProgress: projectRouteProgress({
+        localCompletedStopIds: ['stop-1'],
+        serverConfirmedStopIds: ['stop-2'],
+        totalStops: 2,
+      }),
+      routeReconciliationCount: 0,
+      routeSyncReady: true,
+    };
+    const values = buildDriverOperationalPillValues(input);
+
+    assert.equal(values.sync, 'Blocked');
+    assert.equal(values.gap, 'Stop mismatch');
+    assert.equal(buildDriverOperationalPillValues({
+      ...input,
+      offlineStorageState: 'STORAGE_DEGRADED',
+    }).sync, 'Storage blocked');
+  });
+
+  it('shows the direction when server progress is ahead of the device', () => {
+    const values = buildDriverOperationalPillValues({
+      activeRoutePlanId: 'route-server-ahead',
+      backgroundLocationGranted: true,
+      completionQueued: false,
+      currentStopSequence: 2,
+      deviceConflict: false,
+      gpsOperationalState: {
+        accuracy: 'accurate', freshness: 'fresh', proximity: 'outside', safeForProximity: true,
+      },
+      hasDurablePendingRouteEnd: false,
+      hasReconciliation: false,
+      offlineQueueCount: 0,
+      offlineStorageState: 'READY',
+      routeProgress: projectRouteProgress({
+        localCompletedStopIds: ['stop-1'],
+        serverConfirmedStopIds: ['stop-1', 'stop-2'],
+        totalStops: 2,
+      }),
+      routeReconciliationCount: 0,
+      routeSyncReady: true,
+    });
+
+    assert.equal(values.sync, 'Blocked');
+    assert.equal(values.gap, 'Server ahead 1 stop');
+  });
 });

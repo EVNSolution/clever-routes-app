@@ -30,17 +30,21 @@ export function buildDriverOperationalPillValues(input: {
   const hasRouteProgress = input.routeProgress.totalStops > 0;
   const localProgress = `${input.routeProgress.localCompletedCount}/${input.routeProgress.totalStops}`;
   const serverProgress = `${input.routeProgress.serverConfirmedCount}/${input.routeProgress.totalStops}`;
-  const progressGap = Math.max(
-    0,
-    input.routeProgress.localCompletedCount - input.routeProgress.serverConfirmedCount,
-  );
+  const progressDelta = input.routeProgress.localCompletedCount - input.routeProgress.serverConfirmedCount;
+  const progressGap = input.routeProgress.syncState === 'confirmed'
+    ? '0 stops'
+    : progressDelta > 0
+      ? `${progressDelta} stops`
+      : progressDelta < 0
+        ? `Server ahead ${Math.abs(progressDelta)} ${Math.abs(progressDelta) === 1 ? 'stop' : 'stops'}`
+        : 'Stop mismatch';
   return {
     alert: input.routeReconciliationCount > 0 ? 'Action needed' : 'None',
     device: hasRouteProgress
       ? input.deviceConflict ? `Conflict (${localProgress})` : localProgress
       : input.deviceConflict ? 'Conflict' : 'This device',
     deviceConflict: input.deviceConflict,
-    gap: `${progressGap} stops`,
+    gap: progressGap,
     gps: input.backgroundLocationGranted
       ? formatGpsOperationalPill(input.gpsOperationalState, input.currentStopSequence)
       : 'Unavailable',
@@ -52,7 +56,7 @@ export function buildDriverOperationalPillValues(input: {
     server: hasRouteProgress ? serverProgress : input.routeSyncReady ? 'Connected' : 'Unavailable',
     sync: input.offlineStorageState === 'STORAGE_DEGRADED'
       ? 'Storage blocked'
-      : progressGap > 0 ? 'Blocked' : `${input.offlineQueueCount} pending`,
+      : input.routeProgress.syncState === 'blocked' ? 'Blocked' : `${input.offlineQueueCount} pending`,
   };
 }
 
