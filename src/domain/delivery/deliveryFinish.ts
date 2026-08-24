@@ -49,6 +49,7 @@ export async function finishDeliveryAfterActive(input: {
   eventPayload?: Record<string, unknown>;
   now?: Date;
   offlineQueue?: OfflineSubmissionQueue;
+  onServerAcknowledged?: (routePlanId: string) => Promise<void>;
   routeEnd?: 'completed' | 'released';
   routePlanId: string | null;
   streamService: ContinuousLocationStreamService;
@@ -107,6 +108,13 @@ export async function finishDeliveryAfterActive(input: {
       ? 0
       : input.offlineQueue.discardRouteSubmissions(input.routePlanId);
     await input.offlineQueue?.whenPersisted();
+    if (!routeReleased && input.routePlanId !== null) {
+      try {
+        await input.onServerAcknowledged?.(input.routePlanId);
+      } catch {
+        // The durable completion-clear outbox retries independently of route-session cleanup.
+      }
+    }
     await input.streamService.stopLocationUpdates(taskName);
 
     return {

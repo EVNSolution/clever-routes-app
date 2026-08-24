@@ -1787,6 +1787,32 @@ describe('offline submission queue', () => {
     assert.ok(Date.parse(telemetry.lastAcknowledgedAt!) - Date.parse(completion.enqueuedAt) <= 5 * 60 * 1000);
   });
 
+  it('persists the account-scoped ACK-clear heartbeat outbox until delivery is recorded', async () => {
+    const storage = createMemoryStorage();
+    const ownerA = 'a'.repeat(64);
+    const ownerB = 'b'.repeat(64);
+    const routePlanId = 'route-kitchener';
+    const first = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: ownerA, storage });
+    const completion = first.enqueueDriverEvent({
+      clientEventId: 'completion-clear-outbox', eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId,
+    });
+    first.acknowledge(completion.queueItemId);
+    await first.whenPersisted();
+
+    const restarted = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: ownerA, storage });
+    assert.deepEqual(restarted.listPendingCompletionClearRoutePlanIds(), [routePlanId]);
+    restarted.bindAccountOwnerHash(ownerB);
+    assert.deepEqual(restarted.listPendingCompletionClearRoutePlanIds(), []);
+    restarted.bindAccountOwnerHash(ownerA);
+    assert.equal(restarted.markRouteCompletionClearHeartbeatDelivered(routePlanId), true);
+    await restarted.whenPersisted();
+
+    const delivered = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: ownerA, storage });
+    assert.deepEqual(delivered.listPendingCompletionClearRoutePlanIds(), []);
+    assert.equal(delivered.markRouteCompletionClearHeartbeatDelivered(routePlanId), false);
+  });
+
   it('does not report a completion clear without durable completion evidence', () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueDriverEvent({
@@ -1824,6 +1850,7 @@ describe('offline submission queue', () => {
       lastAcknowledgedAt: null,
       locallyFinished: true,
     });
+    assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), []);
   });
 
   it('isolates same-route completion acknowledgement telemetry by account owner', () => {

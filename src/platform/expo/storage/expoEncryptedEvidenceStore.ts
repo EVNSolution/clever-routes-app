@@ -595,7 +595,7 @@ function readJournalEntries(value: unknown): OfflineEvidenceJournalEntry[] {
     if (
       typeof candidate.at !== 'string'
       || typeof candidate.code !== 'string'
-      || !['ACK', 'ATTEMPT', 'DISCARD', 'ENQUEUED', 'RECONCILIATION'].includes(String(candidate.kind))
+      || !['ACK', 'ATTEMPT', 'DISCARD', 'ENQUEUED', 'HEARTBEAT', 'RECONCILIATION'].includes(String(candidate.kind))
     ) return [];
     return [{
       at: candidate.at,

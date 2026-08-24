@@ -39,7 +39,18 @@ export type DriverSyncHeartbeatResult = {
 };
 
 export type DriverSyncHeartbeatService = {
-  recordHeartbeat(request: DriverSyncHeartbeatRequest): Promise<DriverSyncHeartbeatResult>;
+  recordHeartbeat(
+    request: DriverSyncHeartbeatRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<DriverSyncHeartbeatResult>;
+};
+
+export type DriverSyncIdentityService = {
+  next(sessionKey: string): Promise<{
+    deviceInstanceHash: string;
+    heartbeatSequence: number;
+    sessionGeneration: string;
+  }>;
 };
 
 export type DriverSyncQueueProjection = Pick<DriverSyncHeartbeatRequest,
@@ -85,6 +96,100 @@ export function projectDriverSyncQueueState(
   };
 }
 
+export type DriverCompletionClearHeartbeatAttempt = {
+  appVersion: string;
+  attemptTimeoutMs?: number;
+  cancelAttemptTimeout?: (handle: unknown) => void;
+  completedStopCount: number | null;
+  driverContractVersion: 2;
+  heartbeatService: DriverSyncHeartbeatService;
+  identityService: DriverSyncIdentityService;
+  isAttemptCurrent?: () => boolean;
+  queue: OfflineSubmissionQueue;
+  routePlanId: string;
+  scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
+  sessionKey: string;
+  versionCode: number;
+};
+
+export type DriverCompletionClearHeartbeatOutcome = {
+  failure: 'conflict' | 'failed' | 'not_pending' | 'unauthorized' | null;
+  observed: boolean;
+  result: DriverSyncHeartbeatResult | null;
+};
+
+export async function attemptDriverCompletionClearHeartbeat(
+  input: DriverCompletionClearHeartbeatAttempt,
+): Promise<DriverCompletionClearHeartbeatOutcome> {
+  const queueProjection = projectDriverSyncQueueState(input.queue, input.routePlanId);
+  if (
+    queueProjection.finishPending
+    || queueProjection.lastAcknowledgedAt === null
+    || !input.queue.listPendingCompletionClearRoutePlanIds().includes(input.routePlanId)
+  ) {
+    return { failure: 'not_pending', observed: false, result: null };
+  }
+  try {
+    const result = await runBoundedAsyncOperation(async (signal) => {
+      const identity = await input.identityService.next(input.sessionKey);
+      return input.heartbeatService.recordHeartbeat({
+        ...queueProjection,
+        appVersion: input.appVersion,
+        clientOccurredAt: new Date().toISOString(),
+        completedStopCount: input.completedStopCount,
+        currentStopSequence: null,
+        deviceInstanceHash: identity.deviceInstanceHash,
+        driverContractVersion: input.driverContractVersion,
+        heartbeatSequence: identity.heartbeatSequence,
+        sessionGeneration: identity.sessionGeneration,
+        totalStopCount: null,
+        versionCode: input.versionCode,
+      }, { signal });
+    }, {
+      ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+      ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
+      timeoutMs: input.attemptTimeoutMs ?? 15_000,
+    });
+    if (input.isAttemptCurrent?.() === false) {
+      return { failure: 'failed', observed: false, result };
+    }
+    if (!result.accepted || result.conflict) {
+      return { failure: result.conflict ? 'conflict' : 'failed', observed: false, result };
+    }
+    if (!input.queue.markRouteCompletionClearHeartbeatDelivered(input.routePlanId)) {
+      return { failure: 'failed', observed: false, result };
+    }
+    await input.queue.whenPersisted();
+    return { failure: null, observed: true, result };
+  } catch (error) {
+    return {
+      failure: error instanceof DriverSyncHeartbeatHttpError && error.status === 401 ? 'unauthorized' : 'failed',
+      observed: false,
+      result: null,
+    };
+  }
+}
+
+export async function deliverDriverCompletionClearHeartbeat(input: {
+  attempt: DriverCompletionClearHeartbeatAttempt;
+  refreshHeartbeatService?: (signal: AbortSignal) => Promise<DriverSyncHeartbeatService | null>;
+}): Promise<DriverCompletionClearHeartbeatOutcome> {
+  const first = await attemptDriverCompletionClearHeartbeat(input.attempt);
+  if (first.failure !== 'unauthorized' || input.refreshHeartbeatService === undefined) return first;
+  let refreshedService: DriverSyncHeartbeatService | null;
+  try {
+    refreshedService = await runBoundedAsyncOperation(input.refreshHeartbeatService, {
+      ...(input.attempt.cancelAttemptTimeout === undefined ? {} : { cancel: input.attempt.cancelAttemptTimeout }),
+      ...(input.attempt.scheduleAttemptTimeout === undefined ? {} : { schedule: input.attempt.scheduleAttemptTimeout }),
+      timeoutMs: input.attempt.attemptTimeoutMs ?? 15_000,
+    });
+  } catch {
+    return first;
+  }
+  if (refreshedService === null) return first;
+  return attemptDriverCompletionClearHeartbeat({ ...input.attempt, heartbeatService: refreshedService });
+}
+
 export class DriverSyncHeartbeatHttpError extends Error {
   constructor(readonly status: number) {
     super(`Driver sync heartbeat failed (${status})`);
@@ -97,6 +202,7 @@ type FetchLike = (url: string, init?: {
   credentials?: 'omit';
   headers?: Record<string, string>;
   method?: string;
+  signal?: AbortSignal;
 }) => Promise<Response>;
 
 export function createDriverSyncHeartbeatApiClient(input: {
@@ -106,7 +212,7 @@ export function createDriverSyncHeartbeatApiClient(input: {
 }): DriverSyncHeartbeatService {
   const fetchImpl = input.fetchImpl ?? fetch;
   return {
-    async recordHeartbeat(request) {
+    async recordHeartbeat(request, options) {
       const response = await fetchImpl(`${input.baseUrl.replace(/\/$/u, '')}/driver/sync-health`, {
         body: JSON.stringify(request),
         cache: 'no-store',
@@ -117,6 +223,7 @@ export function createDriverSyncHeartbeatApiClient(input: {
           'Content-Type': 'application/json',
         },
         method: 'PUT',
+        signal: options?.signal,
       });
       if (!response.ok) throw new DriverSyncHeartbeatHttpError(response.status);
       return parseHeartbeatResponse(await response.json());
@@ -158,15 +265,17 @@ export function createDriverSyncHeartbeatScheduler(input: {
   hasActiveSession(): boolean;
   isForeground(): boolean;
   isOnline(): boolean;
+  isDegraded?(): boolean;
   random?: () => number;
   schedule(run: () => void, delayMs: number): unknown;
   scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
-  sendHeartbeat(): Promise<boolean>;
+  sendHeartbeat(signal: AbortSignal): Promise<boolean>;
 }) {
   const random = input.random ?? Math.random;
   let failureCount = 0;
   let handle: unknown;
   let immediateRequested = false;
+  let inFlightAbortController: AbortController | null = null;
   let running = false;
   let started = false;
 
@@ -177,9 +286,10 @@ export function createDriverSyncHeartbeatScheduler(input: {
   function scheduleNext() {
     cancelScheduled();
     if (!started || running || !input.hasActiveSession() || !input.isForeground() || !input.isOnline()) return;
-    const base = Math.min(120_000, 15_000 * (2 ** failureCount));
+    const cadence = input.isDegraded?.() === true ? 30_000 : 60_000;
+    const base = Math.min(120_000, cadence * (2 ** failureCount));
     const jitter = 1 + ((Math.max(0, Math.min(1, random())) * 2 - 1) * 0.2);
-    const delay = Math.max(1_000, Math.min(120_000, Math.round(base * jitter)));
+    const delay = Math.max(cadence, Math.min(120_000, Math.round(base * jitter)));
     handle = input.schedule(() => {
       handle = undefined;
       runNow();
@@ -194,7 +304,13 @@ export function createDriverSyncHeartbeatScheduler(input: {
     }
     immediateRequested = false;
     running = true;
-    void runBoundedAsyncOperation(input.sendHeartbeat, {
+    void runBoundedAsyncOperation((timeoutSignal) => {
+      const lifecycleController = new AbortController();
+      inFlightAbortController = lifecycleController;
+      if (timeoutSignal.aborted) lifecycleController.abort();
+      else timeoutSignal.addEventListener('abort', () => lifecycleController.abort(), { once: true });
+      return input.sendHeartbeat(lifecycleController.signal);
+    }, {
         ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
         ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
         timeoutMs: input.attemptTimeoutMs ?? 15_000,
@@ -202,6 +318,7 @@ export function createDriverSyncHeartbeatScheduler(input: {
         .then((accepted) => { failureCount = accepted ? 0 : failureCount + 1; })
         .catch(() => { failureCount += 1; })
         .finally(() => {
+          inFlightAbortController = null;
           running = false;
           if (immediateRequested) runNow();
           else scheduleNext();
@@ -222,7 +339,15 @@ export function createDriverSyncHeartbeatScheduler(input: {
       if (immediateRequested) runNow();
       else scheduleNext();
     },
-    stop() { started = false; immediateRequested = false; cancelScheduled(); },
+    stop() {
+      const carryImmediateRequest = immediateRequested || running;
+      started = false;
+      immediateRequested = false;
+      inFlightAbortController?.abort();
+      inFlightAbortController = null;
+      cancelScheduled();
+      return carryImmediateRequest;
+    },
   };
 }
 
@@ -231,6 +356,15 @@ export function projectLatestDriverSyncHeartbeat(
   incoming: DriverSyncHeartbeatResult,
 ): DriverSyncHeartbeatResult {
   return current !== null && current.heartbeatSequence > incoming.heartbeatSequence ? current : incoming;
+}
+
+export function projectDriverSyncHeartbeatForEpoch(
+  current: DriverSyncHeartbeatResult | null,
+  incoming: DriverSyncHeartbeatResult,
+  requestEpoch: number,
+  currentEpoch: number,
+): DriverSyncHeartbeatResult | null {
+  return requestEpoch === currentEpoch ? projectLatestDriverSyncHeartbeat(current, incoming) : current;
 }
 
 function parseHeartbeatResponse(value: unknown): DriverSyncHeartbeatResult {

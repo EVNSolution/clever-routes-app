@@ -152,6 +152,33 @@ describe('delivery finish route cleanup', () => {
     ]);
   });
 
+  it('hands durable SERVER_ACK to the clear-heartbeat outbox before GPS cleanup', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const driverEvents = createMockDriverEventService();
+    const order: string[] = [];
+    const stream = createMockStreamService();
+    stream.service.stopLocationUpdates = async () => { order.push('gps-stop'); };
+
+    const result = await finishDeliveryAfterActive({
+      deliveryStart: {
+        flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active',
+      },
+      driverEventService: driverEvents,
+      offlineQueue: queue,
+      onServerAcknowledged: async (routePlanId) => {
+        assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), [routePlanId]);
+        order.push('heartbeat-handoff');
+        throw new Error('transport rejected after durable handoff');
+      },
+      routePlanId: 'route-1',
+      streamService: stream.service,
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.deepEqual(order, ['heartbeat-handoff', 'gps-stop']);
+    assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), ['route-1']);
+  });
+
   it('attaches prepared route termination metadata to the completion event', async () => {
     const driverEvents = createMockDriverEventService();
     const stream = createMockStreamService();

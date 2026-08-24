@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createDriverSyncHeartbeatApiClient } from './driverSyncHeartbeat';
+import {
+  attemptDriverCompletionClearHeartbeat,
+  createDriverSyncHeartbeatApiClient,
+} from './driverSyncHeartbeat';
 import {
   restoreCompletionPendingBeforeRouteHydration,
   type CompletionPendingRestoreIdentity,
@@ -102,4 +105,67 @@ describe('completion-pending cold restore', () => {
       assert.equal(restartedQueue.listPending().length, 0);
     });
   }
+
+  it('retains the durable clear outbox when identity times out and secure session cleanup rejects', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    const routePlanId = sampleInvitedRouteAccess.routeAccess.routePlanId;
+    queue.enqueueDriverEvent({
+      appVersion: '1.2.0', assignmentGeneration: sampleInvitedRouteAccess.routeAccess.assignmentGeneration,
+      clientEventId: 'cold-restart-hostile', driverContractVersion: 2, eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: sampleInvitedRouteAccess.routeAccess.expectedRouteVersionId,
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId, versionCode: 18,
+    });
+    await queue.whenPersisted();
+    const expirations: (() => void)[] = [];
+    let cleanupCalls = 0;
+    const restore = restoreCompletionPendingBeforeRouteHydration({
+      hydrateRoute: async () => 'unused',
+      identity: {
+        activeRouteSession: {
+          completionClientEventId: 'cold-restart-hostile', navigationStepIndex: 11, routePlanId,
+          status: 'completion_pending', updatedAt: '2026-08-22T19:42:10.000Z',
+        },
+        driverAccess: sampleInvitedRouteAccess.driverAccess,
+        routeAccess: sampleInvitedRouteAccess.routeAccess,
+      },
+      onPending: () => undefined,
+      onResolved: async () => {
+        const attempt = attemptDriverCompletionClearHeartbeat({
+          appVersion: '1.2.0', attemptTimeoutMs: 10, cancelAttemptTimeout: () => undefined,
+          completedStopCount: 11, driverContractVersion: 2,
+          heartbeatService: { recordHeartbeat: async () => { throw new Error('must not reach server'); } },
+          identityService: { next: () => new Promise(() => undefined) }, queue, routePlanId,
+          scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+          sessionKey: 'account:route:generation', versionCode: 18,
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+        expirations.shift()?.();
+        assert.equal((await attempt).observed, false);
+        cleanupCalls += 1;
+        throw new Error('secure session clear rejected');
+      },
+      queue,
+      receiptService: { lookupReceipt: async () => ({
+        assignmentGeneration: sampleInvitedRouteAccess.routeAccess.assignmentGeneration,
+        clientEventId: 'cold-restart-hostile', errorCode: null,
+        expectedRouteVersionId: sampleInvitedRouteAccess.routeAccess.expectedRouteVersionId,
+        routePlanId, routeStatus: 'COMPLETED', status: 'APPLIED',
+      }) },
+    });
+    await assert.rejects(restore, /secure session clear rejected/u);
+    assert.equal(cleanupCalls, 1);
+    assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), [routePlanId]);
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    assert.deepEqual(restarted.listPendingCompletionClearRoutePlanIds(), [routePlanId]);
+  });
 });
+
+function createMemoryStorage(): OfflineSubmissionQueueStorage {
+  const values = new Map<string, string>();
+  return {
+    getItem: async (key) => values.get(key) ?? null,
+    removeItem: async (key) => { values.delete(key); },
+    setItem: async (key, value) => { values.set(key, value); },
+  };
+}

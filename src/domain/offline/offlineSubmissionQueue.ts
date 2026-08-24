@@ -45,7 +45,7 @@ export type OfflineEvidenceState = 'ACKNOWLEDGED' | 'DISCARDED' | 'PENDING' | 'Q
 export type OfflineEvidenceJournalEntry = {
   at: string;
   code: string;
-  kind: 'ACK' | 'ATTEMPT' | 'DISCARD' | 'ENQUEUED' | 'RECONCILIATION';
+  kind: 'ACK' | 'ATTEMPT' | 'DISCARD' | 'ENQUEUED' | 'HEARTBEAT' | 'RECONCILIATION';
 };
 
 export function retainOfflineEvidenceJournal(
@@ -115,7 +115,9 @@ export type OfflineSubmissionQueue = {
   enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
   enqueueProofMediaUpload(request: ProofMediaUploadRequest): OfflineProofMediaQueueItem;
   getRouteCompletionTelemetry(routePlanId: string): OfflineRouteCompletionTelemetry;
+  listPendingCompletionClearRoutePlanIds(): string[];
   listPending(): OfflineSubmissionQueueItem[];
+  markRouteCompletionClearHeartbeatDelivered(routePlanId: string): boolean;
   quarantine(queueItemId: string, reason: OfflineSubmissionReconciliation['reason']): boolean;
   recordRetryFailure(queueItemId: string, lastError: unknown): boolean;
   sealForAccountChange(): { discardedLocations: number; sealed: number };
@@ -478,9 +480,39 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
         locallyFinished: true,
       };
     },
+    listPendingCompletionClearRoutePlanIds: () => [...new Set(activeItems()
+      .filter((item): item is OfflineDriverEventQueueItem => (
+        item.kind === 'driver_event'
+        && item.event.eventType === 'ROUTE_COMPLETED'
+        && item.event.routePlanId !== null
+        && item.state === 'ACKNOWLEDGED'
+        && item.journal.some((entry) => entry.kind === 'ACK' && entry.code === 'SERVER_ACK')
+        && !item.journal.some((entry) => entry.kind === 'HEARTBEAT' && entry.code === 'ACK_CLEAR_DELIVERED')
+      ))
+      .sort((left, right) => left.queueSequence - right.queueSequence)
+      .map((item) => item.event.routePlanId!))],
     listPending: () => activeItems()
       .filter((item) => item.state === 'PENDING' || item.state === 'QUARANTINED')
       .sort((left, right) => left.queueSequence - right.queueSequence),
+    markRouteCompletionClearHeartbeatDelivered: (routePlanId) => {
+      requireMutable();
+      const completions = activeItems()
+        .filter((item): item is OfflineDriverEventQueueItem => (
+          item.kind === 'driver_event'
+          && item.event.eventType === 'ROUTE_COMPLETED'
+          && item.event.routePlanId === routePlanId
+          && item.state === 'ACKNOWLEDGED'
+          && item.journal.some((entry) => entry.kind === 'ACK' && entry.code === 'SERVER_ACK')
+          && !item.journal.some((entry) => entry.kind === 'HEARTBEAT' && entry.code === 'ACK_CLEAR_DELIVERED')
+        ))
+        .sort((left, right) => right.queueSequence - left.queueSequence);
+      if (completions.length === 0) return false;
+      for (const completion of completions) {
+        appendJournal(completion, 'HEARTBEAT', 'ACK_CLEAR_DELIVERED');
+      }
+      emitChange();
+      return true;
+    },
     quarantine: (queueItemId, reason) => {
       requireMutable();
       const item = findActiveItem(queueItemId);
@@ -1331,7 +1363,7 @@ function readJournal(value: unknown, now: () => Date): OfflineEvidenceJournalEnt
     const at = readRequiredString(data.at);
     const code = readRequiredString(data.code);
     const kind = data.kind;
-    if (at === null || code === null || !['ACK', 'ATTEMPT', 'DISCARD', 'ENQUEUED', 'RECONCILIATION'].includes(String(kind))) return null;
+    if (at === null || code === null || !['ACK', 'ATTEMPT', 'DISCARD', 'ENQUEUED', 'HEARTBEAT', 'RECONCILIATION'].includes(String(kind))) return null;
     journal.push({ at, code, kind: kind as OfflineEvidenceJournalEntry['kind'] });
   }
   return retainOfflineEvidenceJournal(journal, now());

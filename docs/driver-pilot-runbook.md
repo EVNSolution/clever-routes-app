@@ -28,6 +28,18 @@ authorized separately and tied back to the exact committed source SHA.
   queue evidence immediately after the completion enters pending state.
 - Confirm the durable receipt acknowledgement changes the next immediate
   heartbeat to `finishPending=false` and supplies `lastAcknowledgedAt`.
+- Confirm every server-acknowledged completion opens an account/route-scoped
+  durable clear-heartbeat outbox record. Close it only after an accepted,
+  non-conflicting server observation; restart, timeout, `401`, or session
+  cleanup must leave it retryable. A `401` gets one bounded route-token refresh.
+- Confirm online completion hands the durable server acknowledgement to the
+  heartbeat path before GPS cleanup, while cleanup failure and telemetry
+  failure remain independently recoverable.
+- Confirm logout, account change, and route-session change abort in-flight
+  heartbeat transport, clear displayed sync health, and reject late responses
+  from the prior epoch.
+- Confirm heartbeat cadence is 60 seconds when healthy and 30 seconds when
+  degraded. Jitter must never exceed two heartbeat writes per route per minute.
 - Confirm the interval between pending evidence and acknowledgement is at most
   five minutes for every pilot completion; any breach blocks expansion.
 - Confirm app restart preserves both pending and acknowledged recovery state.

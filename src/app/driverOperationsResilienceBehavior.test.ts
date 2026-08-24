@@ -61,6 +61,23 @@ describe('driver operations resilience runtime', () => {
     assert.ok(receiptAckIndex > 0 && receiptHeartbeatIndex > receiptAckIndex && receiptHeartbeatIndex < receiptClearIndex);
   });
 
+  it('invalidates account-scoped sync health before logout side effects', () => {
+    const logoutIndex = source.indexOf('async function handleLogout()');
+    const epochIndex = source.indexOf('driverSyncAccountEpochRef.current += 1;', logoutIndex);
+    const clearHealthIndex = source.indexOf('setDriverSyncHealth(null);', logoutIndex);
+    const locationCleanupIndex = source.indexOf('await clearAndStopActiveLocationSession();', logoutIndex);
+    assert.ok(logoutIndex > 0 && epochIndex > logoutIndex);
+    assert.ok(clearHealthIndex > epochIndex && clearHealthIndex < locationCleanupIndex);
+  });
+
+  it('does not destroy cached completion identity when ACK-clear token refresh cannot find the ended route', () => {
+    assert.match(source, /options\?\.preserveMissingRoute === true\) return null;/u);
+    const completionRefreshCalls = source.match(
+      /refreshRouteAccessLookupForSubmission\([^)]*, \{ preserveMissingRoute: true \}\)/gu,
+    ) ?? [];
+    assert.ok(completionRefreshCalls.length >= 4);
+  });
+
   it('records native GPS accuracy rather than treating proximity as safe without metadata', () => {
     const platformSource = readFileSync(new URL('../platform/expo/location/expoContinuousLocationStreamService.ts', import.meta.url), 'utf8');
     assert.match(platformSource, /accuracyMeters: location\.coords\.accuracy/u);
