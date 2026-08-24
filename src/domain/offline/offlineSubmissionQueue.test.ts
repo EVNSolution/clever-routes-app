@@ -3,7 +3,11 @@ import { describe, it } from 'node:test';
 
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createMockDriverEventService } from '../events/driverEvents';
-import { createMockProofMediaUploadService, createProofMediaRejectedError } from '../proof/proofMediaUpload';
+import {
+  createMockProofMediaUploadService,
+  createProofMediaRejectedError,
+  createProofMediaUploadApiClient,
+} from '../proof/proofMediaUpload';
 import {
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
   OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY,
@@ -360,6 +364,110 @@ describe('offline submission queue', () => {
     resolveHung();
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(queue.listPending().length, 1);
+  });
+
+  it('propagates the queue deadline through the live proof client and aborts its XHR', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'xhr-stop', fileName: 'proof.jpg', routePlanId: 'xhr-route',
+      source: 'camera', uri: 'file:///proof.jpg',
+    });
+    const expirations: (() => void)[] = [];
+    const headers: Record<string, string> = {};
+    let abortCount = 0;
+    class HungXMLHttpRequest {
+      onabort: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onload: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      responseText = '';
+      status = 0;
+      timeout = 0;
+      abort() { abortCount += 1; this.onabort?.(); }
+      open() {}
+      send() {}
+      setRequestHeader(name: string, value: string) { headers[name] = value; }
+    }
+    const retry = retryOfflineSubmissions({
+      attemptTimeoutMs: 100,
+      cancelAttemptTimeout: () => undefined,
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: createProofMediaUploadApiClient({
+        accessToken: 'driver-token', baseUrl: 'https://delivery.example.com',
+        xmlHttpRequestFactory: () => new HungXMLHttpRequest() as unknown as XMLHttpRequest,
+      }),
+      queue,
+      scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+    });
+    expirations.shift()?.();
+
+    assert.equal((await retry).failed, 1);
+    assert.equal(abortCount, 1);
+    assert.match(headers['Idempotency-Key'] ?? '', /^proof-media-v1:[0-9a-f]{32}$/u);
+    assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
+  });
+
+  it('retries a timeout with one idempotent server proof when transport ignores abort and settles late', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'oshawa-idempotent', fileName: 'proof.jpg', routePlanId: 'route-oshawa',
+      source: 'camera', uri: 'file:///proof.jpg',
+    });
+    const expirations: (() => void)[] = [];
+    const serverReservations = new Map<string, Promise<{
+      contentType: string; kind: 'photo'; mediaId: string; source: 'camera'; storageKey: string; uploadedAt: string;
+    }>>();
+    let completeUpload!: () => void;
+    let serverObjectCount = 0;
+    let uploadCalls = 0;
+    let firstSignal: AbortSignal | undefined;
+    const uploadProofMedia = (_request: unknown, options?: { idempotencyKey?: string; signal?: AbortSignal }) => {
+      uploadCalls += 1;
+      firstSignal ??= options?.signal;
+      const key = options?.idempotencyKey ?? '';
+      const existing = serverReservations.get(key);
+      if (existing !== undefined) return existing;
+      const reserved = new Promise<{
+        contentType: string; kind: 'photo'; mediaId: string; source: 'camera'; storageKey: string; uploadedAt: string;
+      }>((resolve) => {
+        completeUpload = () => {
+          serverObjectCount += 1;
+          resolve({
+            contentType: 'image/jpeg', kind: 'photo', mediaId: 'one-server-reference', source: 'camera',
+            storageKey: 'one/server/object.jpg', uploadedAt: '2026-08-22T12:00:00.000Z',
+          });
+        };
+      });
+      serverReservations.set(key, reserved);
+      return reserved;
+    };
+    const firstRetry = retryOfflineSubmissions({
+      attemptTimeoutMs: 100,
+      cancelAttemptTimeout: () => undefined,
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: { uploadProofMedia },
+      queue,
+      scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+    });
+    expirations.shift()?.();
+
+    assert.equal((await firstRetry).failed, 1);
+    assert.equal(firstSignal?.aborted, true);
+    assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
+
+    const immediateRetry = retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: { uploadProofMedia },
+      queue,
+    });
+    completeUpload();
+
+    assert.equal((await immediateRetry).succeeded, 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(uploadCalls, 2);
+    assert.equal(serverReservations.size, 1);
+    assert.equal(serverObjectCount, 1);
+    assert.equal(queue.listPending().length, 0);
   });
 
   it('retains a bounded first-error record while updating the last retry error', async () => {

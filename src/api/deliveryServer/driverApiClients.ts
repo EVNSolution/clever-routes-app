@@ -171,7 +171,9 @@ function withDriverAccessRefresh(input: {
       recordDriverEvent: (request) => runWithRefresh((client) => client.driverEventService.recordDriverEvent(request)),
     },
     proofMediaUploadService: {
-      uploadProofMedia: (request) => runWithRefresh((client) => client.proofMediaUploadService.uploadProofMedia(request)),
+      uploadProofMedia: (request, options) => runWithRefresh(
+        (client) => client.proofMediaUploadService.uploadProofMedia(request, options),
+      ),
     },
   };
 }

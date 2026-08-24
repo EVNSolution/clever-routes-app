@@ -16,7 +16,7 @@ export type BoundedAsyncOperationOptions = {
 };
 
 export function runBoundedAsyncOperation<T>(
-  operation: () => Promise<T>,
+  operation: (signal: AbortSignal) => Promise<T>,
   options: BoundedAsyncOperationOptions,
 ): Promise<T> {
   const schedule = options.schedule ?? ((expire, timeoutMs) => setTimeout(expire, timeoutMs));
@@ -24,14 +24,16 @@ export function runBoundedAsyncOperation<T>(
 
   return new Promise<T>((resolve, reject) => {
     let settled = false;
+    const controller = new AbortController();
     const timer = schedule(() => {
       if (settled) return;
       settled = true;
+      controller.abort();
       reject(new BoundedOperationTimeoutError());
     }, options.timeoutMs);
     let source: Promise<T>;
     try {
-      source = operation();
+      source = operation(controller.signal);
     } catch (error) {
       settled = true;
       cancel(timer);

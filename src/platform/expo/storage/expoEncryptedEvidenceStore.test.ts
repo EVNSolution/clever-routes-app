@@ -451,26 +451,51 @@ describe('encrypted driver evidence store', () => {
     });
     const validKey = `${owner}:driver-event:valid-schema`;
     await store.setItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY, JSON.stringify({
-      items: [{
-        accountOwnerHash: owner,
-        attempts: 0,
-        enqueuedAt: now().toISOString(),
-        event: {
-          clientEventId: 'valid-schema',
-          eventType: 'STOP_DELIVERED',
-          occurredAt: now().toISOString(),
-          payload: { note: 'private valid replay note' },
-          routePlanId: 'route-schema',
+      items: [
+        {
+          accountOwnerHash: owner,
+          attempts: 0,
+          enqueuedAt: now().toISOString(),
+          event: {
+            clientEventId: 'valid-schema',
+            eventType: 'STOP_DELIVERED',
+            occurredAt: now().toISOString(),
+            payload: { note: 'private valid replay note' },
+            routePlanId: 'route-schema',
+          },
+          journal: [{ at: now().toISOString(), code: 'ENQUEUED', kind: 'ENQUEUED' }],
+          kind: 'driver_event',
+          queueItemId: 'driver-event:valid-schema',
+          queueSequence: 1,
+          state: 'PENDING',
         },
-        journal: [{ at: now().toISOString(), code: 'ENQUEUED', kind: 'ENQUEUED' }],
-        kind: 'driver_event',
-        queueItemId: 'driver-event:valid-schema',
-        queueSequence: 1,
-        state: 'PENDING',
-      }],
+        {
+          accountOwnerHash: owner,
+          attempts: 0,
+          enqueuedAt: now().toISOString(),
+          event: {
+            accuracyMeters: 8,
+            clientEventId: 'valid-location',
+            eventType: 'LOCATION_UPDATED',
+            latitude: 43.4516,
+            longitude: -80.4925,
+            occurredAt: now().toISOString(),
+            routePlanId: 'route-schema',
+          },
+          journal: [{ at: now().toISOString(), code: 'ENQUEUED', kind: 'ENQUEUED' }],
+          kind: 'driver_event',
+          queueItemId: 'driver-event:valid-location',
+          queueSequence: 2,
+          state: 'PENDING',
+        },
+      ],
       version: 2,
     }));
     const validSensitiveBefore = db.tables.get('sensitive_evidence')?.get(validKey);
+    const validLocationKey = `${owner}:driver-event:valid-location`;
+    const validLocationBefore = db.tables.get('location_batches')?.get(validLocationKey);
+    assert.notEqual(validSensitiveBefore, undefined);
+    assert.notEqual(validLocationBefore, undefined);
     const invalidKey = `${owner}:driver-event:json-valid-invalid`;
     db.tables.get('workflow_evidence')?.set(invalidKey, '{}');
     db.tables.get('sensitive_evidence')?.set(invalidKey, JSON.stringify({
@@ -479,10 +504,14 @@ describe('encrypted driver evidence store', () => {
     db.createdAtByRecordKey.set(invalidKey, now().toISOString());
 
     const queue = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: owner, now, storage: store });
-    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), ['driver-event:valid-schema']);
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+      'driver-event:valid-schema',
+      'driver-event:valid-location',
+    ]);
     assert.equal(db.tables.get('workflow_evidence')?.has(invalidKey), false);
     assert.equal(db.tables.get('sensitive_evidence')?.has(invalidKey), false);
     assert.equal(db.tables.get('sensitive_evidence')?.get(validKey), validSensitiveBefore);
+    assert.equal(db.tables.get('location_batches')?.get(validLocationKey), validLocationBefore);
     assert.match([...(db.tables.get('migration_quarantine')?.values() ?? [])].join(''), /CORRUPT_ENCRYPTED_EVIDENCE_ROW/u);
     assert.doesNotMatch(await store.exportDiagnostics(), /private valid replay note|private invalid replay note/u);
     assert.equal(db.runCalls.some(({ sql }) => sql.includes("json_set(payload, '$.state', 'DISCARDED')")), false);
@@ -497,8 +526,8 @@ describe('encrypted driver evidence store', () => {
       proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
       queue,
     });
-    assert.deepEqual(replayed, ['valid-schema']);
-    assert.equal(result.succeeded, 1);
+    assert.deepEqual(replayed, ['valid-schema', 'valid-location']);
+    assert.equal(result.succeeded, 2);
   });
 
   it('keeps workflow envelopes redacted while sensitive replay data remains separately encrypted', async () => {

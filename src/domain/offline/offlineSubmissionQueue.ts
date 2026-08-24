@@ -15,6 +15,7 @@ import {
   getDriverApiRequiresRouteReconciliation,
 } from '../../api/deliveryServer/driverApiError';
 import {
+  getProofMediaUploadIdempotencyKey,
   isProofMediaRejectedError,
   type ProofMediaUploadRequest,
   type ProofMediaUploadService,
@@ -662,7 +663,7 @@ export async function retryOfflineSubmissions(input: {
   const completionAcknowledgedRoutePlanIds = new Set<string>();
   const reconciliationRoutePlanIds = new Set<string>();
   const serverConfirmedStopIds = new Set<string>();
-  const runAttempt = <T>(operation: () => Promise<T>): Promise<T> => runBoundedAsyncOperation(operation, {
+  const runAttempt = <T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> => runBoundedAsyncOperation(operation, {
     ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
     ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
     timeoutMs: input.attemptTimeoutMs ?? 15_000,
@@ -732,7 +733,10 @@ export async function retryOfflineSubmissions(input: {
           routeLookupReason = 'pickup_eta_snapshot_synced';
         }
       } else {
-        await runAttempt(() => input.proofMediaUploadService.uploadProofMedia(item.request));
+        await runAttempt((signal) => input.proofMediaUploadService.uploadProofMedia(item.request, {
+          idempotencyKey: getProofMediaUploadIdempotencyKey(item.request),
+          signal,
+        }));
       }
       input.queue.acknowledge(item.queueItemId);
       succeeded += 1;
