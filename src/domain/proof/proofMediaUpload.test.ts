@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { DriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import {
   createMockProofMediaUploadService,
   createProofMediaUploadApiClient,
@@ -303,6 +304,29 @@ describe('proof media upload', () => {
       kind: 'upload_failed',
       message: 'Photo upload failed (HTTP 400). Try again.',
     });
+  });
+
+  it('preserves the server proof idempotency 409 codes as typed API errors', async () => {
+    for (const code of ['PROOF_MEDIA_UPLOAD_IN_PROGRESS', 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT'] as const) {
+      const service = createProofMediaUploadApiClient({
+        accessToken: 'driver-token',
+        baseUrl: 'https://delivery.example.com/',
+        fetchImpl: async () => ({
+          ok: false,
+          status: 409,
+          json: async () => ({ data: null, error: { code, message: 'safe server message' } }),
+        }),
+      });
+
+      await assert.rejects(service.uploadProofMedia({
+        deliveryStopId: 'stop-1', fileName: 'proof.jpg', routePlanId: 'route-1',
+        source: 'camera', uri: 'file:///proof.jpg',
+      }), (error) => (
+        error instanceof DriverApiHttpError
+        && error.code === code
+        && error.status === 409
+      ));
+    }
   });
 
   it('distinguishes expired driver access from a generic proof upload failure', async () => {

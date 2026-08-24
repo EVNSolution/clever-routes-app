@@ -450,6 +450,77 @@ describe('offline submission queue', () => {
     assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
   });
 
+  it('keeps proof upload-in-progress retryable without treating HTTP 409 as a route end', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'in-progress-stop', fileName: 'proof.jpg', routePlanId: 'in-progress-route',
+      source: 'camera', uri: 'file:///proof.jpg',
+    });
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => {
+          throw createDriverApiHttpError({
+            code: 'PROOF_MEDIA_UPLOAD_IN_PROGRESS', endpoint: 'Proof media upload', status: 409,
+          });
+        },
+      },
+      queue,
+    });
+
+    const pending = queue.listPending()[0];
+    assert.equal(result.failed, 1);
+    assert.equal(result.blocked, undefined);
+    assert.equal(result.reconciliationRoutePlanIds, undefined);
+    assert.equal(pending?.state, 'PENDING');
+    assert.equal(pending?.firstErrorCode, 'PROOF_MEDIA_UPLOAD_IN_PROGRESS');
+    assert.equal(pending?.lastErrorCode, 'PROOF_MEDIA_UPLOAD_IN_PROGRESS');
+    assert.deepEqual(getOfflineSubmissionQueueSummary(queue), {
+      blockedCount: 0, reconciliationRoutePlanIds: [], retryableCount: 1, totalCount: 1,
+    });
+    assert.doesNotMatch(JSON.stringify(pending), /ROUTE_NOT_IN_PROGRESS/u);
+  });
+
+  it('quarantines a proof idempotency conflict immediately with truthful blocked sync evidence', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    queue.enqueueProofMediaUpload({
+      deliveryStopId: 'conflict-stop', fileName: 'proof.jpg', routePlanId: 'conflict-route',
+      source: 'camera', uri: 'file:///proof.jpg',
+    });
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => {
+          throw createDriverApiHttpError({
+            code: 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT', endpoint: 'Proof media upload', status: 409,
+          });
+        },
+      },
+      queue,
+    });
+    await queue.whenPersisted();
+
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    const blocked = restarted.listPending()[0];
+    assert.equal(result.failed, 0);
+    assert.equal(result.blocked, 1);
+    assert.equal(result.reconciliationRoutePlanIds, undefined);
+    assert.equal(blocked?.state, 'QUARANTINED');
+    assert.equal(blocked?.firstErrorCode, 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT');
+    assert.equal(blocked?.lastErrorCode, 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT');
+    assert.equal(blocked?.reconciliation?.reason, 'proof_idempotency_conflict');
+    assert.deepEqual(getOfflineSubmissionQueueSummary(restarted), {
+      blockedCount: 1,
+      reconciliationRoutePlanIds: ['conflict-route'],
+      retryableCount: 0,
+      totalCount: 1,
+    });
+    assert.doesNotMatch(JSON.stringify(blocked), /ROUTE_NOT_IN_PROGRESS/u);
+  });
+
   it('retries a timeout with one idempotent server proof when transport ignores abort and settles late', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueProofMediaUpload({

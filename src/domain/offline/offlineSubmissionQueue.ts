@@ -11,6 +11,7 @@ import {
 } from '../async/boundedAsyncOperation';
 import { resolveCompletionReceipt, type DriverEventReceiptService } from '../events/driverEventReceipt';
 import {
+  DriverApiHttpError,
   getDriverApiRequiresRouteLookup,
   getDriverApiRequiresRouteReconciliation,
 } from '../../api/deliveryServer/driverApiError';
@@ -36,7 +37,7 @@ export type OfflineSubmissionQueueRetryPolicy = {
 
 export type OfflineSubmissionReconciliation = {
   blockedAt: string;
-  reason: 'account_signed_out' | 'retry_policy_exceeded' | 'route_not_in_progress';
+  reason: 'account_signed_out' | 'proof_idempotency_conflict' | 'retry_policy_exceeded' | 'route_not_in_progress';
 };
 
 export type OfflineEvidenceState = 'ACKNOWLEDGED' | 'DISCARDED' | 'PENDING' | 'QUARANTINED';
@@ -115,7 +116,7 @@ export type OfflineSubmissionQueue = {
   enqueueProofMediaUpload(request: ProofMediaUploadRequest): OfflineProofMediaQueueItem;
   listPending(): OfflineSubmissionQueueItem[];
   quarantine(queueItemId: string, reason: OfflineSubmissionReconciliation['reason']): boolean;
-  recordRetryFailure(queueItemId: string, lastError: string): boolean;
+  recordRetryFailure(queueItemId: string, lastError: unknown): boolean;
   sealForAccountChange(): { discardedLocations: number; sealed: number };
   storageState(): 'READY' | 'STORAGE_DEGRADED';
   recoverStorage(): Promise<boolean>;
@@ -770,12 +771,23 @@ export async function retryOfflineSubmissions(input: {
         }
         continue;
       }
+      if (
+        item.kind === 'proof_media'
+        && error instanceof DriverApiHttpError
+        && error.code === 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT'
+      ) {
+        input.queue.recordRetryFailure(item.queueItemId, error);
+        if (input.queue.quarantine(item.queueItemId, 'proof_idempotency_conflict')) {
+          blocked += 1;
+        }
+        continue;
+      }
 
       if (getDriverApiRequiresRouteLookup(error) === true) {
         requiresRouteLookup = true;
         routeLookupReason = 'driver_access_expired';
       }
-      input.queue.recordRetryFailure(item.queueItemId, error instanceof Error ? error.message : 'unknown error');
+      input.queue.recordRetryFailure(item.queueItemId, error);
       const updatedItem = input.queue.listPending().find((pendingItem) => pendingItem.queueItemId === item.queueItemId);
       if (updatedItem !== undefined && shouldDiscardOfflineSubmission(updatedItem, retryPolicy, now())) {
         if (isLocationDriverEvent(updatedItem)) {
@@ -868,11 +880,19 @@ function getInternalItemKey(item: Pick<OfflineSubmissionQueueItem, 'accountOwner
   return `${item.accountOwnerHash}:${item.queueItemId}`;
 }
 
-function getStableRetryErrorCode(message: string) {
+function getStableRetryErrorCode(error: unknown) {
+  if (error instanceof DriverApiHttpError) {
+    if (error.code === 'PROOF_MEDIA_UPLOAD_IN_PROGRESS') return 'PROOF_MEDIA_UPLOAD_IN_PROGRESS';
+    if (error.code === 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT') return 'PROOF_MEDIA_IDEMPOTENCY_CONFLICT';
+    if (error.code === 'ROUTE_NOT_IN_PROGRESS') return 'ROUTE_NOT_IN_PROGRESS';
+    if (error.status === 401) return 'AUTH_EXPIRED';
+    return 'RETRY_FAILED';
+  }
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : 'unknown error';
   const normalized = message.toUpperCase();
   if (normalized.includes('OPERATION_TIMEOUT')) return 'OPERATION_TIMEOUT';
   if (normalized.includes('401') || normalized.includes('UNAUTHORIZED') || normalized.includes('EXPIRED')) return 'AUTH_EXPIRED';
-  if (normalized.includes('ROUTE_NOT_IN_PROGRESS') || normalized.includes('409')) return 'ROUTE_NOT_IN_PROGRESS';
+  if (normalized.includes('ROUTE_NOT_IN_PROGRESS')) return 'ROUTE_NOT_IN_PROGRESS';
   if (normalized.includes('REJECT')) return 'PROOF_REJECTED';
   if (normalized.includes('NETWORK') || normalized.includes('OFFLINE') || normalized.includes('FETCH')) return 'NETWORK_UNAVAILABLE';
   return 'RETRY_FAILED';
@@ -1141,7 +1161,12 @@ function readOptionalReconciliation(value: unknown): OfflineSubmissionReconcilia
   const reason = (value as Record<string, unknown>).reason;
   if (
     blockedAt === null
-    || !['account_signed_out', 'retry_policy_exceeded', 'route_not_in_progress'].includes(String(reason))
+    || ![
+      'account_signed_out',
+      'proof_idempotency_conflict',
+      'retry_policy_exceeded',
+      'route_not_in_progress',
+    ].includes(String(reason))
   ) {
     return null;
   }
