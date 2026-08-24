@@ -45,7 +45,7 @@ type LegacyStorage = {
   removeItem(key: string): Promise<void>;
 };
 
-type StoredRow = { payload: string; recordKey: string };
+type StoredRow = { createdAt?: string; payload: string; recordKey: string };
 
 const RECORD_TABLES = [
   'workflow_evidence',
@@ -401,31 +401,34 @@ async function readHydratedItems(database: EvidenceDatabase, nowIso: string) {
 async function purgeExpiredEvidence(database: EvidenceDatabase, now: Date) {
   const cutoff = new Date(now.getTime() - OFFLINE_EVIDENCE_AUDIT_RETENTION_MS).toISOString();
   await database.withExclusiveTransactionAsync(async (transaction) => {
+    let malformedRowIndex = 0;
     for (const table of RECORD_TABLES) {
       const rows = await transaction.getAllAsync<StoredRow>(
-        `SELECT record_key AS recordKey, payload FROM ${table};`,
+        `SELECT record_key AS recordKey, payload, created_at AS createdAt FROM ${table};`,
       );
       for (const row of rows) {
         if (row.recordKey.startsWith('legacy-corrupt:')) {
-          const retention = readLegacyCorruptRetention(row);
-          if (retention === null || now.getTime() < retention.retainedUntil.getTime()) continue;
-          await transaction.runAsync(
-            'INSERT OR REPLACE INTO diagnostic_records (record_key, payload) VALUES (?, ?);',
-            'migration-corrupt-legacy',
-            JSON.stringify({
-              code: 'CORRUPT_LEGACY_QUEUE_BLOB_PURGED',
-              originalByteLength: retention.originalByteLength,
-              purgedAt: now.toISOString(),
-              purgedBlobCount: 1,
-              quarantinedAt: retention.quarantinedAt.toISOString(),
-              retainedUntil: retention.retainedUntil.toISOString(),
-              truncated: retention.truncated,
-            }),
-          );
+          const retention = readLegacyCorruptRetention(row, now);
+          if (retention.normalizedPayload !== null) {
+            await transaction.runAsync(
+              'INSERT OR REPLACE INTO migration_quarantine (record_key, account_owner_hash, queue_sequence, payload) VALUES (?, ?, ?, ?);',
+              row.recordKey,
+              'legacy-unbound-owner',
+              0,
+              retention.normalizedPayload,
+            );
+          }
+          if (now.getTime() < retention.retainedUntil.getTime()) continue;
+          await writeCorruptEvidencePurgeDiagnostic(transaction, retention, now);
           await transaction.runAsync(`DELETE FROM ${table} WHERE record_key = ?;`, row.recordKey);
           continue;
         }
-        const item = JSON.parse(row.payload) as Record<string, unknown>;
+        const item = parseJsonObject(row.payload);
+        if (item === null) {
+          malformedRowIndex += 1;
+          await quarantineMalformedEvidenceRow(transaction, table, row, now, malformedRowIndex);
+          continue;
+        }
         if (!isExpiredTerminalEvidence(item, now)) continue;
         await transaction.runAsync(`DELETE FROM ${table} WHERE record_key = ?;`, row.recordKey);
         await transaction.runAsync('DELETE FROM sensitive_evidence WHERE record_key = ?;', row.recordKey);
@@ -594,42 +597,155 @@ function parseSupportExportMarker(value: string): { accountOwnerHash: string | n
   }
 }
 
-function readLegacyCorruptRetention(row: StoredRow): {
+function readLegacyCorruptRetention(row: StoredRow, now: Date): {
   originalByteLength: number | null;
   quarantinedAt: Date;
   retainedUntil: Date;
   truncated: boolean | null;
-} | null {
-  try {
-    const payload = JSON.parse(row.payload) as Record<string, unknown>;
-    const keyTimestamp = Number(row.recordKey.slice('legacy-corrupt:'.length));
-    const explicitQuarantinedAt = readIsoTimestamp(payload.quarantinedAt);
-    const quarantinedAt = explicitQuarantinedAt === null
-      ? Number.isFinite(keyTimestamp) && keyTimestamp >= 0
-        ? new Date(keyTimestamp)
-        : null
-      : new Date(explicitQuarantinedAt);
-    if (quarantinedAt === null || Number.isNaN(quarantinedAt.getTime())) return null;
-    const explicitRetainedUntil = readIsoTimestamp(payload.retainedUntil);
-    const candidateRetainedUntil = explicitRetainedUntil === null
-      ? new Date(quarantinedAt.getTime() + LEGACY_CORRUPT_QUARANTINE_RETENTION_MS)
-      : new Date(explicitRetainedUntil);
-    const retainedUntil = candidateRetainedUntil.getTime() < quarantinedAt.getTime()
-      ? new Date(quarantinedAt.getTime() + LEGACY_CORRUPT_QUARANTINE_RETENTION_MS)
-      : candidateRetainedUntil;
-    return {
-      originalByteLength: typeof payload.originalByteLength === 'number'
-        && Number.isSafeInteger(payload.originalByteLength)
-        && payload.originalByteLength >= 0
-        ? payload.originalByteLength
-        : null,
+  normalizedPayload: string | null;
+} {
+  const parsedPayload = parseJsonObject(row.payload);
+  const payload = parsedPayload ?? {};
+  const keyTimestampText = /^legacy-corrupt:(\d+)/u.exec(row.recordKey)?.[1];
+  const keyTimestamp = keyTimestampText === undefined ? Number.NaN : Number(keyTimestampText);
+  const keyDate = Number.isFinite(keyTimestamp) && keyTimestamp >= 0 ? new Date(keyTimestamp) : null;
+  const validKeyDate = keyDate !== null && !Number.isNaN(keyDate.getTime()) ? keyDate : null;
+  const explicitQuarantinedAt = readIsoTimestamp(payload.quarantinedAt);
+  const createdAt = readIsoTimestamp(row.createdAt);
+  const quarantinedAt = explicitQuarantinedAt === null
+    ? validKeyDate !== null
+      ? validKeyDate
+      : createdAt === null ? now : new Date(createdAt)
+    : new Date(explicitQuarantinedAt);
+  const explicitRetainedUntil = readIsoTimestamp(payload.retainedUntil);
+  const maximumRetainedUntil = new Date(quarantinedAt.getTime() + LEGACY_CORRUPT_QUARANTINE_RETENTION_MS);
+  const candidateRetainedUntil = explicitRetainedUntil === null ? maximumRetainedUntil : new Date(explicitRetainedUntil);
+  const retainedUntil = candidateRetainedUntil.getTime() < quarantinedAt.getTime()
+    || candidateRetainedUntil.getTime() > maximumRetainedUntil.getTime()
+    ? maximumRetainedUntil
+    : candidateRetainedUntil;
+  const originalByteLength = typeof payload.originalByteLength === 'number'
+    && Number.isSafeInteger(payload.originalByteLength)
+    && payload.originalByteLength >= 0
+    ? payload.originalByteLength
+    : new TextEncoder().encode(row.payload).byteLength;
+  const truncated = typeof payload.truncated === 'boolean' ? payload.truncated : null;
+  const metadataIsValid = parsedPayload !== null
+    && (explicitQuarantinedAt !== null || validKeyDate !== null);
+  return {
+    normalizedPayload: metadataIsValid ? null : createCorruptEvidenceSummary({
+      originalByteLength,
       quarantinedAt,
       retainedUntil,
-      truncated: typeof payload.truncated === 'boolean' ? payload.truncated : null,
-    };
+      sourceTable: 'migration_quarantine',
+      truncated,
+    }),
+    originalByteLength,
+    quarantinedAt,
+    retainedUntil,
+    truncated,
+  };
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
   } catch {
     return null;
   }
+}
+
+function createCorruptEvidenceSummary(input: {
+  originalByteLength: number | null;
+  quarantinedAt: Date;
+  retainedUntil: Date;
+  sourceTable: (typeof RECORD_TABLES)[number];
+  truncated: boolean | null;
+}) {
+  return JSON.stringify({
+    accountOwnerHash: 'legacy-unbound-owner',
+    code: 'CORRUPT_ENCRYPTED_EVIDENCE_ROW',
+    originalByteLength: input.originalByteLength,
+    quarantinedAt: input.quarantinedAt.toISOString(),
+    reason: 'malformed_encrypted_evidence_row',
+    retainedUntil: input.retainedUntil.toISOString(),
+    sourceTable: input.sourceTable,
+    truncated: input.truncated,
+  });
+}
+
+async function quarantineMalformedEvidenceRow(
+  database: EvidenceDatabase,
+  table: (typeof RECORD_TABLES)[number],
+  row: StoredRow,
+  now: Date,
+  index: number,
+) {
+  const createdAt = readIsoTimestamp(row.createdAt);
+  const quarantinedAt = createdAt === null ? now : new Date(createdAt);
+  const retention = {
+    normalizedPayload: null,
+    originalByteLength: new TextEncoder().encode(row.payload).byteLength,
+    quarantinedAt,
+    retainedUntil: new Date(quarantinedAt.getTime() + LEGACY_CORRUPT_QUARANTINE_RETENTION_MS),
+    truncated: null,
+  };
+  if (now.getTime() >= retention.retainedUntil.getTime()) {
+    await writeCorruptEvidencePurgeDiagnostic(database, retention, now);
+  } else {
+    await database.runAsync(
+      'INSERT OR REPLACE INTO migration_quarantine (record_key, account_owner_hash, queue_sequence, payload) VALUES (?, ?, ?, ?);',
+      `legacy-corrupt:${quarantinedAt.getTime()}:${table}:${stableNonSensitiveKey(row.recordKey)}:${index}`,
+      'legacy-unbound-owner',
+      0,
+      createCorruptEvidenceSummary({
+        originalByteLength: retention.originalByteLength,
+        quarantinedAt,
+        retainedUntil: retention.retainedUntil,
+        sourceTable: table,
+        truncated: null,
+      }),
+    );
+  }
+  await database.runAsync(`DELETE FROM ${table} WHERE record_key = ?;`, row.recordKey);
+  await database.runAsync('DELETE FROM sensitive_evidence WHERE record_key = ?;', row.recordKey);
+}
+
+function stableNonSensitiveKey(value: string) {
+  let hash = 2_166_136_261;
+  for (const codePoint of value) {
+    hash ^= codePoint.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+async function writeCorruptEvidencePurgeDiagnostic(
+  database: EvidenceDatabase,
+  retention: {
+    originalByteLength: number | null;
+    quarantinedAt: Date;
+    retainedUntil: Date;
+    truncated: boolean | null;
+  },
+  now: Date,
+) {
+  await database.runAsync(
+    'INSERT OR REPLACE INTO diagnostic_records (record_key, payload) VALUES (?, ?);',
+    'migration-corrupt-legacy',
+    JSON.stringify({
+      code: 'CORRUPT_LEGACY_QUEUE_BLOB_PURGED',
+      originalByteLength: retention.originalByteLength,
+      purgedAt: now.toISOString(),
+      purgedBlobCount: 1,
+      quarantinedAt: retention.quarantinedAt.toISOString(),
+      retainedUntil: retention.retainedUntil.toISOString(),
+      truncated: retention.truncated,
+    }),
+  );
 }
 
 function createBoundedCorruptLegacyPayload(raw: string, quarantinedAt: Date) {

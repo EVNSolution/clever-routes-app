@@ -25,6 +25,7 @@ function createDatabase(input?: {
   userVersion?: number;
 }) {
   const commands: string[] = [];
+  const createdAtByRecordKey = new Map<string, string>();
   const runCalls: { params: unknown[]; sql: string }[] = [];
   const tables = new Map<string, Map<string, string>>();
   let userVersion = input?.userVersion ?? 0;
@@ -44,7 +45,7 @@ function createDatabase(input?: {
       return [...(tables.get(table)?.entries() ?? [])]
         .map(([recordKey, payload]) => {
           if ((input?.corruptReadPayload !== true && input?.corruptReadLineage !== true) || table !== 'workflow_evidence') {
-            return { recordKey, payload };
+            return { createdAt: createdAtByRecordKey.get(recordKey), recordKey, payload };
           }
           const parsed = JSON.parse(payload) as { event?: { clientEventId?: string } };
           if (parsed.event !== undefined) {
@@ -53,7 +54,7 @@ function createDatabase(input?: {
               (parsed.event as Record<string, unknown>).assignmentGeneration = '999';
             }
           }
-          return { recordKey, payload: JSON.stringify(parsed) };
+          return { createdAt: createdAtByRecordKey.get(recordKey), recordKey, payload: JSON.stringify(parsed) };
         }) as T[];
     },
     getFirstAsync: async <T>(sql: string, ...params: unknown[]) => {
@@ -104,7 +105,7 @@ function createDatabase(input?: {
     },
     withExclusiveTransactionAsync: async (operation) => operation(database),
   };
-  return { commands, database, runCalls, tables };
+  return { commands, createdAtByRecordKey, database, runCalls, tables };
 }
 
 describe('encrypted driver evidence store', () => {
@@ -365,6 +366,77 @@ describe('encrypted driver evidence store', () => {
     assert.equal(beforeRollback, 1);
     assert.equal(db.tables.get('migration_quarantine')?.size, 1);
     assert.doesNotMatch(await store.exportDiagnostics(), /clock rollback evidence/u);
+  });
+
+  it('repairs malformed corrupt-retention metadata without retaining private bytes forever', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    let clock = new Date('2026-08-24T12:00:00.000Z');
+    const corruptKey = 'legacy-corrupt:999999999999999999999';
+    db.tables.set('migration_quarantine', new Map([[corruptKey, '{"private":"tampered retention bytes"']]));
+    db.createdAtByRecordKey.set(corruptKey, '2026-08-20T00:00:00.000Z');
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '6c'.repeat(32), setItemAsync: async () => undefined },
+      now: () => clock,
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+
+    const repaired = db.tables.get('migration_quarantine')?.values().next().value ?? '';
+    assert.match(repaired, /CORRUPT_ENCRYPTED_EVIDENCE_ROW/u);
+    assert.doesNotMatch(repaired, /tampered retention bytes/u);
+    await assert.rejects(store.purgeExportedSupportQuarantine({ exportToken: 'not-exported' }), /durable export marker/u);
+    const exported = await store.exportSupportQuarantine();
+    assert.equal(exported.records.length, 1);
+    assert.doesNotMatch(JSON.stringify(exported.records), /tampered retention bytes/u);
+    clock = new Date('2026-09-20T00:00:00.001Z');
+    assert.equal(await store.getItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY), null);
+    assert.equal(db.tables.get('migration_quarantine')?.size ?? 0, 0);
+    const diagnostics = await store.exportDiagnostics();
+    assert.match(diagnostics, /CORRUPT_LEGACY_QUEUE_BLOB_PURGED/u);
+    assert.doesNotMatch(diagnostics, /tampered retention bytes/u);
+  });
+
+  it('quarantines malformed evidence rows while valid queue reads continue', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    let clock = new Date('2026-08-24T12:00:00.000Z');
+    const owner = '6d'.repeat(32);
+    db.tables.set('workflow_evidence', new Map([
+      [`${owner}:driver-event:valid`, JSON.stringify({
+        accountOwnerHash: owner,
+        attempts: 0,
+        enqueuedAt: '2026-08-24T00:00:00.000Z',
+        event: { clientEventId: 'valid', eventType: 'STOP_DELIVERED', occurredAt: '2026-08-24T00:00:00.000Z' },
+        journal: [],
+        kind: 'driver_event',
+        queueItemId: 'driver-event:valid',
+        queueSequence: 2,
+        state: 'PENDING',
+      })],
+      [`${owner}:driver-event:tampered`, '{"private":"hostile row bytes"'],
+    ]));
+    db.createdAtByRecordKey.set(`${owner}:driver-event:tampered`, '2026-08-20T00:00:00.000Z');
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '6e'.repeat(32), setItemAsync: async () => undefined },
+      now: () => clock,
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+
+    const hydrated = JSON.parse(await store.getItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
+      items?: { queueItemId?: string }[];
+    };
+    assert.deepEqual(hydrated.items?.map((item) => item.queueItemId), ['driver-event:valid']);
+    assert.equal(db.tables.get('workflow_evidence')?.has(`${owner}:driver-event:tampered`), false);
+    const quarantine = [...(db.tables.get('migration_quarantine')?.values() ?? [])].join('');
+    assert.match(quarantine, /CORRUPT_ENCRYPTED_EVIDENCE_ROW/u);
+    assert.doesNotMatch(quarantine, /hostile row bytes/u);
+    assert.doesNotMatch(await store.exportDiagnostics(), /hostile row bytes/u);
+    clock = new Date('2026-09-20T00:00:00.001Z');
+    const afterRetention = JSON.parse(await store.getItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
+      items?: { queueItemId?: string }[];
+    };
+    assert.deepEqual(afterRetention.items?.map((item) => item.queueItemId), ['driver-event:valid']);
+    assert.equal(db.tables.get('migration_quarantine')?.size ?? 0, 0);
   });
 
   it('keeps workflow envelopes redacted while sensitive replay data remains separately encrypted', async () => {
