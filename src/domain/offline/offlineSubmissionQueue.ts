@@ -1261,10 +1261,6 @@ function readJournal(value: unknown, now: () => Date): OfflineEvidenceJournalEnt
     if (at === null || code === null || !['ACK', 'ATTEMPT', 'DISCARD', 'ENQUEUED', 'RECONCILIATION'].includes(String(kind))) return null;
     journal.push({ at, code, kind: kind as OfflineEvidenceJournalEntry['kind'] });
   }
-  return pruneJournal(journal, now);
-}
-
-function pruneJournal(journal: OfflineEvidenceJournalEntry[], now: () => Date) {
   return retainOfflineEvidenceJournal(journal, now());
 }
 

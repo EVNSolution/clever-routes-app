@@ -9,10 +9,21 @@ import {
 } from './expoEncryptedEvidenceStore';
 import {
   createPersistentOfflineSubmissionQueue,
+  createRouteOrderedDriverEventService,
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
+  retryOfflineSubmissions,
 } from '../../../domain/offline/offlineSubmissionQueue';
+import { createDriverApiClientsFromRouteAccess } from '../../../api/deliveryServer/driverApiClients';
+import { finishDeliveryAfterActive } from '../../../domain/delivery/deliveryFinish';
+import { sampleInvitedRouteAccess } from '../../../domain/routeAccess/routeAccess';
 
-function createDatabase(input?: { cipherVersion?: string | null; corruptReadPayload?: boolean; failOn?: string; userVersion?: number }) {
+function createDatabase(input?: {
+  cipherVersion?: string | null;
+  corruptReadLineage?: boolean;
+  corruptReadPayload?: boolean;
+  failOn?: string;
+  userVersion?: number;
+}) {
   const commands: string[] = [];
   const runCalls: { params: unknown[]; sql: string }[] = [];
   const tables = new Map<string, Map<string, string>>();
@@ -32,9 +43,16 @@ function createDatabase(input?: { cipherVersion?: string | null; corruptReadPayl
       const table = /FROM ([a-z_]+)/iu.exec(sql)?.[1] ?? '';
       return [...(tables.get(table)?.entries() ?? [])]
         .map(([recordKey, payload]) => {
-          if (input?.corruptReadPayload !== true || table !== 'workflow_evidence') return { recordKey, payload };
+          if ((input?.corruptReadPayload !== true && input?.corruptReadLineage !== true) || table !== 'workflow_evidence') {
+            return { recordKey, payload };
+          }
           const parsed = JSON.parse(payload) as { event?: { clientEventId?: string } };
-          if (parsed.event !== undefined) parsed.event.clientEventId = 'corrupted-after-write';
+          if (parsed.event !== undefined) {
+            if (input?.corruptReadPayload === true) parsed.event.clientEventId = 'corrupted-after-write';
+            if (input?.corruptReadLineage === true) {
+              (parsed.event as Record<string, unknown>).assignmentGeneration = '999';
+            }
+          }
           return { recordKey, payload: JSON.stringify(parsed) };
         }) as T[];
     },
@@ -250,6 +268,134 @@ describe('encrypted driver evidence store', () => {
     assert.doesNotMatch(replay ?? '', /raw stack/u);
   });
 
+  it('preserves the complete ordered-event lineage through the production encrypted serializer', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '71'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const lineage = {
+      appVersion: '2.8.0',
+      assignmentGeneration: '11',
+      driverContractVersion: 2,
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      versionCode: 20800,
+    } as const;
+    await store.setItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY, JSON.stringify({
+      items: [{
+        accountOwnerHash: 'aa'.repeat(32),
+        attempts: 0,
+        enqueuedAt: '2026-08-24T00:00:00.000Z',
+        event: {
+          ...lineage,
+          clientEventId: 'lineage-round-trip',
+          eventType: 'ROUTE_COMPLETED',
+          occurredAt: '2026-08-24T00:00:00.000Z',
+          routePlanId: 'route-lineage',
+        },
+        journal: [{ at: '2026-08-24T00:00:00.000Z', code: 'ENQUEUED', kind: 'ENQUEUED' }],
+        kind: 'driver_event',
+        queueItemId: 'driver-event:lineage-round-trip',
+        queueSequence: 1,
+        state: 'PENDING',
+      }],
+      version: 2,
+    }));
+
+    const reread = JSON.parse(await store.getItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
+      items: { event: Record<string, unknown> }[];
+    };
+    assert.deepEqual({
+      appVersion: reread.items[0]?.event.appVersion,
+      assignmentGeneration: reread.items[0]?.event.assignmentGeneration,
+      driverContractVersion: reread.items[0]?.event.driverContractVersion,
+      expectedRouteVersionId: reread.items[0]?.event.expectedRouteVersionId,
+      versionCode: reread.items[0]?.event.versionCode,
+    }, lineage);
+    assert.match(db.tables.get('workflow_evidence')?.values().next().value ?? '', /assignmentGeneration/u);
+    assert.equal(db.tables.get('sensitive_evidence')?.size ?? 0, 0);
+  });
+
+  it('recovers a response-lost delivery finish from real encrypted persistence after restart without replay', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const keyStore = { getItemAsync: async () => '72'.repeat(32), setItemAsync: async () => undefined };
+    const openStore = () => createEncryptedEvidenceStore({
+      keyStore,
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const firstQueue = await createPersistentOfflineSubmissionQueue({ storage: await openStore() });
+    const routePlanId = '11111111-1111-4111-8111-111111111111';
+    const contract = {
+      appVersion: '2.8.0',
+      assignmentGeneration: sampleInvitedRouteAccess.routeAccess.assignmentGeneration,
+      driverContractVersion: 2 as const,
+      expectedRouteVersionId: sampleInvitedRouteAccess.routeAccess.expectedRouteVersionId,
+      versionCode: 20800,
+    };
+    const live = createDriverApiClientsFromRouteAccess({
+      appVersion: contract.appVersion,
+      baseUrl: 'https://route.test',
+      fetchImpl: async () => { throw new TypeError('response lost'); },
+      refreshDriverAccess: async () => sampleInvitedRouteAccess.driverAccess,
+      routeAccess: sampleInvitedRouteAccess,
+      versionCode: contract.versionCode,
+    }).driverEventService;
+    const finish = await finishDeliveryAfterActive({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: createRouteOrderedDriverEventService({
+        driverEventService: live,
+        queue: firstQueue,
+        routePlanId,
+      }),
+      now: new Date('2026-08-22T19:42:10.000Z'),
+      offlineQueue: firstQueue,
+      routePlanId,
+      streamService: {
+        getBackgroundAvailability: async () => true,
+        getBackgroundPermission: async () => 'granted',
+        hasStartedLocationUpdates: async () => true,
+        requestBackgroundPermission: async () => 'granted',
+        startLocationUpdates: async () => undefined,
+        stopLocationUpdates: async () => undefined,
+      },
+    });
+    assert.equal(finish.kind, 'queued');
+
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage: await openStore() });
+    const persisted = restarted.listPending()[0];
+    assert.equal(persisted?.kind, 'driver_event');
+    if (persisted?.kind !== 'driver_event') throw new Error('Expected persisted completion');
+    assert.deepEqual({
+      appVersion: persisted.event.appVersion,
+      assignmentGeneration: persisted.event.assignmentGeneration,
+      driverContractVersion: persisted.event.driverContractVersion,
+      expectedRouteVersionId: persisted.event.expectedRouteVersionId,
+      versionCode: persisted.event.versionCode,
+    }, contract);
+
+    let replayed = false;
+    const recovery = await retryOfflineSubmissions({
+      driverEventReceiptService: { lookupReceipt: async () => ({
+        assignmentGeneration: contract.assignmentGeneration,
+        clientEventId: persisted.event.clientEventId,
+        errorCode: null,
+        expectedRouteVersionId: contract.expectedRouteVersionId,
+        routePlanId,
+        routeStatus: 'COMPLETED',
+        status: 'APPLIED',
+      }) },
+      driverEventService: { recordDriverEvent: async () => { replayed = true; throw new Error('must not replay'); } },
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue: restarted,
+    });
+    await restarted.whenPersisted();
+    assert.equal(replayed, false);
+    assert.deepEqual(recovery.completionAcknowledgedRoutePlanIds, [routePlanId]);
+    assert.deepEqual(restarted.listPending(), []);
+  });
+
   it('preserves quarantine and journal rows when replacing the active queue snapshot', async () => {
     const db = createDatabase();
     const store = await createEncryptedEvidenceStore({
@@ -367,6 +513,43 @@ describe('encrypted driver evidence store', () => {
     assert.deepEqual(removed, []);
   });
 
+  it('rejects legacy cleanup when a reread changes ordered-event lineage covered by the keyed manifest', async () => {
+    const db = createDatabase({ corruptReadLineage: true });
+    const removed: string[] = [];
+    const legacyPayload = JSON.stringify({
+      items: [{
+        attempts: 0,
+        enqueuedAt: '2026-08-24T00:00:00.000Z',
+        event: {
+          appVersion: '2.8.0',
+          assignmentGeneration: '11',
+          clientEventId: 'lineage-manifest',
+          driverContractVersion: 2,
+          eventType: 'ROUTE_COMPLETED',
+          expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+          occurredAt: '2026-08-24T00:00:00.000Z',
+          routePlanId: 'route-lineage',
+          versionCode: 20800,
+        },
+        kind: 'driver_event',
+        queueItemId: 'driver-event:lineage-manifest',
+      }],
+      version: 1,
+    });
+    await assert.rejects(createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => 'f1'.repeat(32), setItemAsync: async () => undefined },
+      legacyStorage: { getItem: async () => legacyPayload, removeItem: async (key) => { removed.push(key); } },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+      sha256: async (value) => {
+        const result = new Uint8Array(32);
+        result.fill(value.reduce((sum, byte) => (sum + byte) % 251, 0));
+        return result;
+      },
+    }), /manifest verification failed/u);
+    assert.deepEqual(removed, []);
+  });
+
   it('hydrates a non-empty v1 queue through the public queue API before deleting AsyncStorage', async () => {
     const db = createDatabase();
     const removed: string[] = [];
@@ -422,16 +605,45 @@ describe('encrypted driver evidence store', () => {
     assert.deepEqual(pending.map((item) => item.queueSequence), [1, 2]);
     assert.ok(pending.every((item) => item.accountOwnerHash === 'test-account-owner' && item.state === 'PENDING'));
     assert.ok(pending.every((item) => item.journal[0]?.code === 'LEGACY_MIGRATED'));
+    const legacyDriver = pending.find((item) => item.kind === 'driver_event');
+    assert.equal(legacyDriver?.kind, 'driver_event');
+    if (legacyDriver?.kind !== 'driver_event') throw new Error('Expected legacy driver event');
+    assert.deepEqual({
+      appVersion: legacyDriver.event.appVersion,
+      assignmentGeneration: legacyDriver.event.assignmentGeneration,
+      driverContractVersion: legacyDriver.event.driverContractVersion,
+      expectedRouteVersionId: legacyDriver.event.expectedRouteVersionId,
+      versionCode: legacyDriver.event.versionCode,
+    }, {
+      appVersion: undefined,
+      assignmentGeneration: undefined,
+      driverContractVersion: undefined,
+      expectedRouteVersionId: undefined,
+      versionCode: undefined,
+    });
     assert.doesNotMatch(db.tables.get('workflow_evidence')?.values().next().value ?? '', /private legacy note/u);
     assert.match(db.tables.get('sensitive_evidence')?.values().next().value ?? '', /private legacy note/u);
     assert.ok([...(db.tables.get('sensitive_evidence')?.keys() ?? [])].every((key) => key.startsWith('test-account-owner:')));
   });
 
-  it('quarantines structurally invalid v1 JSON before deleting the original', async () => {
+  it('quarantines structurally invalid v1 lineage before deleting the original', async () => {
     const db = createDatabase();
     const removed: string[] = [];
     const structurallyInvalid = JSON.stringify({
-      items: [{ attempts: 0, kind: 'driver_event', queueItemId: 'missing-required-fields' }],
+      items: [{
+        attempts: 0,
+        enqueuedAt: '2026-08-24T00:00:00.000Z',
+        event: {
+          assignmentGeneration: { tampered: true },
+          clientEventId: 'tampered-lineage',
+          driverContractVersion: 2,
+          eventType: 'ROUTE_COMPLETED',
+          occurredAt: '2026-08-24T00:00:00.000Z',
+          routePlanId: 'route-tampered',
+        },
+        kind: 'driver_event',
+        queueItemId: 'driver-event:tampered-lineage',
+      }],
       version: 1,
     });
     await createEncryptedEvidenceStore({
@@ -445,7 +657,7 @@ describe('encrypted driver evidence store', () => {
     });
 
     assert.deepEqual(removed, [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]);
-    assert.match(db.tables.get('migration_quarantine')?.values().next().value ?? '', /missing-required-fields/u);
+    assert.match(db.tables.get('migration_quarantine')?.values().next().value ?? '', /tampered-lineage/u);
   });
 
   it('uses original audit timestamps, bounds journals, purges old terminal rows, and retains unresolved quarantine', async () => {

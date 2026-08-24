@@ -253,8 +253,11 @@ async function migrateLegacyQueue(
           throw new Error('Legacy evidence migration public hydration verification failed.');
         }
         const rereadManifest = await createMigrationHmacManifest(rereadItems, hexToBytes(key), sha256!);
-        if (rereadManifest.clientIdHmac !== manifest.clientIdHmac || rereadManifest.itemCount !== manifest.itemCount) {
-          throw new Error('Legacy evidence migration client-id manifest verification failed.');
+        if (
+          rereadManifest.canonicalEvidenceHmac !== manifest.canonicalEvidenceHmac
+          || rereadManifest.itemCount !== manifest.itemCount
+        ) {
+          throw new Error('Legacy evidence migration client-id manifest verification failed (canonical lineage mismatch).');
         }
         await transaction.runAsync(
           'INSERT OR REPLACE INTO diagnostic_records (record_key, payload) VALUES (?, ?);',
@@ -468,13 +471,18 @@ function redactReplayPayload(item: Record<string, unknown>) {
   return {
     ...identity,
     event: {
+      ...(event.appVersion === undefined ? {} : { appVersion: event.appVersion }),
+      ...(event.assignmentGeneration === undefined ? {} : { assignmentGeneration: event.assignmentGeneration }),
       clientEventId: event.clientEventId,
       ...(event.deliveryStopId === undefined ? {} : { deliveryStopId: event.deliveryStopId }),
+      ...(event.driverContractVersion === undefined ? {} : { driverContractVersion: event.driverContractVersion }),
       eventType: event.eventType,
+      ...(event.expectedRouteVersionId === undefined ? {} : { expectedRouteVersionId: event.expectedRouteVersionId }),
       ...(event.latitude === undefined ? {} : { latitude: event.latitude }),
       ...(event.longitude === undefined ? {} : { longitude: event.longitude }),
       occurredAt: event.occurredAt,
       ...(event.routePlanId === undefined ? {} : { routePlanId: event.routePlanId }),
+      ...(event.versionCode === undefined ? {} : { versionCode: event.versionCode }),
     },
     ...(event.payload === undefined ? {} : { sensitiveReplay: true }),
   };
@@ -555,24 +563,42 @@ async function createMigrationHmacManifest(
   sha256: (value: Uint8Array) => Promise<Uint8Array>,
 ) {
   const encoder = new TextEncoder();
-  const clientIds = items.map((item) => {
+  const canonicalEvidence = items.map((item) => {
     const event = typeof item.event === 'object' && item.event !== null
       ? item.event as Record<string, unknown>
       : null;
-    return typeof event?.clientEventId === 'string' ? event.clientEventId : String(item.queueItemId ?? '');
-  }).sort();
+    return {
+      event: event === null ? null : {
+        appVersion: event.appVersion ?? null,
+        assignmentGeneration: event.assignmentGeneration ?? null,
+        clientEventId: event.clientEventId ?? null,
+        driverContractVersion: event.driverContractVersion ?? null,
+        eventType: event.eventType ?? null,
+        expectedRouteVersionId: event.expectedRouteVersionId ?? null,
+        routePlanId: event.routePlanId ?? null,
+        versionCode: event.versionCode ?? null,
+      },
+      kind: item.kind ?? null,
+      queueItemId: item.queueItemId ?? null,
+      queueSequence: item.queueSequence ?? null,
+    };
+  }).sort((left, right) => {
+    const sequenceDifference = readQueueSequence(left) - readQueueSequence(right);
+    if (sequenceDifference !== 0) return sequenceDifference;
+    return String(left.queueItemId).localeCompare(String(right.queueItemId));
+  });
   const blockSize = 64;
   const normalizedKey = key.length > blockSize ? await sha256(key) : key;
   const keyBlock = new Uint8Array(blockSize);
   keyBlock.set(normalizedKey.slice(0, blockSize));
   const innerPad = keyBlock.map((byte) => byte ^ 0x36);
   const outerPad = keyBlock.map((byte) => byte ^ 0x5c);
-  const message = encoder.encode(JSON.stringify(clientIds));
+  const message = encoder.encode(JSON.stringify(canonicalEvidence));
   const innerHash = await sha256(concatBytes(innerPad, message));
   const hmac = await sha256(concatBytes(outerPad, innerHash));
   return {
     algorithm: 'HMAC-SHA256',
-    clientIdHmac: bytesToHex(hmac),
+    canonicalEvidenceHmac: bytesToHex(hmac),
     itemCount: items.length,
   };
 }
