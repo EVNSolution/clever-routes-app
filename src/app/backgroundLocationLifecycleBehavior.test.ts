@@ -211,4 +211,30 @@ describe('background location lifecycle wiring', () => {
     assert.match(source, /visibleRouteSessions\.map\(\(session, routeIndex\) =>/u);
     assert.doesNotMatch(source, /Previous Route|Next Route/u);
   });
+
+  it('surfaces storage degradation, gates mutations and replay, and retries verified recovery only under safe conditions', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const retrySource = getFunctionSource(
+      source,
+      'const retryOfflineSubmissionsForSessions = useCallback(',
+      'const selectedRouteSession =',
+    );
+    const recoverySource = getFunctionSource(
+      source,
+      'const recoverOfflineEvidenceStorage = useCallback(',
+      'useEffect(() => {\n    const previous = previousRouteSyncNetworkRef.current;',
+    );
+
+    assert.match(source, /setOfflineStorageState\(queue\.storageState\(\)\)/u);
+    assert.match(retrySource, /queue\.storageState\(\) === 'STORAGE_DEGRADED'[\s\S]*return false/u);
+    assert.match(recoverySource, /await queue\.recoverStorage\(\)[\s\S]*syncOfflineQueueState\(queue\)/u);
+    assert.match(source, /offlineStorageState !== 'STORAGE_DEGRADED'/u);
+    assert.match(source, /isForeground: \(\) => AppState\.currentState === 'active'/u);
+    assert.match(source, /isOnline: \(\) => networkReachability === 'online'/u);
+    assert.match(source, /retry: recoverOfflineEvidenceStorage/u);
+    assert.match(source, /Retry Storage/u);
+    assert.match(source, /Delivery updates are read-only until encrypted storage is safely persisted/u);
+    assert.match(source, /if \(blockMutationWhileStorageDegraded\(\)\) return/u);
+    assert.match(source, /offlineStorageState === 'STORAGE_DEGRADED'[\s\S]*disabled=\{isStartDisabled\}/u);
+  });
 });

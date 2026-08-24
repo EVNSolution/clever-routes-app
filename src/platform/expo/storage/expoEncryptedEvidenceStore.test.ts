@@ -7,9 +7,14 @@ import {
   createEncryptedEvidenceStore,
   type EvidenceDatabase,
 } from './expoEncryptedEvidenceStore';
+import {
+  createPersistentOfflineSubmissionQueue,
+  OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
+} from '../../../domain/offline/offlineSubmissionQueue';
 
 function createDatabase(input?: { cipherVersion?: string | null; corruptReadPayload?: boolean; failOn?: string; userVersion?: number }) {
   const commands: string[] = [];
+  const runCalls: { params: unknown[]; sql: string }[] = [];
   const tables = new Map<string, Map<string, string>>();
   let userVersion = input?.userVersion ?? 0;
   const database: EvidenceDatabase = {
@@ -47,22 +52,36 @@ function createDatabase(input?: { cipherVersion?: string | null; corruptReadPayl
         const recordKey = ['migration-hmac-v2', 'migration-corrupt-legacy'].find((key) => rows?.has(key));
         return recordKey === undefined ? null : { record_key: recordKey } as T;
       }
+      if (sql.includes('FROM migration_quarantine')) {
+        const entry = tables.get('migration_quarantine')?.entries().next().value as [string, string] | undefined;
+        return entry === undefined ? null : { payload: entry[1], recordKey: entry[0] } as T;
+      }
       return null;
     },
     runAsync: async (sql, ...params) => {
+      runCalls.push({ params, sql });
       if (input?.failOn !== undefined && sql.includes(input.failOn)) {
         throw new Error('injected database failure');
+      }
+      const deletedTable = /DELETE FROM ([a-z_]+) WHERE record_key = \?/iu.exec(sql)?.[1];
+      if (deletedTable !== undefined) {
+        tables.get(deletedTable)?.delete(String(params[0]));
+        return;
       }
       const table = /INTO ([a-z_]+)/iu.exec(sql)?.[1];
       if (table !== undefined && params.length >= 2) {
         const rows = tables.get(table) ?? new Map<string, string>();
-        rows.set(String(params[0]), String(params.at(-1)));
+        const columns = /\(([^)]+)\)\s+VALUES/iu.exec(sql)?.[1]?.split(',').map((column) => column.trim()) ?? [];
+        const payloadIndex = columns.indexOf('payload');
+        if (!sql.includes('INSERT OR IGNORE') || !rows.has(String(params[0]))) {
+          rows.set(String(params[0]), String(params[payloadIndex]));
+        }
         tables.set(table, rows);
       }
     },
     withExclusiveTransactionAsync: async (operation) => operation(database),
   };
-  return { commands, database, tables };
+  return { commands, database, runCalls, tables };
 }
 
 describe('encrypted driver evidence store', () => {
@@ -346,5 +365,147 @@ describe('encrypted driver evidence store', () => {
       },
     }), /client-id manifest verification failed/u);
     assert.deepEqual(removed, []);
+  });
+
+  it('hydrates a non-empty v1 queue through the public queue API before deleting AsyncStorage', async () => {
+    const db = createDatabase();
+    const removed: string[] = [];
+    const now = () => new Date('2026-08-24T12:00:00.000Z');
+    const legacyPayload = JSON.stringify({
+      items: [
+        {
+          attempts: 1,
+          enqueuedAt: '2026-08-24T10:00:00.000Z',
+          event: {
+            clientEventId: 'legacy-second-by-id',
+            eventType: 'STOP_DELIVERED',
+            occurredAt: '2026-08-24T10:00:00.000Z',
+            payload: { note: 'private legacy note' },
+            routePlanId: 'route-legacy',
+          },
+          kind: 'driver_event',
+          queueItemId: 'driver-event:z-id',
+        },
+        {
+          attempts: 0,
+          enqueuedAt: '2026-08-24T09:00:00.000Z',
+          kind: 'proof_media',
+          queueItemId: 'proof-media:a-id',
+          request: {
+            deliveryStopId: 'stop-2',
+            fileName: 'proof.jpg',
+            routePlanId: 'route-legacy',
+            source: 'camera',
+            uri: 'file:///private-proof.jpg',
+          },
+        },
+      ],
+      version: 1,
+    });
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '12'.repeat(32), setItemAsync: async () => undefined },
+      legacyStorage: {
+        getItem: async () => legacyPayload,
+        removeItem: async (key) => { removed.push(key); },
+      },
+      now,
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+      sha256: async () => new Uint8Array(32),
+    });
+
+    assert.deepEqual(removed, [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]);
+    const queue = await createPersistentOfflineSubmissionQueue({ storage: store, now });
+    await queue.whenPersisted();
+    const pending = queue.listPending();
+    assert.deepEqual(pending.map((item) => item.queueItemId), ['driver-event:z-id', 'proof-media:a-id']);
+    assert.deepEqual(pending.map((item) => item.queueSequence), [1, 2]);
+    assert.ok(pending.every((item) => item.accountOwnerHash === 'test-account-owner' && item.state === 'PENDING'));
+    assert.ok(pending.every((item) => item.journal[0]?.code === 'LEGACY_MIGRATED'));
+    assert.doesNotMatch(db.tables.get('workflow_evidence')?.values().next().value ?? '', /private legacy note/u);
+    assert.match(db.tables.get('sensitive_evidence')?.values().next().value ?? '', /private legacy note/u);
+    assert.ok([...(db.tables.get('sensitive_evidence')?.keys() ?? [])].every((key) => key.startsWith('test-account-owner:')));
+  });
+
+  it('quarantines structurally invalid v1 JSON before deleting the original', async () => {
+    const db = createDatabase();
+    const removed: string[] = [];
+    const structurallyInvalid = JSON.stringify({
+      items: [{ attempts: 0, kind: 'driver_event', queueItemId: 'missing-required-fields' }],
+      version: 1,
+    });
+    await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '13'.repeat(32), setItemAsync: async () => undefined },
+      legacyStorage: {
+        getItem: async () => structurallyInvalid,
+        removeItem: async (key) => { removed.push(key); },
+      },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+
+    assert.deepEqual(removed, [OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY]);
+    assert.match(db.tables.get('migration_quarantine')?.values().next().value ?? '', /missing-required-fields/u);
+  });
+
+  it('uses original audit timestamps, bounds journals, purges old terminal rows, and retains unresolved quarantine', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    let clock = new Date('2026-08-24T12:00:00.000Z');
+    const now = () => clock;
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '14'.repeat(32), setItemAsync: async () => undefined },
+      now,
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const owner = 'cc'.repeat(32);
+    const recentAckAt = '2026-08-23T12:00:00.000Z';
+    const journal = Array.from({ length: 70 }, (_, index) => ({
+      at: new Date(clock.getTime() - (70 - index) * 60_000).toISOString(),
+      code: `ATTEMPT_${index}`,
+      kind: 'ATTEMPT',
+    }));
+    journal.push({ at: recentAckAt, code: 'SERVER_ACK', kind: 'ACK' });
+    const envelope = {
+      items: [
+        {
+          accountOwnerHash: owner,
+          attempts: 70,
+          enqueuedAt: '2026-08-01T12:00:00.000Z',
+          event: { clientEventId: 'recent-ack', eventType: 'STOP_DELIVERED', occurredAt: recentAckAt, payload: { note: 'sensitive' }, routePlanId: 'route-1' },
+          journal,
+          kind: 'driver_event',
+          queueItemId: 'driver-event:recent-ack',
+          queueSequence: 1,
+          state: 'ACKNOWLEDGED',
+        },
+        {
+          accountOwnerHash: owner,
+          attempts: 1,
+          enqueuedAt: '2026-05-01T12:00:00.000Z',
+          event: { clientEventId: 'unresolved', eventType: 'STOP_FAILED', occurredAt: '2026-05-01T12:00:00.000Z', routePlanId: 'route-1' },
+          journal: [{ at: '2026-05-01T12:00:00.000Z', code: 'ROUTE_NOT_IN_PROGRESS', kind: 'RECONCILIATION' }],
+          kind: 'driver_event',
+          queueItemId: 'driver-event:unresolved',
+          queueSequence: 2,
+          reconciliation: { blockedAt: '2026-05-01T12:00:00.000Z', reason: 'route_not_in_progress' },
+          state: 'QUARANTINED',
+        },
+      ],
+      version: 2,
+    };
+    await store.setItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY, JSON.stringify(envelope));
+    await store.setItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY, JSON.stringify(envelope));
+
+    const journalInserts = db.runCalls.filter((call) => call.sql.includes('INTO evidence_journal'));
+    assert.equal(db.tables.get('evidence_journal')?.size, 64);
+    assert.ok(journalInserts.some((call) => call.params[4] === recentAckAt));
+    assert.ok(journalInserts.every((call) => call.params[4] !== clock.toISOString()));
+
+    clock = new Date('2026-09-24T12:00:00.000Z');
+    await store.getItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY);
+    assert.equal(db.tables.get('workflow_evidence')?.size ?? 0, 0);
+    assert.equal(db.tables.get('sensitive_evidence')?.size ?? 0, 0);
+    assert.equal(db.tables.get('migration_quarantine')?.size, 1);
   });
 });

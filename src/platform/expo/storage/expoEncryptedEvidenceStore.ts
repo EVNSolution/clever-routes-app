@@ -1,4 +1,8 @@
-import { OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY, type OfflineSubmissionQueueStorage } from '../../../domain/offline/offlineSubmissionQueue';
+import {
+  OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
+  normalizePersistedOfflineSubmissionQueue,
+  type OfflineSubmissionQueueStorage,
+} from '../../../domain/offline/offlineSubmissionQueue';
 
 export const DRIVER_EVIDENCE_DATABASE_NAME = 'clever_driver_evidence_v2.db';
 export const DRIVER_EVIDENCE_KEY_STORAGE_KEY = 'clever.driverEvidence.sqlcipherKey.v2';
@@ -36,9 +40,11 @@ export async function createEncryptedEvidenceStore(input: {
   keyStore: KeyStore;
   legacyStorage?: LegacyStorage;
   openDatabaseAsync: (databaseName: string) => Promise<EvidenceDatabase>;
+  now?: () => Date;
   randomBytes: (length: number) => Promise<Uint8Array>;
   sha256?: (value: Uint8Array) => Promise<Uint8Array>;
 }): Promise<OfflineSubmissionQueueStorage & { exportDiagnostics(): Promise<string> }> {
+  const now = input.now ?? (() => new Date());
   const existingKey = await input.keyStore.getItemAsync(DRIVER_EVIDENCE_KEY_STORAGE_KEY);
   const generatedKey = existingKey === null;
   const key = existingKey ?? bytesToHex(await input.randomBytes(32));
@@ -72,10 +78,11 @@ export async function createEncryptedEvidenceStore(input: {
 
   await createSchema(database);
   if (userVersion < DRIVER_EVIDENCE_SCHEMA_VERSION) {
-    await migrateLegacyQueue(database, input.legacyStorage, key, input.sha256);
+    await migrateLegacyQueue(database, input.legacyStorage, key, input.sha256, now);
   } else {
     await cleanupCommittedLegacyQueue(database, input.legacyStorage);
   }
+  await purgeExpiredEvidence(database, now());
 
   return {
     exportDiagnostics: async () => {
@@ -86,11 +93,13 @@ export async function createEncryptedEvidenceStore(input: {
     },
     getItem: async (storageKey) => {
       if (storageKey !== OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) return null;
+      await purgeExpiredEvidence(database, now());
       const rows = (await Promise.all(RECORD_TABLES.map((table) => database.getAllAsync<StoredRow>(
         `SELECT record_key AS recordKey, payload FROM ${table} ORDER BY created_at, record_key;`,
       )))).flat();
       const sensitiveRows = await database.getAllAsync<StoredRow>(
-        'SELECT record_key AS recordKey, payload FROM sensitive_evidence WHERE expires_at > CURRENT_TIMESTAMP ORDER BY created_at, record_key;',
+        'SELECT record_key AS recordKey, payload FROM sensitive_evidence WHERE expires_at > ? ORDER BY created_at, record_key;',
+        now().toISOString(),
       );
       const sensitiveByKey = new Map(sensitiveRows.map((row) => [row.recordKey, row.payload]));
       if (rows.length === 0) return null;
@@ -98,14 +107,18 @@ export async function createEncryptedEvidenceStore(input: {
         .filter((row) => !row.recordKey.startsWith('legacy-corrupt:'))
         .map((row) => {
           const envelope = JSON.parse(row.payload) as Record<string, unknown>;
+          const normalizedEnvelope: Record<string, unknown> = {
+            ...envelope,
+            journal: normalizeJournalEntries(envelope.journal, now()),
+          };
           const sensitive = sensitiveByKey.get(row.recordKey);
-          if (sensitive !== undefined) return hydrateSensitiveReplay(envelope, JSON.parse(sensitive) as unknown);
-          if (envelope.sensitiveReplay !== true) return envelope;
-          const request = typeof envelope.request === 'object' && envelope.request !== null
-            ? envelope.request as Record<string, unknown>
+          if (sensitive !== undefined) return hydrateSensitiveReplay(normalizedEnvelope, JSON.parse(sensitive) as unknown);
+          if (normalizedEnvelope.sensitiveReplay !== true) return normalizedEnvelope;
+          const request = typeof normalizedEnvelope.request === 'object' && normalizedEnvelope.request !== null
+            ? normalizedEnvelope.request as Record<string, unknown>
             : null;
           return {
-            ...envelope,
+            ...normalizedEnvelope,
             ...(request === null ? {} : { request: { ...request, fileName: 'expired', uri: 'expired://' } }),
             state: 'DISCARDED',
           };
@@ -125,7 +138,7 @@ export async function createEncryptedEvidenceStore(input: {
       if (storageKey !== OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) return;
       const items = parseLegacyItems(value);
       if (items === null) throw new Error('Offline evidence payload is invalid and was not written.');
-      await replaceQueueRows(database, items);
+      await replaceQueueRows(database, items, now());
     },
   };
 }
@@ -181,9 +194,10 @@ async function migrateLegacyQueue(
   legacyStorage: LegacyStorage | undefined,
   key: string,
   sha256: ((value: Uint8Array) => Promise<Uint8Array>) | undefined,
+  now: () => Date,
 ) {
   const raw = await legacyStorage?.getItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? null;
-  const parsedItems = raw === null ? null : parseLegacyItems(raw);
+  const parsedItems = raw === null ? null : parseLegacyItems(raw, now);
   const manifest = parsedItems === null || sha256 === undefined
     ? null
     : await createMigrationHmacManifest(parsedItems, hexToBytes(key), sha256);
@@ -210,16 +224,30 @@ async function migrateLegacyQueue(
           'migration-corrupt-legacy',
           JSON.stringify({ code: 'CORRUPT_LEGACY_QUEUE', preserved: true }),
         );
+        const quarantined = await transaction.getFirstAsync<StoredRow>(
+          'SELECT record_key AS recordKey, payload FROM migration_quarantine WHERE record_key LIKE ? LIMIT 1;',
+          'legacy-corrupt:%',
+        );
+        if (quarantined === null || quarantined.payload !== JSON.stringify({
+          encryptedLegacyPayload: boundedRaw,
+          originalByteLength: encodedRaw.byteLength,
+          reason: 'corrupt_legacy_queue',
+          truncated: encodedRaw.byteLength > CORRUPT_LEGACY_QUARANTINE_MAX_BYTES,
+        })) {
+          throw new Error('Corrupt legacy evidence quarantine verification failed.');
+        }
       } else {
-        await writeQueueRows(transaction, items);
+        await writeQueueRows(transaction, items, now());
         const persistedCount = (await Promise.all(RECORD_TABLES.map((table) => transaction.getAllAsync<StoredRow>(
           `SELECT record_key AS recordKey, payload FROM ${table};`,
         )))).flat().length;
         if (persistedCount !== items.length) throw new Error('Legacy evidence migration verification failed.');
         if (manifest === null) throw new Error('Legacy evidence migration HMAC manifest is unavailable.');
-        const rereadItems = (await Promise.all(RECORD_TABLES.map((table) => transaction.getAllAsync<StoredRow>(
-          `SELECT record_key AS recordKey, payload FROM ${table};`,
-        )))).flat().map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+        const rereadItems = await readHydratedItems(transaction, now().toISOString());
+        const hydratedEnvelope = JSON.stringify({ items: rereadItems, version: 2 });
+        if (normalizePersistedOfflineSubmissionQueue(hydratedEnvelope, now) === null) {
+          throw new Error('Legacy evidence migration public hydration verification failed.');
+        }
         const rereadManifest = await createMigrationHmacManifest(rereadItems, hexToBytes(key), sha256!);
         if (rereadManifest.clientIdHmac !== manifest.clientIdHmac || rereadManifest.itemCount !== manifest.itemCount) {
           throw new Error('Legacy evidence migration client-id manifest verification failed.');
@@ -251,48 +279,116 @@ async function cleanupCommittedLegacyQueue(
   }
 }
 
-async function replaceQueueRows(database: EvidenceDatabase, items: Record<string, unknown>[]) {
+async function readHydratedItems(database: EvidenceDatabase, nowIso: string) {
+  const rows = (await Promise.all(RECORD_TABLES.map((table) => database.getAllAsync<StoredRow>(
+    `SELECT record_key AS recordKey, payload FROM ${table} ORDER BY created_at, record_key;`,
+  )))).flat();
+  const sensitiveRows = await database.getAllAsync<StoredRow>(
+    'SELECT record_key AS recordKey, payload FROM sensitive_evidence WHERE expires_at > ? ORDER BY created_at, record_key;',
+    nowIso,
+  );
+  const sensitiveByKey = new Map(sensitiveRows.map((row) => [row.recordKey, row.payload]));
+  return rows
+    .filter((row) => !row.recordKey.startsWith('legacy-corrupt:'))
+    .map((row) => {
+      const envelope = JSON.parse(row.payload) as Record<string, unknown>;
+      const normalizedEnvelope: Record<string, unknown> = {
+        ...envelope,
+        journal: normalizeJournalEntries(envelope.journal, new Date(nowIso)),
+      };
+      const sensitive = sensitiveByKey.get(row.recordKey);
+      return sensitive === undefined
+        ? normalizedEnvelope
+        : hydrateSensitiveReplay(normalizedEnvelope, JSON.parse(sensitive) as unknown) as Record<string, unknown>;
+    })
+    .sort((left, right) => readQueueSequence(left) - readQueueSequence(right));
+}
+
+async function purgeExpiredEvidence(database: EvidenceDatabase, now: Date) {
+  const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
   await database.withExclusiveTransactionAsync(async (transaction) => {
-    await transaction.execAsync('DELETE FROM workflow_evidence;');
-    await transaction.execAsync('DELETE FROM location_batches;');
-    await writeQueueRows(transaction, items);
-    await transaction.execAsync("DELETE FROM evidence_journal WHERE created_at < datetime('now', '-30 days');");
-    await transaction.execAsync('DELETE FROM sensitive_evidence WHERE expires_at <= CURRENT_TIMESTAMP;');
+    for (const table of RECORD_TABLES) {
+      const rows = await transaction.getAllAsync<StoredRow>(
+        `SELECT record_key AS recordKey, payload FROM ${table};`,
+      );
+      for (const row of rows) {
+        if (row.recordKey.startsWith('legacy-corrupt:')) continue;
+        const item = JSON.parse(row.payload) as Record<string, unknown>;
+        if (!isExpiredTerminalEvidence(item, now)) continue;
+        await transaction.runAsync(`DELETE FROM ${table} WHERE record_key = ?;`, row.recordKey);
+        await transaction.runAsync('DELETE FROM sensitive_evidence WHERE record_key = ?;', row.recordKey);
+      }
+    }
+    await transaction.runAsync('DELETE FROM evidence_journal WHERE created_at < ?;', cutoff);
+    await transaction.runAsync('DELETE FROM sensitive_evidence WHERE expires_at <= ?;', now.toISOString());
   });
 }
 
-async function writeQueueRows(database: EvidenceDatabase, items: Record<string, unknown>[]) {
+async function replaceQueueRows(database: EvidenceDatabase, items: Record<string, unknown>[], now: Date) {
+  await database.withExclusiveTransactionAsync(async (transaction) => {
+    const retainedItems = items.filter((item) => !isExpiredTerminalEvidence(item, now));
+    const expiredItems = items.filter((item) => isExpiredTerminalEvidence(item, now));
+    const retainedRecordKeys = new Set(retainedItems.map(getRecordKey));
+    const existingSensitiveRows = await transaction.getAllAsync<StoredRow>(
+      'SELECT record_key AS recordKey, payload FROM sensitive_evidence;',
+    );
+    await transaction.execAsync('DELETE FROM workflow_evidence;');
+    await transaction.execAsync('DELETE FROM location_batches;');
+    for (const row of existingSensitiveRows) {
+      if (!retainedRecordKeys.has(row.recordKey)) {
+        await transaction.runAsync('DELETE FROM sensitive_evidence WHERE record_key = ?;', row.recordKey);
+      }
+    }
+    for (const item of expiredItems) {
+      const recordKey = getRecordKey(item);
+      await transaction.runAsync('DELETE FROM migration_quarantine WHERE record_key = ?;', recordKey);
+      await transaction.runAsync('DELETE FROM sensitive_evidence WHERE record_key = ?;', recordKey);
+    }
+    await writeQueueRows(transaction, retainedItems, now);
+    const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    await transaction.runAsync('DELETE FROM evidence_journal WHERE created_at < ?;', cutoff);
+    await transaction.runAsync('DELETE FROM sensitive_evidence WHERE expires_at <= ?;', now.toISOString());
+  });
+}
+
+async function writeQueueRows(database: EvidenceDatabase, items: Record<string, unknown>[], now: Date) {
   for (const item of items) {
     const queueItemId = typeof item.queueItemId === 'string' ? item.queueItemId : `invalid:${Date.now()}`;
     const ownerHash = typeof item.accountOwnerHash === 'string' ? item.accountOwnerHash : 'legacy-unbound-owner';
     const recordKey = `${ownerHash}:${queueItemId}`;
     const table = classifyItem(item);
-    const envelope = redactReplayPayload(item);
+    const journal = normalizeJournalEntries(item.journal, now);
+    const normalizedItem = { ...item, journal };
+    const envelope = redactReplayPayload(normalizedItem);
     const sequence = readQueueSequence(item);
+    const createdAt = readIsoTimestamp(item.enqueuedAt) ?? now.toISOString();
     await database.runAsync(
-      `INSERT OR REPLACE INTO ${table} (record_key, account_owner_hash, queue_sequence, payload) VALUES (?, ?, ?, ?);`,
+      `INSERT OR REPLACE INTO ${table} (record_key, account_owner_hash, queue_sequence, payload, created_at) VALUES (?, ?, ?, ?, ?);`,
       recordKey,
       ownerHash,
       sequence,
       JSON.stringify(envelope),
+      createdAt,
     );
-    if (hasSensitiveReplayPayload(item)) {
+    if (hasSensitiveReplayPayload(normalizedItem)) {
       await database.runAsync(
-        "INSERT OR IGNORE INTO sensitive_evidence (record_key, account_owner_hash, queue_sequence, payload, expires_at) VALUES (?, ?, ?, ?, datetime('now', '+7 days'));",
+        'INSERT OR IGNORE INTO sensitive_evidence (record_key, account_owner_hash, queue_sequence, payload, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?);',
         recordKey,
         ownerHash,
         sequence,
-        JSON.stringify(extractSensitiveReplay(item)),
+        JSON.stringify(extractSensitiveReplay(normalizedItem)),
+        new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        createdAt,
       );
     }
-    const journal = Array.isArray(item.journal) ? item.journal : [];
     for (const [index, entry] of journal.entries()) {
       await database.runAsync(
-        'INSERT OR IGNORE INTO evidence_journal (record_key, account_owner_hash, queue_sequence, payload) VALUES (?, ?, ?, ?);',
+        'INSERT OR IGNORE INTO evidence_journal (record_key, account_owner_hash, queue_sequence, payload, created_at) VALUES (?, ?, ?, ?, ?);',
         `${recordKey}:${index}:${typeof (entry as Record<string, unknown>).at === 'string' ? (entry as Record<string, unknown>).at : ''}`,
         ownerHash,
         sequence,
         JSON.stringify(entry),
+        (entry as Record<string, unknown>).at,
       );
     }
   }
@@ -302,6 +398,42 @@ function classifyItem(item: Record<string, unknown>): (typeof RECORD_TABLES)[num
   if (item.reconciliation !== undefined) return 'migration_quarantine';
   const event = typeof item.event === 'object' && item.event !== null ? item.event as Record<string, unknown> : null;
   return event?.eventType === 'LOCATION_UPDATED' ? 'location_batches' : 'workflow_evidence';
+}
+
+function getRecordKey(item: Record<string, unknown>) {
+  const ownerHash = typeof item.accountOwnerHash === 'string' ? item.accountOwnerHash : 'legacy-unbound-owner';
+  const queueItemId = typeof item.queueItemId === 'string' ? item.queueItemId : 'invalid';
+  return `${ownerHash}:${queueItemId}`;
+}
+
+function isExpiredTerminalEvidence(item: Record<string, unknown>, now: Date) {
+  if (item.state !== 'ACKNOWLEDGED' && item.state !== 'DISCARDED') return false;
+  const journal = Array.isArray(item.journal) ? item.journal : [];
+  const terminalAt = [...journal].reverse().find((entry) => (
+    typeof entry === 'object'
+    && entry !== null
+    && ((entry as Record<string, unknown>).kind === 'ACK' || (entry as Record<string, unknown>).kind === 'DISCARD')
+  ));
+  const terminalTimestamp = terminalAt === undefined
+    ? readIsoTimestamp(item.enqueuedAt)
+    : readIsoTimestamp((terminalAt as Record<string, unknown>).at);
+  return terminalTimestamp !== null
+    && now.getTime() - Date.parse(terminalTimestamp) > 30 * 24 * 60 * 60 * 1000;
+}
+
+function normalizeJournalEntries(value: unknown, now: Date) {
+  if (!Array.isArray(value)) return [];
+  const cutoff = now.getTime() - 30 * 24 * 60 * 60 * 1000;
+  return value.filter((entry) => {
+    if (typeof entry !== 'object' || entry === null) return false;
+    const timestamp = readIsoTimestamp((entry as Record<string, unknown>).at);
+    return timestamp !== null && Date.parse(timestamp) >= cutoff;
+  }).slice(-64) as Record<string, unknown>[];
+}
+
+function readIsoTimestamp(value: unknown) {
+  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) return null;
+  return new Date(value).toISOString();
 }
 
 function redactReplayPayload(item: Record<string, unknown>) {
@@ -390,15 +522,10 @@ function readQueueSequence(item: unknown) {
   return typeof sequence === 'number' && Number.isInteger(sequence) ? sequence : Number.MAX_SAFE_INTEGER;
 }
 
-function parseLegacyItems(raw: string): Record<string, unknown>[] | null {
-  try {
-    const parsed = JSON.parse(raw) as { items?: unknown; version?: unknown };
-    if ((parsed.version !== 1 && parsed.version !== 2) || !Array.isArray(parsed.items)) return null;
-    if (!parsed.items.every((item) => typeof item === 'object' && item !== null)) return null;
-    return parsed.items as Record<string, unknown>[];
-  } catch {
-    return null;
-  }
+function parseLegacyItems(raw: string, now: () => Date = () => new Date()): Record<string, unknown>[] | null {
+  const normalized = normalizePersistedOfflineSubmissionQueue(raw, now);
+  if (normalized === null) return null;
+  return (JSON.parse(normalized) as { items: Record<string, unknown>[] }).items;
 }
 
 function bytesToHex(bytes: Uint8Array) {

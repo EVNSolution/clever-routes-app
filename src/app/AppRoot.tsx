@@ -341,6 +341,7 @@ function DriverApp() {
   const [completedStopTimes, setCompletedStopTimes] = useState<Record<string, string>>({});
   const [offlineSubmissionQueue, setOfflineSubmissionQueue] = useState<OfflineSubmissionQueue | null>(null);
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
+  const [offlineStorageState, setOfflineStorageState] = useState<'READY' | 'STORAGE_DEGRADED'>('READY');
   const [routeReconciliationCount, setRouteReconciliationCount] = useState(0);
   const [routeRecoveryRefreshReason, setRouteRecoveryRefreshReason] = useState<RouteRecoveryRefreshReason | null>(null);
   const [lastRoutesUpdatedAt, setLastRoutesUpdatedAt] = useState<Date | null>(null);
@@ -402,6 +403,7 @@ function DriverApp() {
   const previousDriverRestoreNetworkRef = useRef(networkReachability);
   const previousRouteSyncNetworkRef = useRef(networkReachability);
   const isRetryingOfflineSubmissionsRef = useRef(false);
+  const isRecoveringOfflineStorageRef = useRef(false);
   const previousNetworkReachabilityRef = useRef(networkReachability);
   const driverAppUpdateCheckRunningRef = useRef(false);
   const explicitDriverAppUpdatePromptRequestedRef = useRef(false);
@@ -419,7 +421,14 @@ function DriverApp() {
     const summary = getOfflineSubmissionQueueSummary(queue);
     setOfflineQueueCount(summary.retryableCount);
     setRouteReconciliationCount(summary.blockedCount);
+    setOfflineStorageState(queue.storageState());
   }, []);
+
+  const blockMutationWhileStorageDegraded = useCallback((): boolean => {
+    if (offlineStorageState !== 'STORAGE_DEGRADED') return false;
+    setMessage('Delivery updates are read-only until encrypted offline storage recovers. Retry Storage from My Routes.');
+    return true;
+  }, [offlineStorageState]);
 
   useEffect(() => {
     selectedRouteIdRef.current = selectedRouteId;
@@ -835,6 +844,7 @@ function DriverApp() {
   }
 
   async function clearRouteReconciliationRecords(): Promise<void> {
+    if (blockMutationWhileStorageDegraded()) return;
     try {
       const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
       if (offlineSubmissionQueue === null) {
@@ -933,6 +943,11 @@ function DriverApp() {
     let completedWithoutRetainedFailures = true;
     try {
       const queue = await getExpoOfflineSubmissionQueue();
+      if (queue.storageState() === 'STORAGE_DEGRADED') {
+        syncOfflineQueueState(queue);
+        setMessage('Offline evidence sync is paused until encrypted storage recovers.');
+        return false;
+      }
       for (const session of sessions) {
         const routeSubmission = toCompanyGuidanceSubmission(session);
         const refreshDriverAccess = buildDriverAccessRefresh(routeSubmission);
@@ -1250,6 +1265,13 @@ function DriverApp() {
     stop: AssignedRouteStop,
     arrivalEvidence?: StopArrivalEvidence,
   ): Promise<StopArrivedRecordResult> => {
+    if (blockMutationWhileStorageDegraded()) {
+      return {
+        kind: 'blocked',
+        message: 'Encrypted offline storage must recover before recording arrival.',
+        reason: 'delivery_not_active',
+      };
+    }
     if (deliveryStartResult === null) {
       return {
         kind: 'blocked',
@@ -1289,11 +1311,17 @@ function DriverApp() {
       applyEtaUpdateToRoute(routeSession.route.id, result.etaUpdate);
     }
     if (result.kind === 'queued') {
-      await queue.whenPersisted();
+      try {
+        await queue.whenPersisted();
+      } finally {
+        syncOfflineQueueState(queue);
+      }
+    } else {
+      syncOfflineQueueState(queue);
     }
-    syncOfflineQueueState(queue);
     return result;
   }, [
+    blockMutationWhileStorageDegraded,
     buildDriverAccessRefresh,
     deliveryStartResult,
     mockDriverEventService,
@@ -1474,7 +1502,8 @@ function DriverApp() {
       })
       .catch(() => {
         if (isMounted) {
-          setMessage('Offline retry storage is unavailable. This session will retry in memory only.');
+          setOfflineStorageState('STORAGE_DEGRADED');
+          setMessage('Encrypted offline storage is unavailable. Delivery updates are read-only until storage recovers.');
         }
       });
 
@@ -2256,6 +2285,31 @@ function DriverApp() {
     return retryOfflineSubmissionsForSessions(routeSessions);
   }, [retryOfflineSubmissionsForSessions, routeSessions]);
 
+  const recoverOfflineEvidenceStorage = useCallback(async (): Promise<boolean> => {
+    if (isRecoveringOfflineStorageRef.current) return false;
+    isRecoveringOfflineStorageRef.current = true;
+    try {
+      const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      if (offlineSubmissionQueue === null) setOfflineSubmissionQueue(queue);
+      if (queue.storageState() === 'READY') {
+        syncOfflineQueueState(queue);
+        return true;
+      }
+      const recovered = await queue.recoverStorage();
+      syncOfflineQueueState(queue);
+      setMessage(recovered
+        ? 'Encrypted offline storage recovered. Delivery updates can continue.'
+        : 'Encrypted offline storage is still unavailable. Delivery updates remain read-only.');
+      return recovered;
+    } catch {
+      setOfflineStorageState('STORAGE_DEGRADED');
+      setMessage('Encrypted offline storage is still unavailable. Delivery updates remain read-only.');
+      return false;
+    } finally {
+      isRecoveringOfflineStorageRef.current = false;
+    }
+  }, [offlineSubmissionQueue, syncOfflineQueueState]);
+
   useEffect(() => {
     const previous = previousRouteSyncNetworkRef.current;
     previousRouteSyncNetworkRef.current = networkReachability;
@@ -2301,7 +2355,11 @@ function DriverApp() {
   ]);
 
   useEffect(() => {
-    if (!isDriverRestoreComplete || routeSessions.length === 0) return;
+    if (
+      !isDriverRestoreComplete
+      || routeSessions.length === 0
+      || offlineStorageState === 'STORAGE_DEGRADED'
+    ) return;
 
     const scheduler = createOfflineRetryScheduler({
       cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -2325,8 +2383,34 @@ function DriverApp() {
     networkReachability,
     offlineQueueCount,
     offlineSubmissionQueue,
+    offlineStorageState,
     retryPendingSubmissionsAfterNetworkRecovery,
     routeSessions.length,
+  ]);
+
+  useEffect(() => {
+    if (!isDriverRestoreComplete || offlineStorageState !== 'STORAGE_DEGRADED') return;
+
+    const scheduler = createOfflineRetryScheduler({
+      cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      hasPendingSubmissions: () => offlineStorageState === 'STORAGE_DEGRADED',
+      isForeground: () => AppState.currentState === 'active',
+      isOnline: () => networkReachability === 'online',
+      policy: { initialDelayMs: 5_000, jitterRatio: 0.2, maxDelayMs: 60_000 },
+      retry: recoverOfflineEvidenceStorage,
+      schedule: (run, delayMs) => setTimeout(run, delayMs),
+    });
+    const subscription = AppState.addEventListener('change', () => scheduler.notifyConditionsChanged());
+    scheduler.start();
+    return () => {
+      subscription.remove();
+      scheduler.stop();
+    };
+  }, [
+    isDriverRestoreComplete,
+    networkReachability,
+    offlineStorageState,
+    recoverOfflineEvidenceStorage,
   ]);
 
   const handlePullRefresh = useCallback(async () => {
@@ -2542,6 +2626,7 @@ function DriverApp() {
   }, [isDriverRestoreComplete, refreshBackgroundLocationPermission, screen, verifiedDriverPhoneE164]);
 
   function handleStartRoute(routeId?: string) {
+    if (blockMutationWhileStorageDegraded()) return;
     if (isStartingRoute || isFinishingRoute || pendingRoutePlanId !== null) {
       return;
     }
@@ -2614,6 +2699,7 @@ function DriverApp() {
   }
 
   async function startRouteSessionAfterConfirmed(routeId?: string) {
+    if (blockMutationWhileStorageDegraded()) return;
     if (isStartingRoute || isFinishingRoute) {
       return;
     }
@@ -2770,6 +2856,7 @@ function DriverApp() {
   }
 
   function handleDeleteActiveRoute(routeId: string) {
+    if (blockMutationWhileStorageDegraded()) return;
     if (activeRoutePlanId !== routeId) {
       setMessage('Only the active route can be deleted.');
       return;
@@ -2865,6 +2952,7 @@ function DriverApp() {
   }
 
   async function handleArrivedAtStep() {
+    if (blockMutationWhileStorageDegraded()) return;
     if (selectedRoute === null) {
       return;
     }
@@ -3094,6 +3182,7 @@ function DriverApp() {
     route: AssignedRoute;
     stop: AssignedRouteStop;
   }) {
+    if (blockMutationWhileStorageDegraded()) return;
     const { captureResult, route, stop } = input;
     if (captureResult.kind !== 'captured') {
       if (captureResult.kind === 'permission_denied') {
@@ -3172,6 +3261,7 @@ function DriverApp() {
   }
 
   async function handleCapturePhoto(source: ProofPhotoCaptureSource) {
+    if (blockMutationWhileStorageDegraded()) return;
     if (currentStop === null || selectedRoute === null) {
       return;
     }
@@ -3249,6 +3339,7 @@ function DriverApp() {
       switchToRoutePlanId?: string;
     },
   ) {
+    if (blockMutationWhileStorageDegraded()) return;
     const routeSwitchPlanId = options?.switchToRoutePlanId ?? pendingRoutePlanId;
     if (selectedRoute === null || deliveryStartResult === null) {
       if (routeSwitchPlanId !== null) {
@@ -3480,6 +3571,7 @@ function DriverApp() {
     routeEnd?: 'completed' | 'released';
     routeSubmission?: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>;
   }): Promise<boolean> {
+    if (blockMutationWhileStorageDegraded()) return false;
     if (deliveryStartResult?.kind !== 'delivery_active') {
       return false;
     }
@@ -3991,6 +4083,7 @@ function DriverApp() {
               isRequestingBackgroundLocation={isRequestingBackgroundLocation}
               isStartingRoute={isStartingRoute}
               isSwitchingRoute={pendingRoutePlanId !== null}
+              offlineStorageState={offlineStorageState}
               onDeleteRoute={handleDeleteActiveRoute}
               onOpenCompletedDeliveries={(routeId) => {
                 const routeSession = getRouteSessionForAction(routeSessions, routeId);
@@ -4008,6 +4101,7 @@ function DriverApp() {
               onContinueRoute={handleOpenRouteSession}
               onClearRouteReconciliation={handleRequestRouteReconciliationClear}
               onRetryRouteSync={() => { void handleRefreshRoutes(); }}
+              onRetryStorage={() => { void recoverOfflineEvidenceStorage(); }}
               onStartRoute={handleStartRoute}
               routeSessions={routeSessions}
               routeReconciliationCount={routeReconciliationCount}
@@ -4321,12 +4415,14 @@ function MyRoutesPage({
   isRequestingBackgroundLocation,
   isStartingRoute,
   isSwitchingRoute,
+  offlineStorageState,
   onDeleteRoute,
   onOpenCompletedDeliveries,
   onOpenBackgroundLocationSettings,
   onContinueRoute,
   onClearRouteReconciliation,
   onRetryRouteSync,
+  onRetryStorage,
   onStartRoute,
   routeSessions,
   routeReconciliationCount,
@@ -4342,12 +4438,14 @@ function MyRoutesPage({
   isRequestingBackgroundLocation: boolean;
   isStartingRoute: boolean;
   isSwitchingRoute: boolean;
+  offlineStorageState: 'READY' | 'STORAGE_DEGRADED';
   onDeleteRoute(routeId: string): void;
   onOpenCompletedDeliveries(routeId: string): void;
   onOpenBackgroundLocationSettings(): void;
   onContinueRoute(routeId: string): void;
   onClearRouteReconciliation(): void;
   onRetryRouteSync(): void;
+  onRetryStorage(): void;
   onStartRoute(routeId: string): void;
   routeSessions: RouteSession[];
   routeReconciliationCount: number;
@@ -4376,6 +4474,28 @@ function MyRoutesPage({
 
   return (
     <View style={styles.myRoutesPage}>
+      {offlineStorageState === 'STORAGE_DEGRADED' ? (
+        <View accessibilityRole="alert" style={styles.backgroundLocationWarning}>
+          <View style={styles.backgroundLocationWarningCopy}>
+            <Text style={styles.backgroundLocationWarningTitle}>Offline storage needs recovery</Text>
+            <Text style={styles.backgroundLocationWarningBody}>
+              Delivery updates are read-only until encrypted storage is safely persisted.
+            </Text>
+          </View>
+          <Pressable
+            accessibilityLabel="Retry encrypted offline storage"
+            accessibilityRole="button"
+            onPress={onRetryStorage}
+            style={({ pressed }) => [
+              styles.backgroundLocationSettingsButton,
+              pressed && styles.backgroundLocationSettingsButtonPressed,
+            ]}
+          >
+            <Text style={styles.backgroundLocationSettingsButtonText}>Retry Storage</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
       {routeReconciliationCount > 0 ? (
         <View accessibilityRole="alert" style={styles.routeReconciliationWarning}>
           <View style={styles.routeReconciliationWarningCopy}>
@@ -4455,10 +4575,13 @@ function MyRoutesPage({
                   : classifiedRouteCardStatus;
             const isRouteCardExpanded = expandedRouteKey === session.route.id;
             const isStartDisabled = isStartingRoute || isFinishingRoute || isSwitchingRoute
+              || offlineStorageState === 'STORAGE_DEGRADED'
               || backgroundLocationPermission !== 'granted' || session.pendingRouteEnd !== undefined;
             const isContinueDisabled = isDeletingRoute || isFinishingRoute
+              || offlineStorageState === 'STORAGE_DEGRADED'
               || backgroundLocationPermission !== 'granted' || activeRoutePlanId !== session.route.id;
-            const isDeleteDisabled = isDeletingRoute || activeRoutePlanId !== session.route.id;
+            const isDeleteDisabled = isDeletingRoute || offlineStorageState === 'STORAGE_DEGRADED'
+              || activeRoutePlanId !== session.route.id;
 
             return (
               <View key={session.route.id} style={styles.selectedRouteCard}>

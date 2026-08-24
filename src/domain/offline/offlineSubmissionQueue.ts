@@ -177,12 +177,14 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
   const now = input?.now ?? (() => new Date());
   const maxItems = normalizeMaxItems(input?.maxItems);
   let activeAccountOwnerHash = input?.accountOwnerHash === undefined ? 'test-account-owner' : input.accountOwnerHash;
+  let initialLegacyAdopted = false;
   if (activeAccountOwnerHash !== null) {
     for (const item of items.values()) {
       if (item.accountOwnerHash !== 'legacy-unbound-owner') continue;
       items.delete(getInternalItemKey(item));
       item.accountOwnerHash = activeAccountOwnerHash;
       items.set(getInternalItemKey(item), item);
+      initialLegacyAdopted = true;
     }
   }
   let nextQueueSequence = Math.max(0, ...Array.from(items.values()).map((item) => item.queueSequence)) + 1;
@@ -447,7 +449,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
     whenPersisted: async () => undefined,
   };
 
-  if (initialDiscarded > 0) {
+  if (initialDiscarded > 0 || initialLegacyAdopted) {
     emitChange();
   }
   return queue;
@@ -462,6 +464,7 @@ export async function createPersistentOfflineSubmissionQueue(input: {
 }): Promise<OfflineSubmissionQueue> {
   const storageKey = input.storageKey ?? OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY;
   const initialItems = await readPersistedOfflineSubmissionQueueItems({
+    now: input.now,
     storage: input.storage,
     storageKey,
   });
@@ -472,6 +475,14 @@ export async function createPersistentOfflineSubmissionQueue(input: {
   const persistLatest = async () => {
     const payload = JSON.stringify(toPersistedEnvelope(latestItems));
     await input.storage.setItem(storageKey, payload);
+    const reread = await input.storage.getItem(storageKey);
+    const normalizedExpected = normalizePersistedOfflineSubmissionQueue(payload, input.now);
+    const normalizedReread = reread === null
+      ? null
+      : normalizePersistedOfflineSubmissionQueue(reread, input.now);
+    if (normalizedExpected === null || normalizedReread !== normalizedExpected) {
+      throw new Error('Offline evidence persistence verification failed.');
+    }
   };
 
   const queue = createInMemoryOfflineSubmissionQueue({
@@ -509,6 +520,19 @@ export async function createPersistentOfflineSubmissionQueue(input: {
     storageState: () => storageDegraded ? 'STORAGE_DEGRADED' : 'READY',
     whenPersisted: () => persistQueue,
   };
+}
+
+export function normalizePersistedOfflineSubmissionQueue(
+  raw: string,
+  now: () => Date = () => new Date(),
+): string | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const items = readPersistedEnvelope(parsed, now);
+    return items === null ? null : JSON.stringify(toPersistedEnvelope(items));
+  } catch {
+    return null;
+  }
 }
 
 export async function retryOfflineSubmissions(input: {
@@ -774,6 +798,7 @@ function shouldDiscardOfflineSubmission(
 }
 
 async function readPersistedOfflineSubmissionQueueItems(input: {
+  now?: () => Date;
   storage: OfflineSubmissionQueueStorage;
   storageKey: string;
 }): Promise<OfflineSubmissionQueueItem[]> {
@@ -784,7 +809,7 @@ async function readPersistedOfflineSubmissionQueueItems(input: {
 
   try {
     const parsed = JSON.parse(raw) as unknown;
-    const items = readPersistedEnvelope(parsed);
+    const items = readPersistedEnvelope(parsed, input.now ?? (() => new Date()));
     if (items === null) {
       await input.storage.removeItem(input.storageKey);
       return [];
@@ -835,7 +860,7 @@ function toPersistedQueueItem(item: OfflineSubmissionQueueItem): Record<string, 
   };
 }
 
-function readPersistedEnvelope(value: unknown): OfflineSubmissionQueueItem[] | null {
+function readPersistedEnvelope(value: unknown, now: () => Date): OfflineSubmissionQueueItem[] | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return null;
   }
@@ -847,7 +872,7 @@ function readPersistedEnvelope(value: unknown): OfflineSubmissionQueueItem[] | n
 
   const items: OfflineSubmissionQueueItem[] = [];
   for (const [index, item] of data.items.entries()) {
-    const parsed = readPersistedQueueItem(item, index + 1, data.version === 1);
+    const parsed = readPersistedQueueItem(item, now, index + 1, data.version === 1);
     if (parsed === null) {
       return null;
     }
@@ -857,7 +882,12 @@ function readPersistedEnvelope(value: unknown): OfflineSubmissionQueueItem[] | n
   return items;
 }
 
-function readPersistedQueueItem(value: unknown, legacySequence = 1, legacy = false): OfflineSubmissionQueueItem | null {
+function readPersistedQueueItem(
+  value: unknown,
+  now: () => Date,
+  legacySequence = 1,
+  legacy = false,
+): OfflineSubmissionQueueItem | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return null;
   }
@@ -867,7 +897,9 @@ function readPersistedQueueItem(value: unknown, legacySequence = 1, legacy = fal
   const attempts = readNonNegativeNumber(data.attempts);
   const enqueuedAt = readRequiredString(data.enqueuedAt);
   const firstErrorCode = readOptionalString(data.firstErrorCode);
-  const journal = legacy ? [{ at: enqueuedAt ?? new Date(0).toISOString(), code: 'LEGACY_MIGRATED', kind: 'ENQUEUED' as const }] : readJournal(data.journal);
+  const journal = legacy
+    ? [{ at: now().toISOString(), code: 'LEGACY_MIGRATED', kind: 'ENQUEUED' as const }]
+    : readJournal(data.journal, now);
   const queueSequence = legacy ? legacySequence : readPositiveNumber(data.queueSequence);
   const queueItemId = readRequiredString(data.queueItemId);
   const lastErrorCode = readOptionalString(data.lastErrorCode);
@@ -1058,8 +1090,8 @@ function readEvidenceState(value: unknown): OfflineEvidenceState | null {
     : null;
 }
 
-function readJournal(value: unknown): OfflineEvidenceJournalEntry[] | null {
-  if (!Array.isArray(value) || value.length > 64) return null;
+function readJournal(value: unknown, now: () => Date): OfflineEvidenceJournalEntry[] | null {
+  if (!Array.isArray(value)) return null;
   const journal: OfflineEvidenceJournalEntry[] = [];
   for (const entry of value) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null;
@@ -1070,7 +1102,17 @@ function readJournal(value: unknown): OfflineEvidenceJournalEntry[] | null {
     if (at === null || code === null || !['ACK', 'ATTEMPT', 'DISCARD', 'ENQUEUED', 'RECONCILIATION'].includes(String(kind))) return null;
     journal.push({ at, code, kind: kind as OfflineEvidenceJournalEntry['kind'] });
   }
-  return journal;
+  return pruneJournal(journal, now);
+}
+
+function pruneJournal(journal: OfflineEvidenceJournalEntry[], now: () => Date) {
+  const cutoff = now().getTime() - 30 * 24 * 60 * 60 * 1000;
+  return journal
+    .filter((entry) => {
+      const timestamp = Date.parse(entry.at);
+      return Number.isFinite(timestamp) && timestamp >= cutoff;
+    })
+    .slice(-64);
 }
 
 function readRequiredString(value: unknown): string | null {
@@ -1078,7 +1120,11 @@ function readRequiredString(value: unknown): string | null {
 }
 
 function readAccountOwnerHash(value: unknown): string | null {
-  return typeof value === 'string' && (/^[0-9a-f]{64}$/u.test(value) || value === 'test-account-owner')
+  return typeof value === 'string' && (
+    /^[0-9a-f]{64}$/u.test(value)
+    || value === 'test-account-owner'
+    || value === 'legacy-unbound-owner'
+  )
     ? value
     : null;
 }

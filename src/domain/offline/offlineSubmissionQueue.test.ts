@@ -761,7 +761,7 @@ describe('offline submission queue', () => {
     let releaseFirstWrite: (() => void) | null = null;
     let writeCount = 0;
     const storage: OfflineSubmissionQueueStorage = {
-      getItem: async () => null,
+      getItem: async (key) => values.get(key) ?? null,
       removeItem: async (key) => {
         values.delete(key);
       },
@@ -842,6 +842,34 @@ describe('offline submission queue', () => {
       'driver-event:first',
       'driver-event:second',
     ]);
+  });
+
+  it('does not leave storage-degraded until the written snapshot passes a public reread', async () => {
+    let persisted: string | null = null;
+    let returnCorruptReread = false;
+    const storage: OfflineSubmissionQueueStorage = {
+      getItem: async () => returnCorruptReread ? '{"invalid":true}' : persisted,
+      removeItem: async () => undefined,
+      setItem: async (_key, value) => { persisted = value; },
+    };
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    returnCorruptReread = true;
+    queue.enqueueDriverEvent({
+      clientEventId: 'verify-reread',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-08-24T12:00:00.000Z'),
+      routePlanId: 'route-1',
+    });
+
+    await assert.rejects(queue.whenPersisted(), /persistence verification failed/u);
+    assert.equal(queue.storageState(), 'STORAGE_DEGRADED');
+    assert.equal(await queue.recoverStorage(), false);
+    assert.equal(queue.storageState(), 'STORAGE_DEGRADED');
+
+    returnCorruptReread = false;
+    assert.equal(await queue.recoverStorage(), true);
+    assert.equal(queue.storageState(), 'READY');
+    assert.match(persisted ?? '', /verify-reread/u);
   });
 
   it('quarantines expired ordered evidence before retrying fresh work', async () => {
