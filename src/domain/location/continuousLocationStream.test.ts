@@ -288,9 +288,9 @@ describe('continuous location streaming', () => {
     assert.deepEqual(streamService.stopped, []);
   });
 
-  it('does not stop account B tracking when account A cleanup loses its session lease', async () => {
+  it('does not stop a new same-assignment session when stale cleanup loses its instance lease', async () => {
     const streamService = createMockStreamService();
-    let currentOwner = 'account-a';
+    let currentSessionInstanceId = 'session-a-started-at';
     let nativeStopCalls = 0;
     let releaseClear!: () => void;
     let signalClearStarted!: () => void;
@@ -303,20 +303,23 @@ describe('continuous location streaming', () => {
     };
     const cleanup = clearAndStopContinuousLocationSession({
       activeRouteSessionStore: {
-        clearActiveRouteSession: async () => {
+        clearActiveRouteSession: async (_routePlanId, sessionInstanceId, assignmentGeneration) => {
+          assert.equal(sessionInstanceId, 'session-a-started-at');
+          assert.equal(assignmentGeneration, '11');
           signalClearStarted();
           await clearPaused;
           return true;
         },
       },
       assignmentGeneration: '11',
-      isSessionLeaseCurrent: () => currentOwner === 'account-a',
+      isSessionLeaseCurrent: () => currentSessionInstanceId === 'session-a-started-at',
       routePlanId: 'shared-route',
+      sessionInstanceId: 'session-a-started-at',
       streamService,
     });
 
     await clearStarted;
-    currentOwner = 'account-b';
+    currentSessionInstanceId = 'session-b-started-at';
     releaseClear();
     assert.deepEqual(await cleanup, {
       kind: 'unchanged', taskName: 'clever-routes-continuous-location',

@@ -98,6 +98,8 @@ describe('driver operations resilience runtime', () => {
     const cleanupDomainIndex = source.indexOf('clearAndStopContinuousLocationSession({', durableLeaseIndex);
     assert.ok(durableLeaseIndex > cleanupHelperIndex && cleanupDomainIndex > durableLeaseIndex);
     assert.match(source.slice(durableLeaseIndex, cleanupDomainIndex), /persisted\.routeAccess\.assignmentGeneration === lease\.assignmentGeneration/u);
+    assert.match(source.slice(durableLeaseIndex, cleanupDomainIndex), /persistedSessionInstanceId === lease\.sessionInstanceId/u);
+    assert.match(source.slice(cleanupHelperIndex, source.indexOf('const selectedPhoneCountry', cleanupHelperIndex)), /sessionInstanceId: lease\.sessionInstanceId/u);
   });
 
   it('does not destroy cached completion identity when ACK-clear token refresh cannot find the ended route', () => {

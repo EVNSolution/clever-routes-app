@@ -115,6 +115,35 @@ describe('offline submission queue', () => {
     });
   });
 
+  it('does not hydrate lineage across a same-id event identity collision', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    const original = queue.enqueueDriverEvent({
+      clientEventId: 'legacy-collision', deliveryStopId: 'stop-old', eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-08-22T19:40:00.000Z'), payload: { proof: { note: 'old' } },
+      routePlanId: 'route-old',
+    });
+    queue.enqueueDriverEvent({
+      appVersion: '1.2.0', assignmentGeneration: '12', clientEventId: 'legacy-collision',
+      driverContractVersion: 2, eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '33333333-3333-4333-8333-333333333333',
+      occurredAt: new Date('2026-08-22T19:43:10.000Z'), payload: { source: 'new' },
+      routePlanId: 'route-new', versionCode: 18,
+    });
+    await queue.whenPersisted();
+
+    const [retained] = (await createPersistentOfflineSubmissionQueue({ storage })).listPending();
+    assert.equal(retained?.state, 'QUARANTINED');
+    assert.equal(retained?.reconciliation?.reason, 'event_identity_conflict');
+    assert.equal(retained?.kind, 'driver_event');
+    if (retained?.kind !== 'driver_event') throw new Error('Expected driver event');
+    assert.deepEqual(retained.event, original.event);
+    assert.equal(retained.event.appVersion, undefined);
+    assert.equal(retained.event.assignmentGeneration, undefined);
+    assert.equal(retained.event.routePlanId, 'route-old');
+    assert.equal(retained.event.eventType, 'STOP_DELIVERED');
+  });
+
   it('keeps complete ordered evidence immutable and quarantines a same-id reassignment', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     const original = queue.enqueueDriverEvent({

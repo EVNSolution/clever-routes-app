@@ -241,6 +241,7 @@ export async function clearAndStopContinuousLocationSession(input: {
   assignmentGeneration?: string;
   isSessionLeaseCurrent?: () => Promise<boolean> | boolean;
   routePlanId?: string;
+  sessionInstanceId?: string;
   streamService: ContinuousLocationStreamService;
   taskName?: string;
 }): Promise<ContinuousLocationSessionCleanupResult> {
@@ -252,7 +253,7 @@ export async function clearAndStopContinuousLocationSession(input: {
     }
     cleared = await input.activeRouteSessionStore.clearActiveRouteSession(
       input.routePlanId,
-      undefined,
+      input.sessionInstanceId,
       input.assignmentGeneration,
     );
   } catch (error) {

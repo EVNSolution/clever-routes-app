@@ -37,7 +37,7 @@ export type OfflineSubmissionQueueRetryPolicy = {
 
 export type OfflineSubmissionReconciliation = {
   blockedAt: string;
-  reason: 'account_signed_out' | 'assignment_changed' | 'proof_idempotency_conflict' | 'retry_policy_exceeded' | 'route_not_in_progress';
+  reason: 'account_signed_out' | 'assignment_changed' | 'event_identity_conflict' | 'proof_idempotency_conflict' | 'retry_policy_exceeded' | 'route_not_in_progress';
 };
 
 export type OfflineEvidenceState = 'ACKNOWLEDGED' | 'DISCARDED' | 'PENDING' | 'QUARANTINED';
@@ -316,6 +316,17 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
         hasCompleteOrderedEventContract(event)
         && !hasCompleteOrderedEventContract(existing.event)
       ) {
+        if (
+          existing.accountOwnerHash !== activeAccountOwnerHash
+          || !hasSameImmutableDriverEventIdentity(existing.event, event)
+        ) {
+          if (existing.reconciliation === undefined) {
+            existing.reconciliation = { blockedAt: now().toISOString(), reason: 'event_identity_conflict' };
+            transition(existing, 'QUARANTINED', 'RECONCILIATION', 'EVENT_IDENTITY_CONFLICT');
+            return { changed: true, inserted: false, item: existing };
+          }
+          return { changed: false, inserted: false, item: existing };
+        }
         existing.event = {
           ...existing.event,
           appVersion: event.appVersion,
@@ -1119,6 +1130,28 @@ function hasSameOrderedEventContract(left: DriverEventInput, right: DriverEventI
     && left.versionCode === right.versionCode;
 }
 
+function hasSameImmutableDriverEventIdentity(left: DriverEventInput, right: DriverEventInput): boolean {
+  return left.clientEventId === right.clientEventId
+    && left.eventType === right.eventType
+    && (left.routePlanId ?? null) === (right.routePlanId ?? null)
+    && (left.deliveryStopId ?? null) === (right.deliveryStopId ?? null)
+    && left.occurredAt.toISOString() === right.occurredAt.toISOString()
+    && (left.latitude ?? null) === (right.latitude ?? null)
+    && (left.longitude ?? null) === (right.longitude ?? null)
+    && (left.accuracyMeters ?? null) === (right.accuracyMeters ?? null)
+    && JSON.stringify(sortJsonValue(left.payload ?? null)) === JSON.stringify(sortJsonValue(right.payload ?? null));
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJsonValue);
+  if (typeof value !== 'object' || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, sortJsonValue(nested)]),
+  );
+}
+
 function hasExactOrderedEventAccessIdentity(
   event: DriverEventInput,
   access: NonNullable<Parameters<typeof retryOfflineSubmissions>[0]['orderedEventAccessIdentity']>,
@@ -1368,6 +1401,7 @@ function readOptionalReconciliation(value: unknown): OfflineSubmissionReconcilia
     || ![
       'account_signed_out',
       'assignment_changed',
+      'event_identity_conflict',
       'proof_idempotency_conflict',
       'retry_policy_exceeded',
       'route_not_in_progress',

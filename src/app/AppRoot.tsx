@@ -591,7 +591,7 @@ function DriverApp() {
 
   const clearAndStopActiveLocationSession = useCallback(async (
     routePlanId?: string,
-    lease?: { assignmentGeneration: string; isCurrent: () => boolean },
+    lease?: { assignmentGeneration: string; isCurrent: () => boolean; sessionInstanceId: string },
   ): Promise<void> => {
     try {
       const isDurableSessionLeaseCurrent = lease === undefined || routePlanId === undefined
@@ -605,14 +605,18 @@ function DriverApp() {
               return persisted.routeAccess?.routePlanId === routePlanId
                 && persisted.routeAccess.assignmentGeneration === lease.assignmentGeneration;
             }
+            const persistedSessionInstanceId = persisted.activeRouteSession.startedAt
+              ?? persisted.activeRouteSession.updatedAt;
             return persisted.activeRouteSession.routePlanId === routePlanId
               && persisted.routeAccess?.routePlanId === routePlanId
-              && persisted.routeAccess.assignmentGeneration === lease.assignmentGeneration;
+              && persisted.routeAccess.assignmentGeneration === lease.assignmentGeneration
+              && persistedSessionInstanceId === lease.sessionInstanceId;
           };
       const result = await clearAndStopContinuousLocationSession({
         activeRouteSessionStore: driverAccessTokenStore,
         ...(lease === undefined ? {} : {
           assignmentGeneration: lease.assignmentGeneration,
+          sessionInstanceId: lease.sessionInstanceId,
           ...(isDurableSessionLeaseCurrent === undefined ? {} : {
             isSessionLeaseCurrent: isDurableSessionLeaseCurrent,
           }),
@@ -1402,6 +1406,21 @@ function DriverApp() {
       }
       for (const session of sessions) {
         const routeSubmission = toCompanyGuidanceSubmission(session);
+        const persistedCleanupAccess = await runBoundedAsyncOperation(
+          async () => driverAccessTokenStore.loadActiveDriverAccess(),
+          { signal: lifecycleSignal, timeoutMs: 15_000 },
+        );
+        if (!isCurrent()) return false;
+        const persistedCleanupSession = (
+          (persistedCleanupAccess.kind === 'active' || persistedCleanupAccess.kind === 'refresh_required')
+          && persistedCleanupAccess.activeRouteSession?.routePlanId === session.route.id
+          && persistedCleanupAccess.routeAccess?.routePlanId === session.route.id
+          && persistedCleanupAccess.routeAccess.assignmentGeneration
+            === routeSubmission.routeAccess.assignmentGeneration
+        ) ? persistedCleanupAccess.activeRouteSession : null;
+        const cleanupSessionInstanceId = persistedCleanupSession === null
+          ? null
+          : persistedCleanupSession.startedAt ?? persistedCleanupSession.updatedAt;
         const refreshDriverAccess = buildDriverAccessRefresh(routeSubmission, {
           isCurrent, lifecycleSignal, persistAccess: false, persistAccountAccess: false,
           preserveMissingRoute: true, projectRuntimeState: false,
@@ -1445,6 +1464,10 @@ function DriverApp() {
           setServerConfirmedStopIds((current) => [...new Set([...current, ...confirmedStopIds])]);
         }
         if (result.completionAcknowledgedRoutePlanIds?.includes(session.route.id) === true) {
+          if (cleanupSessionInstanceId === null) {
+            completedWithoutRetainedFailures = false;
+            continue;
+          }
           await waitForOfflineQueuePersistence(queue);
           if (!isCurrent()) return false;
           const outboxEntry = queue.listPendingCompletionClearEntries().find((entry) => (
@@ -1481,6 +1504,7 @@ function DriverApp() {
           await clearAndStopActiveLocationSession(session.route.id, {
             assignmentGeneration: routeSubmission.routeAccess.assignmentGeneration,
             isCurrent,
+            sessionInstanceId: cleanupSessionInstanceId,
           });
           if (!isCurrent()) return false;
           setCompletionPendingRestoreIdentity(null);
@@ -1489,10 +1513,15 @@ function DriverApp() {
           setContinuousLocationResult({ kind: 'stopped', taskName: CONTINUOUS_LOCATION_TASK_NAME });
         }
         if (result.reconciliationRoutePlanIds?.includes(session.route.id) === true) {
+          if (cleanupSessionInstanceId === null) {
+            completedWithoutRetainedFailures = false;
+            continue;
+          }
           if (!isCurrent()) return false;
           await clearAndStopActiveLocationSession(session.route.id, {
             assignmentGeneration: routeSubmission.routeAccess.assignmentGeneration,
             isCurrent,
+            sessionInstanceId: cleanupSessionInstanceId,
           });
           if (!isCurrent()) return false;
           setCompletionPendingRestoreIdentity(null);
@@ -1543,6 +1572,7 @@ function DriverApp() {
     buildDriverAccessRefresh,
     clearAndStopActiveLocationSession,
     completedStopIds.length,
+    driverAccessTokenStore,
     getActiveAccountAccess,
     mockDriverEventService,
     mockProofMediaUploadService,
@@ -2441,6 +2471,8 @@ function DriverApp() {
               await clearAndStopActiveLocationSession(routePlanId, {
                 assignmentGeneration: identity.routeAccess?.assignmentGeneration ?? '',
                 isCurrent: isLoginAccountCurrent,
+                sessionInstanceId: identity.activeRouteSession.startedAt
+                  ?? identity.activeRouteSession.updatedAt,
               });
               if (!isLoginAccountCurrent()) return;
               persistedActiveRouteSession = null;
@@ -3271,6 +3303,9 @@ function DriverApp() {
       await clearAndStopActiveLocationSession(routePlanId, {
         assignmentGeneration: pendingIdentity?.routeAccess?.assignmentGeneration ?? '',
         isCurrent,
+        sessionInstanceId: pendingIdentity?.activeRouteSession.startedAt
+          ?? pendingIdentity?.activeRouteSession.updatedAt
+          ?? '',
       });
       if (!isCurrent()) return false;
       setCompletionPendingRestoreIdentity(null);
