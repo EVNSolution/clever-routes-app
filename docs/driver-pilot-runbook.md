@@ -11,6 +11,7 @@ authorized separately and tied back to the exact committed source SHA.
 | Driver issue | `EVNSolution/clever-routes-app#210` |
 | Change control | `EVNSolution/clever-change-control#265` |
 | Source branch | `codex/cc-265-driver-pilot-identity-telemetry` |
+| Candidate app source SHA | `bee0cb5af76d80efe033bec6e445409b235f9007` |
 | App version | `1.2.0` |
 | Android version code | `18` |
 | iOS build number | `1` |
