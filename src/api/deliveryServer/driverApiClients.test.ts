@@ -138,6 +138,45 @@ describe('driver API client token handoff', () => {
     );
   });
 
+  it('does not replay an account-A event after its refresh signal is aborted by account-B login', async () => {
+    const requests: string[] = [];
+    let refreshSignal: AbortSignal | undefined;
+    let resolveRefresh!: () => void;
+    const clients = createDriverApiClientsFromRouteAccess({
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async (_url, init) => {
+        requests.push(init?.headers?.Authorization ?? 'missing');
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ data: null, error: { code: 'UNAUTHORIZED' } }),
+        };
+      },
+      refreshDriverAccess: (signal) => {
+        refreshSignal = signal;
+        return new Promise((resolve) => {
+          resolveRefresh = () => resolve({
+            ...sampleInvitedRouteAccess.driverAccess,
+            accessToken: 'account-b-must-not-be-used',
+          });
+        });
+      },
+      routeAccess: sampleInvitedRouteAccess,
+    });
+    const lifecycle = new AbortController();
+    const request = clients.driverEventService.recordDriverEvent({
+      clientEventId: 'account-a-event', eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-08-22T19:40:00.000Z'), routePlanId: 'shared-route',
+    }, { signal: lifecycle.signal });
+    await new Promise((resolve) => setImmediate(resolve));
+    lifecycle.abort();
+    resolveRefresh();
+
+    await assert.rejects(request, /Driver event record failed/u);
+    assert.equal(refreshSignal?.aborted, true);
+    assert.deepEqual(requests, ['Bearer fixture-driver-access-token']);
+  });
+
   it('preserves ordered-event lineage before a refresh-wrapped event can be queued', () => {
     const clients = createDriverApiClientsFromRouteAccess({
       appVersion: '1.1.6',

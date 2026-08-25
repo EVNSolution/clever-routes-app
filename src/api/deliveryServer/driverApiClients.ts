@@ -35,7 +35,7 @@ export type DriverApiClientsFetchLike = AssignedRouteFetchLike
   & DriverEventFetchLike
   & ProofMediaUploadFetchLike;
 
-export type DriverAccessRefresh = () => Promise<DriverAccessToken | null>;
+export type DriverAccessRefresh = (signal?: AbortSignal) => Promise<DriverAccessToken | null>;
 
 export function createDriverApiClientsFromRouteAccess(input: {
   appVersion?: string;
@@ -141,7 +141,10 @@ function withDriverAccessRefresh(input: {
 }): DriverApiClients {
   let clients = input.buildClients(input.initialAccessToken);
 
-  async function runWithRefresh<T>(call: (clients: DriverApiClients) => Promise<T>): Promise<T> {
+  async function runWithRefresh<T>(
+    call: (clients: DriverApiClients) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     try {
       return await call(clients);
     } catch (error) {
@@ -149,8 +152,8 @@ function withDriverAccessRefresh(input: {
         throw error;
       }
 
-      const refreshedAccess = await input.refreshDriverAccess();
-      if (refreshedAccess === null) {
+      const refreshedAccess = await input.refreshDriverAccess(signal);
+      if (signal?.aborted === true || refreshedAccess === null) {
         throw error;
       }
 
@@ -168,11 +171,15 @@ function withDriverAccessRefresh(input: {
     },
     driverEventService: {
       prepareDriverEvent: (request) => clients.driverEventService.prepareDriverEvent?.(request) ?? request,
-      recordDriverEvent: (request) => runWithRefresh((client) => client.driverEventService.recordDriverEvent(request)),
+      recordDriverEvent: (request, options) => runWithRefresh(
+        (client) => client.driverEventService.recordDriverEvent(request, options),
+        options?.signal,
+      ),
     },
     proofMediaUploadService: {
       uploadProofMedia: (request, options) => runWithRefresh(
         (client) => client.proofMediaUploadService.uploadProofMedia(request, options),
+        options?.signal,
       ),
     },
   };

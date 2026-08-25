@@ -155,9 +155,15 @@ export async function attemptDriverCompletionClearHeartbeat(
   input: DriverCompletionClearHeartbeatAttempt,
 ): Promise<DriverCompletionClearHeartbeatOutcome> {
   const routePlanId = input.outboxEntry.routePlanId;
-  const queueProjection = projectDriverSyncQueueState(input.queue, routePlanId);
+  const routeQueueProjection = projectDriverSyncQueueState(input.queue, routePlanId);
+  const exactCompletionProjection = input.queue.getCompletionClearTelemetry(input.outboxEntry);
+  const queueProjection = exactCompletionProjection === null ? routeQueueProjection : {
+    ...routeQueueProjection,
+    ...exactCompletionProjection,
+  };
   if (
-    queueProjection.finishPending
+    exactCompletionProjection === null
+    || queueProjection.finishPending
     || queueProjection.lastAcknowledgedAt === null
     || input.queue.getAccountOwnerHash() !== input.outboxEntry.accountOwnerHash
     || !hasExactCompletionClearAccess(input.outboxEntry, input.accessIdentity)

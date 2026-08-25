@@ -415,6 +415,49 @@ describe('driver sync heartbeat', () => {
     assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), []);
   });
 
+  it('projects an ACK-clear heartbeat from its exact completion when a reused route has newer state', async () => {
+    for (const newerState of ['PENDING', 'DISCARDED', 'ACKNOWLEDGED'] as const) {
+      let currentTime = new Date('2026-08-22T19:46:59.000Z');
+      const routePlanId = `reused-route-${newerState.toLowerCase()}`;
+      const queue = createInMemoryOfflineSubmissionQueue({ now: () => currentTime });
+      const generation11 = acknowledgeCompletion({
+        assignmentGeneration: '11', clientEventId: `completion-gen11-${newerState}`, queue, routePlanId,
+      });
+      currentTime = new Date('2026-08-25T01:00:00.000Z');
+      const generation12Item = queue.enqueueDriverEvent({
+        assignmentGeneration: '12', clientEventId: `completion-gen12-${newerState}`, driverContractVersion: 2,
+        eventType: 'ROUTE_COMPLETED', occurredAt: currentTime, routePlanId,
+      });
+      if (newerState === 'DISCARDED') queue.discard(generation12Item.queueItemId);
+      if (newerState === 'ACKNOWLEDGED') queue.acknowledge(generation12Item.queueItemId);
+
+      let payload: Parameters<NonNullable<Parameters<typeof attemptDriverCompletionClearHeartbeat>[0]['heartbeatService']['recordHeartbeat']>>[0] | undefined;
+      const outcome = await attemptDriverCompletionClearHeartbeat({
+        accessIdentity: completionAccess(routePlanId, '11'),
+        appVersion: '1.2.0', completedStopCount: 11, driverContractVersion: 2,
+        heartbeatService: { recordHeartbeat: async (request) => {
+          payload = request;
+          return { accepted: true, conflict: false, heartbeatSequence: 1, state: 'HEALTHY' };
+        } },
+        identityService: { next: async () => ({
+          deviceInstanceHash: 'a'.repeat(64), heartbeatSequence: 1, sessionGeneration: 'generation-11',
+        }) },
+        outboxEntry: generation11, queue, sessionKey: `account:${routePlanId}:11`, versionCode: 18,
+      });
+
+      assert.equal(outcome.observed, true, newerState);
+      assert.equal(payload?.finishPending, false, newerState);
+      assert.equal(payload?.lastAcknowledgedAt, '2026-08-22T19:46:59.000Z', newerState);
+      assert.equal(queue.getCompletionClearTelemetry(generation11)?.lastAcknowledgedAt, '2026-08-22T19:46:59.000Z');
+      assert.equal(queue.listPendingCompletionClearEntries().some((entry) => (
+        entry.completionClientEventId === generation11.completionClientEventId
+      )), false, newerState);
+      if (newerState === 'ACKNOWLEDGED') {
+        assert.deepEqual(queue.listPendingCompletionClearEntries().map((entry) => entry.assignmentGeneration), ['12']);
+      }
+    }
+  });
+
   it('bounds a hung delivered-marker persistence without losing accepted evidence or closing the outbox', async () => {
     const routePlanId = '11111111-1111-4111-8111-111111111111';
     const baseQueue = createInMemoryOfflineSubmissionQueue();

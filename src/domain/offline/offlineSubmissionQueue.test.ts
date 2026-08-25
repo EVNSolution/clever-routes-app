@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
-import { createMockDriverEventService } from '../events/driverEvents';
+import { createDriverEventsApiClient, createMockDriverEventService } from '../events/driverEvents';
 import {
   createMockProofMediaUploadService,
   createProofMediaRejectedError,
@@ -2022,6 +2022,131 @@ describe('offline submission queue', () => {
     const reconciled = await retry();
     assert.deepEqual(reconciled.reconciliationRoutePlanIds, ['south-route']);
     assert.equal(queue.listPending()[0]?.state, 'QUARANTINED');
+  });
+
+  it('replays a persisted UNKNOWN completion with its queued generation after route reassignment', async () => {
+    const storage = createMemoryStorage();
+    const first = await createPersistentOfflineSubmissionQueue({ storage });
+    first.enqueueDriverEvent({
+      appVersion: '1.1.6', assignmentGeneration: '11', clientEventId: 'persisted-generation-11',
+      driverContractVersion: 2, eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId: 'reassigned-route', versionCode: 17,
+    });
+    await first.whenPersisted();
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    let replayBody: Record<string, unknown> | undefined;
+    const result = await retryOfflineSubmissions({
+      driverEventReceiptService: { lookupReceipt: async () => ({
+        assignmentGeneration: '11', clientEventId: 'persisted-generation-11', errorCode: null,
+        expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', routePlanId: 'reassigned-route',
+        routeStatus: 'IN_PROGRESS', status: 'UNKNOWN',
+      }) },
+      driverEventService: createDriverEventsApiClient({
+        accessToken: 'generation-12-route-token', baseUrl: 'https://delivery.example.com',
+        orderedEventContract: {
+          appVersion: '1.2.0', assignmentGeneration: '12', driverContractVersion: 2,
+          expectedRouteVersionId: '33333333-3333-4333-8333-333333333333', versionCode: 18,
+        },
+        fetchImpl: async (_url, init) => {
+          replayBody = JSON.parse(init?.body ?? '{}') as Record<string, unknown>;
+          return { json: async () => ({ data: { duplicate: false, eventId: 'persisted-generation-11' }, error: null }), ok: true, status: 202 };
+        },
+      }),
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue: restarted,
+    });
+
+    assert.equal(result.succeeded, 1);
+    assert.deepEqual({
+      appVersion: replayBody?.appVersion,
+      assignmentGeneration: replayBody?.assignmentGeneration,
+      expectedRouteVersionId: replayBody?.expectedRouteVersionId,
+      versionCode: replayBody?.versionCode,
+    }, {
+      appVersion: '1.1.6', assignmentGeneration: '11',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', versionCode: 17,
+    });
+  });
+
+  it('aborts an account-A ordinary retry without mutating its queue after account-B login', async () => {
+    const ownerA = 'a'.repeat(64);
+    const ownerB = 'b'.repeat(64);
+    const queue = createInMemoryOfflineSubmissionQueue({ accountOwnerHash: ownerA });
+    queue.enqueueDriverEvent({
+      clientEventId: 'account-a-stop', eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-08-22T19:40:00.000Z'), routePlanId: 'shared-route',
+    });
+    const lifecycle = new AbortController();
+    let accountEpoch = 1;
+    let transportSignal: AbortSignal | undefined;
+    let resolveLate!: () => void;
+    const retry = retryOfflineSubmissions({
+      driverEventService: { recordDriverEvent: (_event, options) => {
+        transportSignal = options?.signal;
+        return new Promise((resolve) => {
+          resolveLate = () => resolve({ duplicate: false, eventId: 'late-account-a', status: 'recorded' });
+        });
+      } },
+      isCurrent: () => accountEpoch === 1 && queue.getAccountOwnerHash() === ownerA,
+      lifecycleSignal: lifecycle.signal,
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    queue.bindAccountOwnerHash(ownerB);
+    accountEpoch = 2;
+    lifecycle.abort();
+    assert.equal(transportSignal?.aborted, true);
+    assert.equal((await retry).succeeded, 0);
+    resolveLate();
+    await new Promise((resolve) => setImmediate(resolve));
+    queue.bindAccountOwnerHash(ownerA);
+    const [accountAItem] = queue.listPending();
+    assert.equal(accountAItem?.state, 'PENDING');
+    assert.equal(accountAItem?.attempts, 0);
+  });
+
+  it('aborts an account-A receipt retry without acknowledging or reconciling after account-B login', async () => {
+    const ownerA = 'a'.repeat(64);
+    const ownerB = 'b'.repeat(64);
+    const queue = createInMemoryOfflineSubmissionQueue({ accountOwnerHash: ownerA });
+    queue.enqueueDriverEvent({
+      assignmentGeneration: '11', clientEventId: 'account-a-completion', driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED', expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:00.000Z'), routePlanId: 'shared-route',
+    });
+    const lifecycle = new AbortController();
+    let accountEpoch = 1;
+    let receiptSignal: AbortSignal | undefined;
+    let resolveLate!: () => void;
+    const recovery = recoverPendingRouteEndReceipt({
+      driverEventReceiptService: { lookupReceipt: (_request, options) => {
+        receiptSignal = options?.signal;
+        return new Promise((resolve) => {
+          resolveLate = () => resolve({
+            assignmentGeneration: '11', clientEventId: 'account-a-completion', errorCode: null,
+            expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', routePlanId: 'shared-route',
+            routeStatus: 'COMPLETED', status: 'APPLIED',
+          });
+        });
+      } },
+      isCurrent: () => accountEpoch === 1 && queue.getAccountOwnerHash() === ownerA,
+      lifecycleSignal: lifecycle.signal,
+      queue,
+      routePlanId: 'shared-route',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    queue.bindAccountOwnerHash(ownerB);
+    accountEpoch = 2;
+    lifecycle.abort();
+    await assert.rejects(recovery, /OPERATION_ABORTED/u);
+    assert.equal(receiptSignal?.aborted, true);
+    resolveLate();
+    await new Promise((resolve) => setImmediate(resolve));
+    queue.bindAccountOwnerHash(ownerA);
+    assert.equal(queue.listPending()[0]?.state, 'PENDING');
+    assert.deepEqual(queue.listPendingCompletionClearEntries(), []);
   });
 
   it('recovers a queued route release receipt and clears reduced monitoring state without replay', async () => {

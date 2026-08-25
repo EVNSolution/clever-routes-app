@@ -13,7 +13,10 @@ export type DriverEventReceipt = {
 };
 
 export type DriverEventReceiptService = {
-  lookupReceipt(input: { clientEventId: string; routePlanId: string }): Promise<DriverEventReceipt>;
+  lookupReceipt(
+    input: { clientEventId: string; routePlanId: string },
+    options?: { signal?: AbortSignal },
+  ): Promise<DriverEventReceipt>;
 };
 
 export type CompletionReceiptResolution =
@@ -26,6 +29,7 @@ type FetchLike = (input: string, init?: {
   credentials?: 'omit';
   headers?: Record<string, string>;
   method?: string;
+  signal?: AbortSignal;
 }) => Promise<{ json(): Promise<unknown>; ok: boolean; status?: number }>;
 
 export function createDriverEventReceiptApiClient(input: {
@@ -36,12 +40,13 @@ export function createDriverEventReceiptApiClient(input: {
   const baseUrl = input.baseUrl.replace(/\/$/u, '');
   const fetchImpl = input.fetchImpl ?? globalThis.fetch;
   return {
-    lookupReceipt: async ({ clientEventId, routePlanId }) => {
+    lookupReceipt: async ({ clientEventId, routePlanId }, options) => {
       const response = await fetchImpl(
         `${baseUrl}/driver/event-receipts/${encodeURIComponent(routePlanId)}/${encodeURIComponent(clientEventId)}`,
         withNoStoreDriverApiRequest({
           headers: { Authorization: `Bearer ${input.accountAccessToken.trim()}` },
           method: 'GET',
+          signal: options?.signal,
         }),
       );
       const payload = await response.json();

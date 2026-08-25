@@ -70,6 +70,27 @@ describe('driver operations resilience runtime', () => {
     assert.ok(clearHealthIndex > epochIndex && clearHealthIndex < locationCleanupIndex);
   });
 
+  it('binds ordinary retry and receipt recovery effects to the captured account epoch', () => {
+    const ordinaryRetryIndex = source.indexOf('const retryOfflineSubmissionsForSessions = useCallback');
+    const ordinarySignalIndex = source.indexOf('const lifecycleSignal = combineDriverSyncAbortSignals([', ordinaryRetryIndex);
+    const ordinaryOwnerIndex = source.indexOf('const accountOwnerHash = queue.getAccountOwnerHash();', ordinarySignalIndex);
+    const ordinaryDomainGuardIndex = source.indexOf('isCurrent,', ordinaryOwnerIndex);
+    const ordinaryCleanupGuardIndex = source.indexOf('if (!isCurrent()) return false;', ordinaryDomainGuardIndex);
+    const ordinaryCleanupIndex = source.indexOf('await clearAndStopActiveLocationSession(session.route.id);', ordinaryCleanupGuardIndex);
+    assert.ok(ordinaryRetryIndex > 0 && ordinarySignalIndex > ordinaryRetryIndex);
+    assert.ok(ordinaryOwnerIndex > ordinarySignalIndex && ordinaryDomainGuardIndex > ordinaryOwnerIndex);
+    assert.ok(ordinaryCleanupGuardIndex > ordinaryDomainGuardIndex && ordinaryCleanupIndex > ordinaryCleanupGuardIndex);
+
+    const receiptRetryIndex = source.indexOf('const retryCompletionPendingReceipt = useCallback');
+    const receiptEpochIndex = source.indexOf('const requestEpoch = driverSyncAccountEpochRef.current;', receiptRetryIndex);
+    const receiptDomainGuardIndex = source.indexOf('isCurrent,', receiptEpochIndex);
+    const receiptCleanupGuardIndex = source.indexOf('if (!isCurrent()) return false;', receiptDomainGuardIndex);
+    const receiptCleanupIndex = source.indexOf('await clearAndStopActiveLocationSession(routePlanId);', receiptCleanupGuardIndex);
+    assert.ok(receiptRetryIndex > 0 && receiptEpochIndex > receiptRetryIndex);
+    assert.ok(receiptDomainGuardIndex > receiptEpochIndex && receiptCleanupGuardIndex > receiptDomainGuardIndex);
+    assert.ok(receiptCleanupIndex > receiptCleanupGuardIndex);
+  });
+
   it('does not destroy cached completion identity when ACK-clear token refresh cannot find the ended route', () => {
     assert.match(source, /options\?\.preserveMissingRoute === true\) return null;/u);
     const completionRefreshCalls = source.match(/preserveMissingRoute: true/gu) ?? [];

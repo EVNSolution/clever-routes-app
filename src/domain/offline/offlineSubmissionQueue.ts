@@ -136,6 +136,7 @@ export type OfflineSubmissionQueue = {
   enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
   enqueueProofMediaUpload(request: ProofMediaUploadRequest): OfflineProofMediaQueueItem;
   getAccountOwnerHash(): string | null;
+  getCompletionClearTelemetry(entry: OfflineCompletionClearOutboxEntry): OfflineRouteCompletionTelemetry | null;
   getRouteCompletionTelemetry(routePlanId: string): OfflineRouteCompletionTelemetry;
   listPendingCompletionClearEntries(): OfflineCompletionClearOutboxEntry[];
   listPendingCompletionClearRoutePlanIds(): string[];
@@ -227,21 +228,21 @@ export function createRouteOrderedDriverEventService(input: {
 }): DriverEventService {
   return {
     prepareDriverEvent: (event) => prepareDriverEventForPersistence(input.driverEventService, event),
-    recordDriverEvent: async (event) => {
-      prepareDriverEventForPersistence(input.driverEventService, event);
+    recordDriverEvent: async (event, options) => {
+      const preparedEvent = prepareDriverEventForPersistence(input.driverEventService, event);
       if (
-        ROUTE_WORKFLOW_EVENT_TYPES.has(event.eventType)
+        ROUTE_WORKFLOW_EVENT_TYPES.has(preparedEvent.eventType)
         && input.queue.listPending().some((item) => (
           item.kind === 'driver_event'
           && item.event.routePlanId === input.routePlanId
-          && item.event.clientEventId !== event.clientEventId
+          && item.event.clientEventId !== preparedEvent.clientEventId
           && ROUTE_WORKFLOW_EVENT_TYPES.has(item.event.eventType)
         ))
       ) {
         throw new Error('Earlier route updates are waiting to sync. This update will be queued in order.');
       }
 
-      return input.driverEventService.recordDriverEvent(event);
+      return input.driverEventService.recordDriverEvent(preparedEvent, options);
     },
   };
 }
@@ -491,6 +492,28 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       return item;
     },
     getAccountOwnerHash: () => activeAccountOwnerHash,
+    getCompletionClearTelemetry: (entry) => {
+      const completion = activeItems().find((item): item is OfflineDriverEventQueueItem => (
+        item.kind === 'driver_event'
+        && item.event.eventType === 'ROUTE_COMPLETED'
+        && item.accountOwnerHash === entry.accountOwnerHash
+        && item.event.routePlanId === entry.routePlanId
+        && (item.event.assignmentGeneration ?? null) === entry.assignmentGeneration
+        && item.event.clientEventId === entry.completionClientEventId
+        && (item.event.driverContractVersion ?? null) === entry.driverContractVersion
+      ));
+      if (completion === undefined || completion.state === 'DISCARDED') return null;
+      const acknowledgedAt = completion.state === 'ACKNOWLEDGED'
+        ? [...completion.journal].reverse().find((journalEntry) => (
+            journalEntry.kind === 'ACK' && journalEntry.code === 'SERVER_ACK'
+          ))?.at ?? null
+        : null;
+      return {
+        finishPending: acknowledgedAt === null,
+        lastAcknowledgedAt: acknowledgedAt,
+        locallyFinished: true,
+      };
+    },
     getRouteCompletionTelemetry: (routePlanId) => {
       const completion = activeItems()
         .filter((item): item is OfflineDriverEventQueueItem => (
@@ -716,6 +739,8 @@ export async function recoverPendingRouteEndReceipt(input: {
   attemptTimeoutMs?: number;
   cancelAttemptTimeout?: (handle: unknown) => void;
   driverEventReceiptService: DriverEventReceiptService;
+  isCurrent?: () => boolean;
+  lifecycleSignal?: AbortSignal;
   queue: OfflineSubmissionQueue;
   routePlanId: string;
   scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
@@ -727,26 +752,31 @@ export async function recoverPendingRouteEndReceipt(input: {
   ));
   if (item === undefined) return 'none';
 
-  const receipt = await runBoundedAsyncOperation(() => input.driverEventReceiptService.lookupReceipt({
+  const isCurrent = () => input.lifecycleSignal?.aborted !== true && input.isCurrent?.() !== false;
+  if (!isCurrent()) return 'pending';
+  const receipt = await runBoundedAsyncOperation((signal) => input.driverEventReceiptService.lookupReceipt({
     clientEventId: item.event.clientEventId,
     routePlanId: input.routePlanId,
-  }), {
+  }, { signal }), {
     ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+    ...(input.lifecycleSignal === undefined ? {} : { signal: input.lifecycleSignal }),
     ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
     timeoutMs: input.attemptTimeoutMs ?? 15_000,
   }).catch((error: unknown) => {
     if (!(error instanceof BoundedOperationTimeoutError)) throw error;
-    input.queue.recordRetryFailure(item.queueItemId, OPERATION_TIMEOUT_CODE);
+    if (isCurrent()) input.queue.recordRetryFailure(item.queueItemId, OPERATION_TIMEOUT_CODE);
     return null;
   });
-  if (receipt === null) return 'pending';
+  if (receipt === null || !isCurrent()) return 'pending';
   const resolution = resolveCompletionReceipt(item.event, receipt);
   if (resolution.kind === 'retry') return 'pending';
   if (resolution.kind === 'reconcile') {
+    if (!isCurrent()) return 'pending';
     input.queue.blockRouteSubmissionsForReconciliation(input.routePlanId);
     return 'reconciliation';
   }
 
+  if (!isCurrent()) return 'pending';
   input.queue.acknowledge(item.queueItemId);
   input.queue.discardRouteSubmissions(input.routePlanId);
   return 'acknowledged';
@@ -757,6 +787,8 @@ export async function retryOfflineSubmissions(input: {
   cancelAttemptTimeout?: (handle: unknown) => void;
   driverEventReceiptService?: DriverEventReceiptService;
   driverEventService: DriverEventService;
+  isCurrent?: () => boolean;
+  lifecycleSignal?: AbortSignal;
   now?: () => Date;
   proofMediaUploadService: ProofMediaUploadService;
   queue: OfflineSubmissionQueue;
@@ -788,13 +820,16 @@ export async function retryOfflineSubmissions(input: {
   const completionAcknowledgedRoutePlanIds = new Set<string>();
   const reconciliationRoutePlanIds = new Set<string>();
   const serverConfirmedStopIds = new Set<string>();
+  const isCurrent = () => input.lifecycleSignal?.aborted !== true && input.isCurrent?.() !== false;
   const runAttempt = <T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> => runBoundedAsyncOperation(operation, {
     ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+    ...(input.lifecycleSignal === undefined ? {} : { signal: input.lifecycleSignal }),
     ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
     timeoutMs: input.attemptTimeoutMs ?? 15_000,
   });
 
   for (const item of pending) {
+    if (!isCurrent()) break;
     const routePlanId = getQueueItemRoutePlanId(item);
     if (routePlanId !== undefined && workflowBlockedRoutePlanIds.has(routePlanId) && isOrderedWorkflowEvidence(item)) {
       continue;
@@ -831,10 +866,11 @@ export async function retryOfflineSubmissions(input: {
           && input.driverEventReceiptService !== undefined
         ) {
           const receiptRoutePlanId = item.event.routePlanId;
-          const receipt = await runAttempt(() => input.driverEventReceiptService!.lookupReceipt({
+          const receipt = await runAttempt((signal) => input.driverEventReceiptService!.lookupReceipt({
             clientEventId: item.event.clientEventId,
             routePlanId: receiptRoutePlanId,
-          }));
+          }, { signal }));
+          if (!isCurrent()) break;
           const resolution = resolveCompletionReceipt(item.event, receipt);
           if (resolution.kind === 'reconcile') {
             const recovery = input.queue.blockRouteSubmissionsForReconciliation(item.event.routePlanId);
@@ -852,7 +888,8 @@ export async function retryOfflineSubmissions(input: {
             continue;
           }
         }
-        await runAttempt(() => input.driverEventService.recordDriverEvent(item.event));
+        await runAttempt((signal) => input.driverEventService.recordDriverEvent(item.event, { signal }));
+        if (!isCurrent()) break;
         if (item.event.eventType === 'PICKUP_COMPLETED') {
           requiresRouteLookup = true;
           routeLookupReason = 'pickup_eta_snapshot_synced';
@@ -863,6 +900,7 @@ export async function retryOfflineSubmissions(input: {
           signal,
         }));
       }
+      if (!isCurrent()) break;
       input.queue.acknowledge(item.queueItemId);
       succeeded += 1;
       if (item.kind === 'driver_event' && isTerminalStopDriverEvent(item) && item.event.deliveryStopId != null) {
@@ -879,6 +917,7 @@ export async function retryOfflineSubmissions(input: {
         discarded += input.queue.discardRouteSubmissions(item.event.routePlanId);
       }
     } catch (error) {
+      if (!isCurrent()) break;
       if (
         routePlanId !== undefined
         && getDriverApiRequiresRouteReconciliation(error) === true
