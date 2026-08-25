@@ -3,11 +3,15 @@ import { describe, it } from 'node:test';
 
 import {
   attemptDriverCompletionClearHeartbeat,
+  createDriverSyncHeartbeatRateLimiter,
   createDriverSyncHeartbeatApiClient,
   createDriverSyncHeartbeatScheduler,
+  createRateLimitedDriverSyncHeartbeatService,
   createDriverSyncTakeoverApiClient,
   deliverDriverCompletionClearHeartbeat,
   DriverSyncHeartbeatHttpError,
+  DriverSyncHeartbeatRateLimitError,
+  flushDriverCompletionClearOutboxRoutes,
   projectDriverSyncHeartbeatForEpoch,
   projectLatestDriverSyncHeartbeat,
 } from './driverSyncHeartbeat';
@@ -193,7 +197,7 @@ describe('driver sync heartbeat', () => {
     first.start();
     first.requestImmediate();
     assert.equal(calls, 0);
-    const carry = first.stop();
+    const carry = first.stop({ carryImmediate: true });
     assert.equal(carry, true);
 
     const second = createDriverSyncHeartbeatScheduler(input);
@@ -265,8 +269,9 @@ describe('driver sync heartbeat', () => {
     scheduler.start();
     scheduler.requestImmediate();
     assert.equal(observedSignals[0]?.aborted, false);
-    assert.equal(scheduler.stop(), true);
+    assert.equal(scheduler.stop(), false);
     assert.equal(observedSignals[0]?.aborted, true);
+    assert.equal(scheduler.stop({ carryImmediate: true }), false);
   });
 
   it('coalesces duplicate immediate requests while one heartbeat is running', async () => {
@@ -383,6 +388,118 @@ describe('driver sync heartbeat', () => {
     assert.equal(signal instanceof AbortSignal, true);
     assert.equal(accepted.observed, true);
     assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), []);
+  });
+
+  it('bounds a hung delivered-marker persistence without losing accepted evidence or closing the outbox', async () => {
+    const routePlanId = '11111111-1111-4111-8111-111111111111';
+    const baseQueue = createInMemoryOfflineSubmissionQueue();
+    const item = baseQueue.enqueueDriverEvent({
+      clientEventId: 'accepted-persist-hang', eventType: 'ROUTE_COMPLETED', occurredAt: new Date(), routePlanId,
+    });
+    baseQueue.acknowledge(item.queueItemId);
+    const queue = { ...baseQueue, whenPersisted: () => new Promise<void>(() => undefined) };
+    const expirations: (() => void)[] = [];
+    const attempt = attemptDriverCompletionClearHeartbeat({
+      appVersion: '1.2.0', attemptTimeoutMs: 10, cancelAttemptTimeout: () => undefined,
+      completedStopCount: null, driverContractVersion: 2,
+      heartbeatService: { recordHeartbeat: async () => ({
+        accepted: true, conflict: false, heartbeatSequence: 3, state: 'HEALTHY',
+      }) },
+      identityService: { next: async () => ({
+        deviceInstanceHash: 'a'.repeat(64), heartbeatSequence: 3, sessionGeneration: 'generation',
+      }) },
+      queue, routePlanId,
+      scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+      sessionKey: 'account:route:generation', versionCode: 18,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expirations.shift()?.();
+    const outcome = await attempt;
+    assert.equal(outcome.observed, false);
+    assert.deepEqual(outcome.result, {
+      accepted: true, conflict: false, heartbeatSequence: 3, state: 'HEALTHY',
+    });
+    assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), [routePlanId]);
+  });
+
+  it('aborts ACK-clear identity and transport work on logout while preserving the account outbox', async () => {
+    const routePlanId = '11111111-1111-4111-8111-111111111111';
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const item = queue.enqueueDriverEvent({
+      clientEventId: 'logout-abort', eventType: 'ROUTE_COMPLETED', occurredAt: new Date(), routePlanId,
+    });
+    queue.acknowledge(item.queueItemId);
+    const lifecycle = new AbortController();
+    const attempt = attemptDriverCompletionClearHeartbeat({
+      appVersion: '1.2.0', completedStopCount: null, driverContractVersion: 2,
+      heartbeatService: { recordHeartbeat: () => new Promise(() => undefined) },
+      identityService: { next: async () => ({
+        deviceInstanceHash: 'a'.repeat(64), heartbeatSequence: 1, sessionGeneration: 'generation-a',
+      }) },
+      lifecycleSignal: lifecycle.signal,
+      queue, routePlanId, sessionKey: 'account-a:route:generation', versionCode: 18,
+    });
+    lifecycle.abort();
+    assert.equal((await attempt).observed, false);
+    assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), [routePlanId]);
+  });
+
+  it('fairly attempts route B when route A access is missing and rotates the next start', async () => {
+    const delivered: string[] = [];
+    const result = await flushDriverCompletionClearOutboxRoutes({
+      deliver: async (routePlanId) => { delivered.push(routePlanId); return true; },
+      resolveAccess: async (routePlanId) => routePlanId === 'route-b',
+      routePlanIds: ['route-a', 'route-b'],
+      startIndex: 0,
+    });
+    assert.deepEqual(delivered, ['route-b']);
+    assert.deepEqual(result, { delivered: 1, nextIndex: 1 });
+  });
+
+  it('delivers route B without waiting for a hung route-A token recovery lane', async () => {
+    const delivered: string[] = [];
+    const expirations: (() => void)[] = [];
+    const flush = flushDriverCompletionClearOutboxRoutes({
+      attemptTimeoutMs: 10,
+      cancelAttemptTimeout: () => undefined,
+      deliver: async (routePlanId) => { delivered.push(routePlanId); return true; },
+      resolveAccess: (routePlanId) => routePlanId === 'route-a'
+        ? new Promise(() => undefined)
+        : Promise.resolve(true),
+      routePlanIds: ['route-a', 'route-b'],
+      scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
+      startIndex: 0,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(delivered, ['route-b']);
+    expirations[0]?.();
+    assert.deepEqual(await flush, { delivered: 1, nextIndex: 1 });
+  });
+
+  it('hard-limits combined periodic, pending, and ACK-clear writes to two per route per minute', async () => {
+    let now = 1_000_000;
+    let writes = 0;
+    const limiter = createDriverSyncHeartbeatRateLimiter({ now: () => now });
+    const raw = { recordHeartbeat: async () => {
+      writes += 1;
+      return { accepted: true, conflict: false, heartbeatSequence: writes, state: 'HEALTHY' as const };
+    } };
+    const periodic = createRateLimitedDriverSyncHeartbeatService({ limiter, routePlanId: 'route-a', service: raw });
+    const pending = createRateLimitedDriverSyncHeartbeatService({ limiter, routePlanId: 'route-a', service: raw });
+    const acknowledged = createRateLimitedDriverSyncHeartbeatService({ limiter, routePlanId: 'route-a', service: raw });
+    await periodic.recordHeartbeat(request);
+    await pending.recordHeartbeat(request);
+    await assert.rejects(
+      async () => acknowledged.recordHeartbeat(request),
+      DriverSyncHeartbeatRateLimitError,
+    );
+    assert.equal(writes, 2);
+    const otherRoute = createRateLimitedDriverSyncHeartbeatService({ limiter, routePlanId: 'route-b', service: raw });
+    await otherRoute.recordHeartbeat(request);
+    assert.equal(writes, 3);
+    now += 60_001;
+    await acknowledged.recordHeartbeat(request);
+    assert.equal(writes, 4);
   });
 
   it('refreshes a 401 route token once and closes the outbox only after the refreshed observation', async () => {

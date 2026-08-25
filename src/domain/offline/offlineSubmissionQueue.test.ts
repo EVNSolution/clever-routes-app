@@ -1794,7 +1794,8 @@ describe('offline submission queue', () => {
     const routePlanId = 'route-kitchener';
     const first = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: ownerA, storage });
     const completion = first.enqueueDriverEvent({
-      clientEventId: 'completion-clear-outbox', eventType: 'ROUTE_COMPLETED',
+      assignmentGeneration: '11', clientEventId: 'completion-clear-outbox', driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED',
       occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId,
     });
     first.acknowledge(completion.queueItemId);
@@ -1802,6 +1803,9 @@ describe('offline submission queue', () => {
 
     const restarted = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: ownerA, storage });
     assert.deepEqual(restarted.listPendingCompletionClearRoutePlanIds(), [routePlanId]);
+    assert.deepEqual(restarted.listPendingCompletionClearEntries(), [{
+      assignmentGeneration: '11', driverContractVersion: 2, routePlanId,
+    }]);
     restarted.bindAccountOwnerHash(ownerB);
     assert.deepEqual(restarted.listPendingCompletionClearRoutePlanIds(), []);
     restarted.bindAccountOwnerHash(ownerA);

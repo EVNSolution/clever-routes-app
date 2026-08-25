@@ -121,11 +121,16 @@ import {
   shouldRetryOfflineSubmissionsAfterNetworkChange,
 } from '../domain/offline/offlineRetryTrigger';
 import { createOfflineRetryScheduler } from '../domain/offline/offlineRetryScheduler';
+import { runBoundedAsyncOperation } from '../domain/async/boundedAsyncOperation';
 import { classifyGpsOperationalState } from '../domain/location/gpsOperationalState';
 import {
+  combineDriverSyncAbortSignals,
   createDriverSyncHeartbeatApiClient,
+  createDriverSyncHeartbeatRateLimiter,
   createDriverSyncHeartbeatScheduler,
+  createRateLimitedDriverSyncHeartbeatService,
   deliverDriverCompletionClearHeartbeat,
+  flushDriverCompletionClearOutboxRoutes,
   createDriverSyncTakeoverApiClient,
   DriverSyncHeartbeatHttpError,
   projectDriverSyncHeartbeatForEpoch,
@@ -432,7 +437,10 @@ function DriverApp() {
   const isRetryingOfflineSubmissionsRef = useRef(false);
   const driverSyncHeartbeatSchedulerRef = useRef<ReturnType<typeof createDriverSyncHeartbeatScheduler> | null>(null);
   const driverSyncAccountEpochRef = useRef(0);
+  const driverSyncLifecycleAbortControllerRef = useRef(new AbortController());
+  const driverSyncRateLimiterRef = useRef(createDriverSyncHeartbeatRateLimiter());
   const driverSyncRouteEpochRef = useRef<string | null>(null);
+  const completionClearOutboxCursorRef = useRef(0);
   const pendingImmediateDriverSyncHeartbeatRef = useRef(false);
   const isRecoveringOfflineStorageRef = useRef(false);
   const previousNetworkReachabilityRef = useRef(networkReachability);
@@ -711,7 +719,8 @@ function DriverApp() {
     driverContractVersion: number | undefined;
     phoneE164: string;
     queue: OfflineSubmissionQueue;
-    refreshAccessToken?: () => Promise<string | null>;
+    lifecycleSignal?: AbortSignal;
+    refreshAccessToken?: (signal: AbortSignal) => Promise<string | null>;
     routePlanId: string;
   }): Promise<boolean> => {
     if (
@@ -722,29 +731,42 @@ function DriverApp() {
       || input.driverContractVersion !== 2
     ) return false;
     const requestEpoch = driverSyncAccountEpochRef.current;
+    const lifecycleSignal = combineDriverSyncAbortSignals([
+      driverSyncLifecycleAbortControllerRef.current.signal,
+      input.lifecycleSignal,
+    ]);
     const sessionKey = [input.phoneE164, input.routePlanId, input.assignmentGeneration].join(':');
     const outcome = await deliverDriverCompletionClearHeartbeat({
       attempt: {
         appVersion: installedDriverAppVersion.versionName,
         completedStopCount: input.completedStopCount,
         driverContractVersion: 2,
-        heartbeatService: createDriverSyncHeartbeatApiClient({
-          accessToken: input.accessToken,
-          baseUrl: runtimeConfig.deliveryServerBaseUrl,
+        heartbeatService: createRateLimitedDriverSyncHeartbeatService({
+          limiter: driverSyncRateLimiterRef.current,
+          routePlanId: input.routePlanId,
+          service: createDriverSyncHeartbeatApiClient({
+            accessToken: input.accessToken,
+            baseUrl: runtimeConfig.deliveryServerBaseUrl,
+          }),
         }),
         identityService: getExpoDriverSyncIdentity(),
         isAttemptCurrent: () => requestEpoch === driverSyncAccountEpochRef.current,
+        lifecycleSignal,
         queue: input.queue,
         routePlanId: input.routePlanId,
         sessionKey,
         versionCode: installedDriverAppVersion.versionCode,
       },
       ...(input.refreshAccessToken === undefined ? {} : {
-        refreshHeartbeatService: async () => {
-          const accessToken = await input.refreshAccessToken!();
-          return accessToken === null ? null : createDriverSyncHeartbeatApiClient({
-            accessToken,
-            baseUrl: runtimeConfig.deliveryServerBaseUrl,
+        refreshHeartbeatService: async (signal) => {
+          const accessToken = await input.refreshAccessToken!(signal);
+          return accessToken === null ? null : createRateLimitedDriverSyncHeartbeatService({
+            limiter: driverSyncRateLimiterRef.current,
+            routePlanId: input.routePlanId,
+            service: createDriverSyncHeartbeatApiClient({
+              accessToken,
+              baseUrl: runtimeConfig.deliveryServerBaseUrl,
+            }),
           });
         },
       }),
@@ -983,13 +1005,14 @@ function DriverApp() {
 
   const refreshRouteAccessLookupForSubmission = useCallback(async (
     routePlanId: string,
-    options?: { preserveMissingRoute?: boolean },
+    options?: { isCurrent?: () => boolean; preserveMissingRoute?: boolean },
   ): Promise<DriverAccessToken | null> => {
     if (runtimeConfig.mode !== 'live') {
       return null;
     }
 
     try {
+      if (options?.isCurrent?.() === false) return null;
       const accountAccess = await getActiveAccountAccess();
       if (accountAccess === null) {
         return null;
@@ -997,6 +1020,7 @@ function DriverApp() {
       const lookupResult = await submitRouteAccess({
         accountAccessToken: accountAccess.accessToken,
       }, routeAccessService);
+      if (options?.isCurrent?.() === false) return null;
       if (lookupResult.kind !== 'company_guidance' && lookupResult.kind !== 'route_choices') {
         if (lookupResult.kind === 'denied' && lookupResult.status === 'NOT_FOUND') {
           if (options?.preserveMissingRoute === true) return null;
@@ -1060,36 +1084,115 @@ function DriverApp() {
 
   const flushCompletionClearOutbox = useCallback(async (): Promise<boolean> => {
     if (runtimeConfig.mode !== 'live' || networkReachability !== 'online') return false;
-    const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
-    const pendingRoutePlanIds = queue.listPendingCompletionClearRoutePlanIds();
-    if (pendingRoutePlanIds.length === 0) return true;
-    const persistedAccess = await driverAccessTokenStore.loadActiveDriverAccess();
-    if (persistedAccess.kind !== 'active' && persistedAccess.kind !== 'refresh_required') return false;
-    const routePlanId = pendingRoutePlanIds[0]!;
+    const requestEpoch = driverSyncAccountEpochRef.current;
+    const lifecycleSignal = driverSyncLifecycleAbortControllerRef.current.signal;
+    let queue: OfflineSubmissionQueue;
+    try {
+      queue = await runBoundedAsyncOperation(
+        async () => offlineSubmissionQueue ?? getExpoOfflineSubmissionQueue(),
+        { signal: lifecycleSignal, timeoutMs: 15_000 },
+      );
+    } catch {
+      return false;
+    }
+    const pendingEntries = queue.listPendingCompletionClearEntries();
+    if (pendingEntries.length === 0) return true;
+    let persistedAccess: Awaited<ReturnType<typeof driverAccessTokenStore.loadActiveDriverAccess>>;
+    try {
+      persistedAccess = await runBoundedAsyncOperation(
+        async () => driverAccessTokenStore.loadActiveDriverAccess(),
+        { signal: lifecycleSignal, timeoutMs: 15_000 },
+      );
+    } catch {
+      return false;
+    }
+    const isCurrent = () => !lifecycleSignal.aborted
+      && requestEpoch === driverSyncAccountEpochRef.current;
+    if (!isCurrent()) return false;
+    const accessByRoute = new Map<string, {
+      accessToken: string;
+      assignmentGeneration: string;
+      driverContractVersion: number;
+      phoneE164: string;
+    }>();
+    const phoneE164 = persistedAccess.kind === 'active' || persistedAccess.kind === 'refresh_required'
+      ? persistedAccess.driverProfile.phoneE164
+      : verifiedDriverPhoneE164 ?? 'authenticated';
+    for (const session of routeSessions) {
+      accessByRoute.set(session.route.id, {
+        accessToken: session.driverAccess.accessToken,
+        assignmentGeneration: session.routeAccess.assignmentGeneration,
+        driverContractVersion: session.routeAccess.driverContractVersion,
+        phoneE164,
+      });
+    }
     if (
-      persistedAccess.driverAccess === undefined
-      || persistedAccess.routeAccess?.routePlanId !== routePlanId
-      || persistedAccess.routeAccess.driverContractVersion !== 2
-    ) return false;
-    return sendCompletionAcknowledgedHeartbeatBeforeCleanup({
-      accessToken: persistedAccess.driverAccess.accessToken,
-      assignmentGeneration: persistedAccess.routeAccess.assignmentGeneration,
-      completedStopCount: null,
-      driverContractVersion: 2,
-      phoneE164: persistedAccess.driverProfile.phoneE164,
-      queue,
-      refreshAccessToken: async () => (
-        await refreshRouteAccessLookupForSubmission(routePlanId, { preserveMissingRoute: true })
-      )?.accessToken ?? null,
-      routePlanId,
+      (persistedAccess.kind === 'active' || persistedAccess.kind === 'refresh_required')
+      && persistedAccess.driverAccess !== undefined
+      && persistedAccess.routeAccess !== undefined
+      && !accessByRoute.has(persistedAccess.routeAccess.routePlanId)
+    ) {
+      accessByRoute.set(persistedAccess.routeAccess.routePlanId, {
+        accessToken: persistedAccess.driverAccess.accessToken,
+        assignmentGeneration: persistedAccess.routeAccess.assignmentGeneration,
+        driverContractVersion: persistedAccess.routeAccess.driverContractVersion,
+        phoneE164: persistedAccess.driverProfile.phoneE164,
+      });
+    }
+    const flushResult = await flushDriverCompletionClearOutboxRoutes({
+      deliver: async (routePlanId, signal) => {
+        if (!isCurrent()) return false;
+        const access = accessByRoute.get(routePlanId);
+        if (access === undefined) return false;
+        return sendCompletionAcknowledgedHeartbeatBeforeCleanup({
+          ...access,
+          completedStopCount: null,
+          lifecycleSignal: signal,
+          queue,
+          refreshAccessToken: async (refreshSignal) => (
+            await refreshRouteAccessLookupForSubmission(routePlanId, {
+              isCurrent: () => !refreshSignal.aborted,
+              preserveMissingRoute: true,
+            })
+          )?.accessToken ?? null,
+          routePlanId,
+        });
+      },
+      lifecycleSignal,
+      resolveAccess: async (routePlanId, signal) => {
+        if (!isCurrent()) return false;
+        if (accessByRoute.has(routePlanId)) return true;
+        const outboxEntry = pendingEntries.find((entry) => entry.routePlanId === routePlanId);
+        if (outboxEntry?.assignmentGeneration === null || outboxEntry?.driverContractVersion !== 2) return false;
+        const refreshedAccess = await refreshRouteAccessLookupForSubmission(
+          routePlanId,
+          { isCurrent: () => !signal.aborted && isCurrent(), preserveMissingRoute: true },
+        );
+        if (refreshedAccess === null) return false;
+        accessByRoute.set(routePlanId, {
+          accessToken: refreshedAccess.accessToken,
+          assignmentGeneration: outboxEntry.assignmentGeneration,
+          driverContractVersion: outboxEntry.driverContractVersion,
+          phoneE164,
+        });
+        return true;
+      },
+      routePlanIds: pendingEntries.map((entry) => entry.routePlanId),
+      startIndex: completionClearOutboxCursorRef.current,
     });
+    completionClearOutboxCursorRef.current = flushResult.nextIndex;
+    syncOfflineQueueState(queue);
+    return queue.listPendingCompletionClearRoutePlanIds().length === 0;
   }, [
     driverAccessTokenStore,
     networkReachability,
     offlineSubmissionQueue,
     refreshRouteAccessLookupForSubmission,
+    routeSessions,
     runtimeConfig.mode,
     sendCompletionAcknowledgedHeartbeatBeforeCleanup,
+    syncOfflineQueueState,
+    verifiedDriverPhoneE164,
   ]);
 
   const retryOfflineSubmissionsForSessions = useCallback(async (sessions: RouteSession[]): Promise<boolean> => {
@@ -1151,8 +1254,11 @@ function DriverApp() {
             driverContractVersion: routeSubmission.routeAccess.driverContractVersion,
             phoneE164: verifiedDriverPhoneE164 ?? 'authenticated',
             queue,
-            refreshAccessToken: async () => (
-              await refreshRouteAccessLookupForSubmission(session.route.id, { preserveMissingRoute: true })
+            refreshAccessToken: async (signal) => (
+              await refreshRouteAccessLookupForSubmission(session.route.id, {
+                isCurrent: () => !signal.aborted,
+                preserveMissingRoute: true,
+              })
             )?.accessToken ?? null,
             routePlanId: session.route.id,
           });
@@ -1999,6 +2105,8 @@ function DriverApp() {
     phoneE164: string,
     options: RouteLoadOptions = {},
   ) => {
+    driverSyncLifecycleAbortControllerRef.current.abort();
+    driverSyncLifecycleAbortControllerRef.current = new AbortController();
     driverSyncAccountEpochRef.current += 1;
     setDriverSyncHealth(null);
     const allowVerifiedDriverNoRoute = options.allowVerifiedDriverNoRoute ?? false;
@@ -2044,8 +2152,11 @@ function DriverApp() {
                   driverContractVersion: identity.routeAccess?.driverContractVersion,
                   phoneE164,
                   queue: accountQueue,
-                  refreshAccessToken: async () => (
-                    await refreshRouteAccessLookupForSubmission(routePlanId, { preserveMissingRoute: true })
+                  refreshAccessToken: async (signal) => (
+                    await refreshRouteAccessLookupForSubmission(routePlanId, {
+                      isCurrent: () => !signal.aborted,
+                      preserveMissingRoute: true,
+                    })
                   )?.accessToken ?? null,
                   routePlanId,
                 });
@@ -2811,8 +2922,11 @@ function DriverApp() {
           driverContractVersion: completionPendingRestoreIdentity?.routeAccess?.driverContractVersion,
           phoneE164: verifiedDriverPhoneE164 ?? 'authenticated',
           queue,
-          refreshAccessToken: async () => (
-            await refreshRouteAccessLookupForSubmission(routePlanId, { preserveMissingRoute: true })
+          refreshAccessToken: async (signal) => (
+            await refreshRouteAccessLookupForSubmission(routePlanId, {
+              isCurrent: () => !signal.aborted,
+              preserveMissingRoute: true,
+            })
           )?.accessToken ?? null,
           routePlanId,
         });
@@ -2874,6 +2988,7 @@ function DriverApp() {
   const sendDriverSyncHeartbeat = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
     if (runtimeConfig.mode !== 'live' || installedDriverAppVersion === null || activeRoutePlanId === null) return true;
     const requestEpoch = driverSyncAccountEpochRef.current;
+    const requestSignal = signal ?? driverSyncLifecycleAbortControllerRef.current.signal;
     const routeSession = routeSessions.find((session) => session.route.id === activeRoutePlanId);
     const reducedIdentity = routeSession === undefined
       && completionPendingRestoreIdentity?.activeRouteSession.routePlanId === activeRoutePlanId
@@ -2909,8 +3024,11 @@ function DriverApp() {
     };
     let accessToken = routeSubmission?.driverAccess.accessToken ?? reducedIdentity!.driverAccess.accessToken;
     try {
-      const result = await createDriverSyncHeartbeatApiClient({ accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl })
-        .recordHeartbeat(request, { signal });
+      const result = await createRateLimitedDriverSyncHeartbeatService({
+        limiter: driverSyncRateLimiterRef.current,
+        routePlanId: activeRoutePlanId,
+        service: createDriverSyncHeartbeatApiClient({ accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl }),
+      }).recordHeartbeat(request, { signal: requestSignal });
       setDriverSyncHealth((current) => projectDriverSyncHeartbeatForEpoch(
         current, result, requestEpoch, driverSyncAccountEpochRef.current,
       ));
@@ -2918,11 +3036,17 @@ function DriverApp() {
     } catch (error) {
       if (!(error instanceof DriverSyncHeartbeatHttpError) || error.status !== 401) throw error;
       if (routeSubmission === null) return false;
-      const refreshed = await refreshDriverAccessForSubmission(routeSubmission);
+      const refreshed = await refreshRouteAccessLookupForSubmission(activeRoutePlanId, {
+        isCurrent: () => !requestSignal.aborted
+          && requestEpoch === driverSyncAccountEpochRef.current,
+      });
       if (refreshed === null) return false;
       accessToken = refreshed.accessToken;
-      const result = await createDriverSyncHeartbeatApiClient({ accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl })
-        .recordHeartbeat(request, { signal });
+      const result = await createRateLimitedDriverSyncHeartbeatService({
+        limiter: driverSyncRateLimiterRef.current,
+        routePlanId: activeRoutePlanId,
+        service: createDriverSyncHeartbeatApiClient({ accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl }),
+      }).recordHeartbeat(request, { signal: requestSignal });
       setDriverSyncHealth((current) => projectDriverSyncHeartbeatForEpoch(
         current, result, requestEpoch, driverSyncAccountEpochRef.current,
       ));
@@ -2935,7 +3059,7 @@ function DriverApp() {
     currentStop?.sequence,
     installedDriverAppVersion,
     offlineSubmissionQueue,
-    refreshDriverAccessForSubmission,
+    refreshRouteAccessLookupForSubmission,
     routeSessions,
     runtimeConfig,
     verifiedDriverPhoneE164,
@@ -2992,7 +3116,7 @@ function DriverApp() {
     scheduler.start();
     return () => {
       subscription.remove();
-      pendingImmediateDriverSyncHeartbeatRef.current = scheduler.stop()
+      pendingImmediateDriverSyncHeartbeatRef.current = scheduler.stop({ carryImmediate: true })
         || pendingImmediateDriverSyncHeartbeatRef.current;
       if (driverSyncHeartbeatSchedulerRef.current === scheduler) {
         driverSyncHeartbeatSchedulerRef.current = null;
@@ -4209,7 +4333,7 @@ function DriverApp() {
         ...(options?.eventPayload === undefined ? {} : { eventPayload: options.eventPayload }),
         ...(options?.now === undefined ? {} : { now: options.now }),
         offlineQueue: queue,
-        onServerAcknowledged: async (routePlanId) => {
+        onServerAcknowledged: async (routePlanId, signal) => {
           if (completionSubmission === undefined) return;
           await sendCompletionAcknowledgedHeartbeatBeforeCleanup({
             accessToken: completionSubmission.driverAccess.accessToken,
@@ -4217,9 +4341,13 @@ function DriverApp() {
             completedStopCount: completedStopIds.length,
             driverContractVersion: completionSubmission.routeAccess.driverContractVersion,
             phoneE164: verifiedDriverPhoneE164 ?? 'authenticated',
+            lifecycleSignal: signal,
             queue,
-            refreshAccessToken: async () => (
-              await refreshRouteAccessLookupForSubmission(routePlanId, { preserveMissingRoute: true })
+            refreshAccessToken: async (signal) => (
+              await refreshRouteAccessLookupForSubmission(routePlanId, {
+                isCurrent: () => !signal.aborted,
+                preserveMissingRoute: true,
+              })
             )?.accessToken ?? null,
             routePlanId,
           });
@@ -4372,6 +4500,9 @@ function DriverApp() {
   }
 
   async function handleLogout() {
+    driverSyncLifecycleAbortControllerRef.current.abort();
+    driverSyncHeartbeatSchedulerRef.current?.stop();
+    driverSyncHeartbeatSchedulerRef.current = null;
     driverSyncAccountEpochRef.current += 1;
     pendingImmediateDriverSyncHeartbeatRef.current = false;
     setDriverSyncHealth(null);

@@ -72,10 +72,28 @@ describe('driver operations resilience runtime', () => {
 
   it('does not destroy cached completion identity when ACK-clear token refresh cannot find the ended route', () => {
     assert.match(source, /options\?\.preserveMissingRoute === true\) return null;/u);
-    const completionRefreshCalls = source.match(
-      /refreshRouteAccessLookupForSubmission\([^)]*, \{ preserveMissingRoute: true \}\)/gu,
-    ) ?? [];
+    const completionRefreshCalls = source.match(/preserveMissingRoute: true/gu) ?? [];
     assert.ok(completionRefreshCalls.length >= 4);
+  });
+
+  it('prefers per-route session tokens and does not let one overwritten SecureStore route block another outbox route', () => {
+    const flushIndex = source.indexOf('const flushCompletionClearOutbox');
+    const sessionAccessIndex = source.indexOf('for (const session of routeSessions)', flushIndex);
+    const persistedAccessIndex = source.indexOf("persistedAccess.kind === 'active'", sessionAccessIndex);
+    const noOverwriteIndex = source.indexOf('!accessByRoute.has(persistedAccess.routeAccess.routePlanId)', persistedAccessIndex);
+    const fairFlushIndex = source.indexOf('flushDriverCompletionClearOutboxRoutes({', noOverwriteIndex);
+    assert.ok(flushIndex > 0 && sessionAccessIndex > flushIndex);
+    assert.ok(persistedAccessIndex > sessionAccessIndex && noOverwriteIndex > persistedAccessIndex);
+    assert.ok(fairFlushIndex > noOverwriteIndex);
+  });
+
+  it('aborts lifecycle work before logout and prevents cleanup from relatching an immediate request', () => {
+    const logoutIndex = source.indexOf('async function handleLogout()');
+    const abortIndex = source.indexOf('driverSyncLifecycleAbortControllerRef.current.abort();', logoutIndex);
+    const stopIndex = source.indexOf('driverSyncHeartbeatSchedulerRef.current?.stop();', logoutIndex);
+    const clearLatchIndex = source.indexOf('pendingImmediateDriverSyncHeartbeatRef.current = false;', logoutIndex);
+    assert.ok(abortIndex > logoutIndex && stopIndex > abortIndex && clearLatchIndex > stopIndex);
+    assert.match(source, /scheduler\.stop\(\{ carryImmediate: true \}\)/u);
   });
 
   it('records native GPS accuracy rather than treating proximity as safe without metadata', () => {

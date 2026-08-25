@@ -105,6 +105,7 @@ export type DriverCompletionClearHeartbeatAttempt = {
   heartbeatService: DriverSyncHeartbeatService;
   identityService: DriverSyncIdentityService;
   isAttemptCurrent?: () => boolean;
+  lifecycleSignal?: AbortSignal;
   queue: OfflineSubmissionQueue;
   routePlanId: string;
   scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
@@ -129,10 +130,12 @@ export async function attemptDriverCompletionClearHeartbeat(
   ) {
     return { failure: 'not_pending', observed: false, result: null };
   }
+  let deliveredMarkerWritten = false;
+  let serverResult: DriverSyncHeartbeatResult | null = null;
   try {
     const result = await runBoundedAsyncOperation(async (signal) => {
       const identity = await input.identityService.next(input.sessionKey);
-      return input.heartbeatService.recordHeartbeat({
+      const heartbeatResult = await input.heartbeatService.recordHeartbeat({
         ...queueProjection,
         appVersion: input.appVersion,
         clientOccurredAt: new Date().toISOString(),
@@ -145,9 +148,17 @@ export async function attemptDriverCompletionClearHeartbeat(
         totalStopCount: null,
         versionCode: input.versionCode,
       }, { signal });
+      serverResult = heartbeatResult;
+      if (input.isAttemptCurrent?.() === false) return heartbeatResult;
+      if (!heartbeatResult.accepted || heartbeatResult.conflict) return heartbeatResult;
+      if (!input.queue.markRouteCompletionClearHeartbeatDelivered(input.routePlanId)) return heartbeatResult;
+      deliveredMarkerWritten = true;
+      await input.queue.whenPersisted();
+      return heartbeatResult;
     }, {
       ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
       ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
+      ...(input.lifecycleSignal === undefined ? {} : { signal: input.lifecycleSignal }),
       timeoutMs: input.attemptTimeoutMs ?? 15_000,
     });
     if (input.isAttemptCurrent?.() === false) {
@@ -156,16 +167,16 @@ export async function attemptDriverCompletionClearHeartbeat(
     if (!result.accepted || result.conflict) {
       return { failure: result.conflict ? 'conflict' : 'failed', observed: false, result };
     }
-    if (!input.queue.markRouteCompletionClearHeartbeatDelivered(input.routePlanId)) {
+    if (!deliveredMarkerWritten) {
       return { failure: 'failed', observed: false, result };
     }
-    await input.queue.whenPersisted();
     return { failure: null, observed: true, result };
   } catch (error) {
+    if (deliveredMarkerWritten) input.queue.reopenRouteCompletionClearHeartbeat(input.routePlanId);
     return {
       failure: error instanceof DriverSyncHeartbeatHttpError && error.status === 401 ? 'unauthorized' : 'failed',
       observed: false,
-      result: null,
+      result: serverResult,
     };
   }
 }
@@ -181,6 +192,7 @@ export async function deliverDriverCompletionClearHeartbeat(input: {
     refreshedService = await runBoundedAsyncOperation(input.refreshHeartbeatService, {
       ...(input.attempt.cancelAttemptTimeout === undefined ? {} : { cancel: input.attempt.cancelAttemptTimeout }),
       ...(input.attempt.scheduleAttemptTimeout === undefined ? {} : { schedule: input.attempt.scheduleAttemptTimeout }),
+      ...(input.attempt.lifecycleSignal === undefined ? {} : { signal: input.attempt.lifecycleSignal }),
       timeoutMs: input.attempt.attemptTimeoutMs ?? 15_000,
     });
   } catch {
@@ -194,6 +206,104 @@ export class DriverSyncHeartbeatHttpError extends Error {
   constructor(readonly status: number) {
     super(`Driver sync heartbeat failed (${status})`);
   }
+}
+
+export class DriverSyncHeartbeatRateLimitError extends Error {
+  constructor() {
+    super('Driver sync heartbeat route rate limit reached');
+    this.name = 'DriverSyncHeartbeatRateLimitError';
+  }
+}
+
+export type DriverSyncHeartbeatRateLimiter = {
+  tryAcquire(routePlanId: string): boolean;
+};
+
+export function createDriverSyncHeartbeatRateLimiter(input?: {
+  maxWritesPerWindow?: number;
+  now?: () => number;
+  windowMs?: number;
+}): DriverSyncHeartbeatRateLimiter {
+  const maxWrites = input?.maxWritesPerWindow ?? 2;
+  const now = input?.now ?? Date.now;
+  const windowMs = input?.windowMs ?? 60_000;
+  const writesByRoute = new Map<string, number[]>();
+  return {
+    tryAcquire(routePlanId) {
+      const currentTime = now();
+      const recent = (writesByRoute.get(routePlanId) ?? [])
+        .filter((timestamp) => timestamp > currentTime - windowMs);
+      if (recent.length >= maxWrites) {
+        writesByRoute.set(routePlanId, recent);
+        return false;
+      }
+      writesByRoute.set(routePlanId, [...recent, currentTime]);
+      return true;
+    },
+  };
+}
+
+export function createRateLimitedDriverSyncHeartbeatService(input: {
+  limiter: DriverSyncHeartbeatRateLimiter;
+  routePlanId: string;
+  service: DriverSyncHeartbeatService;
+}): DriverSyncHeartbeatService {
+  return {
+    recordHeartbeat(request, options) {
+      if (!input.limiter.tryAcquire(input.routePlanId)) {
+        throw new DriverSyncHeartbeatRateLimitError();
+      }
+      return input.service.recordHeartbeat(request, options);
+    },
+  };
+}
+
+export function combineDriverSyncAbortSignals(signals: readonly (AbortSignal | undefined)[]): AbortSignal {
+  const controller = new AbortController();
+  for (const signal of signals) {
+    if (signal?.aborted === true) {
+      controller.abort();
+      break;
+    }
+    signal?.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  return controller.signal;
+}
+
+export async function flushDriverCompletionClearOutboxRoutes(input: {
+  attemptTimeoutMs?: number;
+  cancelAttemptTimeout?: (handle: unknown) => void;
+  deliver(routePlanId: string, signal: AbortSignal): Promise<boolean>;
+  lifecycleSignal?: AbortSignal;
+  resolveAccess(routePlanId: string, signal: AbortSignal): Promise<boolean>;
+  routePlanIds: readonly string[];
+  scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
+  startIndex: number;
+}): Promise<{ delivered: number; nextIndex: number }> {
+  if (input.routePlanIds.length === 0) return { delivered: 0, nextIndex: 0 };
+  const startIndex = Math.max(0, input.startIndex) % input.routePlanIds.length;
+  const orderedRoutePlanIds: string[] = [];
+  for (let offset = 0; offset < input.routePlanIds.length; offset += 1) {
+    const index = (startIndex + offset) % input.routePlanIds.length;
+    orderedRoutePlanIds.push(input.routePlanIds[index]!);
+  }
+  const outcomes = await Promise.all(orderedRoutePlanIds.map(async (routePlanId) => {
+    try {
+      return await runBoundedAsyncOperation(async (signal) => {
+        if (!await input.resolveAccess(routePlanId, signal)) return false;
+        return input.deliver(routePlanId, signal);
+      }, {
+        ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+        ...(input.lifecycleSignal === undefined ? {} : { signal: input.lifecycleSignal }),
+        ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
+        timeoutMs: input.attemptTimeoutMs ?? 15_000,
+      });
+    } catch {
+      return false;
+    }
+  }));
+  const delivered = outcomes.filter(Boolean).length;
+  return { delivered, nextIndex: (startIndex + 1) % input.routePlanIds.length };
 }
 
 type FetchLike = (url: string, init?: {
@@ -339,14 +449,15 @@ export function createDriverSyncHeartbeatScheduler(input: {
       if (immediateRequested) runNow();
       else scheduleNext();
     },
-    stop() {
+    stop(options?: { carryImmediate?: boolean }) {
+      if (!started) return false;
       const carryImmediateRequest = immediateRequested || running;
       started = false;
       immediateRequested = false;
       inFlightAbortController?.abort();
       inFlightAbortController = null;
       cancelScheduled();
-      return carryImmediateRequest;
+      return options?.carryImmediate === true && carryImmediateRequest;
     },
   };
 }

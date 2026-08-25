@@ -8,6 +8,7 @@ import {
 import { prepareDriverEventForPersistence, type DriverEventService } from '../events/driverEvents';
 import type { DriverFlowState } from '../driverFlow/driverFlow';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
+import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
 
 export type DeliveryFinishResult =
   | {
@@ -49,7 +50,10 @@ export async function finishDeliveryAfterActive(input: {
   eventPayload?: Record<string, unknown>;
   now?: Date;
   offlineQueue?: OfflineSubmissionQueue;
-  onServerAcknowledged?: (routePlanId: string) => Promise<void>;
+  onServerAcknowledged?: (routePlanId: string, signal: AbortSignal) => Promise<void>;
+  onServerAcknowledgedCancelTimeout?: (handle: unknown) => void;
+  onServerAcknowledgedScheduleTimeout?: (expire: () => void, timeoutMs: number) => unknown;
+  onServerAcknowledgedTimeoutMs?: number;
   routeEnd?: 'completed' | 'released';
   routePlanId: string | null;
   streamService: ContinuousLocationStreamService;
@@ -110,7 +114,20 @@ export async function finishDeliveryAfterActive(input: {
     await input.offlineQueue?.whenPersisted();
     if (!routeReleased && input.routePlanId !== null) {
       try {
-        await input.onServerAcknowledged?.(input.routePlanId);
+        if (input.onServerAcknowledged !== undefined) {
+          await runBoundedAsyncOperation(
+            (signal) => input.onServerAcknowledged!(input.routePlanId!, signal),
+            {
+              ...(input.onServerAcknowledgedCancelTimeout === undefined
+                ? {}
+                : { cancel: input.onServerAcknowledgedCancelTimeout }),
+              ...(input.onServerAcknowledgedScheduleTimeout === undefined
+                ? {}
+                : { schedule: input.onServerAcknowledgedScheduleTimeout }),
+              timeoutMs: input.onServerAcknowledgedTimeoutMs ?? 15_000,
+            },
+          );
+        }
       } catch {
         // The durable completion-clear outbox retries independently of route-session cleanup.
       }

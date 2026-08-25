@@ -115,15 +115,23 @@ export type OfflineSubmissionQueue = {
   enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
   enqueueProofMediaUpload(request: ProofMediaUploadRequest): OfflineProofMediaQueueItem;
   getRouteCompletionTelemetry(routePlanId: string): OfflineRouteCompletionTelemetry;
+  listPendingCompletionClearEntries(): OfflineCompletionClearOutboxEntry[];
   listPendingCompletionClearRoutePlanIds(): string[];
   listPending(): OfflineSubmissionQueueItem[];
   markRouteCompletionClearHeartbeatDelivered(routePlanId: string): boolean;
   quarantine(queueItemId: string, reason: OfflineSubmissionReconciliation['reason']): boolean;
   recordRetryFailure(queueItemId: string, lastError: unknown): boolean;
+  reopenRouteCompletionClearHeartbeat(routePlanId: string): boolean;
   sealForAccountChange(): { discardedLocations: number; sealed: number };
   storageState(): 'READY' | 'STORAGE_DEGRADED';
   recoverStorage(): Promise<boolean>;
   whenPersisted(): Promise<void>;
+};
+
+export type OfflineCompletionClearOutboxEntry = {
+  assignmentGeneration: string | null;
+  driverContractVersion: number | null;
+  routePlanId: string;
 };
 
 export type OfflineRouteCompletionTelemetry = {
@@ -480,7 +488,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
         locallyFinished: true,
       };
     },
-    listPendingCompletionClearRoutePlanIds: () => [...new Set(activeItems()
+    listPendingCompletionClearEntries: () => [...activeItems()
       .filter((item): item is OfflineDriverEventQueueItem => (
         item.kind === 'driver_event'
         && item.event.eventType === 'ROUTE_COMPLETED'
@@ -489,8 +497,21 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
         && item.journal.some((entry) => entry.kind === 'ACK' && entry.code === 'SERVER_ACK')
         && !item.journal.some((entry) => entry.kind === 'HEARTBEAT' && entry.code === 'ACK_CLEAR_DELIVERED')
       ))
-      .sort((left, right) => left.queueSequence - right.queueSequence)
-      .map((item) => item.event.routePlanId!))],
+      .sort((left, right) => right.queueSequence - left.queueSequence)
+      .reduce((entries, item) => {
+        const routePlanId = item.event.routePlanId!;
+        if (!entries.has(routePlanId)) {
+          entries.set(routePlanId, {
+            assignmentGeneration: item.event.assignmentGeneration ?? null,
+            driverContractVersion: item.event.driverContractVersion ?? null,
+            routePlanId,
+          });
+        }
+        return entries;
+      }, new Map<string, OfflineCompletionClearOutboxEntry>()).values()]
+      .reverse(),
+    listPendingCompletionClearRoutePlanIds: () => queue.listPendingCompletionClearEntries()
+      .map((entry) => entry.routePlanId),
     listPending: () => activeItems()
       .filter((item) => item.state === 'PENDING' || item.state === 'QUARANTINED')
       .sort((left, right) => left.queueSequence - right.queueSequence),
@@ -536,6 +557,24 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       appendJournal(item, 'ATTEMPT', errorCode);
       emitChange();
       return true;
+    },
+    reopenRouteCompletionClearHeartbeat: (routePlanId) => {
+      let reopened = false;
+      for (const completion of activeItems()) {
+        if (
+          completion.kind !== 'driver_event'
+          || completion.event.eventType !== 'ROUTE_COMPLETED'
+          || completion.event.routePlanId !== routePlanId
+        ) continue;
+        const filteredJournal = completion.journal.filter((entry) => !(
+          entry.kind === 'HEARTBEAT' && entry.code === 'ACK_CLEAR_DELIVERED'
+        ));
+        if (filteredJournal.length === completion.journal.length) continue;
+        completion.journal = filteredJournal;
+        reopened = true;
+      }
+      if (reopened) emitChange();
+      return reopened;
     },
     sealForAccountChange: () => {
       requireMutable();
