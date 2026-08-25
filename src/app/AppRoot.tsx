@@ -594,11 +594,28 @@ function DriverApp() {
     lease?: { assignmentGeneration: string; isCurrent: () => boolean },
   ): Promise<void> => {
     try {
+      const isDurableSessionLeaseCurrent = lease === undefined || routePlanId === undefined
+        ? undefined
+        : async () => {
+            if (!lease.isCurrent()) return false;
+            const persisted = await driverAccessTokenStore.loadActiveDriverAccess();
+            if (!lease.isCurrent()) return false;
+            if (persisted.kind !== 'active' && persisted.kind !== 'refresh_required') return false;
+            if (persisted.activeRouteSession === undefined) {
+              return persisted.routeAccess?.routePlanId === routePlanId
+                && persisted.routeAccess.assignmentGeneration === lease.assignmentGeneration;
+            }
+            return persisted.activeRouteSession.routePlanId === routePlanId
+              && persisted.routeAccess?.routePlanId === routePlanId
+              && persisted.routeAccess.assignmentGeneration === lease.assignmentGeneration;
+          };
       const result = await clearAndStopContinuousLocationSession({
         activeRouteSessionStore: driverAccessTokenStore,
         ...(lease === undefined ? {} : {
           assignmentGeneration: lease.assignmentGeneration,
-          isSessionLeaseCurrent: lease.isCurrent,
+          ...(isDurableSessionLeaseCurrent === undefined ? {} : {
+            isSessionLeaseCurrent: isDurableSessionLeaseCurrent,
+          }),
         }),
         ...(routePlanId === undefined ? {} : { routePlanId }),
         streamService: continuousLocationStreamService,

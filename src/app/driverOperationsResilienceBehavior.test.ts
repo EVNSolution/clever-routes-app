@@ -93,6 +93,11 @@ describe('driver operations resilience runtime', () => {
     assert.ok(receiptDomainGuardIndex > receiptEpochIndex && receiptCleanupGuardIndex > receiptDomainGuardIndex);
     assert.ok(receiptCleanupIndex > receiptCleanupGuardIndex);
     assert.match(source.slice(receiptRetryIndex, receiptCleanupIndex), /persistRefreshedAccess: false/u);
+    const cleanupHelperIndex = source.indexOf('const clearAndStopActiveLocationSession = useCallback');
+    const durableLeaseIndex = source.indexOf('await driverAccessTokenStore.loadActiveDriverAccess();', cleanupHelperIndex);
+    const cleanupDomainIndex = source.indexOf('clearAndStopContinuousLocationSession({', durableLeaseIndex);
+    assert.ok(durableLeaseIndex > cleanupHelperIndex && cleanupDomainIndex > durableLeaseIndex);
+    assert.match(source.slice(durableLeaseIndex, cleanupDomainIndex), /persisted\.routeAccess\.assignmentGeneration === lease\.assignmentGeneration/u);
   });
 
   it('does not destroy cached completion identity when ACK-clear token refresh cannot find the ended route', () => {
