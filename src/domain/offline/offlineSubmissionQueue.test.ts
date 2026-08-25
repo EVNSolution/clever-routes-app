@@ -156,7 +156,7 @@ describe('offline submission queue', () => {
       appVersion: '1.2.0', assignmentGeneration: '12', clientEventId: 'same-id-reassigned',
       driverContractVersion: 2, eventType: 'ROUTE_COMPLETED',
       expectedRouteVersionId: '33333333-3333-4333-8333-333333333333',
-      occurredAt: new Date('2026-08-22T19:43:10.000Z'), routePlanId: 'route-1', versionCode: 18,
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId: 'route-1', versionCode: 18,
     });
 
     const [retained] = queue.listPending();
@@ -168,6 +168,55 @@ describe('offline submission queue', () => {
     assert.equal(retained.event.assignmentGeneration, '11');
     assert.equal(retained.event.versionCode, 17);
   });
+
+  for (const collision of [
+    {
+      label: 'event type',
+      mutate: (event: Parameters<ReturnType<typeof createInMemoryOfflineSubmissionQueue>['enqueueDriverEvent']>[0]) => ({
+        ...event, eventType: 'ROUTE_COMPLETED' as const,
+      }),
+    },
+    {
+      label: 'delivery stop',
+      mutate: (event: Parameters<ReturnType<typeof createInMemoryOfflineSubmissionQueue>['enqueueDriverEvent']>[0]) => ({
+        ...event, deliveryStopId: 'stop-2',
+      }),
+    },
+    {
+      label: 'occurred time',
+      mutate: (event: Parameters<ReturnType<typeof createInMemoryOfflineSubmissionQueue>['enqueueDriverEvent']>[0]) => ({
+        ...event, occurredAt: new Date('2026-08-22T19:41:00.000Z'),
+      }),
+    },
+    {
+      label: 'payload',
+      mutate: (event: Parameters<ReturnType<typeof createInMemoryOfflineSubmissionQueue>['enqueueDriverEvent']>[0]) => ({
+        ...event, payload: { proof: { note: 'changed' } },
+      }),
+    },
+  ]) {
+    it(`quarantines a same-lineage same-id ${collision.label} collision`, async () => {
+      const storage = createMemoryStorage();
+      const queue = await createPersistentOfflineSubmissionQueue({ storage });
+      const originalEvent = {
+        appVersion: '1.2.0', assignmentGeneration: '11', clientEventId: `same-lineage-${collision.label}`,
+        deliveryStopId: 'stop-1', driverContractVersion: 2 as const, eventType: 'STOP_DELIVERED' as const,
+        expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+        occurredAt: new Date('2026-08-22T19:40:00.000Z'), payload: { proof: { note: 'original' } },
+        routePlanId: 'route-1', versionCode: 18,
+      };
+      const original = queue.enqueueDriverEvent(originalEvent);
+      queue.enqueueDriverEvent(collision.mutate(originalEvent));
+      await queue.whenPersisted();
+
+      const [retained] = (await createPersistentOfflineSubmissionQueue({ storage })).listPending();
+      assert.equal(retained?.state, 'QUARANTINED');
+      assert.equal(retained?.reconciliation?.reason, 'event_identity_conflict');
+      assert.equal(retained?.kind, 'driver_event');
+      if (retained?.kind !== 'driver_event') throw new Error('Expected driver event');
+      assert.deepEqual(retained.event, original.event);
+    });
+  }
 
   it('reports the newest queued terminal route transition', () => {
     const queue = createInMemoryOfflineSubmissionQueue();

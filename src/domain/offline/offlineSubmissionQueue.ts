@@ -312,21 +312,18 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
     const queueItemId = getDriverEventQueueItemId(event);
     const existing = findActiveItem(queueItemId);
     if (existing?.kind === 'driver_event') {
+      if (!hasSameImmutableDriverEventIdentity(existing.event, event)) {
+        if (existing.reconciliation === undefined) {
+          existing.reconciliation = { blockedAt: now().toISOString(), reason: 'event_identity_conflict' };
+          transition(existing, 'QUARANTINED', 'RECONCILIATION', 'EVENT_IDENTITY_CONFLICT');
+          return { changed: true, inserted: false, item: existing };
+        }
+        return { changed: false, inserted: false, item: existing };
+      }
       if (
         hasCompleteOrderedEventContract(event)
         && !hasCompleteOrderedEventContract(existing.event)
       ) {
-        if (
-          existing.accountOwnerHash !== activeAccountOwnerHash
-          || !hasSameImmutableDriverEventIdentity(existing.event, event)
-        ) {
-          if (existing.reconciliation === undefined) {
-            existing.reconciliation = { blockedAt: now().toISOString(), reason: 'event_identity_conflict' };
-            transition(existing, 'QUARANTINED', 'RECONCILIATION', 'EVENT_IDENTITY_CONFLICT');
-            return { changed: true, inserted: false, item: existing };
-          }
-          return { changed: false, inserted: false, item: existing };
-        }
         existing.event = {
           ...existing.event,
           appVersion: event.appVersion,
