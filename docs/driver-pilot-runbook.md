@@ -11,7 +11,7 @@ authorized separately and tied back to the exact committed source SHA.
 | Driver issue | `EVNSolution/clever-routes-app#210` |
 | Change control | `EVNSolution/clever-change-control#265` |
 | Source branch | `codex/cc-265-driver-pilot-identity-telemetry` |
-| Candidate app source SHA | `bee0cb5af76d80efe033bec6e445409b235f9007` |
+| Candidate app source SHA | `dd57a55c60298486ae05f75f7931f625532eaa9f` |
 | App version | `1.2.0` |
 | Android version code | `18` |
 | iOS build number | `1` |
@@ -35,6 +35,10 @@ authorized separately and tied back to the exact committed source SHA.
   Close the exact record only after an accepted,
   non-conflicting server observation; restart, timeout, `401`, or session
   cleanup must leave it retryable. A `401` gets one bounded route-token refresh.
+- Project an ACK-clear heartbeat from that exact outbox completion identity,
+  never from the newest completion sharing the route ID. A newer pending,
+  discarded, or acknowledged assignment must not change the older payload's
+  `finishPending=false` or `lastAcknowledgedAt` evidence.
 - Require the full refreshed route-access tuple to match the outbox route,
   assignment generation, and driver contract version before sending. A token
   from a reassigned generation must never clear an older completion.
@@ -62,6 +66,12 @@ authorized separately and tied back to the exact committed source SHA.
 - Confirm the interval between pending evidence and acknowledgement is at most
   five minutes for every pilot completion; any breach blocks expansion.
 - Confirm app restart preserves both pending and acknowledged recovery state.
+- Preserve the immutable ordered-event lineage saved with offline evidence.
+  Receipt `UNKNOWN` replay after reassignment must submit the queued assignment,
+  route-version, build, and client-event identity, never the current session's.
+- Abort ordinary event replay and receipt lookup on logout or account change.
+  Recheck the captured account owner and epoch before queue, session, or UI
+  mutation so an account-A response cannot clear account-B state.
 - Confirm a missing route session without durable completion evidence never
   reports a false local finish or acknowledgement clear.
 - Calculate adoption from server-observed contract-v2 heartbeats divided by
