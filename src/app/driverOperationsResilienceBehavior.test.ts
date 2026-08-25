@@ -80,8 +80,8 @@ describe('driver operations resilience runtime', () => {
     const flushIndex = source.indexOf('const flushCompletionClearOutbox');
     const sessionAccessIndex = source.indexOf('for (const session of routeSessions)', flushIndex);
     const persistedAccessIndex = source.indexOf("persistedAccess.kind === 'active'", sessionAccessIndex);
-    const noOverwriteIndex = source.indexOf('!accessByRoute.has(persistedAccess.routeAccess.routePlanId)', persistedAccessIndex);
-    const fairFlushIndex = source.indexOf('flushDriverCompletionClearOutboxRoutes({', noOverwriteIndex);
+    const noOverwriteIndex = source.indexOf('!accessByAssignment.has(persistedKey)', persistedAccessIndex);
+    const fairFlushIndex = source.indexOf('flushDriverCompletionClearOutboxEntries({', noOverwriteIndex);
     assert.ok(flushIndex > 0 && sessionAccessIndex > flushIndex);
     assert.ok(persistedAccessIndex > sessionAccessIndex && noOverwriteIndex > persistedAccessIndex);
     assert.ok(fairFlushIndex > noOverwriteIndex);
@@ -91,9 +91,36 @@ describe('driver operations resilience runtime', () => {
     const logoutIndex = source.indexOf('async function handleLogout()');
     const abortIndex = source.indexOf('driverSyncLifecycleAbortControllerRef.current.abort();', logoutIndex);
     const stopIndex = source.indexOf('driverSyncHeartbeatSchedulerRef.current?.stop();', logoutIndex);
+    const clearRetryStopIndex = source.indexOf('completionClearRetrySchedulerRef.current?.stop();', logoutIndex);
     const clearLatchIndex = source.indexOf('pendingImmediateDriverSyncHeartbeatRef.current = false;', logoutIndex);
-    assert.ok(abortIndex > logoutIndex && stopIndex > abortIndex && clearLatchIndex > stopIndex);
+    assert.ok(abortIndex > logoutIndex && stopIndex > abortIndex);
+    assert.ok(clearRetryStopIndex > stopIndex && clearLatchIndex > clearRetryStopIndex);
     assert.match(source, /scheduler\.stop\(\{ carryImmediate: true \}\)/u);
+  });
+
+  it('rearms account transport only after encrypted queue binding succeeds', () => {
+    const loginIndex = source.indexOf('const handleLoginAndLoadRoutes = useCallback');
+    const abortIndex = source.indexOf('driverSyncLifecycleAbortControllerRef.current.abort();', loginIndex);
+    const bindIndex = source.indexOf('await bindExpoOfflineSubmissionQueueAccount(phoneE164);', abortIndex);
+    const ownerBindIndex = source.indexOf(
+      'driverSyncBoundAccountOwnerHashRef.current = accountOwnerHash;', bindIndex,
+    );
+    const rearmIndex = source.indexOf(
+      'driverSyncLifecycleAbortControllerRef.current = new AbortController();', bindIndex,
+    );
+    assert.ok(loginIndex > 0 && abortIndex > loginIndex && bindIndex > abortIndex);
+    assert.ok(ownerBindIndex > bindIndex && rearmIndex > ownerBindIndex);
+    assert.match(source, /driverSyncBoundAccountOwnerHashRef\.current === accountOwnerHash/u);
+  });
+
+  it('aborts periodic and completion-clear transport when assignment generation changes', () => {
+    const epochIndex = source.indexOf('const activeDriverSyncRouteEpoch =');
+    const routeAbortIndex = source.indexOf('driverSyncRouteAbortControllerRef.current.abort();', epochIndex);
+    const periodicStopIndex = source.indexOf('driverSyncHeartbeatSchedulerRef.current?.stop();', routeAbortIndex);
+    const clearStopIndex = source.indexOf('completionClearRetrySchedulerRef.current?.stop();', periodicStopIndex);
+    assert.ok(epochIndex > 0 && routeAbortIndex > epochIndex);
+    assert.ok(periodicStopIndex > routeAbortIndex && clearStopIndex > periodicStopIndex);
+    assert.match(source, /session\.routeAccess\.assignmentGeneration/u);
   });
 
   it('records native GPS accuracy rather than treating proximity as safe without metadata', () => {

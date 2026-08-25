@@ -1,5 +1,8 @@
 import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
-import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
+import type {
+  OfflineCompletionClearOutboxEntry,
+  OfflineSubmissionQueue,
+} from '../offline/offlineSubmissionQueue';
 
 export type DriverSyncRetryJournalEntry = {
   errorCode: string;
@@ -97,6 +100,7 @@ export function projectDriverSyncQueueState(
 }
 
 export type DriverCompletionClearHeartbeatAttempt = {
+  accessIdentity: DriverCompletionClearRouteAccessIdentity;
   appVersion: string;
   attemptTimeoutMs?: number;
   cancelAttemptTimeout?: (handle: unknown) => void;
@@ -106,12 +110,40 @@ export type DriverCompletionClearHeartbeatAttempt = {
   identityService: DriverSyncIdentityService;
   isAttemptCurrent?: () => boolean;
   lifecycleSignal?: AbortSignal;
+  outboxEntry: OfflineCompletionClearOutboxEntry;
   queue: OfflineSubmissionQueue;
-  routePlanId: string;
   scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
   sessionKey: string;
   versionCode: number;
 };
+
+export type DriverCompletionClearRouteAccessIdentity = {
+  assignmentGeneration: string;
+  driverContractVersion: 2;
+  routePlanId: string;
+};
+
+function hasExactCompletionClearAccess(
+  entry: OfflineCompletionClearOutboxEntry,
+  access: DriverCompletionClearRouteAccessIdentity,
+): boolean {
+  return entry.assignmentGeneration === access.assignmentGeneration
+    && entry.driverContractVersion === access.driverContractVersion
+    && entry.routePlanId === access.routePlanId;
+}
+
+function hasExactCompletionClearEntry(
+  queue: OfflineSubmissionQueue,
+  expected: OfflineCompletionClearOutboxEntry,
+): boolean {
+  return queue.listPendingCompletionClearEntries().some((entry) => (
+    entry.accountOwnerHash === expected.accountOwnerHash
+    && entry.assignmentGeneration === expected.assignmentGeneration
+    && entry.completionClientEventId === expected.completionClientEventId
+    && entry.driverContractVersion === expected.driverContractVersion
+    && entry.routePlanId === expected.routePlanId
+  ));
+}
 
 export type DriverCompletionClearHeartbeatOutcome = {
   failure: 'conflict' | 'failed' | 'not_pending' | 'unauthorized' | null;
@@ -122,11 +154,14 @@ export type DriverCompletionClearHeartbeatOutcome = {
 export async function attemptDriverCompletionClearHeartbeat(
   input: DriverCompletionClearHeartbeatAttempt,
 ): Promise<DriverCompletionClearHeartbeatOutcome> {
-  const queueProjection = projectDriverSyncQueueState(input.queue, input.routePlanId);
+  const routePlanId = input.outboxEntry.routePlanId;
+  const queueProjection = projectDriverSyncQueueState(input.queue, routePlanId);
   if (
     queueProjection.finishPending
     || queueProjection.lastAcknowledgedAt === null
-    || !input.queue.listPendingCompletionClearRoutePlanIds().includes(input.routePlanId)
+    || input.queue.getAccountOwnerHash() !== input.outboxEntry.accountOwnerHash
+    || !hasExactCompletionClearAccess(input.outboxEntry, input.accessIdentity)
+    || !hasExactCompletionClearEntry(input.queue, input.outboxEntry)
   ) {
     return { failure: 'not_pending', observed: false, result: null };
   }
@@ -151,7 +186,7 @@ export async function attemptDriverCompletionClearHeartbeat(
       serverResult = heartbeatResult;
       if (input.isAttemptCurrent?.() === false) return heartbeatResult;
       if (!heartbeatResult.accepted || heartbeatResult.conflict) return heartbeatResult;
-      if (!input.queue.markRouteCompletionClearHeartbeatDelivered(input.routePlanId)) return heartbeatResult;
+      if (!input.queue.markCompletionClearHeartbeatDelivered(input.outboxEntry)) return heartbeatResult;
       deliveredMarkerWritten = true;
       await input.queue.whenPersisted();
       return heartbeatResult;
@@ -172,7 +207,7 @@ export async function attemptDriverCompletionClearHeartbeat(
     }
     return { failure: null, observed: true, result };
   } catch (error) {
-    if (deliveredMarkerWritten) input.queue.reopenRouteCompletionClearHeartbeat(input.routePlanId);
+    if (deliveredMarkerWritten) input.queue.reopenCompletionClearHeartbeat(input.outboxEntry);
     return {
       failure: error instanceof DriverSyncHeartbeatHttpError && error.status === 401 ? 'unauthorized' : 'failed',
       observed: false,
@@ -183,13 +218,16 @@ export async function attemptDriverCompletionClearHeartbeat(
 
 export async function deliverDriverCompletionClearHeartbeat(input: {
   attempt: DriverCompletionClearHeartbeatAttempt;
-  refreshHeartbeatService?: (signal: AbortSignal) => Promise<DriverSyncHeartbeatService | null>;
+  refreshHeartbeatAccess?: (signal: AbortSignal) => Promise<{
+    accessIdentity: DriverCompletionClearRouteAccessIdentity;
+    heartbeatService: DriverSyncHeartbeatService;
+  } | null>;
 }): Promise<DriverCompletionClearHeartbeatOutcome> {
   const first = await attemptDriverCompletionClearHeartbeat(input.attempt);
-  if (first.failure !== 'unauthorized' || input.refreshHeartbeatService === undefined) return first;
-  let refreshedService: DriverSyncHeartbeatService | null;
+  if (first.failure !== 'unauthorized' || input.refreshHeartbeatAccess === undefined) return first;
+  let refreshedAccess: Awaited<ReturnType<NonNullable<typeof input.refreshHeartbeatAccess>>>;
   try {
-    refreshedService = await runBoundedAsyncOperation(input.refreshHeartbeatService, {
+    refreshedAccess = await runBoundedAsyncOperation(input.refreshHeartbeatAccess, {
       ...(input.attempt.cancelAttemptTimeout === undefined ? {} : { cancel: input.attempt.cancelAttemptTimeout }),
       ...(input.attempt.scheduleAttemptTimeout === undefined ? {} : { schedule: input.attempt.scheduleAttemptTimeout }),
       ...(input.attempt.lifecycleSignal === undefined ? {} : { signal: input.attempt.lifecycleSignal }),
@@ -198,8 +236,15 @@ export async function deliverDriverCompletionClearHeartbeat(input: {
   } catch {
     return first;
   }
-  if (refreshedService === null) return first;
-  return attemptDriverCompletionClearHeartbeat({ ...input.attempt, heartbeatService: refreshedService });
+  if (
+    refreshedAccess === null
+    || !hasExactCompletionClearAccess(input.attempt.outboxEntry, refreshedAccess.accessIdentity)
+  ) return first;
+  return attemptDriverCompletionClearHeartbeat({
+    ...input.attempt,
+    accessIdentity: refreshedAccess.accessIdentity,
+    heartbeatService: refreshedAccess.heartbeatService,
+  });
 }
 
 export class DriverSyncHeartbeatHttpError extends Error {
@@ -270,28 +315,32 @@ export function combineDriverSyncAbortSignals(signals: readonly (AbortSignal | u
   return controller.signal;
 }
 
-export async function flushDriverCompletionClearOutboxRoutes(input: {
+export async function flushDriverCompletionClearOutboxEntries(input: {
   attemptTimeoutMs?: number;
   cancelAttemptTimeout?: (handle: unknown) => void;
-  deliver(routePlanId: string, signal: AbortSignal): Promise<boolean>;
+  deliver(entry: OfflineCompletionClearOutboxEntry, signal: AbortSignal): Promise<boolean>;
+  entries: readonly OfflineCompletionClearOutboxEntry[];
+  isCurrent?: () => boolean;
   lifecycleSignal?: AbortSignal;
-  resolveAccess(routePlanId: string, signal: AbortSignal): Promise<boolean>;
-  routePlanIds: readonly string[];
+  resolveAccess(entry: OfflineCompletionClearOutboxEntry, signal: AbortSignal): Promise<boolean>;
   scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
   startIndex: number;
 }): Promise<{ delivered: number; nextIndex: number }> {
-  if (input.routePlanIds.length === 0) return { delivered: 0, nextIndex: 0 };
-  const startIndex = Math.max(0, input.startIndex) % input.routePlanIds.length;
-  const orderedRoutePlanIds: string[] = [];
-  for (let offset = 0; offset < input.routePlanIds.length; offset += 1) {
-    const index = (startIndex + offset) % input.routePlanIds.length;
-    orderedRoutePlanIds.push(input.routePlanIds[index]!);
+  if (input.entries.length === 0) return { delivered: 0, nextIndex: 0 };
+  const startIndex = Math.max(0, input.startIndex) % input.entries.length;
+  const orderedEntries: OfflineCompletionClearOutboxEntry[] = [];
+  for (let offset = 0; offset < input.entries.length; offset += 1) {
+    const index = (startIndex + offset) % input.entries.length;
+    orderedEntries.push(input.entries[index]!);
   }
-  const outcomes = await Promise.all(orderedRoutePlanIds.map(async (routePlanId) => {
+  const outcomes = await Promise.all(orderedEntries.map(async (entry) => {
     try {
       return await runBoundedAsyncOperation(async (signal) => {
-        if (!await input.resolveAccess(routePlanId, signal)) return false;
-        return input.deliver(routePlanId, signal);
+        if (input.isCurrent?.() === false) return false;
+        if (!await input.resolveAccess(entry, signal)) return false;
+        if (signal.aborted || input.isCurrent?.() === false) return false;
+        const delivered = await input.deliver(entry, signal);
+        return !signal.aborted && input.isCurrent?.() !== false && delivered;
       }, {
         ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
         ...(input.lifecycleSignal === undefined ? {} : { signal: input.lifecycleSignal }),
@@ -303,7 +352,7 @@ export async function flushDriverCompletionClearOutboxRoutes(input: {
     }
   }));
   const delivered = outcomes.filter(Boolean).length;
-  return { delivered, nextIndex: (startIndex + 1) % input.routePlanIds.length };
+  return { delivered, nextIndex: (startIndex + 1) % input.entries.length };
 }
 
 type FetchLike = (url: string, init?: {

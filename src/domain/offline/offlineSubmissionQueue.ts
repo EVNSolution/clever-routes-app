@@ -56,16 +56,37 @@ export function retainOfflineEvidenceJournal(
   return journal
     .filter((entry) => {
       const timestamp = Date.parse(entry.at);
-      return Number.isFinite(timestamp) && timestamp >= cutoff;
+      return Number.isFinite(timestamp) && (
+        timestamp >= cutoff
+        || (entry.kind === 'ACK' && entry.code === 'SERVER_ACK')
+        || (entry.kind === 'HEARTBEAT' && entry.code === 'ACK_CLEAR_DELIVERED')
+      );
     })
     .slice(-64);
 }
 
 export function isOfflineTerminalEvidenceExpired(
-  item: Pick<OfflineEvidenceIdentity, 'journal' | 'state'> & { enqueuedAt: string },
+  item: Pick<OfflineEvidenceIdentity, 'journal' | 'state'> & {
+    enqueuedAt: string;
+    event?: Pick<DriverEventInput, 'eventType'>;
+    kind?: OfflineSubmissionQueueItem['kind'];
+  },
   now: Date,
 ): boolean {
   if (item.state !== 'ACKNOWLEDGED' && item.state !== 'DISCARDED') return false;
+  if (
+    item.kind === 'driver_event'
+    && item.event?.eventType === 'ROUTE_COMPLETED'
+    && item.state === 'ACKNOWLEDGED'
+  ) {
+    const deliveredEntry = [...item.journal].reverse().find((entry) => (
+      entry.kind === 'HEARTBEAT' && entry.code === 'ACK_CLEAR_DELIVERED'
+    ));
+    if (deliveredEntry === undefined) return false;
+    const deliveredAt = Date.parse(deliveredEntry.at);
+    return Number.isFinite(deliveredAt)
+      && now.getTime() - deliveredAt > OFFLINE_EVIDENCE_AUDIT_RETENTION_MS;
+  }
   const terminalEntry = [...item.journal].reverse().find((entry) => entry.kind === 'ACK' || entry.kind === 'DISCARD');
   const timestamp = Date.parse(terminalEntry?.at ?? item.enqueuedAt);
   return Number.isFinite(timestamp) && now.getTime() - timestamp > OFFLINE_EVIDENCE_AUDIT_RETENTION_MS;
@@ -114,14 +135,15 @@ export type OfflineSubmissionQueue = {
   enqueueDriverEvent(event: DriverEventInput): OfflineDriverEventQueueItem;
   enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
   enqueueProofMediaUpload(request: ProofMediaUploadRequest): OfflineProofMediaQueueItem;
+  getAccountOwnerHash(): string | null;
   getRouteCompletionTelemetry(routePlanId: string): OfflineRouteCompletionTelemetry;
   listPendingCompletionClearEntries(): OfflineCompletionClearOutboxEntry[];
   listPendingCompletionClearRoutePlanIds(): string[];
   listPending(): OfflineSubmissionQueueItem[];
-  markRouteCompletionClearHeartbeatDelivered(routePlanId: string): boolean;
+  markCompletionClearHeartbeatDelivered(entry: OfflineCompletionClearOutboxEntry): boolean;
   quarantine(queueItemId: string, reason: OfflineSubmissionReconciliation['reason']): boolean;
   recordRetryFailure(queueItemId: string, lastError: unknown): boolean;
-  reopenRouteCompletionClearHeartbeat(routePlanId: string): boolean;
+  reopenCompletionClearHeartbeat(entry: OfflineCompletionClearOutboxEntry): boolean;
   sealForAccountChange(): { discardedLocations: number; sealed: number };
   storageState(): 'READY' | 'STORAGE_DEGRADED';
   recoverStorage(): Promise<boolean>;
@@ -129,7 +151,9 @@ export type OfflineSubmissionQueue = {
 };
 
 export type OfflineCompletionClearOutboxEntry = {
+  accountOwnerHash: string;
   assignmentGeneration: string | null;
+  completionClientEventId: string;
   driverContractVersion: number | null;
   routePlanId: string;
 };
@@ -263,10 +287,10 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
   }
 
   function appendJournal(item: OfflineSubmissionQueueItem, kind: OfflineEvidenceJournalEntry['kind'], code: string) {
-    const cutoff = now().getTime() - 30 * 24 * 60 * 60 * 1000;
-    item.journal = [...item.journal, { at: now().toISOString(), code, kind }]
-      .filter((entry) => Date.parse(entry.at) >= cutoff)
-      .slice(-64);
+    item.journal = retainOfflineEvidenceJournal(
+      [...item.journal, { at: now().toISOString(), code, kind }],
+      now(),
+    );
   }
 
   function transition(item: OfflineSubmissionQueueItem, state: OfflineEvidenceState, kind: OfflineEvidenceJournalEntry['kind'], code: string) {
@@ -466,6 +490,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       emitChange();
       return item;
     },
+    getAccountOwnerHash: () => activeAccountOwnerHash,
     getRouteCompletionTelemetry: (routePlanId) => {
       const completion = activeItems()
         .filter((item): item is OfflineDriverEventQueueItem => (
@@ -488,7 +513,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
         locallyFinished: true,
       };
     },
-    listPendingCompletionClearEntries: () => [...activeItems()
+    listPendingCompletionClearEntries: () => activeItems()
       .filter((item): item is OfflineDriverEventQueueItem => (
         item.kind === 'driver_event'
         && item.event.eventType === 'ROUTE_COMPLETED'
@@ -497,40 +522,38 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
         && item.journal.some((entry) => entry.kind === 'ACK' && entry.code === 'SERVER_ACK')
         && !item.journal.some((entry) => entry.kind === 'HEARTBEAT' && entry.code === 'ACK_CLEAR_DELIVERED')
       ))
-      .sort((left, right) => right.queueSequence - left.queueSequence)
-      .reduce((entries, item) => {
-        const routePlanId = item.event.routePlanId!;
-        if (!entries.has(routePlanId)) {
-          entries.set(routePlanId, {
-            assignmentGeneration: item.event.assignmentGeneration ?? null,
-            driverContractVersion: item.event.driverContractVersion ?? null,
-            routePlanId,
-          });
-        }
-        return entries;
-      }, new Map<string, OfflineCompletionClearOutboxEntry>()).values()]
-      .reverse(),
+      .sort((left, right) => left.queueSequence - right.queueSequence)
+      .map((item) => ({
+        accountOwnerHash: item.accountOwnerHash,
+        assignmentGeneration: item.event.assignmentGeneration ?? null,
+        completionClientEventId: item.event.clientEventId,
+        driverContractVersion: item.event.driverContractVersion ?? null,
+        routePlanId: item.event.routePlanId!,
+      })),
     listPendingCompletionClearRoutePlanIds: () => queue.listPendingCompletionClearEntries()
       .map((entry) => entry.routePlanId),
     listPending: () => activeItems()
       .filter((item) => item.state === 'PENDING' || item.state === 'QUARANTINED')
       .sort((left, right) => left.queueSequence - right.queueSequence),
-    markRouteCompletionClearHeartbeatDelivered: (routePlanId) => {
+    markCompletionClearHeartbeatDelivered: (entry) => {
       requireMutable();
-      const completions = activeItems()
-        .filter((item): item is OfflineDriverEventQueueItem => (
+      const completion = activeItems()
+        .find((item): item is OfflineDriverEventQueueItem => (
           item.kind === 'driver_event'
           && item.event.eventType === 'ROUTE_COMPLETED'
-          && item.event.routePlanId === routePlanId
+          && item.accountOwnerHash === entry.accountOwnerHash
+          && item.event.routePlanId === entry.routePlanId
+          && (item.event.assignmentGeneration ?? null) === entry.assignmentGeneration
+          && item.event.clientEventId === entry.completionClientEventId
+          && (item.event.driverContractVersion ?? null) === entry.driverContractVersion
           && item.state === 'ACKNOWLEDGED'
-          && item.journal.some((entry) => entry.kind === 'ACK' && entry.code === 'SERVER_ACK')
-          && !item.journal.some((entry) => entry.kind === 'HEARTBEAT' && entry.code === 'ACK_CLEAR_DELIVERED')
-        ))
-        .sort((left, right) => right.queueSequence - left.queueSequence);
-      if (completions.length === 0) return false;
-      for (const completion of completions) {
-        appendJournal(completion, 'HEARTBEAT', 'ACK_CLEAR_DELIVERED');
-      }
+          && item.journal.some((journalEntry) => journalEntry.kind === 'ACK' && journalEntry.code === 'SERVER_ACK')
+          && !item.journal.some((journalEntry) => (
+            journalEntry.kind === 'HEARTBEAT' && journalEntry.code === 'ACK_CLEAR_DELIVERED'
+          ))
+        ));
+      if (completion === undefined) return false;
+      appendJournal(completion, 'HEARTBEAT', 'ACK_CLEAR_DELIVERED');
       emitChange();
       return true;
     },
@@ -558,23 +581,24 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       emitChange();
       return true;
     },
-    reopenRouteCompletionClearHeartbeat: (routePlanId) => {
-      let reopened = false;
-      for (const completion of activeItems()) {
-        if (
-          completion.kind !== 'driver_event'
-          || completion.event.eventType !== 'ROUTE_COMPLETED'
-          || completion.event.routePlanId !== routePlanId
-        ) continue;
-        const filteredJournal = completion.journal.filter((entry) => !(
-          entry.kind === 'HEARTBEAT' && entry.code === 'ACK_CLEAR_DELIVERED'
-        ));
-        if (filteredJournal.length === completion.journal.length) continue;
-        completion.journal = filteredJournal;
-        reopened = true;
-      }
-      if (reopened) emitChange();
-      return reopened;
+    reopenCompletionClearHeartbeat: (entry) => {
+      const completion = activeItems().find((item): item is OfflineDriverEventQueueItem => (
+        item.kind === 'driver_event'
+        && item.event.eventType === 'ROUTE_COMPLETED'
+        && item.accountOwnerHash === entry.accountOwnerHash
+        && item.event.routePlanId === entry.routePlanId
+        && (item.event.assignmentGeneration ?? null) === entry.assignmentGeneration
+        && item.event.clientEventId === entry.completionClientEventId
+        && (item.event.driverContractVersion ?? null) === entry.driverContractVersion
+      ));
+      if (completion === undefined) return false;
+      const filteredJournal = completion.journal.filter((journalEntry) => !(
+        journalEntry.kind === 'HEARTBEAT' && journalEntry.code === 'ACK_CLEAR_DELIVERED'
+      ));
+      if (filteredJournal.length === completion.journal.length) return false;
+      completion.journal = filteredJournal;
+      emitChange();
+      return true;
     },
     sealForAccountChange: () => {
       requireMutable();

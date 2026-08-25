@@ -1804,17 +1804,62 @@ describe('offline submission queue', () => {
     const restarted = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: ownerA, storage });
     assert.deepEqual(restarted.listPendingCompletionClearRoutePlanIds(), [routePlanId]);
     assert.deepEqual(restarted.listPendingCompletionClearEntries(), [{
-      assignmentGeneration: '11', driverContractVersion: 2, routePlanId,
+      accountOwnerHash: ownerA, assignmentGeneration: '11',
+      completionClientEventId: 'completion-clear-outbox', driverContractVersion: 2, routePlanId,
     }]);
     restarted.bindAccountOwnerHash(ownerB);
     assert.deepEqual(restarted.listPendingCompletionClearRoutePlanIds(), []);
     restarted.bindAccountOwnerHash(ownerA);
-    assert.equal(restarted.markRouteCompletionClearHeartbeatDelivered(routePlanId), true);
+    const outboxEntry = restarted.listPendingCompletionClearEntries()[0]!;
+    assert.equal(restarted.markCompletionClearHeartbeatDelivered(outboxEntry), true);
     await restarted.whenPersisted();
 
     const delivered = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: ownerA, storage });
     assert.deepEqual(delivered.listPendingCompletionClearRoutePlanIds(), []);
-    assert.equal(delivered.markRouteCompletionClearHeartbeatDelivered(routePlanId), false);
+    assert.equal(delivered.markCompletionClearHeartbeatDelivered(outboxEntry), false);
+  });
+
+  it('closes only the exact account, assignment, and completion identity on a reused route id', () => {
+    const owner = 'a'.repeat(64);
+    const queue = createInMemoryOfflineSubmissionQueue({ accountOwnerHash: owner });
+    for (const [assignmentGeneration, clientEventId] of [['11', 'completion-gen-11'], ['12', 'completion-gen-12']]) {
+      const item = queue.enqueueDriverEvent({
+        assignmentGeneration, clientEventId, driverContractVersion: 2,
+        eventType: 'ROUTE_COMPLETED', occurredAt: new Date(), routePlanId: 'reused-route',
+      });
+      queue.acknowledge(item.queueItemId);
+    }
+    const [generation11, generation12] = queue.listPendingCompletionClearEntries();
+    assert.equal(queue.markCompletionClearHeartbeatDelivered(generation11!), true);
+    assert.deepEqual(queue.listPendingCompletionClearEntries(), [generation12]);
+    assert.equal(queue.reopenCompletionClearHeartbeat(generation11!), true);
+    assert.deepEqual(queue.listPendingCompletionClearEntries(), [generation11, generation12]);
+  });
+
+  it('retains an unsent acknowledged completion beyond 30 days and starts retention at delivery', async () => {
+    const storage = createMemoryStorage();
+    let currentTime = new Date('2026-06-01T00:00:00.000Z');
+    const first = await createPersistentOfflineSubmissionQueue({ now: () => currentTime, storage });
+    const completion = first.enqueueDriverEvent({
+      assignmentGeneration: '11', clientEventId: 'long-lived-clear-outbox', driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED', occurredAt: currentTime, routePlanId: 'route-retained',
+    });
+    first.acknowledge(completion.queueItemId);
+    await first.whenPersisted();
+
+    currentTime = new Date('2026-07-05T00:00:00.000Z');
+    const unsentRestart = await createPersistentOfflineSubmissionQueue({ now: () => currentTime, storage });
+    const [outboxEntry] = unsentRestart.listPendingCompletionClearEntries();
+    assert.equal(outboxEntry?.completionClientEventId, 'long-lived-clear-outbox');
+    assert.equal(unsentRestart.markCompletionClearHeartbeatDelivered(outboxEntry!), true);
+    await unsentRestart.whenPersisted();
+
+    currentTime = new Date('2026-08-03T23:59:59.000Z');
+    const beforeDeliveredRetention = await createPersistentOfflineSubmissionQueue({ now: () => currentTime, storage });
+    assert.equal(beforeDeliveredRetention.getRouteCompletionTelemetry('route-retained').locallyFinished, true);
+    currentTime = new Date('2026-08-05T00:00:01.000Z');
+    const afterDeliveredRetention = await createPersistentOfflineSubmissionQueue({ now: () => currentTime, storage });
+    assert.equal(afterDeliveredRetention.getRouteCompletionTelemetry('route-retained').locallyFinished, false);
   });
 
   it('does not report a completion clear without durable completion evidence', () => {

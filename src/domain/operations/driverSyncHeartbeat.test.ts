@@ -11,11 +11,35 @@ import {
   deliverDriverCompletionClearHeartbeat,
   DriverSyncHeartbeatHttpError,
   DriverSyncHeartbeatRateLimitError,
-  flushDriverCompletionClearOutboxRoutes,
+  flushDriverCompletionClearOutboxEntries,
   projectDriverSyncHeartbeatForEpoch,
   projectLatestDriverSyncHeartbeat,
 } from './driverSyncHeartbeat';
 import { createInMemoryOfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
+
+function acknowledgeCompletion(input: {
+  assignmentGeneration?: string;
+  clientEventId: string;
+  queue: ReturnType<typeof createInMemoryOfflineSubmissionQueue>;
+  routePlanId: string;
+}) {
+  const item = input.queue.enqueueDriverEvent({
+    assignmentGeneration: input.assignmentGeneration ?? '11',
+    clientEventId: input.clientEventId,
+    driverContractVersion: 2,
+    eventType: 'ROUTE_COMPLETED',
+    occurredAt: new Date(),
+    routePlanId: input.routePlanId,
+  });
+  input.queue.acknowledge(item.queueItemId);
+  return input.queue.listPendingCompletionClearEntries().find((entry) => (
+    entry.completionClientEventId === input.clientEventId
+  ))!;
+}
+
+function completionAccess(routePlanId: string, assignmentGeneration = '11') {
+  return { assignmentGeneration, driverContractVersion: 2 as const, routePlanId };
+}
 
 const request = {
   appVersion: '2.8.0',
@@ -326,27 +350,30 @@ describe('driver sync heartbeat', () => {
     const routePlanId = '11111111-1111-4111-8111-111111111111';
     const createQueue = () => {
       const queue = createInMemoryOfflineSubmissionQueue();
-      const item = queue.enqueueDriverEvent({
-        clientEventId: 'completed', eventType: 'ROUTE_COMPLETED', occurredAt: new Date(), routePlanId,
-      });
-      queue.acknowledge(item.queueItemId);
-      return queue;
+      const outboxEntry = acknowledgeCompletion({ clientEventId: 'completed', queue, routePlanId });
+      return { outboxEntry, queue };
     };
     let serverCalls = 0;
+    const rejectedQueue = createQueue();
     const rejected = await attemptDriverCompletionClearHeartbeat({
+      accessIdentity: completionAccess(routePlanId),
       appVersion: '1.2.0', completedStopCount: 11, driverContractVersion: 2,
       heartbeatService: { recordHeartbeat: async () => { serverCalls += 1; throw new Error('unused'); } },
       identityService: { next: async () => { throw new Error('secure store rejected'); } },
-      queue: createQueue(), routePlanId, sessionKey: 'account:route:generation', versionCode: 18,
+      outboxEntry: rejectedQueue.outboxEntry, queue: rejectedQueue.queue,
+      sessionKey: 'account:route:generation', versionCode: 18,
     });
     assert.equal(rejected.failure, 'failed');
 
     const expirations: (() => void)[] = [];
+    const hungQueue = createQueue();
     const hungPromise = attemptDriverCompletionClearHeartbeat({
+      accessIdentity: completionAccess(routePlanId),
       appVersion: '1.2.0', attemptTimeoutMs: 10, cancelAttemptTimeout: () => undefined,
       completedStopCount: 11, driverContractVersion: 2,
       heartbeatService: { recordHeartbeat: async () => { serverCalls += 1; throw new Error('unused'); } },
-      identityService: { next: () => new Promise(() => undefined) }, queue: createQueue(), routePlanId,
+      identityService: { next: () => new Promise(() => undefined) },
+      outboxEntry: hungQueue.outboxEntry, queue: hungQueue.queue,
       scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
       sessionKey: 'account:route:generation', versionCode: 18,
     });
@@ -359,16 +386,14 @@ describe('driver sync heartbeat', () => {
   it('keeps the durable ACK-clear outbox until an accepted server observation', async () => {
     const routePlanId = '11111111-1111-4111-8111-111111111111';
     const queue = createInMemoryOfflineSubmissionQueue();
-    const item = queue.enqueueDriverEvent({
-      clientEventId: 'completed', eventType: 'ROUTE_COMPLETED', occurredAt: new Date(), routePlanId,
-    });
-    queue.acknowledge(item.queueItemId);
+    const outboxEntry = acknowledgeCompletion({ clientEventId: 'completed', queue, routePlanId });
     const base = {
+      accessIdentity: completionAccess(routePlanId),
       appVersion: '1.2.0', completedStopCount: 11, driverContractVersion: 2 as const,
       identityService: { next: async () => ({
         deviceInstanceHash: 'a'.repeat(64), heartbeatSequence: 1, sessionGeneration: 'generation',
       }) },
-      queue, routePlanId, sessionKey: 'account:route:generation', versionCode: 18,
+      outboxEntry, queue, sessionKey: 'account:route:generation', versionCode: 18,
     };
     const unauthorized = await attemptDriverCompletionClearHeartbeat({
       ...base,
@@ -393,13 +418,11 @@ describe('driver sync heartbeat', () => {
   it('bounds a hung delivered-marker persistence without losing accepted evidence or closing the outbox', async () => {
     const routePlanId = '11111111-1111-4111-8111-111111111111';
     const baseQueue = createInMemoryOfflineSubmissionQueue();
-    const item = baseQueue.enqueueDriverEvent({
-      clientEventId: 'accepted-persist-hang', eventType: 'ROUTE_COMPLETED', occurredAt: new Date(), routePlanId,
-    });
-    baseQueue.acknowledge(item.queueItemId);
+    const outboxEntry = acknowledgeCompletion({ clientEventId: 'accepted-persist-hang', queue: baseQueue, routePlanId });
     const queue = { ...baseQueue, whenPersisted: () => new Promise<void>(() => undefined) };
     const expirations: (() => void)[] = [];
     const attempt = attemptDriverCompletionClearHeartbeat({
+      accessIdentity: completionAccess(routePlanId),
       appVersion: '1.2.0', attemptTimeoutMs: 10, cancelAttemptTimeout: () => undefined,
       completedStopCount: null, driverContractVersion: 2,
       heartbeatService: { recordHeartbeat: async () => ({
@@ -408,7 +431,7 @@ describe('driver sync heartbeat', () => {
       identityService: { next: async () => ({
         deviceInstanceHash: 'a'.repeat(64), heartbeatSequence: 3, sessionGeneration: 'generation',
       }) },
-      queue, routePlanId,
+      outboxEntry, queue,
       scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
       sessionKey: 'account:route:generation', versionCode: 18,
     });
@@ -425,19 +448,17 @@ describe('driver sync heartbeat', () => {
   it('aborts ACK-clear identity and transport work on logout while preserving the account outbox', async () => {
     const routePlanId = '11111111-1111-4111-8111-111111111111';
     const queue = createInMemoryOfflineSubmissionQueue();
-    const item = queue.enqueueDriverEvent({
-      clientEventId: 'logout-abort', eventType: 'ROUTE_COMPLETED', occurredAt: new Date(), routePlanId,
-    });
-    queue.acknowledge(item.queueItemId);
+    const outboxEntry = acknowledgeCompletion({ clientEventId: 'logout-abort', queue, routePlanId });
     const lifecycle = new AbortController();
     const attempt = attemptDriverCompletionClearHeartbeat({
+      accessIdentity: completionAccess(routePlanId),
       appVersion: '1.2.0', completedStopCount: null, driverContractVersion: 2,
       heartbeatService: { recordHeartbeat: () => new Promise(() => undefined) },
       identityService: { next: async () => ({
         deviceInstanceHash: 'a'.repeat(64), heartbeatSequence: 1, sessionGeneration: 'generation-a',
       }) },
       lifecycleSignal: lifecycle.signal,
-      queue, routePlanId, sessionKey: 'account-a:route:generation', versionCode: 18,
+      outboxEntry, queue, sessionKey: 'account-a:route:generation', versionCode: 18,
     });
     lifecycle.abort();
     assert.equal((await attempt).observed, false);
@@ -446,10 +467,14 @@ describe('driver sync heartbeat', () => {
 
   it('fairly attempts route B when route A access is missing and rotates the next start', async () => {
     const delivered: string[] = [];
-    const result = await flushDriverCompletionClearOutboxRoutes({
-      deliver: async (routePlanId) => { delivered.push(routePlanId); return true; },
-      resolveAccess: async (routePlanId) => routePlanId === 'route-b',
-      routePlanIds: ['route-a', 'route-b'],
+    const entries = ['route-a', 'route-b'].map((routePlanId) => ({
+      accountOwnerHash: 'test-account-owner', assignmentGeneration: '11',
+      completionClientEventId: `completion-${routePlanId}`, driverContractVersion: 2, routePlanId,
+    }));
+    const result = await flushDriverCompletionClearOutboxEntries({
+      deliver: async (entry) => { delivered.push(entry.routePlanId); return true; },
+      entries,
+      resolveAccess: async (entry) => entry.routePlanId === 'route-b',
       startIndex: 0,
     });
     assert.deepEqual(delivered, ['route-b']);
@@ -459,14 +484,18 @@ describe('driver sync heartbeat', () => {
   it('delivers route B without waiting for a hung route-A token recovery lane', async () => {
     const delivered: string[] = [];
     const expirations: (() => void)[] = [];
-    const flush = flushDriverCompletionClearOutboxRoutes({
+    const entries = ['route-a', 'route-b'].map((routePlanId) => ({
+      accountOwnerHash: 'test-account-owner', assignmentGeneration: '11',
+      completionClientEventId: `completion-${routePlanId}`, driverContractVersion: 2, routePlanId,
+    }));
+    const flush = flushDriverCompletionClearOutboxEntries({
       attemptTimeoutMs: 10,
       cancelAttemptTimeout: () => undefined,
-      deliver: async (routePlanId) => { delivered.push(routePlanId); return true; },
-      resolveAccess: (routePlanId) => routePlanId === 'route-a'
+      deliver: async (entry) => { delivered.push(entry.routePlanId); return true; },
+      entries,
+      resolveAccess: (entry) => entry.routePlanId === 'route-a'
         ? new Promise(() => undefined)
         : Promise.resolve(true),
-      routePlanIds: ['route-a', 'route-b'],
       scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
       startIndex: 0,
     });
@@ -505,25 +534,26 @@ describe('driver sync heartbeat', () => {
   it('refreshes a 401 route token once and closes the outbox only after the refreshed observation', async () => {
     const routePlanId = '11111111-1111-4111-8111-111111111111';
     const queue = createInMemoryOfflineSubmissionQueue();
-    const item = queue.enqueueDriverEvent({
-      clientEventId: 'completed-refresh', eventType: 'ROUTE_COMPLETED', occurredAt: new Date(), routePlanId,
-    });
-    queue.acknowledge(item.queueItemId);
+    const outboxEntry = acknowledgeCompletion({ clientEventId: 'completed-refresh', queue, routePlanId });
     let refreshCalls = 0;
     const outcome = await deliverDriverCompletionClearHeartbeat({
       attempt: {
+        accessIdentity: completionAccess(routePlanId),
         appVersion: '1.2.0', completedStopCount: null, driverContractVersion: 2,
         heartbeatService: { recordHeartbeat: async () => { throw new DriverSyncHeartbeatHttpError(401); } },
         identityService: { next: async () => ({
           deviceInstanceHash: 'a'.repeat(64), heartbeatSequence: 1, sessionGeneration: 'generation',
         }) },
-        queue, routePlanId, sessionKey: 'account:route:generation', versionCode: 18,
+        outboxEntry, queue, sessionKey: 'account:route:generation', versionCode: 18,
       },
-      refreshHeartbeatService: async () => {
+      refreshHeartbeatAccess: async () => {
         refreshCalls += 1;
-        return { recordHeartbeat: async () => ({
-          accepted: true, conflict: false, heartbeatSequence: 2, state: 'HEALTHY',
-        }) };
+        return {
+          accessIdentity: completionAccess(routePlanId),
+          heartbeatService: { recordHeartbeat: async () => ({
+            accepted: true, conflict: false, heartbeatSequence: 2, state: 'HEALTHY',
+          }) },
+        };
       },
     });
     assert.equal(refreshCalls, 1);
@@ -531,27 +561,77 @@ describe('driver sync heartbeat', () => {
     assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), []);
   });
 
+  it('refuses a generation-12 token for a generation-11 completion on the same route id', async () => {
+    const routePlanId = '11111111-1111-4111-8111-111111111111';
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const outboxEntry = acknowledgeCompletion({
+      assignmentGeneration: '11', clientEventId: 'completion-gen-11', queue, routePlanId,
+    });
+    let refreshedServerCalls = 0;
+    const outcome = await deliverDriverCompletionClearHeartbeat({
+      attempt: {
+        accessIdentity: completionAccess(routePlanId, '11'),
+        appVersion: '1.2.0', completedStopCount: null, driverContractVersion: 2,
+        heartbeatService: { recordHeartbeat: async () => { throw new DriverSyncHeartbeatHttpError(401); } },
+        identityService: { next: async () => ({
+          deviceInstanceHash: 'a'.repeat(64), heartbeatSequence: 1, sessionGeneration: 'generation',
+        }) },
+        outboxEntry, queue, sessionKey: 'account:route:generation-11', versionCode: 18,
+      },
+      refreshHeartbeatAccess: async () => ({
+        accessIdentity: completionAccess(routePlanId, '12'),
+        heartbeatService: { recordHeartbeat: async () => {
+          refreshedServerCalls += 1;
+          return { accepted: true, conflict: false, heartbeatSequence: 2, state: 'HEALTHY' };
+        } },
+      }),
+    });
+    assert.equal(outcome.failure, 'unauthorized');
+    assert.equal(refreshedServerCalls, 0);
+    assert.deepEqual(queue.listPendingCompletionClearEntries(), [outboxEntry]);
+  });
+
+  it('rechecks the captured account after token resolution before delivering a reused route id', async () => {
+    const entry = {
+      accountOwnerHash: 'a'.repeat(64), assignmentGeneration: '11',
+      completionClientEventId: 'account-a-completion', driverContractVersion: 2, routePlanId: 'same-route',
+    } as const;
+    let activeOwner = entry.accountOwnerHash;
+    let releaseAccess!: () => void;
+    let deliveries = 0;
+    const flush = flushDriverCompletionClearOutboxEntries({
+      deliver: async () => { deliveries += 1; return true; },
+      entries: [entry],
+      isCurrent: () => activeOwner === entry.accountOwnerHash,
+      resolveAccess: () => new Promise<boolean>((resolve) => { releaseAccess = () => resolve(true); }),
+      startIndex: 0,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    activeOwner = 'b'.repeat(64);
+    releaseAccess();
+    assert.deepEqual(await flush, { delivered: 0, nextIndex: 0 });
+    assert.equal(deliveries, 0);
+  });
+
   it('bounds a hung 401 token refresh and leaves the outbox open', async () => {
     const routePlanId = '11111111-1111-4111-8111-111111111111';
     const queue = createInMemoryOfflineSubmissionQueue();
-    const item = queue.enqueueDriverEvent({
-      clientEventId: 'completed-refresh-hang', eventType: 'ROUTE_COMPLETED', occurredAt: new Date(), routePlanId,
-    });
-    queue.acknowledge(item.queueItemId);
+    const outboxEntry = acknowledgeCompletion({ clientEventId: 'completed-refresh-hang', queue, routePlanId });
     let expireLatest: (() => void) | undefined;
     const delivery = deliverDriverCompletionClearHeartbeat({
       attempt: {
+        accessIdentity: completionAccess(routePlanId),
         appVersion: '1.2.0', attemptTimeoutMs: 10, cancelAttemptTimeout: () => undefined,
         completedStopCount: null, driverContractVersion: 2,
         heartbeatService: { recordHeartbeat: async () => { throw new DriverSyncHeartbeatHttpError(401); } },
         identityService: { next: async () => ({
           deviceInstanceHash: 'a'.repeat(64), heartbeatSequence: 1, sessionGeneration: 'generation',
         }) },
-        queue, routePlanId,
+        outboxEntry, queue,
         scheduleAttemptTimeout: (expire) => { expireLatest = expire; return expire; },
         sessionKey: 'account:route:generation', versionCode: 18,
       },
-      refreshHeartbeatService: () => new Promise(() => undefined),
+      refreshHeartbeatAccess: () => new Promise(() => undefined),
     });
     await new Promise((resolve) => setImmediate(resolve));
     expireLatest?.();
@@ -562,22 +642,20 @@ describe('driver sync heartbeat', () => {
   it('does not let an accepted account-A response close account-B state after the epoch changes', async () => {
     const routePlanId = '11111111-1111-4111-8111-111111111111';
     const queue = createInMemoryOfflineSubmissionQueue();
-    const item = queue.enqueueDriverEvent({
-      clientEventId: 'late-account-a', eventType: 'ROUTE_COMPLETED', occurredAt: new Date(), routePlanId,
-    });
-    queue.acknowledge(item.queueItemId);
+    const outboxEntry = acknowledgeCompletion({ clientEventId: 'late-account-a', queue, routePlanId });
     let currentEpoch = 7;
     let resolveServer!: (result: {
       accepted: boolean; conflict: boolean; heartbeatSequence: number; state: 'HEALTHY';
     }) => void;
     const attempt = attemptDriverCompletionClearHeartbeat({
+      accessIdentity: completionAccess(routePlanId),
       appVersion: '1.2.0', completedStopCount: null, driverContractVersion: 2,
       heartbeatService: { recordHeartbeat: () => new Promise((resolve) => { resolveServer = resolve; }) },
       identityService: { next: async () => ({
         deviceInstanceHash: 'a'.repeat(64), heartbeatSequence: 1, sessionGeneration: 'generation-a',
       }) },
       isAttemptCurrent: () => currentEpoch === 7,
-      queue, routePlanId, sessionKey: 'account-a:route:generation', versionCode: 18,
+      outboxEntry, queue, sessionKey: 'account-a:route:generation', versionCode: 18,
     });
     await new Promise((resolve) => setImmediate(resolve));
     currentEpoch = 8;

@@ -165,8 +165,8 @@ describe('delivery finish route cleanup', () => {
       },
       driverEventService: driverEvents,
       offlineQueue: queue,
-      onServerAcknowledged: async (routePlanId) => {
-        assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), [routePlanId]);
+      onServerAcknowledged: async (entry) => {
+        assert.deepEqual(queue.listPendingCompletionClearEntries(), [entry]);
         order.push('heartbeat-handoff');
         throw new Error('transport rejected after durable handoff');
       },

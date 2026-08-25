@@ -28,22 +28,32 @@ authorized separately and tied back to the exact committed source SHA.
   queue evidence immediately after the completion enters pending state.
 - Confirm the durable receipt acknowledgement changes the next immediate
   heartbeat to `finishPending=false` and supplies `lastAcknowledgedAt`.
-- Confirm every server-acknowledged completion opens an account/route-scoped
-  durable clear-heartbeat outbox record. Close it only after an accepted,
+- Confirm every server-acknowledged completion opens a durable clear-heartbeat
+  outbox record keyed by account owner hash, route, assignment generation, and
+  completion client-event identity. Never deduplicate or close by route alone.
+  Close the exact record only after an accepted,
   non-conflicting server observation; restart, timeout, `401`, or session
   cleanup must leave it retryable. A `401` gets one bounded route-token refresh.
+- Require the full refreshed route-access tuple to match the outbox route,
+  assignment generation, and driver contract version before sending. A token
+  from a reassigned generation must never clear an older completion.
 - Treat the pre-existing server-ACK outbox row as write-ahead evidence. Bound
   the delivered-marker persistence step and reopen the row after timeout or
   storage failure while retaining the accepted server result for diagnostics.
 - Process pending clear rows fairly across routes. A missing, overwritten, or
   expired token for one route must not prevent another route from attempting
   its independently resolved token.
+- Retain an acknowledged completion indefinitely while its clear heartbeat is
+  unsent. Start the 30-day terminal evidence retention window only at the
+  durable `ACK_CLEAR_DELIVERED` timestamp.
 - Confirm online completion hands the durable server acknowledgement to the
   heartbeat path before GPS cleanup, while cleanup failure and telemetry
   failure remain independently recoverable.
 - Confirm logout, account change, and route-session change abort in-flight
-  heartbeat transport, clear displayed sync health, and reject late responses
-  from the prior epoch.
+  heartbeat transport, stop both heartbeat schedulers, clear displayed sync
+  health, and reject late responses from the prior epoch. Do not rearm account
+  transport until encrypted queue account binding succeeds, and recheck the
+  captured account owner after every awaited outbox operation.
 - Confirm heartbeat cadence is 60 seconds when healthy and 30 seconds when
   degraded. One central rolling limiter covers periodic, immediate-pending,
   clear-acknowledgement, and `401` retry calls and must reject any third write

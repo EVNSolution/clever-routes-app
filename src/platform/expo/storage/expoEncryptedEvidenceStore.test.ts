@@ -801,6 +801,36 @@ describe('encrypted driver evidence store', () => {
     assert.deepEqual(restarted.listPending(), []);
   });
 
+  it('keeps an acknowledged completion clear outbox past 30 days in encrypted storage', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    let currentTime = new Date('2026-06-01T00:00:00.000Z');
+    const keyStore = { getItemAsync: async () => '73'.repeat(32), setItemAsync: async () => undefined };
+    const openStore = () => createEncryptedEvidenceStore({
+      keyStore,
+      now: () => currentTime,
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const first = await createPersistentOfflineSubmissionQueue({ now: () => currentTime, storage: await openStore() });
+    const completion = first.enqueueDriverEvent({
+      assignmentGeneration: '11', clientEventId: 'encrypted-long-lived-clear', driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED', occurredAt: currentTime, routePlanId: 'encrypted-route',
+    });
+    first.acknowledge(completion.queueItemId);
+    await first.whenPersisted();
+
+    currentTime = new Date('2026-07-05T00:00:00.000Z');
+    const restarted = await createPersistentOfflineSubmissionQueue({ now: () => currentTime, storage: await openStore() });
+    const [entry] = restarted.listPendingCompletionClearEntries();
+    assert.equal(entry?.completionClientEventId, 'encrypted-long-lived-clear');
+    assert.equal(restarted.markCompletionClearHeartbeatDelivered(entry!), true);
+    await restarted.whenPersisted();
+
+    currentTime = new Date('2026-08-05T00:00:01.000Z');
+    const expired = await createPersistentOfflineSubmissionQueue({ now: () => currentTime, storage: await openStore() });
+    assert.equal(expired.getRouteCompletionTelemetry('encrypted-route').locallyFinished, false);
+  });
+
   it('preserves quarantine and journal rows when replacing the active queue snapshot', async () => {
     const db = createDatabase();
     const store = await createEncryptedEvidenceStore({

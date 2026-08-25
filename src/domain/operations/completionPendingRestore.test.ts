@@ -131,11 +131,19 @@ describe('completion-pending cold restore', () => {
       },
       onPending: () => undefined,
       onResolved: async () => {
+        const outboxEntry = queue.listPendingCompletionClearEntries().find((entry) => (
+          entry.completionClientEventId === 'cold-restart-hostile'
+        ))!;
         const attempt = attemptDriverCompletionClearHeartbeat({
+          accessIdentity: {
+            assignmentGeneration: sampleInvitedRouteAccess.routeAccess.assignmentGeneration,
+            driverContractVersion: 2,
+            routePlanId,
+          },
           appVersion: '1.2.0', attemptTimeoutMs: 10, cancelAttemptTimeout: () => undefined,
           completedStopCount: 11, driverContractVersion: 2,
           heartbeatService: { recordHeartbeat: async () => { throw new Error('must not reach server'); } },
-          identityService: { next: () => new Promise(() => undefined) }, queue, routePlanId,
+          identityService: { next: () => new Promise(() => undefined) }, outboxEntry, queue,
           scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
           sessionKey: 'account:route:generation', versionCode: 18,
         });
