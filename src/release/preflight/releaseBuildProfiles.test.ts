@@ -81,7 +81,7 @@ test('documents a source-only Driver pilot candidate that cannot be mistaken for
 
   assert.match(runbook, /Driver issue \| `EVNSolution\/clever-routes-app#210`/u);
   assert.match(runbook, /Change control \| `EVNSolution\/clever-change-control#265`/u);
-  assert.match(runbook, /Candidate app source SHA \| `dd57a55c60298486ae05f75f7931f625532eaa9f`/u);
+  assert.match(runbook, /Candidate app source SHA \| `ab59bacd26b93d9a788a589a1f1eed054760f797`/u);
   assert.match(runbook, /App version \| `1\.2\.0`/u);
   assert.match(runbook, /Android version code \| `18`/u);
   assert.match(runbook, /iOS build number \| `1`/u);
