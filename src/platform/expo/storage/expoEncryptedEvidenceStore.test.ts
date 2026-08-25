@@ -527,6 +527,8 @@ describe('encrypted driver evidence store', () => {
       'driver-event:valid-schema',
       'driver-event:valid-location',
     ]);
+    const restoredLocation = queue.listPending().find((item) => item.queueItemId === 'driver-event:valid-location');
+    assert.equal(restoredLocation?.kind === 'driver_event' ? restoredLocation.event.accuracyMeters : null, 8);
     assert.equal(db.tables.get('workflow_evidence')?.has(invalidKey), false);
     assert.equal(db.tables.get('sensitive_evidence')?.has(invalidKey), false);
     assert.equal(db.tables.get('sensitive_evidence')?.get(validKey), validSensitiveBefore);

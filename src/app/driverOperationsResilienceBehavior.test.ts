@@ -8,7 +8,7 @@ const pillModelSource = readFileSync(new URL('../ui/components/operationalPillMo
 describe('driver operations resilience runtime', () => {
   it('runs heartbeat independently while online and foreground and surfaces lease state', () => {
     assert.match(source, /createDriverSyncHeartbeatScheduler\([\s\S]*hasActiveSession:[\s\S]*isForeground: \(\) => AppState\.currentState === 'active'[\s\S]*isOnline: \(\) => networkReachability === 'online'/u);
-    assert.match(source, /createDriverSyncTakeoverApiClient[\s\S]*accountAccessToken:[\s\S]*onDriverSyncTakeover/u);
+    assert.match(source, /createDriverSyncTakeoverApiClient[\s\S]*accountAccessToken:[\s\S]*<OperationalPills[\s\S]*onTakeover=\{\(\) => \{ void handleDriverSyncTakeover\(\); \}\}/u);
   });
 
   it('surfaces independent operational values including progress gap and keeps completion pending visible', () => {

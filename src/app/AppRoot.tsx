@@ -5260,9 +5260,7 @@ function DriverApp() {
               isStartingRoute={isStartingRoute}
               isSwitchingRoute={pendingRoutePlanId !== null}
               offlineStorageState={offlineStorageState}
-              operationalPillValues={operationalPillValues}
               onDeleteRoute={handleDeleteActiveRoute}
-              onDriverSyncTakeover={() => { void handleDriverSyncTakeover(); }}
               onOpenCompletedDeliveries={(routeId) => {
                 const routeSession = getRouteSessionForAction(routeSessions, routeId);
                 if (routeSession === null) {
@@ -5600,9 +5598,7 @@ function MyRoutesPage({
   isStartingRoute,
   isSwitchingRoute,
   offlineStorageState,
-  operationalPillValues,
   onDeleteRoute,
-  onDriverSyncTakeover,
   onOpenCompletedDeliveries,
   onOpenBackgroundLocationSettings,
   onContinueRoute,
@@ -5625,9 +5621,7 @@ function MyRoutesPage({
   isStartingRoute: boolean;
   isSwitchingRoute: boolean;
   offlineStorageState: 'READY' | 'STORAGE_DEGRADED';
-  operationalPillValues: Parameters<typeof OperationalPills>[0]['values'];
   onDeleteRoute(routeId: string): void;
-  onDriverSyncTakeover(): void;
   onOpenCompletedDeliveries(routeId: string): void;
   onOpenBackgroundLocationSettings(): void;
   onContinueRoute(routeId: string): void;
@@ -5662,7 +5656,6 @@ function MyRoutesPage({
 
   return (
     <View style={styles.myRoutesPage}>
-      <OperationalPills onTakeover={onDriverSyncTakeover} values={operationalPillValues} />
       {offlineStorageState === 'STORAGE_DEGRADED' ? (
         <View accessibilityRole="alert" style={styles.backgroundLocationWarning}>
           <View style={styles.backgroundLocationWarningCopy}>

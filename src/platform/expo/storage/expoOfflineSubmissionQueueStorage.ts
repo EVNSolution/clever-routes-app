@@ -29,7 +29,7 @@ export async function createExpoOfflineSubmissionQueueStorage() {
     randomBytes: Crypto.getRandomBytesAsync,
     sha256: async (value) => new Uint8Array(await Crypto.digest(
       Crypto.CryptoDigestAlgorithm.SHA256,
-      Uint8Array.from(value).buffer,
+      Uint8Array.from(value),
     )),
   });
 }
@@ -57,14 +57,23 @@ export async function bindExpoOfflineSubmissionQueueAccount(phoneE164: string): 
   return queue;
 }
 
-function adaptDatabase(database: SQLite.SQLiteDatabase): EvidenceDatabase {
+function adaptDatabase(
+  database: SQLite.SQLiteDatabase,
+  keyPragma: { value: string | null } = { value: null },
+): EvidenceDatabase {
   return {
-    execAsync: (sql) => database.execAsync(sql),
+    execAsync: async (sql) => {
+      if (sql.startsWith('PRAGMA key = ')) keyPragma.value = sql;
+      await database.execAsync(sql);
+    },
     getAllAsync: <T>(sql: string, ...params: unknown[]) => database.getAllAsync<T>(sql, ...(params as SQLite.SQLiteVariadicBindParams)),
     getFirstAsync: <T>(sql: string, ...params: unknown[]) => database.getFirstAsync<T>(sql, ...(params as SQLite.SQLiteVariadicBindParams)),
     runAsync: (sql, ...params) => database.runAsync(sql, ...(params as SQLite.SQLiteVariadicBindParams)),
-    withExclusiveTransactionAsync: (operation) => database.withExclusiveTransactionAsync(
-      async (transaction) => operation(adaptDatabase(transaction)),
-    ),
+    withExclusiveTransactionAsync: (operation) => database.withExclusiveTransactionAsync(async (transaction) => {
+      const keyPragmaSql = keyPragma.value;
+      if (keyPragmaSql === null) throw new Error('Encrypted evidence database key was not applied.');
+      await transaction.execAsync(keyPragmaSql);
+      await operation(adaptDatabase(transaction, keyPragma));
+    }),
   };
 }
