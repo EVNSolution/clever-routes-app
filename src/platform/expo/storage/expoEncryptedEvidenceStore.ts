@@ -898,6 +898,7 @@ function redactReplayPayload(item: Record<string, unknown>) {
   return {
     ...identity,
     event: {
+      ...(event.accuracyMeters === undefined ? {} : { accuracyMeters: event.accuracyMeters }),
       ...(event.appVersion === undefined ? {} : { appVersion: event.appVersion }),
       ...(event.assignmentGeneration === undefined ? {} : { assignmentGeneration: event.assignmentGeneration }),
       clientEventId: event.clientEventId,

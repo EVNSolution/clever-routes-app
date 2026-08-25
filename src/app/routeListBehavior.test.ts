@@ -27,6 +27,7 @@ describe('routes list behavior', () => {
     assert.match(source, /import Ionicons from '@expo\/vector-icons\/Ionicons'/u);
     assert.match(source, /screen === 'mainTabs' \? \([\s\S]*rightAccessibilityLabel="Settings"[\s\S]*rightIcon="settings"[\s\S]*title="My Routes"/u);
     assert.doesNotMatch(routesPage, /accessibilityLabel="Settings"|>My Routes</u);
+    assert.doesNotMatch(routesPage, /<OperationalPills/u);
     assert.doesNotMatch(routesPage, /⚙/u);
     assert.match(source, /<View style=\{styles\.standardScreenFrame\}>[\s\S]*\{standardScreenHeader\}[\s\S]*<ScrollView/u);
     assert.match(routesPage, /title="No routes assigned yet"/u);

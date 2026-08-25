@@ -219,6 +219,10 @@ describe('Expo continuous location wiring', () => {
     assert.match(appSource, /getExpoOfflineSubmissionQueue/u);
     assert.match(locationSource, /getExpoOfflineSubmissionQueue/u);
     assert.match(storageSource, /offlineSubmissionQueuePromise/u);
+    assert.match(storageSource, /Crypto\.digest\([\s\S]*Uint8Array\.from\(value\),/u);
+    assert.doesNotMatch(storageSource, /Uint8Array\.from\(value\)\.buffer/u);
+    assert.match(storageSource, /withExclusiveTransactionAsync: \(operation\) => database\.withExclusiveTransactionAsync\([\s\S]*await transaction\.execAsync\(keyPragmaSql\)/u);
+    assert.doesNotMatch(storageSource, /=> database\.withTransactionAsync\(/u);
     assert.match(secureStoreSource, /driverAccessTokenStore \?\?=/u);
   });
 });
