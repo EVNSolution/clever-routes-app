@@ -80,6 +80,9 @@ describe('driver operations resilience runtime', () => {
     assert.ok(ordinaryRetryIndex > 0 && ordinarySignalIndex > ordinaryRetryIndex);
     assert.ok(ordinaryOwnerIndex > ordinarySignalIndex && ordinaryDomainGuardIndex > ordinaryOwnerIndex);
     assert.ok(ordinaryCleanupGuardIndex > ordinaryDomainGuardIndex && ordinaryCleanupIndex > ordinaryCleanupGuardIndex);
+    assert.match(source.slice(ordinaryRetryIndex, ordinaryCleanupIndex), /persistAccess: false, persistAccountAccess: false,/u);
+    assert.match(source.slice(ordinaryRetryIndex, ordinaryCleanupIndex), /preserveMissingRoute: true, projectRuntimeState: false,/u);
+    assert.match(source.slice(ordinaryRetryIndex, ordinaryCleanupIndex), /persistRefreshedAccess: false/u);
 
     const receiptRetryIndex = source.indexOf('const retryCompletionPendingReceipt = useCallback');
     const receiptEpochIndex = source.indexOf('const requestEpoch = driverSyncAccountEpochRef.current;', receiptRetryIndex);
@@ -89,6 +92,7 @@ describe('driver operations resilience runtime', () => {
     assert.ok(receiptRetryIndex > 0 && receiptEpochIndex > receiptRetryIndex);
     assert.ok(receiptDomainGuardIndex > receiptEpochIndex && receiptCleanupGuardIndex > receiptDomainGuardIndex);
     assert.ok(receiptCleanupIndex > receiptCleanupGuardIndex);
+    assert.match(source.slice(receiptRetryIndex, receiptCleanupIndex), /persistRefreshedAccess: false/u);
   });
 
   it('does not destroy cached completion identity when ACK-clear token refresh cannot find the ended route', () => {

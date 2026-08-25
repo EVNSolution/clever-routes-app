@@ -692,7 +692,7 @@ function DriverApp() {
   const driverAuthService = runtimeServices.driverAuthService;
 
   const getActiveAccountAccess = useCallback(async (
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; persistRefreshedAccess?: boolean },
   ): Promise<DriverAccountAccessToken | null> => {
     const restoredAccess = await driverAccessTokenStore.loadActiveDriverAccess();
     if (options?.isCurrent?.() === false) return null;
@@ -707,7 +707,9 @@ function DriverApp() {
       refreshToken: restoredAccess.accountAccess.refreshToken,
     });
     if (options?.isCurrent?.() === false) return null;
-    await driverAccessTokenStore.saveRefreshedAccountAccess(refreshResult.accountAccess);
+    if (options?.persistRefreshedAccess !== false) {
+      await driverAccessTokenStore.saveRefreshedAccountAccess(refreshResult.accountAccess);
+    }
     if (options?.isCurrent?.() === false) return null;
     return refreshResult.accountAccess;
   }, [driverAccessTokenStore, driverAuthService]);
@@ -1055,7 +1057,13 @@ function DriverApp() {
 
   const refreshRouteAccessTupleForSubmission = useCallback(async (
     routePlanId: string,
-    options?: { isCurrent?: () => boolean; preserveMissingRoute?: boolean },
+    options?: {
+      isCurrent?: () => boolean;
+      persistAccess?: boolean;
+      persistAccountAccess?: boolean;
+      preserveMissingRoute?: boolean;
+      projectRuntimeState?: boolean;
+    },
   ): Promise<{
     driverAccess: DriverAccessToken;
     routeAccess: RouteAccessRouteChoice['routeAccess'];
@@ -1066,7 +1074,10 @@ function DriverApp() {
 
     try {
       if (options?.isCurrent?.() === false) return null;
-      const accountAccess = await getActiveAccountAccess({ isCurrent: options?.isCurrent });
+      const accountAccess = await getActiveAccountAccess({
+        isCurrent: options?.isCurrent,
+        persistRefreshedAccess: options?.persistAccountAccess,
+      });
       if (options?.isCurrent?.() === false || accountAccess === null) {
         return null;
       }
@@ -1100,20 +1111,24 @@ function DriverApp() {
 
       const refreshedSubmission = toCompanyGuidanceSubmission(refreshedChoice);
       if (options?.isCurrent?.() === false) return null;
-      setSubmission((current) => (
-        current?.kind === 'company_guidance' && current.routeAccess.routePlanId === routePlanId
-          ? refreshedSubmission
-          : current
-      ));
-      setRouteSessions((current) => current.map((session) => (
-        session.routeAccess.routePlanId === routePlanId ? { ...session, ...refreshedChoice } : session
-      )));
-      await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(refreshedSubmission)).catch((error) => {
-        if (options?.isCurrent?.() === false) return false;
-        const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
-        console.warn(`[driver-api] Refreshed route access could not be saved: ${errorMessage}`);
-        return false;
-      });
+      if (options?.projectRuntimeState !== false) {
+        setSubmission((current) => (
+          current?.kind === 'company_guidance' && current.routeAccess.routePlanId === routePlanId
+            ? refreshedSubmission
+            : current
+        ));
+        setRouteSessions((current) => current.map((session) => (
+          session.routeAccess.routePlanId === routePlanId ? { ...session, ...refreshedChoice } : session
+        )));
+      }
+      if (options?.persistAccess !== false) {
+        await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(refreshedSubmission)).catch((error) => {
+          if (options?.isCurrent?.() === false) return false;
+          const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+          console.warn(`[driver-api] Refreshed route access could not be saved: ${errorMessage}`);
+          return false;
+        });
+      }
       if (options?.isCurrent?.() === false) return null;
       console.info('[driver-api] Refreshed route access after expired token.');
       return {
@@ -1130,28 +1145,38 @@ function DriverApp() {
 
   const refreshRouteAccessLookupForSubmission = useCallback(async (
     routePlanId: string,
-    options?: { isCurrent?: () => boolean; preserveMissingRoute?: boolean },
+    options?: Parameters<typeof refreshRouteAccessTupleForSubmission>[1],
   ): Promise<DriverAccessToken | null> => (
     await refreshRouteAccessTupleForSubmission(routePlanId, options)
   )?.driverAccess ?? null, [refreshRouteAccessTupleForSubmission]);
 
   const refreshDriverAccessForSubmission = useCallback(async (
     currentSubmission: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>,
-    options?: { isCurrent?: () => boolean; preserveMissingRoute?: boolean },
+    options?: Parameters<typeof refreshRouteAccessTupleForSubmission>[1],
   ): Promise<DriverAccessToken | null> => {
     return refreshRouteAccessLookupForSubmission(currentSubmission.routeAccess.routePlanId, options);
   }, [refreshRouteAccessLookupForSubmission]);
 
   const buildDriverAccessRefresh = useCallback((
     currentSubmission: RouteAccessSubmissionResult | null,
-    options?: { isCurrent?: () => boolean; lifecycleSignal?: AbortSignal; preserveMissingRoute?: boolean },
+    options?: {
+      isCurrent?: () => boolean;
+      lifecycleSignal?: AbortSignal;
+      persistAccess?: boolean;
+      persistAccountAccess?: boolean;
+      preserveMissingRoute?: boolean;
+      projectRuntimeState?: boolean;
+    },
   ): ((signal?: AbortSignal) => Promise<DriverAccessToken | null>) | undefined => (
     currentSubmission?.kind === 'company_guidance'
       ? (signal) => refreshDriverAccessForSubmission(currentSubmission, {
           isCurrent: () => signal?.aborted !== true
             && options?.lifecycleSignal?.aborted !== true
             && options?.isCurrent?.() !== false,
+          persistAccess: options?.persistAccess,
+          persistAccountAccess: options?.persistAccountAccess,
           preserveMissingRoute: options?.preserveMissingRoute,
+          projectRuntimeState: options?.projectRuntimeState,
         })
       : undefined
   ), [refreshDriverAccessForSubmission]);
@@ -1335,7 +1360,7 @@ function DriverApp() {
         return false;
       }
       const receiptAccountAccess = runtimeConfig.mode === 'live' ? await runBoundedAsyncOperation(
-        async () => getActiveAccountAccess({ isCurrent }),
+        async () => getActiveAccountAccess({ isCurrent, persistRefreshedAccess: false }),
         { signal: lifecycleSignal, timeoutMs: 15_000 },
       ) : null;
       if (!isCurrent()) return false;
@@ -1345,7 +1370,8 @@ function DriverApp() {
       for (const session of sessions) {
         const routeSubmission = toCompanyGuidanceSubmission(session);
         const refreshDriverAccess = buildDriverAccessRefresh(routeSubmission, {
-          isCurrent, lifecycleSignal, preserveMissingRoute: true,
+          isCurrent, lifecycleSignal, persistAccess: false, persistAccountAccess: false,
+          preserveMissingRoute: true, projectRuntimeState: false,
         });
         const result = await retryOfflineSubmissions({
           ...(runtimeConfig.mode !== 'live' ? {} : {
@@ -3109,7 +3135,7 @@ function DriverApp() {
         && queue?.getAccountOwnerHash() === accountOwnerHash;
       if (!isCurrent()) return false;
       const accountAccess = await runBoundedAsyncOperation(
-        async () => getActiveAccountAccess({ isCurrent }),
+        async () => getActiveAccountAccess({ isCurrent, persistRefreshedAccess: false }),
         { signal: lifecycleSignal, timeoutMs: 15_000 },
       );
       if (!isCurrent() || accountAccess === null || queue.storageState() === 'STORAGE_DEGRADED') return false;
