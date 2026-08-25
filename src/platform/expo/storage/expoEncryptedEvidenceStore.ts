@@ -8,6 +8,7 @@ import {
   type OfflineEvidenceState,
   type OfflineSubmissionQueueStorage,
 } from '../../../domain/offline/offlineSubmissionQueue';
+import type { DriverEventType } from '../../../domain/events/driverEvents';
 
 export const DRIVER_EVIDENCE_DATABASE_NAME = 'clever_driver_evidence_v2.db';
 export const DRIVER_EVIDENCE_KEY_STORAGE_KEY = 'clever.driverEvidence.sqlcipherKey.v2';
@@ -576,9 +577,14 @@ function isExpiredTerminalEvidence(item: Record<string, unknown>, now: Date) {
     typeof item.enqueuedAt !== 'string'
     || (item.state !== 'ACKNOWLEDGED' && item.state !== 'DISCARDED')
   ) return false;
+  const event = typeof item.event === 'object' && item.event !== null
+    ? item.event as Record<string, unknown>
+    : undefined;
   return isOfflineTerminalEvidenceExpired({
     enqueuedAt: item.enqueuedAt,
+    ...(typeof event?.eventType === 'string' ? { event: { eventType: event.eventType as DriverEventType } } : {}),
     journal: readJournalEntries(item.journal),
+    ...(item.kind === 'driver_event' || item.kind === 'proof_media' ? { kind: item.kind } : {}),
     state: item.state as OfflineEvidenceState,
   }, now);
 }
@@ -595,7 +601,7 @@ function readJournalEntries(value: unknown): OfflineEvidenceJournalEntry[] {
     if (
       typeof candidate.at !== 'string'
       || typeof candidate.code !== 'string'
-      || !['ACK', 'ATTEMPT', 'DISCARD', 'ENQUEUED', 'RECONCILIATION'].includes(String(candidate.kind))
+      || !['ACK', 'ATTEMPT', 'DISCARD', 'ENQUEUED', 'HEARTBEAT', 'RECONCILIATION'].includes(String(candidate.kind))
     ) return [];
     return [{
       at: candidate.at,

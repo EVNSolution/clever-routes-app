@@ -9,9 +9,17 @@ export class BoundedOperationTimeoutError extends Error {
   }
 }
 
+export class BoundedOperationAbortedError extends Error {
+  constructor() {
+    super('OPERATION_ABORTED');
+    this.name = 'AbortError';
+  }
+}
+
 export type BoundedAsyncOperationOptions = {
   cancel?: (handle: unknown) => void;
   schedule?: (expire: () => void, timeoutMs: number) => unknown;
+  signal?: AbortSignal;
   timeoutMs: number;
 };
 
@@ -25,18 +33,33 @@ export function runBoundedAsyncOperation<T>(
   return new Promise<T>((resolve, reject) => {
     let settled = false;
     const controller = new AbortController();
+    const inputSignal = options.signal;
+    const abortFromLifecycle = () => {
+      if (settled) return;
+      settled = true;
+      controller.abort();
+      cancel(timer);
+      reject(new BoundedOperationAbortedError());
+    };
     const timer = schedule(() => {
       if (settled) return;
       settled = true;
       controller.abort();
+      inputSignal?.removeEventListener('abort', abortFromLifecycle);
       reject(new BoundedOperationTimeoutError());
     }, options.timeoutMs);
+    if (inputSignal?.aborted === true) {
+      abortFromLifecycle();
+      return;
+    }
+    inputSignal?.addEventListener('abort', abortFromLifecycle, { once: true });
     let source: Promise<T>;
     try {
       source = operation(controller.signal);
     } catch (error) {
       settled = true;
       cancel(timer);
+      inputSignal?.removeEventListener('abort', abortFromLifecycle);
       reject(error);
       return;
     }
@@ -45,12 +68,14 @@ export function runBoundedAsyncOperation<T>(
         if (settled) return;
         settled = true;
         cancel(timer);
+        inputSignal?.removeEventListener('abort', abortFromLifecycle);
         resolve(value);
       },
       (error: unknown) => {
         if (settled) return;
         settled = true;
         cancel(timer);
+        inputSignal?.removeEventListener('abort', abortFromLifecycle);
         reject(error);
       },
     );

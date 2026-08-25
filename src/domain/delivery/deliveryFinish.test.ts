@@ -152,6 +152,57 @@ describe('delivery finish route cleanup', () => {
     ]);
   });
 
+  it('hands durable SERVER_ACK to the clear-heartbeat outbox before GPS cleanup', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const driverEvents = createMockDriverEventService();
+    const order: string[] = [];
+    const stream = createMockStreamService();
+    stream.service.stopLocationUpdates = async () => { order.push('gps-stop'); };
+
+    const result = await finishDeliveryAfterActive({
+      deliveryStart: {
+        flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active',
+      },
+      driverEventService: driverEvents,
+      offlineQueue: queue,
+      onServerAcknowledged: async (entry) => {
+        assert.deepEqual(queue.listPendingCompletionClearEntries(), [entry]);
+        order.push('heartbeat-handoff');
+        throw new Error('transport rejected after durable handoff');
+      },
+      routePlanId: 'route-1',
+      streamService: stream.service,
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.deepEqual(order, ['heartbeat-handoff', 'gps-stop']);
+    assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), ['route-1']);
+  });
+
+  it('does not let hung ACK-clear persistence permanently block online GPS cleanup', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const stream = createMockStreamService();
+    const expirations: (() => void)[] = [];
+    const finish = finishDeliveryAfterActive({
+      deliveryStart: {
+        flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active',
+      },
+      driverEventService: createMockDriverEventService(),
+      offlineQueue: queue,
+      onServerAcknowledged: () => new Promise(() => undefined),
+      onServerAcknowledgedCancelTimeout: () => undefined,
+      onServerAcknowledgedScheduleTimeout: (expire) => { expirations.push(expire); return expire; },
+      onServerAcknowledgedTimeoutMs: 10,
+      routePlanId: 'route-1',
+      streamService: stream.service,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expirations.shift()?.();
+    assert.equal((await finish).kind, 'recorded');
+    assert.deepEqual(stream.stoppedTasks, ['clever-routes-continuous-location']);
+    assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), ['route-1']);
+  });
+
   it('attaches prepared route termination metadata to the completion event', async () => {
     const driverEvents = createMockDriverEventService();
     const stream = createMockStreamService();

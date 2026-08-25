@@ -86,7 +86,7 @@ export type DriverRouteEtaUpdate = {
 
 export type DriverEventService = {
   prepareDriverEvent?(input: DriverEventInput): DriverEventInput;
-  recordDriverEvent(input: DriverEventInput): Promise<DriverEventRecordResult>;
+  recordDriverEvent(input: DriverEventInput, options?: { signal?: AbortSignal }): Promise<DriverEventRecordResult>;
 };
 
 export function prepareDriverEventForPersistence(
@@ -130,6 +130,7 @@ export type FetchLike = (
     credentials?: 'omit';
     headers?: Record<string, string>;
     method?: string;
+    signal?: AbortSignal;
   },
 ) => Promise<{
   json(): Promise<unknown>;
@@ -161,23 +162,28 @@ export function createDriverEventsApiClient(input: {
   const baseUrl = input.baseUrl.replace(/\/$/u, '');
   const fetchImpl = input.fetchImpl ?? globalThis.fetch;
   const prepareDriverEvent = (event: DriverEventInput): DriverEventInput => {
-    if (event.eventType !== 'LOCATION_UPDATED' && input.orderedEventContract !== undefined) {
-      Object.assign(event, input.orderedEventContract);
+    if (
+      event.eventType !== 'LOCATION_UPDATED'
+      && input.orderedEventContract !== undefined
+      && !hasCompleteOrderedEventContract(event)
+    ) {
+      return { ...event, ...input.orderedEventContract };
     }
     return event;
   };
 
   return {
     prepareDriverEvent,
-    recordDriverEvent: async (event) => {
-      prepareDriverEvent(event);
+    recordDriverEvent: async (event, options) => {
+      const preparedEvent = prepareDriverEvent(event);
       const response = await fetchImpl(`${baseUrl}/driver/events`, withNoStoreDriverApiRequest({
-        body: JSON.stringify(toDriverEventRequestBody(event)),
+        body: JSON.stringify(toDriverEventRequestBody(preparedEvent)),
         headers: {
           Authorization: `Bearer ${input.accessToken}`,
           'Content-Type': 'application/json',
         },
         method: 'POST',
+        signal: options?.signal,
       }));
       const payload = await response.json();
       if (!response.ok) {
@@ -191,6 +197,14 @@ export function createDriverEventsApiClient(input: {
       return readDriverEventRecordEnvelope(payload);
     },
   };
+}
+
+function hasCompleteOrderedEventContract(event: DriverEventInput): boolean {
+  return typeof event.appVersion === 'string' && event.appVersion.trim() !== ''
+    && typeof event.assignmentGeneration === 'string' && /^\d+$/u.test(event.assignmentGeneration)
+    && event.driverContractVersion === 2
+    && typeof event.expectedRouteVersionId === 'string' && event.expectedRouteVersionId.trim() !== ''
+    && Number.isSafeInteger(event.versionCode) && (event.versionCode ?? 0) > 0;
 }
 
 export async function recordRouteStartedAfterDeliveryStart(input: {

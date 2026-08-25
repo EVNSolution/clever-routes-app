@@ -7,7 +7,11 @@ import {
 } from '../../api/deliveryServer/driverApiError';
 import { prepareDriverEventForPersistence, type DriverEventService } from '../events/driverEvents';
 import type { DriverFlowState } from '../driverFlow/driverFlow';
-import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
+import type {
+  OfflineCompletionClearOutboxEntry,
+  OfflineSubmissionQueue,
+} from '../offline/offlineSubmissionQueue';
+import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
 
 export type DeliveryFinishResult =
   | {
@@ -49,6 +53,13 @@ export async function finishDeliveryAfterActive(input: {
   eventPayload?: Record<string, unknown>;
   now?: Date;
   offlineQueue?: OfflineSubmissionQueue;
+  onServerAcknowledged?: (
+    entry: OfflineCompletionClearOutboxEntry,
+    signal: AbortSignal,
+  ) => Promise<void>;
+  onServerAcknowledgedCancelTimeout?: (handle: unknown) => void;
+  onServerAcknowledgedScheduleTimeout?: (expire: () => void, timeoutMs: number) => unknown;
+  onServerAcknowledgedTimeoutMs?: number;
   routeEnd?: 'completed' | 'released';
   routePlanId: string | null;
   streamService: ContinuousLocationStreamService;
@@ -107,6 +118,33 @@ export async function finishDeliveryAfterActive(input: {
       ? 0
       : input.offlineQueue.discardRouteSubmissions(input.routePlanId);
     await input.offlineQueue?.whenPersisted();
+    if (!routeReleased && input.routePlanId !== null && preparedQueueItem !== undefined) {
+      try {
+        if (input.onServerAcknowledged !== undefined) {
+          const completionClearEntry: OfflineCompletionClearOutboxEntry = {
+            accountOwnerHash: preparedQueueItem.accountOwnerHash,
+            assignmentGeneration: preparedQueueItem.event.assignmentGeneration ?? null,
+            completionClientEventId: preparedQueueItem.event.clientEventId,
+            driverContractVersion: preparedQueueItem.event.driverContractVersion ?? null,
+            routePlanId: input.routePlanId,
+          };
+          await runBoundedAsyncOperation(
+            (signal) => input.onServerAcknowledged!(completionClearEntry, signal),
+            {
+              ...(input.onServerAcknowledgedCancelTimeout === undefined
+                ? {}
+                : { cancel: input.onServerAcknowledgedCancelTimeout }),
+              ...(input.onServerAcknowledgedScheduleTimeout === undefined
+                ? {}
+                : { schedule: input.onServerAcknowledgedScheduleTimeout }),
+              timeoutMs: input.onServerAcknowledgedTimeoutMs ?? 15_000,
+            },
+          );
+        }
+      } catch {
+        // The durable completion-clear outbox retries independently of route-session cleanup.
+      }
+    }
     await input.streamService.stopLocationUpdates(taskName);
 
     return {

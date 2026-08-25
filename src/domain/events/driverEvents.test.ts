@@ -44,6 +44,36 @@ describe('driver event API boundary', () => {
     assert.deepEqual(body, routeCompletedRequest);
   });
 
+  it('preserves immutable queued lineage when a reassigned route client replays an older completion', async () => {
+    let body: Record<string, unknown> | undefined;
+    const service = createDriverEventsApiClient({
+      accessToken: 'generation-12-route-token',
+      baseUrl: 'https://delivery.example.com',
+      orderedEventContract: {
+        appVersion: '1.2.0', assignmentGeneration: '12', driverContractVersion: 2,
+        expectedRouteVersionId: '33333333-3333-4333-8333-333333333333', versionCode: 18,
+      },
+      fetchImpl: async (_url, init) => {
+        body = JSON.parse(init?.body ?? '{}') as Record<string, unknown>;
+        return { json: async () => ({ data: { duplicate: false, eventId: 'older-completion' }, error: null }), ok: true, status: 202 };
+      },
+    });
+    const queuedGeneration11 = {
+      appVersion: '1.1.6', assignmentGeneration: '11', clientEventId: 'completion-generation-11',
+      driverContractVersion: 2 as const, eventType: 'ROUTE_COMPLETED' as const,
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId: 'reused-route', versionCode: 17,
+    };
+
+    await service.recordDriverEvent(queuedGeneration11);
+
+    assert.equal(body?.assignmentGeneration, '11');
+    assert.equal(body?.expectedRouteVersionId, '22222222-2222-4222-8222-222222222222');
+    assert.equal(body?.appVersion, '1.1.6');
+    assert.equal(body?.versionCode, 17);
+    assert.equal(queuedGeneration11.assignmentGeneration, '11');
+  });
+
   it('posts route started events with driver bearer token evidence', async () => {
     const requests: { body: unknown; cache?: string; credentials?: string; headers: Record<string, string>; method: string; url: string }[] = [];
     const service = createDriverEventsApiClient({

@@ -37,7 +37,7 @@ export type OfflineSubmissionQueueRetryPolicy = {
 
 export type OfflineSubmissionReconciliation = {
   blockedAt: string;
-  reason: 'account_signed_out' | 'proof_idempotency_conflict' | 'retry_policy_exceeded' | 'route_not_in_progress';
+  reason: 'account_signed_out' | 'assignment_changed' | 'event_identity_conflict' | 'proof_idempotency_conflict' | 'retry_policy_exceeded' | 'route_not_in_progress';
 };
 
 export type OfflineEvidenceState = 'ACKNOWLEDGED' | 'DISCARDED' | 'PENDING' | 'QUARANTINED';
@@ -45,7 +45,7 @@ export type OfflineEvidenceState = 'ACKNOWLEDGED' | 'DISCARDED' | 'PENDING' | 'Q
 export type OfflineEvidenceJournalEntry = {
   at: string;
   code: string;
-  kind: 'ACK' | 'ATTEMPT' | 'DISCARD' | 'ENQUEUED' | 'RECONCILIATION';
+  kind: 'ACK' | 'ATTEMPT' | 'DISCARD' | 'ENQUEUED' | 'HEARTBEAT' | 'RECONCILIATION';
 };
 
 export function retainOfflineEvidenceJournal(
@@ -56,16 +56,37 @@ export function retainOfflineEvidenceJournal(
   return journal
     .filter((entry) => {
       const timestamp = Date.parse(entry.at);
-      return Number.isFinite(timestamp) && timestamp >= cutoff;
+      return Number.isFinite(timestamp) && (
+        timestamp >= cutoff
+        || (entry.kind === 'ACK' && entry.code === 'SERVER_ACK')
+        || (entry.kind === 'HEARTBEAT' && entry.code === 'ACK_CLEAR_DELIVERED')
+      );
     })
     .slice(-64);
 }
 
 export function isOfflineTerminalEvidenceExpired(
-  item: Pick<OfflineEvidenceIdentity, 'journal' | 'state'> & { enqueuedAt: string },
+  item: Pick<OfflineEvidenceIdentity, 'journal' | 'state'> & {
+    enqueuedAt: string;
+    event?: Pick<DriverEventInput, 'eventType'>;
+    kind?: OfflineSubmissionQueueItem['kind'];
+  },
   now: Date,
 ): boolean {
   if (item.state !== 'ACKNOWLEDGED' && item.state !== 'DISCARDED') return false;
+  if (
+    item.kind === 'driver_event'
+    && item.event?.eventType === 'ROUTE_COMPLETED'
+    && item.state === 'ACKNOWLEDGED'
+  ) {
+    const deliveredEntry = [...item.journal].reverse().find((entry) => (
+      entry.kind === 'HEARTBEAT' && entry.code === 'ACK_CLEAR_DELIVERED'
+    ));
+    if (deliveredEntry === undefined) return false;
+    const deliveredAt = Date.parse(deliveredEntry.at);
+    return Number.isFinite(deliveredAt)
+      && now.getTime() - deliveredAt > OFFLINE_EVIDENCE_AUDIT_RETENTION_MS;
+  }
   const terminalEntry = [...item.journal].reverse().find((entry) => entry.kind === 'ACK' || entry.kind === 'DISCARD');
   const timestamp = Date.parse(terminalEntry?.at ?? item.enqueuedAt);
   return Number.isFinite(timestamp) && now.getTime() - timestamp > OFFLINE_EVIDENCE_AUDIT_RETENTION_MS;
@@ -114,13 +135,34 @@ export type OfflineSubmissionQueue = {
   enqueueDriverEvent(event: DriverEventInput): OfflineDriverEventQueueItem;
   enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
   enqueueProofMediaUpload(request: ProofMediaUploadRequest): OfflineProofMediaQueueItem;
+  getAccountOwnerHash(): string | null;
+  getCompletionClearTelemetry(entry: OfflineCompletionClearOutboxEntry): OfflineRouteCompletionTelemetry | null;
+  getRouteCompletionTelemetry(routePlanId: string): OfflineRouteCompletionTelemetry;
+  listPendingCompletionClearEntries(): OfflineCompletionClearOutboxEntry[];
+  listPendingCompletionClearRoutePlanIds(): string[];
   listPending(): OfflineSubmissionQueueItem[];
+  markCompletionClearHeartbeatDelivered(entry: OfflineCompletionClearOutboxEntry): boolean;
   quarantine(queueItemId: string, reason: OfflineSubmissionReconciliation['reason']): boolean;
   recordRetryFailure(queueItemId: string, lastError: unknown): boolean;
+  reopenCompletionClearHeartbeat(entry: OfflineCompletionClearOutboxEntry): boolean;
   sealForAccountChange(): { discardedLocations: number; sealed: number };
   storageState(): 'READY' | 'STORAGE_DEGRADED';
   recoverStorage(): Promise<boolean>;
   whenPersisted(): Promise<void>;
+};
+
+export type OfflineCompletionClearOutboxEntry = {
+  accountOwnerHash: string;
+  assignmentGeneration: string | null;
+  completionClientEventId: string;
+  driverContractVersion: number | null;
+  routePlanId: string;
+};
+
+export type OfflineRouteCompletionTelemetry = {
+  finishPending: boolean;
+  lastAcknowledgedAt: string | null;
+  locallyFinished: boolean;
 };
 
 export type OfflineSubmissionQueueStorage = {
@@ -186,21 +228,21 @@ export function createRouteOrderedDriverEventService(input: {
 }): DriverEventService {
   return {
     prepareDriverEvent: (event) => prepareDriverEventForPersistence(input.driverEventService, event),
-    recordDriverEvent: async (event) => {
-      prepareDriverEventForPersistence(input.driverEventService, event);
+    recordDriverEvent: async (event, options) => {
+      const preparedEvent = prepareDriverEventForPersistence(input.driverEventService, event);
       if (
-        ROUTE_WORKFLOW_EVENT_TYPES.has(event.eventType)
+        ROUTE_WORKFLOW_EVENT_TYPES.has(preparedEvent.eventType)
         && input.queue.listPending().some((item) => (
           item.kind === 'driver_event'
           && item.event.routePlanId === input.routePlanId
-          && item.event.clientEventId !== event.clientEventId
+          && item.event.clientEventId !== preparedEvent.clientEventId
           && ROUTE_WORKFLOW_EVENT_TYPES.has(item.event.eventType)
         ))
       ) {
         throw new Error('Earlier route updates are waiting to sync. This update will be queued in order.');
       }
 
-      return input.driverEventService.recordDriverEvent(event);
+      return input.driverEventService.recordDriverEvent(preparedEvent, options);
     },
   };
 }
@@ -246,10 +288,10 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
   }
 
   function appendJournal(item: OfflineSubmissionQueueItem, kind: OfflineEvidenceJournalEntry['kind'], code: string) {
-    const cutoff = now().getTime() - 30 * 24 * 60 * 60 * 1000;
-    item.journal = [...item.journal, { at: now().toISOString(), code, kind }]
-      .filter((entry) => Date.parse(entry.at) >= cutoff)
-      .slice(-64);
+    item.journal = retainOfflineEvidenceJournal(
+      [...item.journal, { at: now().toISOString(), code, kind }],
+      now(),
+    );
   }
 
   function transition(item: OfflineSubmissionQueueItem, state: OfflineEvidenceState, kind: OfflineEvidenceJournalEntry['kind'], code: string) {
@@ -270,7 +312,18 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
     const queueItemId = getDriverEventQueueItemId(event);
     const existing = findActiveItem(queueItemId);
     if (existing?.kind === 'driver_event') {
-      if (hasCompleteOrderedEventContract(event) && !hasSameOrderedEventContract(existing.event, event)) {
+      if (!hasSameImmutableDriverEventIdentity(existing.event, event)) {
+        if (existing.reconciliation === undefined) {
+          existing.reconciliation = { blockedAt: now().toISOString(), reason: 'event_identity_conflict' };
+          transition(existing, 'QUARANTINED', 'RECONCILIATION', 'EVENT_IDENTITY_CONFLICT');
+          return { changed: true, inserted: false, item: existing };
+        }
+        return { changed: false, inserted: false, item: existing };
+      }
+      if (
+        hasCompleteOrderedEventContract(event)
+        && !hasCompleteOrderedEventContract(existing.event)
+      ) {
         existing.event = {
           ...existing.event,
           appVersion: event.appVersion,
@@ -280,6 +333,17 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
           versionCode: event.versionCode,
         };
         return { changed: true, inserted: false, item: existing };
+      }
+      if (
+        hasCompleteOrderedEventContract(existing.event)
+        && hasCompleteOrderedEventContract(event)
+        && !hasSameOrderedEventContract(existing.event, event)
+      ) {
+        if (existing.reconciliation === undefined) {
+          existing.reconciliation = { blockedAt: now().toISOString(), reason: 'assignment_changed' };
+          transition(existing, 'QUARANTINED', 'RECONCILIATION', 'ASSIGNMENT_CHANGED');
+          return { changed: true, inserted: false, item: existing };
+        }
       }
       return { changed: false, inserted: false, item: existing };
     }
@@ -449,9 +513,95 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       emitChange();
       return item;
     },
+    getAccountOwnerHash: () => activeAccountOwnerHash,
+    getCompletionClearTelemetry: (entry) => {
+      const completion = activeItems().find((item): item is OfflineDriverEventQueueItem => (
+        item.kind === 'driver_event'
+        && item.event.eventType === 'ROUTE_COMPLETED'
+        && item.accountOwnerHash === entry.accountOwnerHash
+        && item.event.routePlanId === entry.routePlanId
+        && (item.event.assignmentGeneration ?? null) === entry.assignmentGeneration
+        && item.event.clientEventId === entry.completionClientEventId
+        && (item.event.driverContractVersion ?? null) === entry.driverContractVersion
+      ));
+      if (completion === undefined || completion.state === 'DISCARDED') return null;
+      const acknowledgedAt = completion.state === 'ACKNOWLEDGED'
+        ? [...completion.journal].reverse().find((journalEntry) => (
+            journalEntry.kind === 'ACK' && journalEntry.code === 'SERVER_ACK'
+          ))?.at ?? null
+        : null;
+      return {
+        finishPending: acknowledgedAt === null,
+        lastAcknowledgedAt: acknowledgedAt,
+        locallyFinished: true,
+      };
+    },
+    getRouteCompletionTelemetry: (routePlanId) => {
+      const completion = activeItems()
+        .filter((item): item is OfflineDriverEventQueueItem => (
+          item.kind === 'driver_event'
+          && item.event.eventType === 'ROUTE_COMPLETED'
+          && item.event.routePlanId === routePlanId
+        ))
+        .sort((left, right) => right.queueSequence - left.queueSequence)[0];
+      if (completion === undefined || completion.state === 'DISCARDED') {
+        return { finishPending: false, lastAcknowledgedAt: null, locallyFinished: false };
+      }
+      const acknowledgedAt = completion.state === 'ACKNOWLEDGED'
+        ? [...completion.journal].reverse().find((entry) => (
+            entry.kind === 'ACK' && entry.code === 'SERVER_ACK'
+          ))?.at ?? null
+        : null;
+      return {
+        finishPending: acknowledgedAt === null,
+        lastAcknowledgedAt: acknowledgedAt,
+        locallyFinished: true,
+      };
+    },
+    listPendingCompletionClearEntries: () => activeItems()
+      .filter((item): item is OfflineDriverEventQueueItem => (
+        item.kind === 'driver_event'
+        && item.event.eventType === 'ROUTE_COMPLETED'
+        && item.event.routePlanId !== null
+        && item.state === 'ACKNOWLEDGED'
+        && item.journal.some((entry) => entry.kind === 'ACK' && entry.code === 'SERVER_ACK')
+        && !item.journal.some((entry) => entry.kind === 'HEARTBEAT' && entry.code === 'ACK_CLEAR_DELIVERED')
+      ))
+      .sort((left, right) => left.queueSequence - right.queueSequence)
+      .map((item) => ({
+        accountOwnerHash: item.accountOwnerHash,
+        assignmentGeneration: item.event.assignmentGeneration ?? null,
+        completionClientEventId: item.event.clientEventId,
+        driverContractVersion: item.event.driverContractVersion ?? null,
+        routePlanId: item.event.routePlanId!,
+      })),
+    listPendingCompletionClearRoutePlanIds: () => queue.listPendingCompletionClearEntries()
+      .map((entry) => entry.routePlanId),
     listPending: () => activeItems()
       .filter((item) => item.state === 'PENDING' || item.state === 'QUARANTINED')
       .sort((left, right) => left.queueSequence - right.queueSequence),
+    markCompletionClearHeartbeatDelivered: (entry) => {
+      requireMutable();
+      const completion = activeItems()
+        .find((item): item is OfflineDriverEventQueueItem => (
+          item.kind === 'driver_event'
+          && item.event.eventType === 'ROUTE_COMPLETED'
+          && item.accountOwnerHash === entry.accountOwnerHash
+          && item.event.routePlanId === entry.routePlanId
+          && (item.event.assignmentGeneration ?? null) === entry.assignmentGeneration
+          && item.event.clientEventId === entry.completionClientEventId
+          && (item.event.driverContractVersion ?? null) === entry.driverContractVersion
+          && item.state === 'ACKNOWLEDGED'
+          && item.journal.some((journalEntry) => journalEntry.kind === 'ACK' && journalEntry.code === 'SERVER_ACK')
+          && !item.journal.some((journalEntry) => (
+            journalEntry.kind === 'HEARTBEAT' && journalEntry.code === 'ACK_CLEAR_DELIVERED'
+          ))
+        ));
+      if (completion === undefined) return false;
+      appendJournal(completion, 'HEARTBEAT', 'ACK_CLEAR_DELIVERED');
+      emitChange();
+      return true;
+    },
     quarantine: (queueItemId, reason) => {
       requireMutable();
       const item = findActiveItem(queueItemId);
@@ -473,6 +623,25 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       item.firstErrorCode ??= errorCode;
       item.lastErrorCode = errorCode;
       appendJournal(item, 'ATTEMPT', errorCode);
+      emitChange();
+      return true;
+    },
+    reopenCompletionClearHeartbeat: (entry) => {
+      const completion = activeItems().find((item): item is OfflineDriverEventQueueItem => (
+        item.kind === 'driver_event'
+        && item.event.eventType === 'ROUTE_COMPLETED'
+        && item.accountOwnerHash === entry.accountOwnerHash
+        && item.event.routePlanId === entry.routePlanId
+        && (item.event.assignmentGeneration ?? null) === entry.assignmentGeneration
+        && item.event.clientEventId === entry.completionClientEventId
+        && (item.event.driverContractVersion ?? null) === entry.driverContractVersion
+      ));
+      if (completion === undefined) return false;
+      const filteredJournal = completion.journal.filter((journalEntry) => !(
+        journalEntry.kind === 'HEARTBEAT' && journalEntry.code === 'ACK_CLEAR_DELIVERED'
+      ));
+      if (filteredJournal.length === completion.journal.length) return false;
+      completion.journal = filteredJournal;
       emitChange();
       return true;
     },
@@ -592,6 +761,8 @@ export async function recoverPendingRouteEndReceipt(input: {
   attemptTimeoutMs?: number;
   cancelAttemptTimeout?: (handle: unknown) => void;
   driverEventReceiptService: DriverEventReceiptService;
+  isCurrent?: () => boolean;
+  lifecycleSignal?: AbortSignal;
   queue: OfflineSubmissionQueue;
   routePlanId: string;
   scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
@@ -603,26 +774,31 @@ export async function recoverPendingRouteEndReceipt(input: {
   ));
   if (item === undefined) return 'none';
 
-  const receipt = await runBoundedAsyncOperation(() => input.driverEventReceiptService.lookupReceipt({
+  const isCurrent = () => input.lifecycleSignal?.aborted !== true && input.isCurrent?.() !== false;
+  if (!isCurrent()) return 'pending';
+  const receipt = await runBoundedAsyncOperation((signal) => input.driverEventReceiptService.lookupReceipt({
     clientEventId: item.event.clientEventId,
     routePlanId: input.routePlanId,
-  }), {
+  }, { signal }), {
     ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+    ...(input.lifecycleSignal === undefined ? {} : { signal: input.lifecycleSignal }),
     ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
     timeoutMs: input.attemptTimeoutMs ?? 15_000,
   }).catch((error: unknown) => {
     if (!(error instanceof BoundedOperationTimeoutError)) throw error;
-    input.queue.recordRetryFailure(item.queueItemId, OPERATION_TIMEOUT_CODE);
+    if (isCurrent()) input.queue.recordRetryFailure(item.queueItemId, OPERATION_TIMEOUT_CODE);
     return null;
   });
-  if (receipt === null) return 'pending';
+  if (receipt === null || !isCurrent()) return 'pending';
   const resolution = resolveCompletionReceipt(item.event, receipt);
   if (resolution.kind === 'retry') return 'pending';
   if (resolution.kind === 'reconcile') {
+    if (!isCurrent()) return 'pending';
     input.queue.blockRouteSubmissionsForReconciliation(input.routePlanId);
     return 'reconciliation';
   }
 
+  if (!isCurrent()) return 'pending';
   input.queue.acknowledge(item.queueItemId);
   input.queue.discardRouteSubmissions(input.routePlanId);
   return 'acknowledged';
@@ -633,6 +809,14 @@ export async function retryOfflineSubmissions(input: {
   cancelAttemptTimeout?: (handle: unknown) => void;
   driverEventReceiptService?: DriverEventReceiptService;
   driverEventService: DriverEventService;
+  isCurrent?: () => boolean;
+  lifecycleSignal?: AbortSignal;
+  orderedEventAccessIdentity?: {
+    assignmentGeneration: string;
+    driverContractVersion: number;
+    expectedRouteVersionId: string;
+    routePlanId: string;
+  };
   now?: () => Date;
   proofMediaUploadService: ProofMediaUploadService;
   queue: OfflineSubmissionQueue;
@@ -664,13 +848,16 @@ export async function retryOfflineSubmissions(input: {
   const completionAcknowledgedRoutePlanIds = new Set<string>();
   const reconciliationRoutePlanIds = new Set<string>();
   const serverConfirmedStopIds = new Set<string>();
+  const isCurrent = () => input.lifecycleSignal?.aborted !== true && input.isCurrent?.() !== false;
   const runAttempt = <T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> => runBoundedAsyncOperation(operation, {
     ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+    ...(input.lifecycleSignal === undefined ? {} : { signal: input.lifecycleSignal }),
     ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
     timeoutMs: input.attemptTimeoutMs ?? 15_000,
   });
 
   for (const item of pending) {
+    if (!isCurrent()) break;
     const routePlanId = getQueueItemRoutePlanId(item);
     if (routePlanId !== undefined && workflowBlockedRoutePlanIds.has(routePlanId) && isOrderedWorkflowEvidence(item)) {
       continue;
@@ -702,15 +889,27 @@ export async function retryOfflineSubmissions(input: {
     try {
       if (item.kind === 'driver_event') {
         if (
+          isOrderedWorkflowEvidence(item)
+          && input.orderedEventAccessIdentity !== undefined
+          && !hasExactOrderedEventAccessIdentity(item.event, input.orderedEventAccessIdentity)
+        ) {
+          if (input.queue.quarantine(item.queueItemId, 'assignment_changed')) blocked += 1;
+          if (routePlanId !== undefined) {
+            workflowBlockedRoutePlanIds.add(routePlanId);
+          }
+          continue;
+        }
+        if (
           (item.event.eventType === 'ROUTE_COMPLETED' || item.event.eventType === 'ROUTE_PAUSED')
           && item.event.routePlanId != null
           && input.driverEventReceiptService !== undefined
         ) {
           const receiptRoutePlanId = item.event.routePlanId;
-          const receipt = await runAttempt(() => input.driverEventReceiptService!.lookupReceipt({
+          const receipt = await runAttempt((signal) => input.driverEventReceiptService!.lookupReceipt({
             clientEventId: item.event.clientEventId,
             routePlanId: receiptRoutePlanId,
-          }));
+          }, { signal }));
+          if (!isCurrent()) break;
           const resolution = resolveCompletionReceipt(item.event, receipt);
           if (resolution.kind === 'reconcile') {
             const recovery = input.queue.blockRouteSubmissionsForReconciliation(item.event.routePlanId);
@@ -728,7 +927,8 @@ export async function retryOfflineSubmissions(input: {
             continue;
           }
         }
-        await runAttempt(() => input.driverEventService.recordDriverEvent(item.event));
+        await runAttempt((signal) => input.driverEventService.recordDriverEvent(item.event, { signal }));
+        if (!isCurrent()) break;
         if (item.event.eventType === 'PICKUP_COMPLETED') {
           requiresRouteLookup = true;
           routeLookupReason = 'pickup_eta_snapshot_synced';
@@ -739,6 +939,7 @@ export async function retryOfflineSubmissions(input: {
           signal,
         }));
       }
+      if (!isCurrent()) break;
       input.queue.acknowledge(item.queueItemId);
       succeeded += 1;
       if (item.kind === 'driver_event' && isTerminalStopDriverEvent(item) && item.event.deliveryStopId != null) {
@@ -755,6 +956,7 @@ export async function retryOfflineSubmissions(input: {
         discarded += input.queue.discardRouteSubmissions(item.event.routePlanId);
       }
     } catch (error) {
+      if (!isCurrent()) break;
       if (
         routePlanId !== undefined
         && getDriverApiRequiresRouteReconciliation(error) === true
@@ -923,6 +1125,38 @@ function hasSameOrderedEventContract(left: DriverEventInput, right: DriverEventI
     && left.driverContractVersion === right.driverContractVersion
     && left.expectedRouteVersionId === right.expectedRouteVersionId
     && left.versionCode === right.versionCode;
+}
+
+function hasSameImmutableDriverEventIdentity(left: DriverEventInput, right: DriverEventInput): boolean {
+  return left.clientEventId === right.clientEventId
+    && left.eventType === right.eventType
+    && (left.routePlanId ?? null) === (right.routePlanId ?? null)
+    && (left.deliveryStopId ?? null) === (right.deliveryStopId ?? null)
+    && left.occurredAt.toISOString() === right.occurredAt.toISOString()
+    && (left.latitude ?? null) === (right.latitude ?? null)
+    && (left.longitude ?? null) === (right.longitude ?? null)
+    && (left.accuracyMeters ?? null) === (right.accuracyMeters ?? null)
+    && JSON.stringify(sortJsonValue(left.payload ?? null)) === JSON.stringify(sortJsonValue(right.payload ?? null));
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJsonValue);
+  if (typeof value !== 'object' || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, sortJsonValue(nested)]),
+  );
+}
+
+function hasExactOrderedEventAccessIdentity(
+  event: DriverEventInput,
+  access: NonNullable<Parameters<typeof retryOfflineSubmissions>[0]['orderedEventAccessIdentity']>,
+): boolean {
+  return event.routePlanId === access.routePlanId
+    && event.assignmentGeneration === access.assignmentGeneration
+    && event.driverContractVersion === access.driverContractVersion
+    && event.expectedRouteVersionId === access.expectedRouteVersionId;
 }
 
 function getProofMediaQueueItemId(request: ProofMediaUploadRequest): string {
@@ -1163,6 +1397,8 @@ function readOptionalReconciliation(value: unknown): OfflineSubmissionReconcilia
     blockedAt === null
     || ![
       'account_signed_out',
+      'assignment_changed',
+      'event_identity_conflict',
       'proof_idempotency_conflict',
       'retry_policy_exceeded',
       'route_not_in_progress',
@@ -1302,7 +1538,7 @@ function readJournal(value: unknown, now: () => Date): OfflineEvidenceJournalEnt
     const at = readRequiredString(data.at);
     const code = readRequiredString(data.code);
     const kind = data.kind;
-    if (at === null || code === null || !['ACK', 'ATTEMPT', 'DISCARD', 'ENQUEUED', 'RECONCILIATION'].includes(String(kind))) return null;
+    if (at === null || code === null || !['ACK', 'ATTEMPT', 'DISCARD', 'ENQUEUED', 'HEARTBEAT', 'RECONCILIATION'].includes(String(kind))) return null;
     journal.push({ at, code, kind: kind as OfflineEvidenceJournalEntry['kind'] });
   }
   return retainOfflineEvidenceJournal(journal, now());

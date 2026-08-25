@@ -1,6 +1,6 @@
 {
   "name": "clever-routes-app",
-  "version": "1.1.6",
+  "version": "1.2.0",
   "private": true,
   "main": "index.ts",
   "scripts": {

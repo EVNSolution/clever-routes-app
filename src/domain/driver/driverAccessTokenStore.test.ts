@@ -219,7 +219,19 @@ test('keeps a stable route-session generation and route-start acknowledgement', 
     false,
   );
   assert.equal(
-    await store.clearActiveRouteSession(sampleInvitedRouteAccess.routeAccess.routePlanId, startedAt),
+    await store.clearActiveRouteSession(
+      sampleInvitedRouteAccess.routeAccess.routePlanId,
+      startedAt,
+      `${Number(sampleInvitedRouteAccess.routeAccess.assignmentGeneration) + 1}`,
+    ),
+    false,
+  );
+  assert.equal(
+    await store.clearActiveRouteSession(
+      sampleInvitedRouteAccess.routeAccess.routePlanId,
+      startedAt,
+      sampleInvitedRouteAccess.routeAccess.assignmentGeneration,
+    ),
     true,
   );
 });

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
-import { createMockDriverEventService } from '../events/driverEvents';
+import { createDriverEventsApiClient, createMockDriverEventService } from '../events/driverEvents';
 import {
   createMockProofMediaUploadService,
   createProofMediaRejectedError,
@@ -114,6 +114,109 @@ describe('offline submission queue', () => {
       expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', versionCode: 20800,
     });
   });
+
+  it('does not hydrate lineage across a same-id event identity collision', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    const original = queue.enqueueDriverEvent({
+      clientEventId: 'legacy-collision', deliveryStopId: 'stop-old', eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-08-22T19:40:00.000Z'), payload: { proof: { note: 'old' } },
+      routePlanId: 'route-old',
+    });
+    queue.enqueueDriverEvent({
+      appVersion: '1.2.0', assignmentGeneration: '12', clientEventId: 'legacy-collision',
+      driverContractVersion: 2, eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '33333333-3333-4333-8333-333333333333',
+      occurredAt: new Date('2026-08-22T19:43:10.000Z'), payload: { source: 'new' },
+      routePlanId: 'route-new', versionCode: 18,
+    });
+    await queue.whenPersisted();
+
+    const [retained] = (await createPersistentOfflineSubmissionQueue({ storage })).listPending();
+    assert.equal(retained?.state, 'QUARANTINED');
+    assert.equal(retained?.reconciliation?.reason, 'event_identity_conflict');
+    assert.equal(retained?.kind, 'driver_event');
+    if (retained?.kind !== 'driver_event') throw new Error('Expected driver event');
+    assert.deepEqual(retained.event, original.event);
+    assert.equal(retained.event.appVersion, undefined);
+    assert.equal(retained.event.assignmentGeneration, undefined);
+    assert.equal(retained.event.routePlanId, 'route-old');
+    assert.equal(retained.event.eventType, 'STOP_DELIVERED');
+  });
+
+  it('keeps complete ordered evidence immutable and quarantines a same-id reassignment', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const original = queue.enqueueDriverEvent({
+      appVersion: '1.1.6', assignmentGeneration: '11', clientEventId: 'same-id-reassigned',
+      driverContractVersion: 2, eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId: 'route-1', versionCode: 17,
+    });
+    queue.enqueueDriverEvent({
+      appVersion: '1.2.0', assignmentGeneration: '12', clientEventId: 'same-id-reassigned',
+      driverContractVersion: 2, eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '33333333-3333-4333-8333-333333333333',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId: 'route-1', versionCode: 18,
+    });
+
+    const [retained] = queue.listPending();
+    assert.equal(retained?.state, 'QUARANTINED');
+    assert.equal(retained?.reconciliation?.reason, 'assignment_changed');
+    assert.equal(retained?.kind, 'driver_event');
+    if (retained?.kind !== 'driver_event') throw new Error('Expected driver event');
+    assert.deepEqual(retained.event, original.event);
+    assert.equal(retained.event.assignmentGeneration, '11');
+    assert.equal(retained.event.versionCode, 17);
+  });
+
+  for (const collision of [
+    {
+      label: 'event type',
+      mutate: (event: Parameters<ReturnType<typeof createInMemoryOfflineSubmissionQueue>['enqueueDriverEvent']>[0]) => ({
+        ...event, eventType: 'ROUTE_COMPLETED' as const,
+      }),
+    },
+    {
+      label: 'delivery stop',
+      mutate: (event: Parameters<ReturnType<typeof createInMemoryOfflineSubmissionQueue>['enqueueDriverEvent']>[0]) => ({
+        ...event, deliveryStopId: 'stop-2',
+      }),
+    },
+    {
+      label: 'occurred time',
+      mutate: (event: Parameters<ReturnType<typeof createInMemoryOfflineSubmissionQueue>['enqueueDriverEvent']>[0]) => ({
+        ...event, occurredAt: new Date('2026-08-22T19:41:00.000Z'),
+      }),
+    },
+    {
+      label: 'payload',
+      mutate: (event: Parameters<ReturnType<typeof createInMemoryOfflineSubmissionQueue>['enqueueDriverEvent']>[0]) => ({
+        ...event, payload: { proof: { note: 'changed' } },
+      }),
+    },
+  ]) {
+    it(`quarantines a same-lineage same-id ${collision.label} collision`, async () => {
+      const storage = createMemoryStorage();
+      const queue = await createPersistentOfflineSubmissionQueue({ storage });
+      const originalEvent = {
+        appVersion: '1.2.0', assignmentGeneration: '11', clientEventId: `same-lineage-${collision.label}`,
+        deliveryStopId: 'stop-1', driverContractVersion: 2 as const, eventType: 'STOP_DELIVERED' as const,
+        expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+        occurredAt: new Date('2026-08-22T19:40:00.000Z'), payload: { proof: { note: 'original' } },
+        routePlanId: 'route-1', versionCode: 18,
+      };
+      const original = queue.enqueueDriverEvent(originalEvent);
+      queue.enqueueDriverEvent(collision.mutate(originalEvent));
+      await queue.whenPersisted();
+
+      const [retained] = (await createPersistentOfflineSubmissionQueue({ storage })).listPending();
+      assert.equal(retained?.state, 'QUARANTINED');
+      assert.equal(retained?.reconciliation?.reason, 'event_identity_conflict');
+      assert.equal(retained?.kind, 'driver_event');
+      if (retained?.kind !== 'driver_event') throw new Error('Expected driver event');
+      assert.deepEqual(retained.event, original.event);
+    });
+  }
 
   it('reports the newest queued terminal route transition', () => {
     const queue = createInMemoryOfflineSubmissionQueue();
@@ -1741,6 +1844,193 @@ describe('offline submission queue', () => {
     assert.deepEqual(restarted.listPending(), []);
   });
 
+  it('preserves completion recovery telemetry across restart and acknowledgement within five minutes', async () => {
+    const storage = createMemoryStorage();
+    let currentTime = new Date('2026-08-22T19:42:10.000Z');
+    const first = await createPersistentOfflineSubmissionQueue({
+      now: () => currentTime,
+      storage,
+    });
+    const completion = first.enqueueDriverEvent({
+      appVersion: '1.2.0',
+      assignmentGeneration: '11',
+      clientEventId: 'kitchener-completion-telemetry',
+      driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: currentTime,
+      routePlanId: 'route-kitchener',
+      versionCode: 18,
+    });
+    await first.whenPersisted();
+
+    const restartedPending = await createPersistentOfflineSubmissionQueue({
+      now: () => currentTime,
+      storage,
+    });
+    assert.deepEqual(restartedPending.getRouteCompletionTelemetry('route-kitchener'), {
+      finishPending: true,
+      lastAcknowledgedAt: null,
+      locallyFinished: true,
+    });
+
+    currentTime = new Date('2026-08-22T19:46:59.000Z');
+    assert.equal(restartedPending.acknowledge(completion.queueItemId), true);
+    await restartedPending.whenPersisted();
+    const restartedAcknowledged = await createPersistentOfflineSubmissionQueue({
+      now: () => currentTime,
+      storage,
+    });
+    const telemetry = restartedAcknowledged.getRouteCompletionTelemetry('route-kitchener');
+    assert.deepEqual(telemetry, {
+      finishPending: false,
+      lastAcknowledgedAt: '2026-08-22T19:46:59.000Z',
+      locallyFinished: true,
+    });
+    assert.ok(Date.parse(telemetry.lastAcknowledgedAt!) - Date.parse(completion.enqueuedAt) <= 5 * 60 * 1000);
+  });
+
+  it('persists the account-scoped ACK-clear heartbeat outbox until delivery is recorded', async () => {
+    const storage = createMemoryStorage();
+    const ownerA = 'a'.repeat(64);
+    const ownerB = 'b'.repeat(64);
+    const routePlanId = 'route-kitchener';
+    const first = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: ownerA, storage });
+    const completion = first.enqueueDriverEvent({
+      assignmentGeneration: '11', clientEventId: 'completion-clear-outbox', driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId,
+    });
+    first.acknowledge(completion.queueItemId);
+    await first.whenPersisted();
+
+    const restarted = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: ownerA, storage });
+    assert.deepEqual(restarted.listPendingCompletionClearRoutePlanIds(), [routePlanId]);
+    assert.deepEqual(restarted.listPendingCompletionClearEntries(), [{
+      accountOwnerHash: ownerA, assignmentGeneration: '11',
+      completionClientEventId: 'completion-clear-outbox', driverContractVersion: 2, routePlanId,
+    }]);
+    restarted.bindAccountOwnerHash(ownerB);
+    assert.deepEqual(restarted.listPendingCompletionClearRoutePlanIds(), []);
+    restarted.bindAccountOwnerHash(ownerA);
+    const outboxEntry = restarted.listPendingCompletionClearEntries()[0]!;
+    assert.equal(restarted.markCompletionClearHeartbeatDelivered(outboxEntry), true);
+    await restarted.whenPersisted();
+
+    const delivered = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: ownerA, storage });
+    assert.deepEqual(delivered.listPendingCompletionClearRoutePlanIds(), []);
+    assert.equal(delivered.markCompletionClearHeartbeatDelivered(outboxEntry), false);
+  });
+
+  it('closes only the exact account, assignment, and completion identity on a reused route id', () => {
+    const owner = 'a'.repeat(64);
+    const queue = createInMemoryOfflineSubmissionQueue({ accountOwnerHash: owner });
+    for (const [assignmentGeneration, clientEventId] of [['11', 'completion-gen-11'], ['12', 'completion-gen-12']]) {
+      const item = queue.enqueueDriverEvent({
+        assignmentGeneration, clientEventId, driverContractVersion: 2,
+        eventType: 'ROUTE_COMPLETED', occurredAt: new Date(), routePlanId: 'reused-route',
+      });
+      queue.acknowledge(item.queueItemId);
+    }
+    const [generation11, generation12] = queue.listPendingCompletionClearEntries();
+    assert.equal(queue.markCompletionClearHeartbeatDelivered(generation11!), true);
+    assert.deepEqual(queue.listPendingCompletionClearEntries(), [generation12]);
+    assert.equal(queue.reopenCompletionClearHeartbeat(generation11!), true);
+    assert.deepEqual(queue.listPendingCompletionClearEntries(), [generation11, generation12]);
+  });
+
+  it('retains an unsent acknowledged completion beyond 30 days and starts retention at delivery', async () => {
+    const storage = createMemoryStorage();
+    let currentTime = new Date('2026-06-01T00:00:00.000Z');
+    const first = await createPersistentOfflineSubmissionQueue({ now: () => currentTime, storage });
+    const completion = first.enqueueDriverEvent({
+      assignmentGeneration: '11', clientEventId: 'long-lived-clear-outbox', driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED', occurredAt: currentTime, routePlanId: 'route-retained',
+    });
+    first.acknowledge(completion.queueItemId);
+    await first.whenPersisted();
+
+    currentTime = new Date('2026-07-05T00:00:00.000Z');
+    const unsentRestart = await createPersistentOfflineSubmissionQueue({ now: () => currentTime, storage });
+    const [outboxEntry] = unsentRestart.listPendingCompletionClearEntries();
+    assert.equal(outboxEntry?.completionClientEventId, 'long-lived-clear-outbox');
+    assert.equal(unsentRestart.markCompletionClearHeartbeatDelivered(outboxEntry!), true);
+    await unsentRestart.whenPersisted();
+
+    currentTime = new Date('2026-08-03T23:59:59.000Z');
+    const beforeDeliveredRetention = await createPersistentOfflineSubmissionQueue({ now: () => currentTime, storage });
+    assert.equal(beforeDeliveredRetention.getRouteCompletionTelemetry('route-retained').locallyFinished, true);
+    currentTime = new Date('2026-08-05T00:00:01.000Z');
+    const afterDeliveredRetention = await createPersistentOfflineSubmissionQueue({ now: () => currentTime, storage });
+    assert.equal(afterDeliveredRetention.getRouteCompletionTelemetry('route-retained').locallyFinished, false);
+  });
+
+  it('does not report a completion clear without durable completion evidence', () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'route-released-only',
+      eventType: 'ROUTE_PAUSED',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'),
+      routePlanId: 'route-kitchener',
+    });
+
+    assert.deepEqual(queue.getRouteCompletionTelemetry('route-kitchener'), {
+      finishPending: false,
+      lastAcknowledgedAt: null,
+      locallyFinished: false,
+    });
+    assert.deepEqual(queue.getRouteCompletionTelemetry('route-without-session'), {
+      finishPending: false,
+      lastAcknowledgedAt: null,
+      locallyFinished: false,
+    });
+  });
+
+  it('does not project an operator reconciliation clear as a server acknowledgement', () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'completion-reconciliation-clear',
+      eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'),
+      routePlanId: 'route-kitchener',
+    });
+    queue.blockRouteSubmissionsForReconciliation('route-kitchener');
+    assert.equal(queue.discardReconciliationRecords(), 1);
+
+    assert.deepEqual(queue.getRouteCompletionTelemetry('route-kitchener'), {
+      finishPending: true,
+      lastAcknowledgedAt: null,
+      locallyFinished: true,
+    });
+    assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), []);
+  });
+
+  it('isolates same-route completion acknowledgement telemetry by account owner', () => {
+    const ownerA = 'a'.repeat(64);
+    const ownerB = 'b'.repeat(64);
+    const queue = createInMemoryOfflineSubmissionQueue({
+      accountOwnerHash: ownerA,
+      now: () => new Date('2026-08-25T00:00:00.000Z'),
+    });
+    const ownerACompletion = queue.enqueueDriverEvent({
+      clientEventId: 'owner-a-completion', eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId: 'shared-route-id',
+    });
+    queue.acknowledge(ownerACompletion.queueItemId);
+    queue.bindAccountOwnerHash(ownerB);
+    queue.enqueueDriverEvent({
+      clientEventId: 'owner-b-completion', eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date('2026-08-22T19:43:10.000Z'), routePlanId: 'shared-route-id',
+    });
+
+    assert.deepEqual(queue.getRouteCompletionTelemetry('shared-route-id'), {
+      finishPending: true, lastAcknowledgedAt: null, locallyFinished: true,
+    });
+    queue.bindAccountOwnerHash(ownerA);
+    assert.equal(queue.getRouteCompletionTelemetry('shared-route-id').finishPending, false);
+    assert.equal(queue.getRouteCompletionTelemetry('shared-route-id').lastAcknowledgedAt, '2026-08-25T00:00:00.000Z');
+  });
+
   it('recovers an APPLIED completion receipt before assigned-route restoration is available', async () => {
     const storage = createMemoryStorage();
     const queue = await createPersistentOfflineSubmissionQueue({ storage });
@@ -1835,6 +2125,134 @@ describe('offline submission queue', () => {
     const reconciled = await retry();
     assert.deepEqual(reconciled.reconciliationRoutePlanIds, ['south-route']);
     assert.equal(queue.listPending()[0]?.state, 'QUARANTINED');
+  });
+
+  it('quarantines a persisted UNKNOWN completion instead of using reassigned route access', async () => {
+    const storage = createMemoryStorage();
+    const first = await createPersistentOfflineSubmissionQueue({ storage });
+    first.enqueueDriverEvent({
+      appVersion: '1.1.6', assignmentGeneration: '11', clientEventId: 'persisted-generation-11',
+      driverContractVersion: 2, eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId: 'reassigned-route', versionCode: 17,
+    });
+    await first.whenPersisted();
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    let networkCalls = 0;
+    const result = await retryOfflineSubmissions({
+      driverEventReceiptService: { lookupReceipt: async () => {
+        networkCalls += 1;
+        return {
+          assignmentGeneration: '11', clientEventId: 'persisted-generation-11', errorCode: null,
+          expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', routePlanId: 'reassigned-route',
+          routeStatus: 'IN_PROGRESS', status: 'UNKNOWN',
+        };
+      } },
+      driverEventService: createDriverEventsApiClient({
+        accessToken: 'generation-12-route-token', baseUrl: 'https://delivery.example.com',
+        orderedEventContract: {
+          appVersion: '1.2.0', assignmentGeneration: '12', driverContractVersion: 2,
+          expectedRouteVersionId: '33333333-3333-4333-8333-333333333333', versionCode: 18,
+        },
+        fetchImpl: async () => {
+          networkCalls += 1;
+          return { json: async () => ({ data: { duplicate: false, eventId: 'persisted-generation-11' }, error: null }), ok: true, status: 202 };
+        },
+      }),
+      orderedEventAccessIdentity: {
+        assignmentGeneration: '12', driverContractVersion: 2,
+        expectedRouteVersionId: '33333333-3333-4333-8333-333333333333', routePlanId: 'reassigned-route',
+      },
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue: restarted,
+    });
+
+    assert.equal(networkCalls, 0);
+    assert.equal(result.succeeded, 0);
+    assert.equal(result.blocked, 1);
+    assert.equal(result.reconciliationRoutePlanIds, undefined);
+    assert.equal(restarted.listPending()[0]?.state, 'QUARANTINED');
+    assert.equal(restarted.listPending()[0]?.reconciliation?.reason, 'assignment_changed');
+  });
+
+  it('aborts an account-A ordinary retry without mutating its queue after account-B login', async () => {
+    const ownerA = 'a'.repeat(64);
+    const ownerB = 'b'.repeat(64);
+    const queue = createInMemoryOfflineSubmissionQueue({ accountOwnerHash: ownerA });
+    queue.enqueueDriverEvent({
+      clientEventId: 'account-a-stop', eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-08-22T19:40:00.000Z'), routePlanId: 'shared-route',
+    });
+    const lifecycle = new AbortController();
+    let accountEpoch = 1;
+    let transportSignal: AbortSignal | undefined;
+    let resolveLate!: () => void;
+    const retry = retryOfflineSubmissions({
+      driverEventService: { recordDriverEvent: (_event, options) => {
+        transportSignal = options?.signal;
+        return new Promise((resolve) => {
+          resolveLate = () => resolve({ duplicate: false, eventId: 'late-account-a', status: 'recorded' });
+        });
+      } },
+      isCurrent: () => accountEpoch === 1 && queue.getAccountOwnerHash() === ownerA,
+      lifecycleSignal: lifecycle.signal,
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+      queue,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    queue.bindAccountOwnerHash(ownerB);
+    accountEpoch = 2;
+    lifecycle.abort();
+    assert.equal(transportSignal?.aborted, true);
+    assert.equal((await retry).succeeded, 0);
+    resolveLate();
+    await new Promise((resolve) => setImmediate(resolve));
+    queue.bindAccountOwnerHash(ownerA);
+    const [accountAItem] = queue.listPending();
+    assert.equal(accountAItem?.state, 'PENDING');
+    assert.equal(accountAItem?.attempts, 0);
+  });
+
+  it('aborts an account-A receipt retry without acknowledging or reconciling after account-B login', async () => {
+    const ownerA = 'a'.repeat(64);
+    const ownerB = 'b'.repeat(64);
+    const queue = createInMemoryOfflineSubmissionQueue({ accountOwnerHash: ownerA });
+    queue.enqueueDriverEvent({
+      assignmentGeneration: '11', clientEventId: 'account-a-completion', driverContractVersion: 2,
+      eventType: 'ROUTE_COMPLETED', expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:00.000Z'), routePlanId: 'shared-route',
+    });
+    const lifecycle = new AbortController();
+    let accountEpoch = 1;
+    let receiptSignal: AbortSignal | undefined;
+    let resolveLate!: () => void;
+    const recovery = recoverPendingRouteEndReceipt({
+      driverEventReceiptService: { lookupReceipt: (_request, options) => {
+        receiptSignal = options?.signal;
+        return new Promise((resolve) => {
+          resolveLate = () => resolve({
+            assignmentGeneration: '11', clientEventId: 'account-a-completion', errorCode: null,
+            expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', routePlanId: 'shared-route',
+            routeStatus: 'COMPLETED', status: 'APPLIED',
+          });
+        });
+      } },
+      isCurrent: () => accountEpoch === 1 && queue.getAccountOwnerHash() === ownerA,
+      lifecycleSignal: lifecycle.signal,
+      queue,
+      routePlanId: 'shared-route',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    queue.bindAccountOwnerHash(ownerB);
+    accountEpoch = 2;
+    lifecycle.abort();
+    await assert.rejects(recovery, /OPERATION_ABORTED/u);
+    assert.equal(receiptSignal?.aborted, true);
+    resolveLate();
+    await new Promise((resolve) => setImmediate(resolve));
+    queue.bindAccountOwnerHash(ownerA);
+    assert.equal(queue.listPending()[0]?.state, 'PENDING');
+    assert.deepEqual(queue.listPendingCompletionClearEntries(), []);
   });
 
   it('recovers a queued route release receipt and clears reduced monitoring state without replay', async () => {

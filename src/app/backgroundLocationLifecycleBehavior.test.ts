@@ -203,8 +203,8 @@ describe('background location lifecycle wiring', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const refreshSource = getFunctionSource(
       source,
+      'const refreshRouteAccessTupleForSubmission = useCallback(',
       'const refreshRouteAccessLookupForSubmission = useCallback(',
-      'const refreshDriverAccessForSubmission = useCallback(',
     );
 
     assert.match(refreshSource, /clearCachedRouteAccess\(routePlanId\)/u);

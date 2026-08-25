@@ -52,6 +52,9 @@ test('keeps source-controlled Android versions aligned across Expo and Gradle', 
     };
   }>('app.json');
   const androidBuildGradle = readFileSync(resolve(repoRoot, 'android/app/build.gradle'), 'utf8');
+  const iosProject = readFileSync(resolve(repoRoot, 'ios/CleverRoutes.xcodeproj/project.pbxproj'), 'utf8');
+  const packageConfig = readJson<{ version?: string }>('package.json');
+  const packageLock = readJson<{ packages?: { ''?: { version?: string } }; version?: string }>('package-lock.json');
   const versionCode = Number(androidBuildGradle.match(/\bversionCode\s+(\d+)/u)?.[1]);
   const versionName = androidBuildGradle.match(/\bversionName\s+"([^"]+)"/u)?.[1];
 
@@ -60,6 +63,42 @@ test('keeps source-controlled Android versions aligned across Expo and Gradle', 
   assert.equal(appConfig.expo?.android?.package, 'com.evnsolution.clever.routes');
   assert.equal(appConfig.expo?.android?.versionCode, versionCode);
   assert.equal(appConfig.expo?.version, versionName);
+  assert.equal(appConfig.expo?.version, packageConfig.version);
+  assert.equal(appConfig.expo?.version, packageLock.version);
+  assert.equal(appConfig.expo?.version, packageLock.packages?.['']?.version);
+  assert.deepEqual(
+    [...iosProject.matchAll(/\bMARKETING_VERSION = ([^;]+);/gu)].map((match) => match[1]),
+    [appConfig.expo?.version, appConfig.expo?.version],
+  );
+  assert.deepEqual(
+    [...iosProject.matchAll(/\bCURRENT_PROJECT_VERSION = ([^;]+);/gu)].map((match) => match[1]),
+    [appConfig.expo?.ios?.buildNumber, appConfig.expo?.ios?.buildNumber],
+  );
+});
+
+test('documents a source-only Driver pilot candidate that cannot be mistaken for a published artifact', () => {
+  const runbook = readFileSync(resolve(repoRoot, 'docs/driver-pilot-runbook.md'), 'utf8');
+
+  assert.match(runbook, /Driver issue \| `EVNSolution\/clever-routes-app#210`/u);
+  assert.match(runbook, /Change control \| `EVNSolution\/clever-change-control#265`/u);
+  assert.match(runbook, /Candidate app source SHA \| `518fa106180fdd6fd96381b6945f6d146c0910c6`/u);
+  assert.match(runbook, /App version \| `1\.2\.0`/u);
+  assert.match(runbook, /Android version code \| `18`/u);
+  assert.match(runbook, /iOS build number \| `1`/u);
+  assert.match(runbook, /Publish authorized \| `no`/u);
+  assert.match(runbook, /Signing performed \| `no`/u);
+  assert.match(runbook, /Artifact built \| `no`/u);
+  assert.match(runbook, /Synthetic data only \| `yes`/u);
+  assert.match(runbook, /finishPending/u);
+  assert.match(runbook, /lastAcknowledgedAt/u);
+  assert.match(runbook, /five minutes/u);
+});
+
+test('distinguishes the last published Android build from the source-only pilot candidate', () => {
+  const readiness = readFileSync(resolve(repoRoot, 'docs/release-readiness.md'), 'utf8');
+
+  assert.match(readiness, /last published[\s\S]*direct-distribution Android build is `1\.1\.6` \(`versionCode` `17`\)/u);
+  assert.match(readiness, /source-only pilot candidate is `1\.2\.0` \(`versionCode` `18`, iOS build `1`\)/u);
 });
 
 test('keeps the installed app name aligned across Expo, Android, and iOS', () => {

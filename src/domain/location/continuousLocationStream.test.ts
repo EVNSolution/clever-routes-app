@@ -287,4 +287,43 @@ describe('continuous location streaming', () => {
     });
     assert.deepEqual(streamService.stopped, []);
   });
+
+  it('does not stop a new same-assignment session when stale cleanup loses its instance lease', async () => {
+    const streamService = createMockStreamService();
+    let currentSessionInstanceId = 'session-a-started-at';
+    let nativeStopCalls = 0;
+    let releaseClear!: () => void;
+    let signalClearStarted!: () => void;
+    const clearPaused = new Promise<void>((resolve) => { releaseClear = resolve; });
+    const clearStarted = new Promise<void>((resolve) => { signalClearStarted = resolve; });
+    streamService.stopLocationUpdatesIfCurrent = async (_taskName, isCurrent) => {
+      if (!(await isCurrent())) return false;
+      nativeStopCalls += 1;
+      return true;
+    };
+    const cleanup = clearAndStopContinuousLocationSession({
+      activeRouteSessionStore: {
+        clearActiveRouteSession: async (_routePlanId, sessionInstanceId, assignmentGeneration) => {
+          assert.equal(sessionInstanceId, 'session-a-started-at');
+          assert.equal(assignmentGeneration, '11');
+          signalClearStarted();
+          await clearPaused;
+          return true;
+        },
+      },
+      assignmentGeneration: '11',
+      isSessionLeaseCurrent: () => currentSessionInstanceId === 'session-a-started-at',
+      routePlanId: 'shared-route',
+      sessionInstanceId: 'session-a-started-at',
+      streamService,
+    });
+
+    await clearStarted;
+    currentSessionInstanceId = 'session-b-started-at';
+    releaseClear();
+    assert.deepEqual(await cleanup, {
+      kind: 'unchanged', taskName: 'clever-routes-continuous-location',
+    });
+    assert.equal(nativeStopCalls, 0);
+  });
 });

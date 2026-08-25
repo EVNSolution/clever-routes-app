@@ -113,6 +113,7 @@ import {
   getPendingRouteEnd,
   recoverPendingRouteEndReceipt,
   retryOfflineSubmissions,
+  type OfflineCompletionClearOutboxEntry,
   type OfflineSubmissionQueue,
   type PendingRouteEnd,
 } from '../domain/offline/offlineSubmissionQueue';
@@ -121,13 +122,20 @@ import {
   shouldRetryOfflineSubmissionsAfterNetworkChange,
 } from '../domain/offline/offlineRetryTrigger';
 import { createOfflineRetryScheduler } from '../domain/offline/offlineRetryScheduler';
+import { runBoundedAsyncOperation } from '../domain/async/boundedAsyncOperation';
 import { classifyGpsOperationalState } from '../domain/location/gpsOperationalState';
 import {
+  combineDriverSyncAbortSignals,
   createDriverSyncHeartbeatApiClient,
+  createDriverSyncHeartbeatRateLimiter,
   createDriverSyncHeartbeatScheduler,
+  createRateLimitedDriverSyncHeartbeatService,
+  deliverDriverCompletionClearHeartbeat,
+  flushDriverCompletionClearOutboxEntries,
   createDriverSyncTakeoverApiClient,
   DriverSyncHeartbeatHttpError,
-  projectLatestDriverSyncHeartbeat,
+  projectDriverSyncHeartbeatForEpoch,
+  projectDriverSyncQueueState,
   type DriverSyncHeartbeatResult,
 } from '../domain/operations/driverSyncHeartbeat';
 import {
@@ -362,6 +370,7 @@ function DriverApp() {
   const [completedStopTimes, setCompletedStopTimes] = useState<Record<string, string>>({});
   const [offlineSubmissionQueue, setOfflineSubmissionQueue] = useState<OfflineSubmissionQueue | null>(null);
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
+  const [completionClearOutboxCount, setCompletionClearOutboxCount] = useState(0);
   const [offlineStorageState, setOfflineStorageState] = useState<'READY' | 'STORAGE_DEGRADED'>('READY');
   const [routeReconciliationCount, setRouteReconciliationCount] = useState(0);
   const [durableCompletionPendingRoutePlanId, setDurableCompletionPendingRoutePlanId] = useState<string | null>(null);
@@ -426,7 +435,17 @@ function DriverApp() {
   const networkReachability = getNetworkReachability(networkState);
   const previousDriverRestoreNetworkRef = useRef(networkReachability);
   const previousRouteSyncNetworkRef = useRef(networkReachability);
-  const isRetryingOfflineSubmissionsRef = useRef(false);
+  const retryingOfflineSubmissionsEpochRef = useRef<number | null>(null);
+  const driverSyncHeartbeatSchedulerRef = useRef<ReturnType<typeof createDriverSyncHeartbeatScheduler> | null>(null);
+  const completionClearRetrySchedulerRef = useRef<ReturnType<typeof createOfflineRetryScheduler> | null>(null);
+  const driverSyncAccountEpochRef = useRef(0);
+  const driverSyncBoundAccountOwnerHashRef = useRef<string | null>(null);
+  const driverSyncLifecycleAbortControllerRef = useRef(new AbortController());
+  const driverSyncRouteAbortControllerRef = useRef(new AbortController());
+  const driverSyncRateLimiterRef = useRef(createDriverSyncHeartbeatRateLimiter());
+  const driverSyncRouteEpochRef = useRef<string | null>(null);
+  const completionClearOutboxCursorRef = useRef(0);
+  const pendingImmediateDriverSyncHeartbeatRef = useRef(false);
   const isRecoveringOfflineStorageRef = useRef(false);
   const previousNetworkReachabilityRef = useRef(networkReachability);
   const driverAppUpdateCheckRunningRef = useRef(false);
@@ -439,6 +458,7 @@ function DriverApp() {
   const syncOfflineQueueState = useCallback((queue: OfflineSubmissionQueue | null) => {
     if (queue === null) {
       setOfflineQueueCount(0);
+      setCompletionClearOutboxCount(0);
       setRouteReconciliationCount(0);
       setDurableCompletionPendingRoutePlanId(null);
       return;
@@ -450,6 +470,7 @@ function DriverApp() {
       && item.event.routePlanId != null
     ));
     setOfflineQueueCount(summary.retryableCount);
+    setCompletionClearOutboxCount(queue.listPendingCompletionClearRoutePlanIds().length);
     setRouteReconciliationCount(summary.blockedCount);
     setDurableCompletionPendingRoutePlanId(
       pendingRouteEnd?.kind === 'driver_event' ? pendingRouteEnd.event.routePlanId ?? null : null,
@@ -467,9 +488,39 @@ function DriverApp() {
     await persistOfflineQueueAndSyncState(queue, syncOfflineQueueState);
   }, [syncOfflineQueueState]);
 
+  const requestImmediateDriverSyncHeartbeat = useCallback((): void => {
+    const scheduler = driverSyncHeartbeatSchedulerRef.current;
+    if (scheduler === null) {
+      pendingImmediateDriverSyncHeartbeatRef.current = true;
+      return;
+    }
+    pendingImmediateDriverSyncHeartbeatRef.current = false;
+    scheduler.requestImmediate();
+  }, []);
+
   useEffect(() => {
     selectedRouteIdRef.current = selectedRouteId;
   }, [selectedRouteId]);
+
+  const activeDriverSyncRouteEpoch = activeRoutePlanId === null ? null : [
+    activeRoutePlanId,
+    routeSessions.find((session) => session.route.id === activeRoutePlanId)?.routeAccess.assignmentGeneration
+      ?? completionPendingRestoreIdentity?.routeAccess?.assignmentGeneration
+      ?? 'unresolved',
+  ].join(':');
+
+  useEffect(() => {
+    if (driverSyncRouteEpochRef.current === activeDriverSyncRouteEpoch) return;
+    driverSyncRouteEpochRef.current = activeDriverSyncRouteEpoch;
+    driverSyncRouteAbortControllerRef.current.abort();
+    driverSyncRouteAbortControllerRef.current = new AbortController();
+    driverSyncHeartbeatSchedulerRef.current?.stop();
+    driverSyncHeartbeatSchedulerRef.current = null;
+    completionClearRetrySchedulerRef.current?.stop();
+    completionClearRetrySchedulerRef.current = null;
+    driverSyncAccountEpochRef.current += 1;
+    setDriverSyncHealth(null);
+  }, [activeDriverSyncRouteEpoch]);
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
@@ -538,14 +589,42 @@ function DriverApp() {
     );
   }, [isRequestingBackgroundLocation, requestBackgroundLocationPermissionAfterDisclosure, showOperationalDialog]);
 
-  const clearAndStopActiveLocationSession = useCallback(async (routePlanId?: string): Promise<void> => {
+  const clearAndStopActiveLocationSession = useCallback(async (
+    routePlanId?: string,
+    lease?: { assignmentGeneration: string; isCurrent: () => boolean; sessionInstanceId: string },
+  ): Promise<void> => {
     try {
+      const isDurableSessionLeaseCurrent = lease === undefined || routePlanId === undefined
+        ? undefined
+        : async () => {
+            if (!lease.isCurrent()) return false;
+            const persisted = await driverAccessTokenStore.loadActiveDriverAccess();
+            if (!lease.isCurrent()) return false;
+            if (persisted.kind !== 'active' && persisted.kind !== 'refresh_required') return false;
+            if (persisted.activeRouteSession === undefined) {
+              return persisted.routeAccess?.routePlanId === routePlanId
+                && persisted.routeAccess.assignmentGeneration === lease.assignmentGeneration;
+            }
+            const persistedSessionInstanceId = persisted.activeRouteSession.startedAt
+              ?? persisted.activeRouteSession.updatedAt;
+            return persisted.activeRouteSession.routePlanId === routePlanId
+              && persisted.routeAccess?.routePlanId === routePlanId
+              && persisted.routeAccess.assignmentGeneration === lease.assignmentGeneration
+              && persistedSessionInstanceId === lease.sessionInstanceId;
+          };
       const result = await clearAndStopContinuousLocationSession({
         activeRouteSessionStore: driverAccessTokenStore,
+        ...(lease === undefined ? {} : {
+          assignmentGeneration: lease.assignmentGeneration,
+          sessionInstanceId: lease.sessionInstanceId,
+          ...(isDurableSessionLeaseCurrent === undefined ? {} : {
+            isSessionLeaseCurrent: isDurableSessionLeaseCurrent,
+          }),
+        }),
         ...(routePlanId === undefined ? {} : { routePlanId }),
         streamService: continuousLocationStreamService,
       });
-      if (result.kind === 'stopped') {
+      if (result.kind === 'stopped' && (lease === undefined || lease.isCurrent())) {
         setActiveRoutePlanId(null);
       }
     } catch (error) {
@@ -640,8 +719,11 @@ function DriverApp() {
   ), [runtimeConfig.mode, runtimeServices.routeAccessService]);
   const driverAuthService = runtimeServices.driverAuthService;
 
-  const getActiveAccountAccess = useCallback(async (): Promise<DriverAccountAccessToken | null> => {
+  const getActiveAccountAccess = useCallback(async (
+    options?: { isCurrent?: () => boolean; persistRefreshedAccess?: boolean },
+  ): Promise<DriverAccountAccessToken | null> => {
     const restoredAccess = await driverAccessTokenStore.loadActiveDriverAccess();
+    if (options?.isCurrent?.() === false) return null;
     if (restoredAccess.kind === 'active') {
       return restoredAccess.accountAccess;
     }
@@ -652,7 +734,11 @@ function DriverApp() {
     const refreshResult = await driverAuthService.refreshSession({
       refreshToken: restoredAccess.accountAccess.refreshToken,
     });
-    await driverAccessTokenStore.saveRefreshedAccountAccess(refreshResult.accountAccess);
+    if (options?.isCurrent?.() === false) return null;
+    if (options?.persistRefreshedAccess !== false) {
+      await driverAccessTokenStore.saveRefreshedAccountAccess(refreshResult.accountAccess);
+    }
+    if (options?.isCurrent?.() === false) return null;
     return refreshResult.accountAccess;
   }, [driverAccessTokenStore, driverAuthService]);
 
@@ -677,6 +763,105 @@ function DriverApp() {
       }, routeAccessService);
     }
   }, [driverAccessTokenStore, driverAuthService, routeAccessService]);
+
+  const sendCompletionAcknowledgedHeartbeatBeforeCleanup = useCallback(async (input: {
+    access: {
+      accessToken: string;
+      assignmentGeneration: string;
+      driverContractVersion: 2;
+      routePlanId: string;
+    } | undefined;
+    completedStopCount: number | null;
+    lifecycleSignal?: AbortSignal;
+    outboxEntry: OfflineCompletionClearOutboxEntry;
+    queue: OfflineSubmissionQueue;
+    refreshAccess?: (signal: AbortSignal) => Promise<{
+      accessToken: string;
+      assignmentGeneration: string;
+      driverContractVersion: 2;
+      routePlanId: string;
+    } | null>;
+  }): Promise<boolean> => {
+    if (
+      runtimeConfig.mode !== 'live'
+      || installedDriverAppVersion === null
+      || input.access === undefined
+      || input.queue.getAccountOwnerHash() !== input.outboxEntry.accountOwnerHash
+      || driverSyncBoundAccountOwnerHashRef.current !== input.outboxEntry.accountOwnerHash
+    ) return false;
+    const requestEpoch = driverSyncAccountEpochRef.current;
+    const lifecycleSignal = combineDriverSyncAbortSignals([
+      driverSyncLifecycleAbortControllerRef.current.signal,
+      driverSyncRouteAbortControllerRef.current.signal,
+      input.lifecycleSignal,
+    ]);
+    const sessionKey = [
+      input.outboxEntry.accountOwnerHash,
+      input.outboxEntry.routePlanId,
+      input.outboxEntry.assignmentGeneration,
+      input.outboxEntry.completionClientEventId,
+    ].join(':');
+    const outcome = await deliverDriverCompletionClearHeartbeat({
+      attempt: {
+        accessIdentity: {
+          assignmentGeneration: input.access.assignmentGeneration,
+          driverContractVersion: input.access.driverContractVersion,
+          routePlanId: input.access.routePlanId,
+        },
+        appVersion: installedDriverAppVersion.versionName,
+        completedStopCount: input.completedStopCount,
+        driverContractVersion: 2,
+        heartbeatService: createRateLimitedDriverSyncHeartbeatService({
+          limiter: driverSyncRateLimiterRef.current,
+          routePlanId: input.outboxEntry.routePlanId,
+          service: createDriverSyncHeartbeatApiClient({
+            accessToken: input.access.accessToken,
+            baseUrl: runtimeConfig.deliveryServerBaseUrl,
+          }),
+        }),
+        identityService: getExpoDriverSyncIdentity(),
+        isAttemptCurrent: () => !lifecycleSignal.aborted
+          && requestEpoch === driverSyncAccountEpochRef.current
+          && driverSyncBoundAccountOwnerHashRef.current === input.outboxEntry.accountOwnerHash
+          && input.queue.getAccountOwnerHash() === input.outboxEntry.accountOwnerHash,
+        lifecycleSignal,
+        outboxEntry: input.outboxEntry,
+        queue: input.queue,
+        sessionKey,
+        versionCode: installedDriverAppVersion.versionCode,
+      },
+      ...(input.refreshAccess === undefined ? {} : {
+        refreshHeartbeatAccess: async (signal) => {
+          const access = await input.refreshAccess!(signal);
+          return access === null ? null : {
+            accessIdentity: {
+              assignmentGeneration: access.assignmentGeneration,
+              driverContractVersion: access.driverContractVersion,
+              routePlanId: access.routePlanId,
+            },
+            heartbeatService: createRateLimitedDriverSyncHeartbeatService({
+            limiter: driverSyncRateLimiterRef.current,
+            routePlanId: input.outboxEntry.routePlanId,
+            service: createDriverSyncHeartbeatApiClient({
+              accessToken: access.accessToken,
+              baseUrl: runtimeConfig.deliveryServerBaseUrl,
+            }),
+            }),
+          };
+        },
+      }),
+    });
+    if (outcome.result !== null) {
+      setDriverSyncHealth((current) => projectDriverSyncHeartbeatForEpoch(
+        current,
+        outcome.result!,
+        requestEpoch,
+        driverSyncAccountEpochRef.current,
+      ));
+    }
+    syncOfflineQueueState(input.queue);
+    return outcome.observed;
+  }, [installedDriverAppVersion, runtimeConfig, syncOfflineQueueState]);
 
   const registerCurrentPushInstallation = useCallback(async (): Promise<void> => {
     if (
@@ -898,21 +1083,39 @@ function DriverApp() {
     }
   }
 
-  const refreshRouteAccessLookupForSubmission = useCallback(async (routePlanId: string): Promise<DriverAccessToken | null> => {
+  const refreshRouteAccessTupleForSubmission = useCallback(async (
+    routePlanId: string,
+    options?: {
+      isCurrent?: () => boolean;
+      persistAccess?: boolean;
+      persistAccountAccess?: boolean;
+      preserveMissingRoute?: boolean;
+      projectRuntimeState?: boolean;
+    },
+  ): Promise<{
+    driverAccess: DriverAccessToken;
+    routeAccess: RouteAccessRouteChoice['routeAccess'];
+  } | null> => {
     if (runtimeConfig.mode !== 'live') {
       return null;
     }
 
     try {
-      const accountAccess = await getActiveAccountAccess();
-      if (accountAccess === null) {
+      if (options?.isCurrent?.() === false) return null;
+      const accountAccess = await getActiveAccountAccess({
+        isCurrent: options?.isCurrent,
+        persistRefreshedAccess: options?.persistAccountAccess,
+      });
+      if (options?.isCurrent?.() === false || accountAccess === null) {
         return null;
       }
       const lookupResult = await submitRouteAccess({
         accountAccessToken: accountAccess.accessToken,
       }, routeAccessService);
+      if (options?.isCurrent?.() === false) return null;
       if (lookupResult.kind !== 'company_guidance' && lookupResult.kind !== 'route_choices') {
         if (lookupResult.kind === 'denied' && lookupResult.status === 'NOT_FOUND') {
+          if (options?.preserveMissingRoute === true) return null;
           await clearAndStopActiveLocationSession();
           await driverAccessTokenStore.clearCachedRouteAccess();
           setRouteSessions([]);
@@ -925,6 +1128,7 @@ function DriverApp() {
         (choice) => choice.routeAccess.routePlanId === routePlanId,
       );
       if (refreshedChoice === undefined) {
+        if (options?.preserveMissingRoute === true) return null;
         await clearAndStopActiveLocationSession(routePlanId);
         await driverAccessTokenStore.clearCachedRouteAccess(routePlanId);
         setRouteSessions((current) => current.filter(
@@ -934,63 +1138,293 @@ function DriverApp() {
       }
 
       const refreshedSubmission = toCompanyGuidanceSubmission(refreshedChoice);
-      setSubmission((current) => (
-        current?.kind === 'company_guidance' && current.routeAccess.routePlanId === routePlanId
-          ? refreshedSubmission
-          : current
-      ));
-      setRouteSessions((current) => current.map((session) => (
-        session.routeAccess.routePlanId === routePlanId ? { ...session, ...refreshedChoice } : session
-      )));
-      await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(refreshedSubmission)).catch((error) => {
-        const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
-        console.warn(`[driver-api] Refreshed route access could not be saved: ${errorMessage}`);
-        return false;
-      });
+      if (options?.isCurrent?.() === false) return null;
+      if (options?.projectRuntimeState !== false) {
+        setSubmission((current) => (
+          current?.kind === 'company_guidance' && current.routeAccess.routePlanId === routePlanId
+            ? refreshedSubmission
+            : current
+        ));
+        setRouteSessions((current) => current.map((session) => (
+          session.routeAccess.routePlanId === routePlanId ? { ...session, ...refreshedChoice } : session
+        )));
+      }
+      if (options?.persistAccess !== false) {
+        await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(refreshedSubmission)).catch((error) => {
+          if (options?.isCurrent?.() === false) return false;
+          const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+          console.warn(`[driver-api] Refreshed route access could not be saved: ${errorMessage}`);
+          return false;
+        });
+      }
+      if (options?.isCurrent?.() === false) return null;
       console.info('[driver-api] Refreshed route access after expired token.');
-      return refreshedSubmission.driverAccess;
+      return {
+        driverAccess: refreshedSubmission.driverAccess,
+        routeAccess: refreshedSubmission.routeAccess,
+      };
     } catch (error) {
+      if (options?.isCurrent?.() === false) return null;
       const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
       console.warn(`[driver-api] Route access refresh failed: ${errorMessage}`);
       return null;
     }
   }, [clearAndStopActiveLocationSession, driverAccessTokenStore, getActiveAccountAccess, routeAccessService, runtimeConfig.mode]);
 
+  const refreshRouteAccessLookupForSubmission = useCallback(async (
+    routePlanId: string,
+    options?: Parameters<typeof refreshRouteAccessTupleForSubmission>[1],
+  ): Promise<DriverAccessToken | null> => (
+    await refreshRouteAccessTupleForSubmission(routePlanId, options)
+  )?.driverAccess ?? null, [refreshRouteAccessTupleForSubmission]);
+
   const refreshDriverAccessForSubmission = useCallback(async (
     currentSubmission: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>,
+    options?: Parameters<typeof refreshRouteAccessTupleForSubmission>[1],
   ): Promise<DriverAccessToken | null> => {
-    return refreshRouteAccessLookupForSubmission(currentSubmission.routeAccess.routePlanId);
+    return refreshRouteAccessLookupForSubmission(currentSubmission.routeAccess.routePlanId, options);
   }, [refreshRouteAccessLookupForSubmission]);
 
   const buildDriverAccessRefresh = useCallback((
     currentSubmission: RouteAccessSubmissionResult | null,
-  ): (() => Promise<DriverAccessToken | null>) | undefined => (
+    options?: {
+      isCurrent?: () => boolean;
+      lifecycleSignal?: AbortSignal;
+      persistAccess?: boolean;
+      persistAccountAccess?: boolean;
+      preserveMissingRoute?: boolean;
+      projectRuntimeState?: boolean;
+    },
+  ): ((signal?: AbortSignal) => Promise<DriverAccessToken | null>) | undefined => (
     currentSubmission?.kind === 'company_guidance'
-      ? () => refreshDriverAccessForSubmission(currentSubmission)
+      ? (signal) => refreshDriverAccessForSubmission(currentSubmission, {
+          isCurrent: () => signal?.aborted !== true
+            && options?.lifecycleSignal?.aborted !== true
+            && options?.isCurrent?.() !== false,
+          persistAccess: options?.persistAccess,
+          persistAccountAccess: options?.persistAccountAccess,
+          preserveMissingRoute: options?.preserveMissingRoute,
+          projectRuntimeState: options?.projectRuntimeState,
+        })
       : undefined
   ), [refreshDriverAccessForSubmission]);
 
+  const flushCompletionClearOutbox = useCallback(async (): Promise<boolean> => {
+    if (runtimeConfig.mode !== 'live' || networkReachability !== 'online') return false;
+    const requestEpoch = driverSyncAccountEpochRef.current;
+    const lifecycleSignal = combineDriverSyncAbortSignals([
+      driverSyncLifecycleAbortControllerRef.current.signal,
+      driverSyncRouteAbortControllerRef.current.signal,
+    ]);
+    let queue: OfflineSubmissionQueue;
+    try {
+      queue = await runBoundedAsyncOperation(
+        async () => offlineSubmissionQueue ?? getExpoOfflineSubmissionQueue(),
+        { signal: lifecycleSignal, timeoutMs: 15_000 },
+      );
+    } catch {
+      return false;
+    }
+    const accountOwnerHash = queue.getAccountOwnerHash();
+    if (accountOwnerHash === null) return false;
+    const isCurrent = () => !lifecycleSignal.aborted
+      && requestEpoch === driverSyncAccountEpochRef.current
+      && driverSyncBoundAccountOwnerHashRef.current === accountOwnerHash
+      && queue.getAccountOwnerHash() === accountOwnerHash;
+    if (!isCurrent()) return false;
+    const pendingEntries = queue.listPendingCompletionClearEntries();
+    if (pendingEntries.length === 0) return true;
+    let persistedAccess: Awaited<ReturnType<typeof driverAccessTokenStore.loadActiveDriverAccess>>;
+    try {
+      persistedAccess = await runBoundedAsyncOperation(
+        async () => driverAccessTokenStore.loadActiveDriverAccess(),
+        { signal: lifecycleSignal, timeoutMs: 15_000 },
+      );
+    } catch {
+      return false;
+    }
+    if (!isCurrent()) return false;
+    const accessKey = (routePlanId: string, assignmentGeneration: string, driverContractVersion: number) => (
+      [routePlanId, assignmentGeneration, driverContractVersion].join(':')
+    );
+    const accessByAssignment = new Map<string, {
+      accessToken: string;
+      assignmentGeneration: string;
+      driverContractVersion: 2;
+      routePlanId: string;
+    }>();
+    for (const session of routeSessions) {
+      accessByAssignment.set(accessKey(
+        session.routeAccess.routePlanId,
+        session.routeAccess.assignmentGeneration,
+        session.routeAccess.driverContractVersion,
+      ), {
+        accessToken: session.driverAccess.accessToken,
+        assignmentGeneration: session.routeAccess.assignmentGeneration,
+        driverContractVersion: session.routeAccess.driverContractVersion,
+        routePlanId: session.routeAccess.routePlanId,
+      });
+    }
+    if (
+      (persistedAccess.kind === 'active' || persistedAccess.kind === 'refresh_required')
+      && persistedAccess.driverAccess !== undefined
+      && persistedAccess.routeAccess !== undefined
+    ) {
+      const persistedKey = accessKey(
+        persistedAccess.routeAccess.routePlanId,
+        persistedAccess.routeAccess.assignmentGeneration,
+        persistedAccess.routeAccess.driverContractVersion,
+      );
+      if (!accessByAssignment.has(persistedKey)) accessByAssignment.set(persistedKey, {
+        accessToken: persistedAccess.driverAccess.accessToken,
+        assignmentGeneration: persistedAccess.routeAccess.assignmentGeneration,
+        driverContractVersion: persistedAccess.routeAccess.driverContractVersion,
+        routePlanId: persistedAccess.routeAccess.routePlanId,
+      });
+    }
+    const flushResult = await flushDriverCompletionClearOutboxEntries({
+      deliver: async (entry, signal) => {
+        if (!isCurrent()) return false;
+        if (entry.assignmentGeneration === null || entry.driverContractVersion !== 2) return false;
+        const access = accessByAssignment.get(accessKey(
+          entry.routePlanId,
+          entry.assignmentGeneration,
+          entry.driverContractVersion,
+        ));
+        if (access === undefined) return false;
+        return sendCompletionAcknowledgedHeartbeatBeforeCleanup({
+          access,
+          completedStopCount: null,
+          lifecycleSignal: signal,
+          outboxEntry: entry,
+          queue,
+          refreshAccess: async (refreshSignal) => {
+            const refreshed = await refreshRouteAccessTupleForSubmission(entry.routePlanId, {
+              isCurrent: () => !refreshSignal.aborted && isCurrent(),
+              persistAccess: false,
+              persistAccountAccess: false,
+              preserveMissingRoute: true,
+              projectRuntimeState: false,
+            });
+            return refreshed === null ? null : {
+              accessToken: refreshed.driverAccess.accessToken,
+              assignmentGeneration: refreshed.routeAccess.assignmentGeneration,
+              driverContractVersion: refreshed.routeAccess.driverContractVersion,
+              routePlanId: refreshed.routeAccess.routePlanId,
+            };
+          },
+        });
+      },
+      entries: pendingEntries,
+      isCurrent,
+      lifecycleSignal,
+      resolveAccess: async (entry, signal) => {
+        if (!isCurrent()) return false;
+        if (entry.assignmentGeneration === null || entry.driverContractVersion !== 2) return false;
+        const key = accessKey(entry.routePlanId, entry.assignmentGeneration, entry.driverContractVersion);
+        if (accessByAssignment.has(key)) return true;
+        const refreshed = await refreshRouteAccessTupleForSubmission(
+          entry.routePlanId,
+          {
+            isCurrent: () => !signal.aborted && isCurrent(),
+            persistAccess: false,
+            persistAccountAccess: false,
+            preserveMissingRoute: true,
+            projectRuntimeState: false,
+          },
+        );
+        if (
+          refreshed === null
+          || !isCurrent()
+          || refreshed.routeAccess.routePlanId !== entry.routePlanId
+          || refreshed.routeAccess.assignmentGeneration !== entry.assignmentGeneration
+          || refreshed.routeAccess.driverContractVersion !== entry.driverContractVersion
+        ) return false;
+        accessByAssignment.set(key, {
+          accessToken: refreshed.driverAccess.accessToken,
+          assignmentGeneration: refreshed.routeAccess.assignmentGeneration,
+          driverContractVersion: refreshed.routeAccess.driverContractVersion,
+          routePlanId: refreshed.routeAccess.routePlanId,
+        });
+        return true;
+      },
+      startIndex: completionClearOutboxCursorRef.current,
+    });
+    if (!isCurrent()) return false;
+    completionClearOutboxCursorRef.current = flushResult.nextIndex;
+    syncOfflineQueueState(queue);
+    return queue.listPendingCompletionClearRoutePlanIds().length === 0;
+  }, [
+    driverAccessTokenStore,
+    networkReachability,
+    offlineSubmissionQueue,
+    refreshRouteAccessTupleForSubmission,
+    routeSessions,
+    runtimeConfig.mode,
+    sendCompletionAcknowledgedHeartbeatBeforeCleanup,
+    syncOfflineQueueState,
+  ]);
+
   const retryOfflineSubmissionsForSessions = useCallback(async (sessions: RouteSession[]): Promise<boolean> => {
-    if (isRetryingOfflineSubmissionsRef.current || sessions.length === 0) {
+    if (retryingOfflineSubmissionsEpochRef.current !== null || sessions.length === 0) {
       return true;
     }
 
-    isRetryingOfflineSubmissionsRef.current = true;
+    const requestEpoch = driverSyncAccountEpochRef.current;
+    const lifecycleSignal = combineDriverSyncAbortSignals([
+      driverSyncLifecycleAbortControllerRef.current.signal,
+      driverSyncRouteAbortControllerRef.current.signal,
+    ]);
+    retryingOfflineSubmissionsEpochRef.current = requestEpoch;
     let completedWithoutRetainedFailures = true;
+    let isCurrent = () => !lifecycleSignal.aborted
+      && requestEpoch === driverSyncAccountEpochRef.current;
     try {
-      const queue = await getExpoOfflineSubmissionQueue();
+      const queue = await runBoundedAsyncOperation(
+        async () => getExpoOfflineSubmissionQueue(),
+        { signal: lifecycleSignal, timeoutMs: 15_000 },
+      );
+      const accountOwnerHash = queue.getAccountOwnerHash();
+      isCurrent = () => !lifecycleSignal.aborted
+        && requestEpoch === driverSyncAccountEpochRef.current
+        && accountOwnerHash !== null
+        && driverSyncBoundAccountOwnerHashRef.current === accountOwnerHash
+        && queue.getAccountOwnerHash() === accountOwnerHash;
+      if (!isCurrent()) return false;
       if (queue.storageState() === 'STORAGE_DEGRADED') {
         syncOfflineQueueState(queue);
         setMessage('Offline evidence sync is paused until encrypted storage recovers.');
         return false;
       }
-      const receiptAccountAccess = runtimeConfig.mode === 'live' ? await getActiveAccountAccess() : null;
+      const receiptAccountAccess = runtimeConfig.mode === 'live' ? await runBoundedAsyncOperation(
+        async () => getActiveAccountAccess({ isCurrent, persistRefreshedAccess: false }),
+        { signal: lifecycleSignal, timeoutMs: 15_000 },
+      ) : null;
+      if (!isCurrent()) return false;
       if (runtimeConfig.mode === 'live' && receiptAccountAccess === null) {
         throw new Error('Account access is required before completion receipt recovery.');
       }
       for (const session of sessions) {
         const routeSubmission = toCompanyGuidanceSubmission(session);
-        const refreshDriverAccess = buildDriverAccessRefresh(routeSubmission);
+        const persistedCleanupAccess = await runBoundedAsyncOperation(
+          async () => driverAccessTokenStore.loadActiveDriverAccess(),
+          { signal: lifecycleSignal, timeoutMs: 15_000 },
+        );
+        if (!isCurrent()) return false;
+        const persistedCleanupSession = (
+          (persistedCleanupAccess.kind === 'active' || persistedCleanupAccess.kind === 'refresh_required')
+          && persistedCleanupAccess.activeRouteSession?.routePlanId === session.route.id
+          && persistedCleanupAccess.routeAccess?.routePlanId === session.route.id
+          && persistedCleanupAccess.routeAccess.assignmentGeneration
+            === routeSubmission.routeAccess.assignmentGeneration
+        ) ? persistedCleanupAccess.activeRouteSession : null;
+        const cleanupSessionInstanceId = persistedCleanupSession === null
+          ? null
+          : persistedCleanupSession.startedAt ?? persistedCleanupSession.updatedAt;
+        const refreshDriverAccess = buildDriverAccessRefresh(routeSubmission, {
+          isCurrent, lifecycleSignal, persistAccess: false, persistAccountAccess: false,
+          preserveMissingRoute: true, projectRuntimeState: false,
+        });
         const result = await retryOfflineSubmissions({
           ...(runtimeConfig.mode !== 'live' ? {} : {
             driverEventReceiptService: createDriverEventReceiptApiClient({
@@ -1004,6 +1438,14 @@ function DriverApp() {
             runtimeConfig,
             submission: routeSubmission,
           }),
+          isCurrent,
+          lifecycleSignal,
+          orderedEventAccessIdentity: {
+            assignmentGeneration: routeSubmission.routeAccess.assignmentGeneration,
+            driverContractVersion: routeSubmission.routeAccess.driverContractVersion,
+            expectedRouteVersionId: routeSubmission.routeAccess.expectedRouteVersionId,
+            routePlanId: routeSubmission.routeAccess.routePlanId,
+          },
           proofMediaUploadService: getProofMediaUploadServiceForCurrentSubmission({
             fallback: mockProofMediaUploadService,
             refreshDriverAccess,
@@ -1013,6 +1455,7 @@ function DriverApp() {
           queue,
           routePlanId: session.route.id,
         });
+        if (!isCurrent()) return false;
         if (result.failed > 0) {
           completedWithoutRetainedFailures = false;
         }
@@ -1021,14 +1464,66 @@ function DriverApp() {
           setServerConfirmedStopIds((current) => [...new Set([...current, ...confirmedStopIds])]);
         }
         if (result.completionAcknowledgedRoutePlanIds?.includes(session.route.id) === true) {
-          await clearAndStopActiveLocationSession(session.route.id);
+          if (cleanupSessionInstanceId === null) {
+            completedWithoutRetainedFailures = false;
+            continue;
+          }
+          await waitForOfflineQueuePersistence(queue);
+          if (!isCurrent()) return false;
+          const outboxEntry = queue.listPendingCompletionClearEntries().find((entry) => (
+            entry.routePlanId === session.route.id
+            && entry.assignmentGeneration === routeSubmission.routeAccess.assignmentGeneration
+          ));
+          if (outboxEntry !== undefined) await sendCompletionAcknowledgedHeartbeatBeforeCleanup({
+            access: {
+              accessToken: routeSubmission.driverAccess.accessToken,
+              assignmentGeneration: routeSubmission.routeAccess.assignmentGeneration,
+              driverContractVersion: routeSubmission.routeAccess.driverContractVersion,
+              routePlanId: routeSubmission.routeAccess.routePlanId,
+            },
+            completedStopCount: activeRoutePlanId === session.route.id ? completedStopIds.length : null,
+            outboxEntry,
+            queue,
+            refreshAccess: async (signal) => {
+              const refreshed = await refreshRouteAccessTupleForSubmission(session.route.id, {
+                isCurrent: () => !signal.aborted && isCurrent(),
+                persistAccess: false,
+                persistAccountAccess: false,
+                preserveMissingRoute: true,
+                projectRuntimeState: false,
+              });
+              return refreshed === null ? null : {
+                accessToken: refreshed.driverAccess.accessToken,
+                assignmentGeneration: refreshed.routeAccess.assignmentGeneration,
+                driverContractVersion: refreshed.routeAccess.driverContractVersion,
+                routePlanId: refreshed.routeAccess.routePlanId,
+              };
+            },
+          });
+          if (!isCurrent()) return false;
+          await clearAndStopActiveLocationSession(session.route.id, {
+            assignmentGeneration: routeSubmission.routeAccess.assignmentGeneration,
+            isCurrent,
+            sessionInstanceId: cleanupSessionInstanceId,
+          });
+          if (!isCurrent()) return false;
           setCompletionPendingRestoreIdentity(null);
           setActiveRoutePlanId(null);
           setDeliveryStartResult(null);
           setContinuousLocationResult({ kind: 'stopped', taskName: CONTINUOUS_LOCATION_TASK_NAME });
         }
         if (result.reconciliationRoutePlanIds?.includes(session.route.id) === true) {
-          await clearAndStopActiveLocationSession(session.route.id);
+          if (cleanupSessionInstanceId === null) {
+            completedWithoutRetainedFailures = false;
+            continue;
+          }
+          if (!isCurrent()) return false;
+          await clearAndStopActiveLocationSession(session.route.id, {
+            assignmentGeneration: routeSubmission.routeAccess.assignmentGeneration,
+            isCurrent,
+            sessionInstanceId: cleanupSessionInstanceId,
+          });
+          if (!isCurrent()) return false;
           setCompletionPendingRestoreIdentity(null);
           if (activeRoutePlanId === session.route.id) {
             setActiveRoutePlanId(null);
@@ -1055,26 +1550,35 @@ function DriverApp() {
         }
       }
       await waitForOfflineQueuePersistence(queue);
+      if (!isCurrent()) return false;
       setRouteSessions((current) => current.map((session) => ({
         ...session,
         pendingRouteEnd: getPendingRouteEnd(queue, session.route.id) ?? undefined,
       })));
     } catch (error) {
       completedWithoutRetainedFailures = false;
-      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
-      console.warn(`[offline-queue] Retry failed: ${errorMessage}`);
+      if (isCurrent()) {
+        const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
+        console.warn(`[offline-queue] Retry failed: ${errorMessage}`);
+      }
     } finally {
-      isRetryingOfflineSubmissionsRef.current = false;
+      if (retryingOfflineSubmissionsEpochRef.current === requestEpoch) {
+        retryingOfflineSubmissionsEpochRef.current = null;
+      }
     }
     return completedWithoutRetainedFailures;
   }, [
     activeRoutePlanId,
     buildDriverAccessRefresh,
     clearAndStopActiveLocationSession,
+    completedStopIds.length,
+    driverAccessTokenStore,
     getActiveAccountAccess,
     mockDriverEventService,
     mockProofMediaUploadService,
     runtimeConfig,
+    refreshRouteAccessTupleForSubmission,
+    sendCompletionAcknowledgedHeartbeatBeforeCleanup,
     setScreen,
     syncOfflineQueueState,
     waitForOfflineQueuePersistence,
@@ -1860,6 +2364,16 @@ function DriverApp() {
     phoneE164: string,
     options: RouteLoadOptions = {},
   ) => {
+    driverSyncBoundAccountOwnerHashRef.current = null;
+    driverSyncLifecycleAbortControllerRef.current.abort();
+    driverSyncRouteAbortControllerRef.current.abort();
+    driverSyncHeartbeatSchedulerRef.current?.stop();
+    driverSyncHeartbeatSchedulerRef.current = null;
+    completionClearRetrySchedulerRef.current?.stop();
+    completionClearRetrySchedulerRef.current = null;
+    driverSyncAccountEpochRef.current += 1;
+    const loginEpoch = driverSyncAccountEpochRef.current;
+    setDriverSyncHealth(null);
     const allowVerifiedDriverNoRoute = options.allowVerifiedDriverNoRoute ?? false;
     const shouldResetProgress = options.resetProgress ?? true;
     const shouldNavigateOnSuccess = options.navigateOnSuccess ?? true;
@@ -1867,13 +2381,35 @@ function DriverApp() {
     setRouteSyncState('loading');
     setMessage(null);
     setVerifiedDriverPhoneE164(phoneE164);
+    setRouteSessions([]);
     if (shouldResetProgress) {
       resetRouteProgress();
     }
 
     let persistedActiveRouteSession = options.activeRouteSession ?? null;
+    let loginAccountOwnerHash: string | null = null;
+    let loginLifecycleSignal: AbortSignal | null = null;
+    let accountQueueForLogin: OfflineSubmissionQueue | null = null;
+    const isLoginAccountCurrent = () => loginEpoch === driverSyncAccountEpochRef.current
+      && loginLifecycleSignal?.aborted !== true
+      && (
+        loginAccountOwnerHash === null
+        || (
+          driverSyncBoundAccountOwnerHashRef.current === loginAccountOwnerHash
+          && accountQueueForLogin?.getAccountOwnerHash() === loginAccountOwnerHash
+        )
+      );
     try {
       const accountQueue = await bindExpoOfflineSubmissionQueueAccount(phoneE164);
+      const accountOwnerHash = accountQueue.getAccountOwnerHash();
+      if (accountOwnerHash === null) throw new Error('Offline evidence account binding did not return an owner.');
+      if (loginEpoch !== driverSyncAccountEpochRef.current) return;
+      accountQueueForLogin = accountQueue;
+      loginAccountOwnerHash = accountOwnerHash;
+      driverSyncBoundAccountOwnerHashRef.current = accountOwnerHash;
+      driverSyncLifecycleAbortControllerRef.current = new AbortController();
+      driverSyncRouteAbortControllerRef.current = new AbortController();
+      loginLifecycleSignal = driverSyncLifecycleAbortControllerRef.current.signal;
       setOfflineSubmissionQueue(accountQueue);
       syncOfflineQueueState(accountQueue);
       const restorePendingRuntime = (identity: CompletionPendingRestoreIdentity): void => {
@@ -1893,9 +2429,52 @@ function DriverApp() {
           const receiptFirstRestore = await restoreCompletionPendingBeforeRouteHydration({
             hydrateRoute: () => submitAccountRouteAccess(accountAccess),
             identity,
+            isCurrent: isLoginAccountCurrent,
+            lifecycleSignal: loginLifecycleSignal,
             onPending: restorePendingRuntime,
-            onResolved: async (routePlanId) => {
-              await clearAndStopActiveLocationSession(routePlanId);
+            onResolved: async (routePlanId, resolution) => {
+              if (!isLoginAccountCurrent()) return;
+              if (resolution === 'acknowledged') {
+                const outboxEntry = accountQueue.listPendingCompletionClearEntries().find((entry) => (
+                  entry.routePlanId === routePlanId
+                  && entry.completionClientEventId === identity.activeRouteSession.completionClientEventId
+                  && entry.assignmentGeneration === identity.routeAccess?.assignmentGeneration
+                ));
+                if (outboxEntry !== undefined) await sendCompletionAcknowledgedHeartbeatBeforeCleanup({
+                  access: identity.driverAccess === undefined || identity.routeAccess === undefined ? undefined : {
+                    accessToken: identity.driverAccess.accessToken,
+                    assignmentGeneration: identity.routeAccess.assignmentGeneration,
+                    driverContractVersion: identity.routeAccess.driverContractVersion,
+                    routePlanId: identity.routeAccess.routePlanId,
+                  },
+                  completedStopCount: identity.activeRouteSession.completedStopIds?.length ?? null,
+                  outboxEntry,
+                  queue: accountQueue,
+                  refreshAccess: async (signal) => {
+                    const refreshed = await refreshRouteAccessTupleForSubmission(routePlanId, {
+                      isCurrent: () => !signal.aborted && isLoginAccountCurrent(),
+                      persistAccess: false,
+                      persistAccountAccess: false,
+                      preserveMissingRoute: true,
+                      projectRuntimeState: false,
+                    });
+                    return refreshed === null ? null : {
+                      accessToken: refreshed.driverAccess.accessToken,
+                      assignmentGeneration: refreshed.routeAccess.assignmentGeneration,
+                      driverContractVersion: refreshed.routeAccess.driverContractVersion,
+                      routePlanId: refreshed.routeAccess.routePlanId,
+                    };
+                  },
+                });
+              }
+              if (!isLoginAccountCurrent()) return;
+              await clearAndStopActiveLocationSession(routePlanId, {
+                assignmentGeneration: identity.routeAccess?.assignmentGeneration ?? '',
+                isCurrent: isLoginAccountCurrent,
+                sessionInstanceId: identity.activeRouteSession.startedAt
+                  ?? identity.activeRouteSession.updatedAt,
+              });
+              if (!isLoginAccountCurrent()) return;
               persistedActiveRouteSession = null;
               setCompletionPendingRestoreIdentity(null);
               setActiveRoutePlanId(null);
@@ -2187,6 +2766,7 @@ function DriverApp() {
       }
       setMessage(null);
     } catch (error) {
+      if (!isLoginAccountCurrent()) return;
       const failure = buildAuthFailureMessage({
         runtimeConfig,
         phase: 'route_access',
@@ -2213,7 +2793,9 @@ function DriverApp() {
         setMessage(failure.message);
       }
     } finally {
+      if (!isLoginAccountCurrent()) return;
       const currentQueue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue().catch(() => null);
+      if (!isLoginAccountCurrent()) return;
       if (currentQueue !== null) {
         if (offlineSubmissionQueue === null) setOfflineSubmissionQueue(currentQueue);
         syncOfflineQueueState(currentQueue);
@@ -2235,6 +2817,9 @@ function DriverApp() {
     retryOfflineSubmissionsForSessions,
     routeAccessService,
     runtimeConfig,
+    refreshRouteAccessLookupForSubmission,
+    refreshRouteAccessTupleForSubmission,
+    sendCompletionAcknowledgedHeartbeatBeforeCleanup,
     setScreen,
     submitAccountRouteAccess,
     syncOfflineQueueState,
@@ -2602,25 +3187,127 @@ function DriverApp() {
     recoverOfflineEvidenceStorage,
   ]);
 
+  useEffect(() => {
+    if (
+      !isDriverRestoreComplete
+      || completionClearOutboxCount === 0
+      || offlineStorageState === 'STORAGE_DEGRADED'
+    ) return;
+    const scheduler = createOfflineRetryScheduler({
+      cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      hasPendingSubmissions: () => completionClearOutboxCount > 0,
+      isForeground: () => AppState.currentState === 'active',
+      isOnline: () => networkReachability === 'online',
+      policy: { initialDelayMs: 5_000, jitterRatio: 0.2, maxDelayMs: 60_000 },
+      retry: flushCompletionClearOutbox,
+      schedule: (run, delayMs) => setTimeout(run, delayMs),
+    });
+    completionClearRetrySchedulerRef.current = scheduler;
+    const subscription = AppState.addEventListener('change', () => scheduler.notifyConditionsChanged());
+    scheduler.start();
+    return () => {
+      subscription.remove();
+      scheduler.stop();
+      if (completionClearRetrySchedulerRef.current === scheduler) {
+        completionClearRetrySchedulerRef.current = null;
+      }
+    };
+  }, [
+    activeDriverSyncRouteEpoch,
+    completionClearOutboxCount,
+    flushCompletionClearOutbox,
+    isDriverRestoreComplete,
+    networkReachability,
+    offlineStorageState,
+  ]);
+
   const retryCompletionPendingReceipt = useCallback(async (): Promise<boolean> => {
-    const routePlanId = completionPendingRestoreIdentity?.activeRouteSession.routePlanId ?? null;
+    const pendingIdentity = completionPendingRestoreIdentity;
+    const routePlanId = pendingIdentity?.activeRouteSession.routePlanId ?? null;
     if (runtimeConfig.mode !== 'live' || routePlanId === null) return true;
+    const requestEpoch = driverSyncAccountEpochRef.current;
+    const lifecycleSignal = combineDriverSyncAbortSignals([
+      driverSyncLifecycleAbortControllerRef.current.signal,
+      driverSyncRouteAbortControllerRef.current.signal,
+    ]);
     let queue = offlineSubmissionQueue;
+    let isCurrent = () => !lifecycleSignal.aborted
+      && requestEpoch === driverSyncAccountEpochRef.current;
     try {
-      queue ??= await getExpoOfflineSubmissionQueue();
-      const accountAccess = await getActiveAccountAccess();
-      if (accountAccess === null || queue.storageState() === 'STORAGE_DEGRADED') return false;
+      queue ??= await runBoundedAsyncOperation(
+        async () => getExpoOfflineSubmissionQueue(),
+        { signal: lifecycleSignal, timeoutMs: 15_000 },
+      );
+      const accountOwnerHash = queue.getAccountOwnerHash();
+      isCurrent = () => !lifecycleSignal.aborted
+        && requestEpoch === driverSyncAccountEpochRef.current
+        && accountOwnerHash !== null
+        && driverSyncBoundAccountOwnerHashRef.current === accountOwnerHash
+        && queue?.getAccountOwnerHash() === accountOwnerHash;
+      if (!isCurrent()) return false;
+      const accountAccess = await runBoundedAsyncOperation(
+        async () => getActiveAccountAccess({ isCurrent, persistRefreshedAccess: false }),
+        { signal: lifecycleSignal, timeoutMs: 15_000 },
+      );
+      if (!isCurrent() || accountAccess === null || queue.storageState() === 'STORAGE_DEGRADED') return false;
       const recovery = await recoverPendingRouteEndReceipt({
         driverEventReceiptService: createDriverEventReceiptApiClient({
           accountAccessToken: accountAccess.accessToken,
           baseUrl: runtimeConfig.deliveryServerBaseUrl,
         }),
+        isCurrent,
+        lifecycleSignal,
         queue,
         routePlanId,
       });
+      if (!isCurrent()) return false;
       await waitForOfflineQueuePersistence(queue);
+      if (!isCurrent()) return false;
       if (recovery !== 'acknowledged' && recovery !== 'reconciliation') return false;
-      await clearAndStopActiveLocationSession(routePlanId);
+      if (recovery === 'acknowledged') {
+        const outboxEntry = queue.listPendingCompletionClearEntries().find((entry) => (
+          entry.routePlanId === routePlanId
+          && entry.completionClientEventId
+            === pendingIdentity?.activeRouteSession.completionClientEventId
+          && entry.assignmentGeneration === pendingIdentity?.routeAccess?.assignmentGeneration
+        ));
+        if (outboxEntry !== undefined) await sendCompletionAcknowledgedHeartbeatBeforeCleanup({
+          access: pendingIdentity?.driverAccess === undefined
+            || pendingIdentity.routeAccess === undefined ? undefined : {
+              accessToken: pendingIdentity.driverAccess.accessToken,
+              assignmentGeneration: pendingIdentity.routeAccess.assignmentGeneration,
+              driverContractVersion: pendingIdentity.routeAccess.driverContractVersion,
+              routePlanId: pendingIdentity.routeAccess.routePlanId,
+            },
+          completedStopCount: pendingIdentity?.activeRouteSession.completedStopIds?.length ?? null,
+          outboxEntry,
+          queue,
+          refreshAccess: async (signal) => {
+            const refreshed = await refreshRouteAccessTupleForSubmission(routePlanId, {
+              isCurrent: () => !signal.aborted && isCurrent(),
+              persistAccess: false,
+              persistAccountAccess: false,
+              preserveMissingRoute: true,
+              projectRuntimeState: false,
+            });
+            return refreshed === null ? null : {
+              accessToken: refreshed.driverAccess.accessToken,
+              assignmentGeneration: refreshed.routeAccess.assignmentGeneration,
+              driverContractVersion: refreshed.routeAccess.driverContractVersion,
+              routePlanId: refreshed.routeAccess.routePlanId,
+            };
+          },
+        });
+      }
+      if (!isCurrent()) return false;
+      await clearAndStopActiveLocationSession(routePlanId, {
+        assignmentGeneration: pendingIdentity?.routeAccess?.assignmentGeneration ?? '',
+        isCurrent,
+        sessionInstanceId: pendingIdentity?.activeRouteSession.startedAt
+          ?? pendingIdentity?.activeRouteSession.updatedAt
+          ?? '',
+      });
+      if (!isCurrent()) return false;
       setCompletionPendingRestoreIdentity(null);
       setActiveRoutePlanId(null);
       setDeliveryStartResult(null);
@@ -2630,15 +3317,17 @@ function DriverApp() {
       }
       return true;
     } catch {
-      syncOfflineQueueState(queue);
+      if (isCurrent()) syncOfflineQueueState(queue);
       return false;
     }
   }, [
     clearAndStopActiveLocationSession,
-    completionPendingRestoreIdentity?.activeRouteSession.routePlanId,
+    completionPendingRestoreIdentity,
     getActiveAccountAccess,
     offlineSubmissionQueue,
+    refreshRouteAccessTupleForSubmission,
     runtimeConfig,
+    sendCompletionAcknowledgedHeartbeatBeforeCleanup,
     syncOfflineQueueState,
     waitForOfflineQueuePersistence,
   ]);
@@ -2671,8 +3360,14 @@ function DriverApp() {
     routeSessions,
   ]);
 
-  const sendDriverSyncHeartbeat = useCallback(async (): Promise<boolean> => {
+  const sendDriverSyncHeartbeat = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
     if (runtimeConfig.mode !== 'live' || installedDriverAppVersion === null || activeRoutePlanId === null) return true;
+    const requestEpoch = driverSyncAccountEpochRef.current;
+    const requestSignal = combineDriverSyncAbortSignals([
+      driverSyncLifecycleAbortControllerRef.current.signal,
+      driverSyncRouteAbortControllerRef.current.signal,
+      signal,
+    ]);
     const routeSession = routeSessions.find((session) => session.route.id === activeRoutePlanId);
     const reducedIdentity = routeSession === undefined
       && completionPendingRestoreIdentity?.activeRouteSession.routePlanId === activeRoutePlanId
@@ -2686,14 +3381,8 @@ function DriverApp() {
     if (routeSession === undefined && reducedIdentity === null) return false;
     const routeSubmission = routeSession === undefined ? null : toCompanyGuidanceSubmission(routeSession);
     const routeAccess = routeSession?.routeAccess ?? reducedIdentity!.routeAccess;
-    const pending = offlineSubmissionQueue?.listPending().filter((item) => (
-      item.kind === 'driver_event' ? item.event.routePlanId === activeRoutePlanId : item.request.routePlanId === activeRoutePlanId
-    )) ?? [];
-    const firstPending = pending[0];
-    const retryEntries = pending.flatMap((item) => item.journal)
-      .filter((entry) => entry.kind === 'ATTEMPT' || entry.kind === 'RECONCILIATION')
-      .slice(-8)
-      .map((entry) => ({ errorCode: entry.code, observedAt: entry.at }));
+    const telemetryQueue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+    const queueProjection = projectDriverSyncQueueState(telemetryQueue, activeRoutePlanId);
     const identity = await getExpoDriverSyncIdentity().next([
       verifiedDriverPhoneE164 ?? 'authenticated',
       activeRoutePlanId,
@@ -2706,36 +3395,40 @@ function DriverApp() {
       currentStopSequence: routeSession === undefined ? null : currentStop?.sequence ?? null,
       deviceInstanceHash: identity.deviceInstanceHash,
       driverContractVersion: routeAccess.driverContractVersion,
-      finishPending: routeSession === undefined || routeSession.pendingRouteEnd === 'completed',
-      firstErrorCode: firstPending?.firstErrorCode ?? null,
-      firstFailedAt: firstPending?.journal.find((entry) => entry.kind === 'ATTEMPT')?.at ?? null,
+      ...queueProjection,
       heartbeatSequence: identity.heartbeatSequence,
-      lastAcknowledgedAt: null,
-      lastErrorCode: pending.at(-1)?.lastErrorCode ?? null,
-      lastRetryAt: pending.flatMap((item) => item.journal).filter((entry) => entry.kind === 'ATTEMPT').at(-1)?.at ?? null,
-      locallyFinished: routeSession === undefined || routeSession.pendingRouteEnd === 'completed',
-      nextRetryAt: null,
-      oldestQueuedAt: firstPending?.enqueuedAt ?? null,
-      queueDepth: pending.length,
-      retryCount: pending.reduce((total, item) => total + item.attempts, 0),
-      retryJournal: retryEntries,
       sessionGeneration: identity.sessionGeneration,
       totalStopCount: routeSession?.route.stops.length ?? null,
       versionCode: installedDriverAppVersion.versionCode,
     };
     let accessToken = routeSubmission?.driverAccess.accessToken ?? reducedIdentity!.driverAccess.accessToken;
     try {
-      const result = await createDriverSyncHeartbeatApiClient({ accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl }).recordHeartbeat(request);
-      setDriverSyncHealth((current) => projectLatestDriverSyncHeartbeat(current, result));
+      const result = await createRateLimitedDriverSyncHeartbeatService({
+        limiter: driverSyncRateLimiterRef.current,
+        routePlanId: activeRoutePlanId,
+        service: createDriverSyncHeartbeatApiClient({ accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl }),
+      }).recordHeartbeat(request, { signal: requestSignal });
+      setDriverSyncHealth((current) => projectDriverSyncHeartbeatForEpoch(
+        current, result, requestEpoch, driverSyncAccountEpochRef.current,
+      ));
       return result.accepted && !result.conflict;
     } catch (error) {
       if (!(error instanceof DriverSyncHeartbeatHttpError) || error.status !== 401) throw error;
       if (routeSubmission === null) return false;
-      const refreshed = await refreshDriverAccessForSubmission(routeSubmission);
+      const refreshed = await refreshRouteAccessLookupForSubmission(activeRoutePlanId, {
+        isCurrent: () => !requestSignal.aborted
+          && requestEpoch === driverSyncAccountEpochRef.current,
+      });
       if (refreshed === null) return false;
       accessToken = refreshed.accessToken;
-      const result = await createDriverSyncHeartbeatApiClient({ accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl }).recordHeartbeat(request);
-      setDriverSyncHealth((current) => projectLatestDriverSyncHeartbeat(current, result));
+      const result = await createRateLimitedDriverSyncHeartbeatService({
+        limiter: driverSyncRateLimiterRef.current,
+        routePlanId: activeRoutePlanId,
+        service: createDriverSyncHeartbeatApiClient({ accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl }),
+      }).recordHeartbeat(request, { signal: requestSignal });
+      setDriverSyncHealth((current) => projectDriverSyncHeartbeatForEpoch(
+        current, result, requestEpoch, driverSyncAccountEpochRef.current,
+      ));
       return result.accepted && !result.conflict;
     }
   }, [
@@ -2745,7 +3438,7 @@ function DriverApp() {
     currentStop?.sequence,
     installedDriverAppVersion,
     offlineSubmissionQueue,
-    refreshDriverAccessForSubmission,
+    refreshRouteAccessLookupForSubmission,
     routeSessions,
     runtimeConfig,
     verifiedDriverPhoneE164,
@@ -2789,13 +3482,33 @@ function DriverApp() {
       hasActiveSession: () => activeRoutePlanId !== null,
       isForeground: () => AppState.currentState === 'active',
       isOnline: () => networkReachability === 'online',
+      isDegraded: () => driverSyncHealth?.state !== 'HEALTHY' || offlineQueueCount > 0,
       schedule: (run, delayMs) => setTimeout(run, delayMs),
       sendHeartbeat: sendDriverSyncHeartbeat,
     });
+    driverSyncHeartbeatSchedulerRef.current = scheduler;
     const subscription = AppState.addEventListener('change', scheduler.notifyConditionsChanged);
+    if (pendingImmediateDriverSyncHeartbeatRef.current) {
+      pendingImmediateDriverSyncHeartbeatRef.current = false;
+      scheduler.requestImmediate();
+    }
     scheduler.start();
-    return () => { subscription.remove(); scheduler.stop(); };
-  }, [activeRoutePlanId, isDriverRestoreComplete, networkReachability, sendDriverSyncHeartbeat]);
+    return () => {
+      subscription.remove();
+      pendingImmediateDriverSyncHeartbeatRef.current = scheduler.stop({ carryImmediate: true })
+        || pendingImmediateDriverSyncHeartbeatRef.current;
+      if (driverSyncHeartbeatSchedulerRef.current === scheduler) {
+        driverSyncHeartbeatSchedulerRef.current = null;
+      }
+    };
+  }, [
+    activeRoutePlanId,
+    driverSyncHealth?.state,
+    isDriverRestoreComplete,
+    networkReachability,
+    offlineQueueCount,
+    sendDriverSyncHeartbeat,
+  ]);
 
   const handlePullRefresh = useCallback(async () => {
     if (isPullRefreshingRef.current) {
@@ -3968,13 +4681,27 @@ function DriverApp() {
 
     let routeSessionDeactivated = false;
     let queueForStateSync = offlineSubmissionQueue;
+    const finishEpoch = driverSyncAccountEpochRef.current;
+    const finishLifecycleSignal = combineDriverSyncAbortSignals([
+      driverSyncLifecycleAbortControllerRef.current.signal,
+      driverSyncRouteAbortControllerRef.current.signal,
+    ]);
     setIsFinishingRoute(true);
     try {
       const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      const finishAccountOwnerHash = queue.getAccountOwnerHash();
+      const isFinishCurrent = () => !finishLifecycleSignal.aborted
+        && finishEpoch === driverSyncAccountEpochRef.current
+        && finishAccountOwnerHash !== null
+        && driverSyncBoundAccountOwnerHashRef.current === finishAccountOwnerHash
+        && queue.getAccountOwnerHash() === finishAccountOwnerHash;
+      if (!isFinishCurrent()) return false;
       queueForStateSync = queue;
       if (offlineSubmissionQueue === null) {
         setOfflineSubmissionQueue(queue);
       }
+      const completionSubmission = options?.routeSubmission
+        ?? (submission?.kind === 'company_guidance' ? submission : undefined);
       const finishResult = await finishDeliveryAfterActive({
         deactivateActiveRouteSession: async (completion) => {
           return driverAccessTokenStore.markActiveRouteCompletionPending({
@@ -3997,6 +4724,36 @@ function DriverApp() {
         ...(options?.eventPayload === undefined ? {} : { eventPayload: options.eventPayload }),
         ...(options?.now === undefined ? {} : { now: options.now }),
         offlineQueue: queue,
+        onServerAcknowledged: async (outboxEntry, signal) => {
+          if (completionSubmission === undefined) return;
+          await sendCompletionAcknowledgedHeartbeatBeforeCleanup({
+            access: {
+              accessToken: completionSubmission.driverAccess.accessToken,
+              assignmentGeneration: completionSubmission.routeAccess.assignmentGeneration,
+              driverContractVersion: completionSubmission.routeAccess.driverContractVersion,
+              routePlanId: completionSubmission.routeAccess.routePlanId,
+            },
+            completedStopCount: completedStopIds.length,
+            lifecycleSignal: signal,
+            outboxEntry,
+            queue,
+            refreshAccess: async (signal) => {
+              const refreshed = await refreshRouteAccessTupleForSubmission(outboxEntry.routePlanId, {
+                isCurrent: () => !signal.aborted && isFinishCurrent(),
+                persistAccess: false,
+                persistAccountAccess: false,
+                preserveMissingRoute: true,
+                projectRuntimeState: false,
+              });
+              return refreshed === null ? null : {
+                accessToken: refreshed.driverAccess.accessToken,
+                assignmentGeneration: refreshed.routeAccess.assignmentGeneration,
+                driverContractVersion: refreshed.routeAccess.driverContractVersion,
+                routePlanId: refreshed.routeAccess.routePlanId,
+              };
+            },
+          });
+        },
         routeEnd: options?.routeEnd,
         routePlanId: route.id,
         streamService: continuousLocationStreamService,
@@ -4022,6 +4779,10 @@ function DriverApp() {
         return false;
       }
       if (finishResult.kind === 'queued') {
+        await waitForOfflineQueuePersistence(queue);
+        if (options?.routeEnd !== 'released') {
+          requestImmediateDriverSyncHeartbeat();
+        }
         setRouteSessions((current) => current.map((session): RouteSession => session.route.id === route.id
           ? {
               ...session,
@@ -4141,6 +4902,16 @@ function DriverApp() {
   }
 
   async function handleLogout() {
+    driverSyncBoundAccountOwnerHashRef.current = null;
+    driverSyncLifecycleAbortControllerRef.current.abort();
+    driverSyncRouteAbortControllerRef.current.abort();
+    driverSyncHeartbeatSchedulerRef.current?.stop();
+    driverSyncHeartbeatSchedulerRef.current = null;
+    completionClearRetrySchedulerRef.current?.stop();
+    completionClearRetrySchedulerRef.current = null;
+    driverSyncAccountEpochRef.current += 1;
+    pendingImmediateDriverSyncHeartbeatRef.current = false;
+    setDriverSyncHealth(null);
     setMessage(null);
     const registeredDevicePushToken = registeredDevicePushTokenRef.current
       ?? await stopArrivalNotificationService.getDevicePushToken().catch(() => null);
