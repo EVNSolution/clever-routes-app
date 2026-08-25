@@ -287,4 +287,40 @@ describe('continuous location streaming', () => {
     });
     assert.deepEqual(streamService.stopped, []);
   });
+
+  it('does not stop account B tracking when account A cleanup loses its session lease', async () => {
+    const streamService = createMockStreamService();
+    let currentOwner = 'account-a';
+    let nativeStopCalls = 0;
+    let releaseClear!: () => void;
+    let signalClearStarted!: () => void;
+    const clearPaused = new Promise<void>((resolve) => { releaseClear = resolve; });
+    const clearStarted = new Promise<void>((resolve) => { signalClearStarted = resolve; });
+    streamService.stopLocationUpdatesIfCurrent = async (_taskName, isCurrent) => {
+      if (!(await isCurrent())) return false;
+      nativeStopCalls += 1;
+      return true;
+    };
+    const cleanup = clearAndStopContinuousLocationSession({
+      activeRouteSessionStore: {
+        clearActiveRouteSession: async () => {
+          signalClearStarted();
+          await clearPaused;
+          return true;
+        },
+      },
+      assignmentGeneration: '11',
+      isSessionLeaseCurrent: () => currentOwner === 'account-a',
+      routePlanId: 'shared-route',
+      streamService,
+    });
+
+    await clearStarted;
+    currentOwner = 'account-b';
+    releaseClear();
+    assert.deepEqual(await cleanup, {
+      kind: 'unchanged', taskName: 'clever-routes-continuous-location',
+    });
+    assert.equal(nativeStopCalls, 0);
+  });
 });

@@ -589,14 +589,21 @@ function DriverApp() {
     );
   }, [isRequestingBackgroundLocation, requestBackgroundLocationPermissionAfterDisclosure, showOperationalDialog]);
 
-  const clearAndStopActiveLocationSession = useCallback(async (routePlanId?: string): Promise<void> => {
+  const clearAndStopActiveLocationSession = useCallback(async (
+    routePlanId?: string,
+    lease?: { assignmentGeneration: string; isCurrent: () => boolean },
+  ): Promise<void> => {
     try {
       const result = await clearAndStopContinuousLocationSession({
         activeRouteSessionStore: driverAccessTokenStore,
+        ...(lease === undefined ? {} : {
+          assignmentGeneration: lease.assignmentGeneration,
+          isSessionLeaseCurrent: lease.isCurrent,
+        }),
         ...(routePlanId === undefined ? {} : { routePlanId }),
         streamService: continuousLocationStreamService,
       });
-      if (result.kind === 'stopped') {
+      if (result.kind === 'stopped' && (lease === undefined || lease.isCurrent())) {
         setActiveRoutePlanId(null);
       }
     } catch (error) {
@@ -1272,8 +1279,11 @@ function DriverApp() {
           queue,
           refreshAccess: async (refreshSignal) => {
             const refreshed = await refreshRouteAccessTupleForSubmission(entry.routePlanId, {
-              isCurrent: () => !refreshSignal.aborted,
+              isCurrent: () => !refreshSignal.aborted && isCurrent(),
+              persistAccess: false,
+              persistAccountAccess: false,
               preserveMissingRoute: true,
+              projectRuntimeState: false,
             });
             return refreshed === null ? null : {
               accessToken: refreshed.driverAccess.accessToken,
@@ -1294,7 +1304,13 @@ function DriverApp() {
         if (accessByAssignment.has(key)) return true;
         const refreshed = await refreshRouteAccessTupleForSubmission(
           entry.routePlanId,
-          { isCurrent: () => !signal.aborted && isCurrent(), preserveMissingRoute: true },
+          {
+            isCurrent: () => !signal.aborted && isCurrent(),
+            persistAccess: false,
+            persistAccountAccess: false,
+            preserveMissingRoute: true,
+            projectRuntimeState: false,
+          },
         );
         if (
           refreshed === null
@@ -1388,6 +1404,12 @@ function DriverApp() {
           }),
           isCurrent,
           lifecycleSignal,
+          orderedEventAccessIdentity: {
+            assignmentGeneration: routeSubmission.routeAccess.assignmentGeneration,
+            driverContractVersion: routeSubmission.routeAccess.driverContractVersion,
+            expectedRouteVersionId: routeSubmission.routeAccess.expectedRouteVersionId,
+            routePlanId: routeSubmission.routeAccess.routePlanId,
+          },
           proofMediaUploadService: getProofMediaUploadServiceForCurrentSubmission({
             fallback: mockProofMediaUploadService,
             refreshDriverAccess,
@@ -1424,8 +1446,11 @@ function DriverApp() {
             queue,
             refreshAccess: async (signal) => {
               const refreshed = await refreshRouteAccessTupleForSubmission(session.route.id, {
-                isCurrent: () => !signal.aborted,
+                isCurrent: () => !signal.aborted && isCurrent(),
+                persistAccess: false,
+                persistAccountAccess: false,
                 preserveMissingRoute: true,
+                projectRuntimeState: false,
               });
               return refreshed === null ? null : {
                 accessToken: refreshed.driverAccess.accessToken,
@@ -1436,7 +1461,10 @@ function DriverApp() {
             },
           });
           if (!isCurrent()) return false;
-          await clearAndStopActiveLocationSession(session.route.id);
+          await clearAndStopActiveLocationSession(session.route.id, {
+            assignmentGeneration: routeSubmission.routeAccess.assignmentGeneration,
+            isCurrent,
+          });
           if (!isCurrent()) return false;
           setCompletionPendingRestoreIdentity(null);
           setActiveRoutePlanId(null);
@@ -1445,7 +1473,10 @@ function DriverApp() {
         }
         if (result.reconciliationRoutePlanIds?.includes(session.route.id) === true) {
           if (!isCurrent()) return false;
-          await clearAndStopActiveLocationSession(session.route.id);
+          await clearAndStopActiveLocationSession(session.route.id, {
+            assignmentGeneration: routeSubmission.routeAccess.assignmentGeneration,
+            isCurrent,
+          });
           if (!isCurrent()) return false;
           setCompletionPendingRestoreIdentity(null);
           if (activeRoutePlanId === session.route.id) {
@@ -2294,6 +2325,7 @@ function DriverApp() {
     completionClearRetrySchedulerRef.current?.stop();
     completionClearRetrySchedulerRef.current = null;
     driverSyncAccountEpochRef.current += 1;
+    const loginEpoch = driverSyncAccountEpochRef.current;
     setDriverSyncHealth(null);
     const allowVerifiedDriverNoRoute = options.allowVerifiedDriverNoRoute ?? false;
     const shouldResetProgress = options.resetProgress ?? true;
@@ -2308,13 +2340,29 @@ function DriverApp() {
     }
 
     let persistedActiveRouteSession = options.activeRouteSession ?? null;
+    let loginAccountOwnerHash: string | null = null;
+    let loginLifecycleSignal: AbortSignal | null = null;
+    let accountQueueForLogin: OfflineSubmissionQueue | null = null;
+    const isLoginAccountCurrent = () => loginEpoch === driverSyncAccountEpochRef.current
+      && loginLifecycleSignal?.aborted !== true
+      && (
+        loginAccountOwnerHash === null
+        || (
+          driverSyncBoundAccountOwnerHashRef.current === loginAccountOwnerHash
+          && accountQueueForLogin?.getAccountOwnerHash() === loginAccountOwnerHash
+        )
+      );
     try {
       const accountQueue = await bindExpoOfflineSubmissionQueueAccount(phoneE164);
       const accountOwnerHash = accountQueue.getAccountOwnerHash();
       if (accountOwnerHash === null) throw new Error('Offline evidence account binding did not return an owner.');
+      if (loginEpoch !== driverSyncAccountEpochRef.current) return;
+      accountQueueForLogin = accountQueue;
+      loginAccountOwnerHash = accountOwnerHash;
       driverSyncBoundAccountOwnerHashRef.current = accountOwnerHash;
       driverSyncLifecycleAbortControllerRef.current = new AbortController();
       driverSyncRouteAbortControllerRef.current = new AbortController();
+      loginLifecycleSignal = driverSyncLifecycleAbortControllerRef.current.signal;
       setOfflineSubmissionQueue(accountQueue);
       syncOfflineQueueState(accountQueue);
       const restorePendingRuntime = (identity: CompletionPendingRestoreIdentity): void => {
@@ -2334,8 +2382,11 @@ function DriverApp() {
           const receiptFirstRestore = await restoreCompletionPendingBeforeRouteHydration({
             hydrateRoute: () => submitAccountRouteAccess(accountAccess),
             identity,
+            isCurrent: isLoginAccountCurrent,
+            lifecycleSignal: loginLifecycleSignal,
             onPending: restorePendingRuntime,
             onResolved: async (routePlanId, resolution) => {
+              if (!isLoginAccountCurrent()) return;
               if (resolution === 'acknowledged') {
                 const outboxEntry = accountQueue.listPendingCompletionClearEntries().find((entry) => (
                   entry.routePlanId === routePlanId
@@ -2354,8 +2405,11 @@ function DriverApp() {
                   queue: accountQueue,
                   refreshAccess: async (signal) => {
                     const refreshed = await refreshRouteAccessTupleForSubmission(routePlanId, {
-                      isCurrent: () => !signal.aborted,
+                      isCurrent: () => !signal.aborted && isLoginAccountCurrent(),
+                      persistAccess: false,
+                      persistAccountAccess: false,
                       preserveMissingRoute: true,
+                      projectRuntimeState: false,
                     });
                     return refreshed === null ? null : {
                       accessToken: refreshed.driverAccess.accessToken,
@@ -2366,7 +2420,12 @@ function DriverApp() {
                   },
                 });
               }
-              await clearAndStopActiveLocationSession(routePlanId);
+              if (!isLoginAccountCurrent()) return;
+              await clearAndStopActiveLocationSession(routePlanId, {
+                assignmentGeneration: identity.routeAccess?.assignmentGeneration ?? '',
+                isCurrent: isLoginAccountCurrent,
+              });
+              if (!isLoginAccountCurrent()) return;
               persistedActiveRouteSession = null;
               setCompletionPendingRestoreIdentity(null);
               setActiveRoutePlanId(null);
@@ -2658,6 +2717,7 @@ function DriverApp() {
       }
       setMessage(null);
     } catch (error) {
+      if (!isLoginAccountCurrent()) return;
       const failure = buildAuthFailureMessage({
         runtimeConfig,
         phase: 'route_access',
@@ -2684,7 +2744,9 @@ function DriverApp() {
         setMessage(failure.message);
       }
     } finally {
+      if (!isLoginAccountCurrent()) return;
       const currentQueue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue().catch(() => null);
+      if (!isLoginAccountCurrent()) return;
       if (currentQueue !== null) {
         if (offlineSubmissionQueue === null) setOfflineSubmissionQueue(currentQueue);
         syncOfflineQueueState(currentQueue);
@@ -3173,8 +3235,11 @@ function DriverApp() {
           queue,
           refreshAccess: async (signal) => {
             const refreshed = await refreshRouteAccessTupleForSubmission(routePlanId, {
-              isCurrent: () => !signal.aborted,
+              isCurrent: () => !signal.aborted && isCurrent(),
+              persistAccess: false,
+              persistAccountAccess: false,
               preserveMissingRoute: true,
+              projectRuntimeState: false,
             });
             return refreshed === null ? null : {
               accessToken: refreshed.driverAccess.accessToken,
@@ -3186,7 +3251,10 @@ function DriverApp() {
         });
       }
       if (!isCurrent()) return false;
-      await clearAndStopActiveLocationSession(routePlanId);
+      await clearAndStopActiveLocationSession(routePlanId, {
+        assignmentGeneration: pendingIdentity?.routeAccess?.assignmentGeneration ?? '',
+        isCurrent,
+      });
       if (!isCurrent()) return false;
       setCompletionPendingRestoreIdentity(null);
       setActiveRoutePlanId(null);
@@ -4561,9 +4629,21 @@ function DriverApp() {
 
     let routeSessionDeactivated = false;
     let queueForStateSync = offlineSubmissionQueue;
+    const finishEpoch = driverSyncAccountEpochRef.current;
+    const finishLifecycleSignal = combineDriverSyncAbortSignals([
+      driverSyncLifecycleAbortControllerRef.current.signal,
+      driverSyncRouteAbortControllerRef.current.signal,
+    ]);
     setIsFinishingRoute(true);
     try {
       const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      const finishAccountOwnerHash = queue.getAccountOwnerHash();
+      const isFinishCurrent = () => !finishLifecycleSignal.aborted
+        && finishEpoch === driverSyncAccountEpochRef.current
+        && finishAccountOwnerHash !== null
+        && driverSyncBoundAccountOwnerHashRef.current === finishAccountOwnerHash
+        && queue.getAccountOwnerHash() === finishAccountOwnerHash;
+      if (!isFinishCurrent()) return false;
       queueForStateSync = queue;
       if (offlineSubmissionQueue === null) {
         setOfflineSubmissionQueue(queue);
@@ -4607,8 +4687,11 @@ function DriverApp() {
             queue,
             refreshAccess: async (signal) => {
               const refreshed = await refreshRouteAccessTupleForSubmission(outboxEntry.routePlanId, {
-                isCurrent: () => !signal.aborted,
+                isCurrent: () => !signal.aborted && isFinishCurrent(),
+                persistAccess: false,
+                persistAccountAccess: false,
                 preserveMissingRoute: true,
+                projectRuntimeState: false,
               });
               return refreshed === null ? null : {
                 accessToken: refreshed.driverAccess.accessToken,

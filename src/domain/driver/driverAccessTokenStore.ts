@@ -51,7 +51,7 @@ type StoredDriverAccessPayload = PersistedDriverAccess & {
 
 export type DriverAccessTokenStore = {
   clear(): Promise<void>;
-  clearActiveRouteSession(routePlanId?: string, startedAt?: string): Promise<boolean>;
+  clearActiveRouteSession(routePlanId?: string, startedAt?: string, assignmentGeneration?: string): Promise<boolean>;
   clearCachedRouteAccess(routePlanId?: string): Promise<boolean>;
   loadActiveDriverAccess(): Promise<DriverAccessRestoreResult>;
   markActiveRouteStarted(routePlanId: string, startedAt: string): Promise<boolean>;
@@ -120,13 +120,14 @@ export function createDriverAccessTokenStore(input: {
 
   return {
     clear: () => runSerialized(clearStoredPayload),
-    clearActiveRouteSession: (routePlanId, startedAt) => runSerialized(() => updateStoredPayload((payload) => {
+    clearActiveRouteSession: (routePlanId, startedAt, assignmentGeneration) => runSerialized(() => updateStoredPayload((payload) => {
       const persistedStartedAt = payload.activeRouteSession?.startedAt ?? payload.activeRouteSession?.updatedAt;
       if (
         routePlanId !== undefined
         && (
           payload.activeRouteSession?.routePlanId !== routePlanId
           || (startedAt !== undefined && persistedStartedAt !== startedAt)
+          || (assignmentGeneration !== undefined && payload.routeAccess?.assignmentGeneration !== assignmentGeneration)
         )
       ) {
         return null;

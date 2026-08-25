@@ -32,6 +32,7 @@ describe('Expo continuous location wiring', () => {
     assert.match(source, /stopContinuousLocationTaskIfInactive/u);
     assert.match(source, /activeTaskExecutions/u);
     assert.match(source, /ensureLocationUpdatesStarted/u);
+    assert.match(source, /stopLocationUpdatesIfCurrent: async \(taskName, isCurrent\) => \{[\s\S]*runLocationTaskOperation\(async \(\) => \{[\s\S]*if \(!\(await isCurrent\(\)\)\) return false;[\s\S]*stopExpoLocationUpdates\(taskName\)/u);
     assert.doesNotMatch(source, /let continuousLocationTaskHandler/u);
     assert.doesNotMatch(source, /registerContinuousLocationTaskHandler/u);
   });

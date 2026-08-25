@@ -42,7 +42,7 @@ describe('driver operations resilience runtime', () => {
     const receiptRestoreIndex = source.indexOf('await restoreCompletionPendingBeforeRouteHydration({');
     const onResolvedIndex = source.indexOf('onResolved: async (routePlanId, resolution)', receiptRestoreIndex);
     const heartbeatIndex = source.indexOf('await sendCompletionAcknowledgedHeartbeatBeforeCleanup({', onResolvedIndex);
-    const clearIndex = source.indexOf('await clearAndStopActiveLocationSession(routePlanId);', onResolvedIndex);
+    const clearIndex = source.indexOf('await clearAndStopActiveLocationSession(routePlanId, {', onResolvedIndex);
     assert.ok(receiptRestoreIndex > 0 && onResolvedIndex > receiptRestoreIndex);
     assert.ok(heartbeatIndex > onResolvedIndex && heartbeatIndex < clearIndex);
     assert.match(source.slice(onResolvedIndex, clearIndex), /resolution === 'acknowledged'/u);
@@ -52,12 +52,12 @@ describe('driver operations resilience runtime', () => {
   it('orders both online acknowledgement paths before active-session cleanup', () => {
     const replayAckIndex = source.indexOf('result.completionAcknowledgedRoutePlanIds?.includes(session.route.id)');
     const replayHeartbeatIndex = source.indexOf('await sendCompletionAcknowledgedHeartbeatBeforeCleanup({', replayAckIndex);
-    const replayClearIndex = source.indexOf('await clearAndStopActiveLocationSession(session.route.id);', replayAckIndex);
+    const replayClearIndex = source.indexOf('await clearAndStopActiveLocationSession(session.route.id, {', replayAckIndex);
     assert.ok(replayAckIndex > 0 && replayHeartbeatIndex > replayAckIndex && replayHeartbeatIndex < replayClearIndex);
 
     const receiptAckIndex = source.indexOf("if (recovery === 'acknowledged')");
     const receiptHeartbeatIndex = source.indexOf('await sendCompletionAcknowledgedHeartbeatBeforeCleanup({', receiptAckIndex);
-    const receiptClearIndex = source.indexOf('await clearAndStopActiveLocationSession(routePlanId);', receiptAckIndex);
+    const receiptClearIndex = source.indexOf('await clearAndStopActiveLocationSession(routePlanId, {', receiptAckIndex);
     assert.ok(receiptAckIndex > 0 && receiptHeartbeatIndex > receiptAckIndex && receiptHeartbeatIndex < receiptClearIndex);
   });
 
@@ -76,7 +76,7 @@ describe('driver operations resilience runtime', () => {
     const ordinaryOwnerIndex = source.indexOf('const accountOwnerHash = queue.getAccountOwnerHash();', ordinarySignalIndex);
     const ordinaryDomainGuardIndex = source.indexOf('isCurrent,', ordinaryOwnerIndex);
     const ordinaryCleanupGuardIndex = source.indexOf('if (!isCurrent()) return false;', ordinaryDomainGuardIndex);
-    const ordinaryCleanupIndex = source.indexOf('await clearAndStopActiveLocationSession(session.route.id);', ordinaryCleanupGuardIndex);
+    const ordinaryCleanupIndex = source.indexOf('await clearAndStopActiveLocationSession(session.route.id, {', ordinaryCleanupGuardIndex);
     assert.ok(ordinaryRetryIndex > 0 && ordinarySignalIndex > ordinaryRetryIndex);
     assert.ok(ordinaryOwnerIndex > ordinarySignalIndex && ordinaryDomainGuardIndex > ordinaryOwnerIndex);
     assert.ok(ordinaryCleanupGuardIndex > ordinaryDomainGuardIndex && ordinaryCleanupIndex > ordinaryCleanupGuardIndex);
@@ -88,7 +88,7 @@ describe('driver operations resilience runtime', () => {
     const receiptEpochIndex = source.indexOf('const requestEpoch = driverSyncAccountEpochRef.current;', receiptRetryIndex);
     const receiptDomainGuardIndex = source.indexOf('isCurrent,', receiptEpochIndex);
     const receiptCleanupGuardIndex = source.indexOf('if (!isCurrent()) return false;', receiptDomainGuardIndex);
-    const receiptCleanupIndex = source.indexOf('await clearAndStopActiveLocationSession(routePlanId);', receiptCleanupGuardIndex);
+    const receiptCleanupIndex = source.indexOf('await clearAndStopActiveLocationSession(routePlanId, {', receiptCleanupGuardIndex);
     assert.ok(receiptRetryIndex > 0 && receiptEpochIndex > receiptRetryIndex);
     assert.ok(receiptDomainGuardIndex > receiptEpochIndex && receiptCleanupGuardIndex > receiptDomainGuardIndex);
     assert.ok(receiptCleanupIndex > receiptCleanupGuardIndex);
@@ -99,6 +99,11 @@ describe('driver operations resilience runtime', () => {
     assert.match(source, /options\?\.preserveMissingRoute === true\) return null;/u);
     const completionRefreshCalls = source.match(/preserveMissingRoute: true/gu) ?? [];
     assert.ok(completionRefreshCalls.length >= 4);
+    assert.ok((source.match(/persistAccess: false/gu) ?? []).length >= 6);
+    assert.ok((source.match(/persistAccountAccess: false/gu) ?? []).length >= 6);
+    assert.ok((source.match(/projectRuntimeState: false/gu) ?? []).length >= 6);
+    assert.match(source, /isCurrent: \(\) => !signal\.aborted && isLoginAccountCurrent\(\)/u);
+    assert.match(source, /isCurrent: \(\) => !signal\.aborted && isFinishCurrent\(\)/u);
   });
 
   it('prefers per-route session tokens and does not let one overwritten SecureStore route block another outbox route', () => {

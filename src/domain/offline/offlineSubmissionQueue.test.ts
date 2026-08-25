@@ -115,6 +115,31 @@ describe('offline submission queue', () => {
     });
   });
 
+  it('keeps complete ordered evidence immutable and quarantines a same-id reassignment', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const original = queue.enqueueDriverEvent({
+      appVersion: '1.1.6', assignmentGeneration: '11', clientEventId: 'same-id-reassigned',
+      driverContractVersion: 2, eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId: 'route-1', versionCode: 17,
+    });
+    queue.enqueueDriverEvent({
+      appVersion: '1.2.0', assignmentGeneration: '12', clientEventId: 'same-id-reassigned',
+      driverContractVersion: 2, eventType: 'ROUTE_COMPLETED',
+      expectedRouteVersionId: '33333333-3333-4333-8333-333333333333',
+      occurredAt: new Date('2026-08-22T19:43:10.000Z'), routePlanId: 'route-1', versionCode: 18,
+    });
+
+    const [retained] = queue.listPending();
+    assert.equal(retained?.state, 'QUARANTINED');
+    assert.equal(retained?.reconciliation?.reason, 'assignment_changed');
+    assert.equal(retained?.kind, 'driver_event');
+    if (retained?.kind !== 'driver_event') throw new Error('Expected driver event');
+    assert.deepEqual(retained.event, original.event);
+    assert.equal(retained.event.assignmentGeneration, '11');
+    assert.equal(retained.event.versionCode, 17);
+  });
+
   it('reports the newest queued terminal route transition', () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueDriverEvent({
@@ -2024,7 +2049,7 @@ describe('offline submission queue', () => {
     assert.equal(queue.listPending()[0]?.state, 'QUARANTINED');
   });
 
-  it('replays a persisted UNKNOWN completion with its queued generation after route reassignment', async () => {
+  it('quarantines a persisted UNKNOWN completion instead of using reassigned route access', async () => {
     const storage = createMemoryStorage();
     const first = await createPersistentOfflineSubmissionQueue({ storage });
     first.enqueueDriverEvent({
@@ -2035,38 +2060,41 @@ describe('offline submission queue', () => {
     });
     await first.whenPersisted();
     const restarted = await createPersistentOfflineSubmissionQueue({ storage });
-    let replayBody: Record<string, unknown> | undefined;
+    let networkCalls = 0;
     const result = await retryOfflineSubmissions({
-      driverEventReceiptService: { lookupReceipt: async () => ({
-        assignmentGeneration: '11', clientEventId: 'persisted-generation-11', errorCode: null,
-        expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', routePlanId: 'reassigned-route',
-        routeStatus: 'IN_PROGRESS', status: 'UNKNOWN',
-      }) },
+      driverEventReceiptService: { lookupReceipt: async () => {
+        networkCalls += 1;
+        return {
+          assignmentGeneration: '11', clientEventId: 'persisted-generation-11', errorCode: null,
+          expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', routePlanId: 'reassigned-route',
+          routeStatus: 'IN_PROGRESS', status: 'UNKNOWN',
+        };
+      } },
       driverEventService: createDriverEventsApiClient({
         accessToken: 'generation-12-route-token', baseUrl: 'https://delivery.example.com',
         orderedEventContract: {
           appVersion: '1.2.0', assignmentGeneration: '12', driverContractVersion: 2,
           expectedRouteVersionId: '33333333-3333-4333-8333-333333333333', versionCode: 18,
         },
-        fetchImpl: async (_url, init) => {
-          replayBody = JSON.parse(init?.body ?? '{}') as Record<string, unknown>;
+        fetchImpl: async () => {
+          networkCalls += 1;
           return { json: async () => ({ data: { duplicate: false, eventId: 'persisted-generation-11' }, error: null }), ok: true, status: 202 };
         },
       }),
+      orderedEventAccessIdentity: {
+        assignmentGeneration: '12', driverContractVersion: 2,
+        expectedRouteVersionId: '33333333-3333-4333-8333-333333333333', routePlanId: 'reassigned-route',
+      },
       proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
       queue: restarted,
     });
 
-    assert.equal(result.succeeded, 1);
-    assert.deepEqual({
-      appVersion: replayBody?.appVersion,
-      assignmentGeneration: replayBody?.assignmentGeneration,
-      expectedRouteVersionId: replayBody?.expectedRouteVersionId,
-      versionCode: replayBody?.versionCode,
-    }, {
-      appVersion: '1.1.6', assignmentGeneration: '11',
-      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222', versionCode: 17,
-    });
+    assert.equal(networkCalls, 0);
+    assert.equal(result.succeeded, 0);
+    assert.equal(result.blocked, 1);
+    assert.equal(result.reconciliationRoutePlanIds, undefined);
+    assert.equal(restarted.listPending()[0]?.state, 'QUARANTINED');
+    assert.equal(restarted.listPending()[0]?.reconciliation?.reason, 'assignment_changed');
   });
 
   it('aborts an account-A ordinary retry without mutating its queue after account-B login', async () => {

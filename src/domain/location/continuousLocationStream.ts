@@ -31,6 +31,7 @@ export type ContinuousLocationStreamService = {
     taskName: string;
   }): Promise<void>;
   stopLocationUpdates(taskName: string): Promise<void>;
+  stopLocationUpdatesIfCurrent?(taskName: string, isCurrent: () => Promise<boolean> | boolean): Promise<boolean>;
   updateLocationNotification?(input: {
     notification: ContinuousLocationNotificationContent;
     taskName: string;
@@ -237,6 +238,8 @@ export async function stopContinuousLocationUpdates(input: {
 
 export async function clearAndStopContinuousLocationSession(input: {
   activeRouteSessionStore: Pick<DriverAccessTokenStore, 'clearActiveRouteSession'>;
+  assignmentGeneration?: string;
+  isSessionLeaseCurrent?: () => Promise<boolean> | boolean;
   routePlanId?: string;
   streamService: ContinuousLocationStreamService;
   taskName?: string;
@@ -244,7 +247,14 @@ export async function clearAndStopContinuousLocationSession(input: {
   let clearError: unknown;
   let cleared = false;
   try {
-    cleared = await input.activeRouteSessionStore.clearActiveRouteSession(input.routePlanId);
+    if (input.isSessionLeaseCurrent !== undefined && !(await input.isSessionLeaseCurrent())) {
+      return { kind: 'unchanged', taskName: input.taskName ?? CONTINUOUS_LOCATION_TASK_NAME };
+    }
+    cleared = await input.activeRouteSessionStore.clearActiveRouteSession(
+      input.routePlanId,
+      undefined,
+      input.assignmentGeneration,
+    );
   } catch (error) {
     clearError = error;
   }
@@ -252,6 +262,19 @@ export async function clearAndStopContinuousLocationSession(input: {
   const taskName = input.taskName ?? CONTINUOUS_LOCATION_TASK_NAME;
   if (input.routePlanId !== undefined && !cleared && clearError === undefined) {
     return { kind: 'unchanged', taskName };
+  }
+  if (input.isSessionLeaseCurrent !== undefined) {
+    let stopped: boolean;
+    if (input.streamService.stopLocationUpdatesIfCurrent === undefined) {
+      if (!(await input.isSessionLeaseCurrent())) return { kind: 'unchanged', taskName };
+      await input.streamService.stopLocationUpdates(taskName);
+      stopped = true;
+    } else {
+      stopped = await input.streamService.stopLocationUpdatesIfCurrent(taskName, input.isSessionLeaseCurrent);
+    }
+    if (!stopped) return { kind: 'unchanged', taskName };
+    if (clearError !== undefined) throw clearError;
+    return { kind: 'stopped', taskName };
   }
   const result = await stopContinuousLocationUpdates({
     streamService: input.streamService,

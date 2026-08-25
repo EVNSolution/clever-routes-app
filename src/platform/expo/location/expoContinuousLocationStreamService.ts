@@ -213,6 +213,14 @@ export function createExpoContinuousLocationStreamService(): ContinuousLocationS
       await Promise.allSettled(Array.from(activeTaskExecutions));
       await runLocationTaskOperation(() => stopExpoLocationUpdates(taskName));
     },
+    stopLocationUpdatesIfCurrent: async (taskName, isCurrent) => {
+      await Promise.allSettled(Array.from(activeTaskExecutions));
+      return runLocationTaskOperation(async () => {
+        if (!(await isCurrent())) return false;
+        await stopExpoLocationUpdates(taskName);
+        return true;
+      });
+    },
     updateLocationNotification: ({ notification, taskName }) => runLocationTaskOperation(async () => {
       if (
         expoLocationNotificationModule !== null

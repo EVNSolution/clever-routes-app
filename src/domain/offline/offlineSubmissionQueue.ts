@@ -37,7 +37,7 @@ export type OfflineSubmissionQueueRetryPolicy = {
 
 export type OfflineSubmissionReconciliation = {
   blockedAt: string;
-  reason: 'account_signed_out' | 'proof_idempotency_conflict' | 'retry_policy_exceeded' | 'route_not_in_progress';
+  reason: 'account_signed_out' | 'assignment_changed' | 'proof_idempotency_conflict' | 'retry_policy_exceeded' | 'route_not_in_progress';
 };
 
 export type OfflineEvidenceState = 'ACKNOWLEDGED' | 'DISCARDED' | 'PENDING' | 'QUARANTINED';
@@ -312,7 +312,10 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
     const queueItemId = getDriverEventQueueItemId(event);
     const existing = findActiveItem(queueItemId);
     if (existing?.kind === 'driver_event') {
-      if (hasCompleteOrderedEventContract(event) && !hasSameOrderedEventContract(existing.event, event)) {
+      if (
+        hasCompleteOrderedEventContract(event)
+        && !hasCompleteOrderedEventContract(existing.event)
+      ) {
         existing.event = {
           ...existing.event,
           appVersion: event.appVersion,
@@ -322,6 +325,17 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
           versionCode: event.versionCode,
         };
         return { changed: true, inserted: false, item: existing };
+      }
+      if (
+        hasCompleteOrderedEventContract(existing.event)
+        && hasCompleteOrderedEventContract(event)
+        && !hasSameOrderedEventContract(existing.event, event)
+      ) {
+        if (existing.reconciliation === undefined) {
+          existing.reconciliation = { blockedAt: now().toISOString(), reason: 'assignment_changed' };
+          transition(existing, 'QUARANTINED', 'RECONCILIATION', 'ASSIGNMENT_CHANGED');
+          return { changed: true, inserted: false, item: existing };
+        }
       }
       return { changed: false, inserted: false, item: existing };
     }
@@ -789,6 +803,12 @@ export async function retryOfflineSubmissions(input: {
   driverEventService: DriverEventService;
   isCurrent?: () => boolean;
   lifecycleSignal?: AbortSignal;
+  orderedEventAccessIdentity?: {
+    assignmentGeneration: string;
+    driverContractVersion: number;
+    expectedRouteVersionId: string;
+    routePlanId: string;
+  };
   now?: () => Date;
   proofMediaUploadService: ProofMediaUploadService;
   queue: OfflineSubmissionQueue;
@@ -860,6 +880,17 @@ export async function retryOfflineSubmissions(input: {
 
     try {
       if (item.kind === 'driver_event') {
+        if (
+          isOrderedWorkflowEvidence(item)
+          && input.orderedEventAccessIdentity !== undefined
+          && !hasExactOrderedEventAccessIdentity(item.event, input.orderedEventAccessIdentity)
+        ) {
+          if (input.queue.quarantine(item.queueItemId, 'assignment_changed')) blocked += 1;
+          if (routePlanId !== undefined) {
+            workflowBlockedRoutePlanIds.add(routePlanId);
+          }
+          continue;
+        }
         if (
           (item.event.eventType === 'ROUTE_COMPLETED' || item.event.eventType === 'ROUTE_PAUSED')
           && item.event.routePlanId != null
@@ -1086,6 +1117,16 @@ function hasSameOrderedEventContract(left: DriverEventInput, right: DriverEventI
     && left.driverContractVersion === right.driverContractVersion
     && left.expectedRouteVersionId === right.expectedRouteVersionId
     && left.versionCode === right.versionCode;
+}
+
+function hasExactOrderedEventAccessIdentity(
+  event: DriverEventInput,
+  access: NonNullable<Parameters<typeof retryOfflineSubmissions>[0]['orderedEventAccessIdentity']>,
+): boolean {
+  return event.routePlanId === access.routePlanId
+    && event.assignmentGeneration === access.assignmentGeneration
+    && event.driverContractVersion === access.driverContractVersion
+    && event.expectedRouteVersionId === access.expectedRouteVersionId;
 }
 
 function getProofMediaQueueItemId(request: ProofMediaUploadRequest): string {
@@ -1326,6 +1367,7 @@ function readOptionalReconciliation(value: unknown): OfflineSubmissionReconcilia
     blockedAt === null
     || ![
       'account_signed_out',
+      'assignment_changed',
       'proof_idempotency_conflict',
       'retry_policy_exceeded',
       'route_not_in_progress',
