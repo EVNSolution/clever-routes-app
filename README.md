@@ -112,6 +112,19 @@ npx eas-cli build --platform ios --profile preview
 npx eas-cli build --platform all --profile production
 ```
 
+Android commands are intentionally separated so a QA phone cannot be overwritten by an Expo Development Build:
+
+| Command | Use |
+| --- | --- |
+| `npm run android:dev:install` | Install the arm64 `debugOptimized` development client after native dependency/config changes only |
+| `npm run android:dev:start` | Reuse the installed development client for normal JS/TS work through Metro |
+| `npm run android:qa:build` | Build the self-contained EAS `preview` APK for QA/device evidence |
+| `npm run build:android:device-smoke` | Build a local arm64 self-contained release-mode APK for smoke diagnostics; not a distributable signed artifact |
+| `npm run build:android:distribution` | Reuse Gradle outputs/cache for the reviewed direct-distribution APK |
+| `npm run build:android:distribution:clean` | Force a clean direct-distribution build only for reproducibility or cache-recovery diagnosis |
+
+The ambiguous `npm run android` command is intentionally absent. Development builds require Metro and must not be installed on QA devices.
+
 Run `npm run check:native-release` before EAS builds or release PRs. It validates source-controlled Expo/EAS identity, permission, profile, and public runtime env baseline only; owner-controlled Expo/EAS project values, Apple/Google signing authority, store/private distribution approval, privacy copy, and license decisions remain external release blockers.
 
 Run `npm run release:evidence:seed` from the committed source revision selected for EAS/device testing. It prints a non-secret Markdown seed with commit, app version/build identifiers, EAS build commands, preflight status, external blocker list, and tracking issues so the completed evidence manifest can be filled in the approved external evidence store.

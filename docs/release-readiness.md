@@ -135,6 +135,8 @@ The native binary build path uses Expo EAS profiles:
 | `preview` iOS | `npx eas-cli build --platform ios --profile preview` | Internal iPhone smoke build through EAS internal distribution | Expo account/project access, Apple team/signing authority, registered devices or approved internal distribution path, EAS `preview` environment values |
 | `production` all | `npx eas-cli build --platform all --profile production` | Store/TestFlight/Play candidate archives | Expo account/project access, Apple/Google store authority, production signing, EAS `production` environment values, approved privacy/store copy |
 
+Do not use `expo run:android` or a Development Build as Android QA evidence. Those binaries require Metro and include developer tooling. Use `npm run android:qa:build` for the self-contained EAS preview APK. `npm run build:android:device-smoke` is limited to local release-mode diagnostics and does not establish signing or distribution evidence.
+
 `cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied
 to committed source. `cli.appVersionSource` is `remote`; the last published
 direct-distribution Android build is `1.1.6` (`versionCode` `17`). The current

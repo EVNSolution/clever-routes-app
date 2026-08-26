@@ -35,9 +35,11 @@ Use committed source only. `eas.json` sets `cli.requireCommit=true`, so build ev
 Recommended preview commands:
 
 ```bash
-npx eas-cli build --platform android --profile preview
+npm run android:qa:build
 npx eas-cli build --platform ios --profile preview
 ```
+
+Never install `npm run android:dev:install` output on a QA device: it is a Metro-backed Development Build. For a local self-contained Android diagnostic before EAS evidence exists, use `npm run build:android:device-smoke`, record it as non-distributable local evidence, and verify that the package is not `DEBUGGABLE` before launch.
 
 Production candidate command, only after owner approval:
 
