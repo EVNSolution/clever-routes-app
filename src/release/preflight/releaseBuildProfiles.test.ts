@@ -119,21 +119,46 @@ test('keeps the installed app name aligned across Expo, Android, and iOS', () =>
   );
 });
 
-test('keeps direct-download Android optimization isolated to the distribution APK build', () => {
+test('separates Android development, QA, and self-contained smoke commands', () => {
+  const packageConfig = readJson<{
+    scripts?: Record<string, string>;
+  }>('package.json');
+  const scripts = packageConfig.scripts ?? {};
+
+  assert.equal(scripts.android, undefined);
+  assert.match(scripts['android:dev:install'] ?? '', /expo run:android --device --variant debugOptimized/u);
+  assert.match(scripts['android:dev:install'] ?? '', /reactNativeArchitectures=arm64-v8a/u);
+  assert.match(scripts['android:dev:start'] ?? '', /expo start --dev-client --localhost --android/u);
+  assert.match(scripts['android:qa:build'] ?? '', /eas-cli build --platform android --profile preview/u);
+  assert.match(scripts['prebuild:android:device-smoke'] ?? '', /prepare:android:firebase:local/u);
+  assert.match(scripts['prepare:android:firebase:local'] ?? '', /prepare-google-services\.mjs --allow-existing/u);
+  assert.match(scripts['build:android:device-smoke'] ?? '', /app:assembleRelease/u);
+  assert.match(scripts['build:android:device-smoke'] ?? '', /reactNativeArchitectures=arm64-v8a/u);
+  assert.doesNotMatch(scripts['build:android:device-smoke'] ?? '', /app:clean/u);
+});
+
+test('keeps incremental and clean direct-download Android builds explicit', () => {
   const packageConfig = readJson<{
     scripts?: Record<string, string>;
   }>('package.json');
   const command = packageConfig.scripts?.['build:android:distribution'] ?? '';
+  const cleanCommand = packageConfig.scripts?.['build:android:distribution:clean'] ?? '';
   const preflight = packageConfig.scripts?.['prebuild:android:distribution'] ?? '';
+  const gradleProperties = readFileSync(resolve(repoRoot, 'android/gradle.properties'), 'utf8');
 
   assert.match(preflight, /verify-distribution-source\.mjs/u);
-  assert.match(command, /app:clean/u);
+  assert.doesNotMatch(command, /app:clean/u);
   assert.match(command, /app:assembleRelease/u);
+  assert.match(cleanCommand, /app:clean/u);
+  assert.match(cleanCommand, /app:assembleRelease/u);
   assert.match(command, /reactNativeArchitectures=armeabi-v7a,arm64-v8a/u);
   assert.match(command, /android\.enableMinifyInReleaseBuilds=true/u);
   assert.match(command, /android\.enableShrinkResourcesInReleaseBuilds=true/u);
   assert.match(command, /expo\.useLegacyPackaging=true/u);
   assert.doesNotMatch(command, /android\.enableBundleCompression=true/u);
+  assert.match(gradleProperties, /^org\.gradle\.caching=true$/mu);
+  assert.match(gradleProperties, /^org\.gradle\.workers\.max=4$/mu);
+  assert.match(gradleProperties, /^org\.gradle\.jvmargs=.*-XX:MaxMetaspaceSize=768m$/mu);
 });
 
 test('exposes one reviewed direct Android publisher command', () => {

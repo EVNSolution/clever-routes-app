@@ -3,7 +3,9 @@ import { dirname, resolve } from 'node:path';
 
 const EXPECTED_PACKAGE = 'com.evnsolution.clever.routes';
 const EXPECTED_PROJECT = 'clever-routes-prod';
-const source = process.env.CLEVER_ROUTES_GOOGLE_SERVICES_FILE?.trim();
+const destination = resolve('android/app/google-services.json');
+const allowExisting = process.argv.includes('--allow-existing');
+const source = process.env.CLEVER_ROUTES_GOOGLE_SERVICES_FILE?.trim() || (allowExisting ? destination : undefined);
 
 function fail(message) {
   console.error(`Firebase Android configuration blocked: ${message}`);
@@ -32,7 +34,8 @@ if (!packages.includes(EXPECTED_PACKAGE)) {
   fail(`expected Android package ${EXPECTED_PACKAGE}.`);
 }
 
-const destination = resolve('android/app/google-services.json');
 mkdirSync(dirname(destination), { recursive: true });
-copyFileSync(source, destination);
+if (resolve(source) !== destination) {
+  copyFileSync(source, destination);
+}
 console.info(`Firebase Android configuration prepared for ${EXPECTED_PACKAGE}.`);
