@@ -247,6 +247,35 @@ export function createRouteOrderedDriverEventService(input: {
   };
 }
 
+export type PickupCompletionQueueState = 'none' | 'pending' | 'reconciliation';
+
+export function getPickupCompletionQueueState(
+  queue: Pick<OfflineSubmissionQueue, 'listPending'>,
+  routePlanId: string,
+): PickupCompletionQueueState {
+  let hasRetryablePending = false;
+  for (const item of queue.listPending()) {
+    if (
+      item.kind !== 'driver_event'
+      || item.event.eventType !== 'PICKUP_COMPLETED'
+      || item.event.routePlanId !== routePlanId
+    ) {
+      continue;
+    }
+    if (item.state === 'QUARANTINED' || item.reconciliation !== undefined) {
+      return 'reconciliation';
+    }
+    if (item.state === 'PENDING') {
+      hasRetryablePending = true;
+    }
+  }
+  return hasRetryablePending ? 'pending' : 'none';
+}
+
+export function hasPendingPickupCompletion(queue: Pick<OfflineSubmissionQueue, 'listPending'>, routePlanId: string): boolean {
+  return getPickupCompletionQueueState(queue, routePlanId) === 'pending';
+}
+
 export function createInMemoryOfflineSubmissionQueue(input?: {
   accountOwnerHash?: string | null;
   initialItems?: OfflineSubmissionQueueItem[];
