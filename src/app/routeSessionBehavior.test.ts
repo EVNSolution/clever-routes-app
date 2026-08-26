@@ -61,6 +61,16 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /session\.pendingRouteEnd === 'completed'[\s\S]*'completed'[\s\S]*session\.pendingRouteEnd === 'released'[\s\S]*'ready'/u);
   });
 
+  it('shows final-status recovery instead of Start Session while a route end is pending', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const componentSource = getRouteSessionComponentSource();
+
+    assert.match(appSource, /<RouteSessionScreen[\s\S]*isRefreshingRoutes=\{isRefreshingRoutes\}[\s\S]*onRetryRouteSync=\{\(\) => \{ void handleRefreshRoutes\(\); \}\}[\s\S]*pendingRouteEnd=\{selectedRouteSession\?\.pendingRouteEnd\}/u);
+    assert.match(componentSource, /pendingRouteEnd\?: PendingRouteEnd/u);
+    assert.match(componentSource, /routeStatus === 'ready' \? \([\s\S]*pendingRouteEnd !== undefined \? \([\s\S]*Final status syncing[\s\S]*Retry Sync[\s\S]*\) : \([\s\S]*label="Start Session"/u);
+    assert.doesNotMatch(componentSource, /StatusChip[^\n]*Final status syncing/u);
+  });
+
   it('clears previous route progress before a new route starts', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const start = appSource.indexOf('async function startRouteSessionAfterConfirmed(');

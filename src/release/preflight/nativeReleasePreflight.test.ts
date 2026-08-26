@@ -198,7 +198,7 @@ test('native release preflight validates a source-controlled iOS project when pr
       ].join('\n'),
       privacyManifest: '<key>NSPrivacyTracking</key>\n<false/>',
       projectPbxproj: [
-        'MARKETING_VERSION = 1.2.1;',
+        'MARKETING_VERSION = 1.2.2;',
         'CURRENT_PROJECT_VERSION = 1;',
         'PRODUCT_BUNDLE_IDENTIFIER = com.evnsolution.clever.routes;',
       ].join('\n'),
@@ -268,7 +268,7 @@ test('native release preflight rejects local Apple team pins in source-controlle
       privacyManifest: '<key>NSPrivacyTracking</key>\n<false/>',
       projectPbxproj: [
         'DEVELOPMENT_TEAM = Y4RMZPJAA7;',
-        'MARKETING_VERSION = 1.2.1;',
+        'MARKETING_VERSION = 1.2.2;',
         'CURRENT_PROJECT_VERSION = 1;',
         'PRODUCT_BUNDLE_IDENTIFIER = com.evnsolution.clever.routes;',
       ].join('\n'),
@@ -298,7 +298,7 @@ test('native release preflight rejects unapproved generated iOS permission copy'
       ].join('\n'),
       privacyManifest: '<key>NSPrivacyTracking</key>\n<false/>',
       projectPbxproj: [
-        'MARKETING_VERSION = 1.2.1;',
+        'MARKETING_VERSION = 1.2.2;',
         'CURRENT_PROJECT_VERSION = 1;',
         'PRODUCT_BUNDLE_IDENTIFIER = com.evnsolution.clever.routes;',
       ].join('\n'),
