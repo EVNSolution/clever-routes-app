@@ -13,6 +13,11 @@
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>
+      <category android:name="android.intent.category.DEFAULT"/>
+      <data android:scheme="geo"/>
+    </intent>
+    <intent>
+      <action android:name="android.intent.action.VIEW"/>
       <category android:name="android.intent.category.BROWSABLE"/>
       <data android:scheme="https"/>
     </intent>
@@ -35,5 +40,6 @@
         <data android:scheme="exp+clever-routes-app"/>
       </intent-filter>
     </activity>
+    <activity android:name=".MapNavigationActivity" android:exported="false" android:theme="@android:style/Theme.Translucent.NoTitleBar"/>
   </application>
 </manifest>

@@ -1,5 +1,4 @@
 import type { AssignedRoute, AssignedRouteAddress, AssignedRouteLngLat, AssignedRouteStop } from '../route/assignedRoute';
-import type { NavigationProvider } from '../navigation/navigationPreference';
 
 export type StopNavigationPlatform = 'android' | 'ios' | string;
 
@@ -49,7 +48,7 @@ type RouteNavigationTarget = {
 };
 
 const GOOGLE_MAPS_DIRECTIONS_URL = 'https://www.google.com/maps/dir/';
-const WAZE_DIRECTIONS_URL = 'https://waze.com/ul';
+const ANDROID_MAP_RESOLVER_URL = 'clever-routes-map://navigate';
 const GOOGLE_MAPS_MAX_WAYPOINTS = 3;
 
 export function buildRouteNavigationUrl(input: {
@@ -113,7 +112,6 @@ export async function openRouteNavigation(input: {
 
 export function buildStopNavigationUrl(input: {
   platform: StopNavigationPlatform;
-  provider?: NavigationProvider;
   stop: AssignedRouteStop;
 }): string | null {
   const target = buildStopNavigationTarget(input.stop);
@@ -121,10 +119,18 @@ export function buildStopNavigationUrl(input: {
     return null;
   }
 
-  if (input.provider === 'waze') {
-    const targetParameter = target.kind === 'coordinates' ? 'll' : 'q';
-    const navigate = target.kind === 'coordinates' ? '&navigate=yes' : '';
-    return `${WAZE_DIRECTIONS_URL}?${targetParameter}=${encodeURIComponent(target.value)}${navigate}`;
+  if (input.platform === 'android') {
+    const address = formatStopNavigationAddress(input.stop.address);
+    const coordinates = stopCoordinatesToLngLat(input.stop.coordinates);
+    const params = [`target=${target.kind}`];
+    if (address !== null) {
+      params.push(`address=${encodeURIComponent(address)}`);
+    }
+    if (coordinates !== null) {
+      params.push(`latitude=${coordinates[1]}`);
+      params.push(`longitude=${coordinates[0]}`);
+    }
+    return `${ANDROID_MAP_RESOLVER_URL}?${params.join('&')}`;
   }
 
   const params = [
@@ -139,11 +145,9 @@ export function buildStopNavigationUrl(input: {
 export async function openStopNavigation(input: {
   linking: StopNavigationLinking;
   platform: StopNavigationPlatform;
-  provider?: NavigationProvider;
   stop: AssignedRouteStop;
 }): Promise<StopNavigationResult> {
-  const provider = input.provider ?? 'google';
-  const url = buildStopNavigationUrl({ platform: input.platform, provider, stop: input.stop });
+  const url = buildStopNavigationUrl({ platform: input.platform, stop: input.stop });
   if (url === null) {
     return {
       kind: 'skipped',
@@ -155,17 +159,15 @@ export async function openStopNavigation(input: {
   try {
     await input.linking.openURL(url);
     const destination = buildStopNavigationTarget(input.stop)?.value ?? 'the stop location';
-    const isWazeSearch = provider === 'waze' && buildStopNavigationTarget(input.stop)?.kind === 'address';
-    const providerAction = isWazeSearch ? 'Waze search' : provider === 'waze' ? 'Waze navigation' : 'Google Maps navigation';
     return {
       kind: 'opened',
-      message: `${providerAction} opened for ${destination}.`,
+      message: `Map navigation requested for ${destination}.`,
       url,
     };
   } catch {
     return {
       kind: 'failed',
-      message: `${provider === 'waze' ? 'Waze' : 'Google Maps'} navigation could not be opened for this stop.`,
+      message: 'Map navigation could not be opened for this stop.',
       reason: 'open_failed',
       url,
     };

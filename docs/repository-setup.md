@@ -12,7 +12,7 @@ This document records the repo baseline for the `clever-routes-app` implementati
 - Node floor: `.nvmrc` pins `20.19.4`; `package.json` allows Node `>=20.19.4`
 - Text normalization: `.editorconfig` sets UTF-8, LF, final newline, trailing-whitespace trim, and two-space indentation for source/docs files; `.gitattributes` normalizes reviewed TypeScript/JavaScript/Markdown/YAML/JSON/shell text files to LF and marks evidence/release/signing artifact patterns as binary
 - Entry point: `index.ts` registering `App.tsx`
-- Current implementation depth: native Expo phone + six-digit PIN account login, invitation + forced-PIN first registration without driver name, separate SecureStore account/route credentials, account refresh and account-bearer route lookup, authoritative deleted-route cache clearing, consent and assigned-route views, map/location tracking, proof capture/upload, offline retry/discard, route completion cleanup, direct Android update discovery, version 1.2.0 (`versionCode` 18) Android native source, and EAS preview/production profile scaffolding. Shopify invitation/signup creation remains manual and outside app/server automation; SMS OTP, forgotten-PIN recovery, production signing/store approval, and final privacy evidence remain later owner-approved slices.
+- Current implementation depth: native Expo phone + six-digit PIN account login, invitation + forced-PIN first registration without driver name, separate SecureStore account/route credentials, account refresh and account-bearer route lookup, authoritative deleted-route cache clearing, consent and assigned-route views, map/location tracking, proof capture/upload, offline retry/discard, route completion cleanup, direct Android update discovery, version 1.2.1 (`versionCode` 19) Android native source, and EAS preview/production profile scaffolding. Shopify invitation/signup creation remains manual and outside app/server automation; SMS OTP, forgotten-PIN recovery, production signing/store approval, and final privacy evidence remain later owner-approved slices.
 
 ## Scripts
 
@@ -62,7 +62,7 @@ Use `npm run android:dev:install` only for an intentional Metro-backed developer
 
 The EAS config intentionally does not commit Expo project IDs, Apple/Google credentials, signing files, store metadata, or concrete delivery-server origins. EAS `preview` and `production` environment values must be created in the owner-controlled Expo/EAS project before native builds are run.
 
-`eas.json` sets `cli.requireCommit=true` to bind native build evidence to committed source. It also sets `cli.appVersionSource=remote`; `app.json` keeps the reviewed native source version, currently Android `1.2.0` (`versionCode` 18), while future production store builds use `autoIncrement`.
+`eas.json` sets `cli.requireCommit=true` to bind native build evidence to committed source. It also sets `cli.appVersionSource=remote`; `app.json` keeps the reviewed native source version, currently Android `1.2.1` (`versionCode` 19), while future production store builds use `autoIncrement`.
 
 `npm run check:native-release` must pass before EAS build evidence or release-sensitive PRs. This preflight is intentionally source-controlled and secret-free: it checks bundle/package identity, native version pins, permission plugin copy, preview/production profile shape, and `.env.example` coverage. It does not prove Expo/EAS project ownership, Apple/Google signing authority, store/private distribution approval, privacy copy approval, or the public license decision.
 

@@ -105,7 +105,7 @@ import {
 import { createExpoContinuousLocationStreamService, registerContinuousLocationTaskObserver } from '../platform/expo/location/expoContinuousLocationStreamService';
 import { createExpoForegroundLocationSnapshotService } from '../platform/expo/location/expoForegroundLocationSnapshotService';
 import { createExpoForegroundLocationPermissionService } from '../platform/expo/location/expoLocationPermissionService';
-import { createExpoNavigationPreferenceStore } from '../platform/expo/storage/expoNavigationPreferenceStore';
+import { createExpoStopNavigationLinking } from '../platform/expo/navigation/expoStopNavigationLinking';
 import {
   bindExpoOfflineSubmissionQueueAccount,
   getExpoOfflineSubmissionQueue,
@@ -188,9 +188,6 @@ import {
   type StopProofFailureReason,
 } from '../domain/stop/stopProofEvents';
 import { openRouteNavigation, openStopNavigation } from '../domain/stop/stopNavigation';
-import {
-  type NavigationProvider,
-} from '../domain/navigation/navigationPreference';
 import {
   getCountrySelectorRowText,
   getSelectedCountryCardText,
@@ -339,8 +336,6 @@ function DriverApp() {
   const [accountNameDraft, setAccountNameDraft] = useState('');
   const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
   const [acceptedLocation, setAcceptedLocation] = useState(false);
-  const [navigationProvider, setNavigationProvider] = useState<NavigationProvider | null>(null);
-  const [navigationPreferenceLoadFailed, setNavigationPreferenceLoadFailed] = useState(false);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [navigationStepIndex, setNavigationStepIndex] = useState(COMPANY_STEP_INDEX);
   const [selectedStopDetailsId, setSelectedStopDetailsId] = useState<string | null>(null);
@@ -467,7 +462,6 @@ function DriverApp() {
   const previousActiveRoutePlanIdRef = useRef<string | null>(null);
   const registeredDevicePushTokenRef = useRef<string | null>(null);
   const isPushRegistrationRunningRef = useRef(false);
-  const navigationPreferenceRevisionRef = useRef(0);
 
   const syncOfflineQueueState = useCallback((queue: OfflineSubmissionQueue | null) => {
     if (queue === null) {
@@ -537,7 +531,7 @@ function DriverApp() {
   }, [activeDriverSyncRouteEpoch]);
 
   const driverAccessTokenStore = useMemo(() => createExpoSecureDriverAccessTokenStore(), []);
-  const navigationPreferenceStore = useMemo(() => createExpoNavigationPreferenceStore(), []);
+  const stopNavigationLinking = useMemo(() => createExpoStopNavigationLinking(), []);
   const foregroundLocationPermissionService = useMemo(() => createExpoForegroundLocationPermissionService(), []);
   const foregroundLocationSnapshotService = useMemo(() => createExpoForegroundLocationSnapshotService(), []);
   const continuousLocationStreamService = useMemo(() => createExpoContinuousLocationStreamService(), []);
@@ -547,25 +541,6 @@ function DriverApp() {
   const mockDriverConsentService = useMemo(() => createMockDriverConsentService(), []);
   const mockAssignedRouteService = useMemo(() => createMockAssignedRouteService({ status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute }), []);
   const mockProofMediaUploadService = useMemo(() => createMockProofMediaUploadService({ mode: 'success' }), []);
-
-  useEffect(() => {
-    let active = true;
-    const loadRevision = navigationPreferenceRevisionRef.current;
-    void navigationPreferenceStore.load()
-      .then((savedProvider) => {
-        if (active && navigationPreferenceRevisionRef.current === loadRevision) {
-          setNavigationPreferenceLoadFailed(false);
-          setNavigationProvider(savedProvider);
-        }
-      })
-      .catch(() => {
-        if (active && navigationPreferenceRevisionRef.current === loadRevision) {
-          setNavigationPreferenceLoadFailed(true);
-          setMessage('Stop navigation app could not be loaded. Restart the app to retry.');
-        }
-      });
-    return () => { active = false; };
-  }, [navigationPreferenceStore]);
 
   const refreshBackgroundLocationPermission = useCallback(async (): Promise<BackgroundPermissionResult> => {
     const permission = await continuousLocationStreamService.getBackgroundPermission();
@@ -1008,30 +983,6 @@ function DriverApp() {
       setMessage('Name could not be updated. Check your connection and try again.');
     } finally {
       setIsSavingAccountName(false);
-    }
-  }
-
-  async function handleChangeNavigationProvider(provider: NavigationProvider): Promise<void> {
-    navigationPreferenceRevisionRef.current += 1;
-    const saveRevision = navigationPreferenceRevisionRef.current;
-    setNavigationProvider(provider);
-    try {
-      await navigationPreferenceStore.save(provider);
-      if (navigationPreferenceRevisionRef.current === saveRevision) {
-        setNavigationPreferenceLoadFailed(false);
-        setMessage(`${provider === 'waze' ? 'Waze' : 'Google Maps'} selected for stop navigation.`);
-      }
-    } catch {
-      if (navigationPreferenceRevisionRef.current === saveRevision) {
-        const persistedProvider = await navigationPreferenceStore.load().catch(() => null);
-        if (navigationPreferenceRevisionRef.current === saveRevision) {
-          setNavigationProvider(persistedProvider);
-          setNavigationPreferenceLoadFailed(persistedProvider === null);
-          setMessage(persistedProvider === null
-            ? 'Stop navigation app could not be saved or restored. Restart the app to retry.'
-            : 'The latest stop navigation choice could not be saved. The previous saved choice was restored.');
-        }
-      }
     }
   }
 
@@ -4460,17 +4411,9 @@ function DriverApp() {
       setMessage('No stop is available to open in map.');
       return;
     }
-    if (navigationProvider === null) {
-      setMessage(navigationPreferenceLoadFailed
-        ? 'Stop navigation app is unavailable. Restart the app to retry.'
-        : 'Navigation app setting is still loading. Try Navigate again.');
-      return;
-    }
-
     const result = await openStopNavigation({
-      linking: Linking,
+      linking: stopNavigationLinking,
       platform: Platform.OS,
-      provider: navigationProvider,
       stop,
     });
     setMessage(result.message);
@@ -5494,10 +5437,7 @@ function DriverApp() {
               appVersion={installedDriverAppVersion?.versionName ?? 'Unknown'}
               isLoadingAccountProfile={isLoadingAccountProfile}
               isRequestingAccountDeletion={isRequestingAccountDeletion}
-              navigationPreferenceLoadFailed={navigationPreferenceLoadFailed}
-              navigationProvider={navigationProvider}
               onEditName={handleOpenAccountName}
-              onChangeNavigationProvider={(provider) => { void handleChangeNavigationProvider(provider); }}
               onOpenConsentDocument={handleOpenConsentDocument}
               onLogout={handleLogout}
               onRequestAccountDeletion={handleRequestAccountDeletion}
@@ -6051,9 +5991,6 @@ function SettingsPage({
   appVersion,
   isLoadingAccountProfile,
   isRequestingAccountDeletion,
-  navigationPreferenceLoadFailed,
-  navigationProvider,
-  onChangeNavigationProvider,
   onEditName,
   onOpenConsentDocument,
   onLogout,
@@ -6066,9 +6003,6 @@ function SettingsPage({
   appVersion: string;
   isLoadingAccountProfile: boolean;
   isRequestingAccountDeletion: boolean;
-  navigationPreferenceLoadFailed: boolean;
-  navigationProvider: NavigationProvider | null;
-  onChangeNavigationProvider(provider: NavigationProvider): void;
   onEditName(): void;
   onOpenConsentDocument(): void;
   onLogout(): void;
@@ -6106,56 +6040,6 @@ function SettingsPage({
             </Text>
           </View>
         </View>
-      </View>
-
-      <View style={styles.settingsSection}>
-        <Text style={styles.settingsSectionLabel}>STOP NAVIGATION APP</Text>
-        <View style={styles.settingsGroup}>
-          <Pressable
-            accessibilityLabel="Use Google Maps for navigation"
-            accessibilityRole="radio"
-            accessibilityState={{ checked: navigationProvider === 'google' }}
-            disabled={navigationProvider === null}
-            onPress={() => onChangeNavigationProvider('google')}
-            style={({ pressed }) => [
-              styles.settingsRow,
-              styles.settingsRowSeparated,
-              pressed && styles.settingsRowPressed,
-            ]}
-          >
-            <Text style={styles.settingsRowLabel}>Google Maps</Text>
-            <Ionicons
-              color={navigationProvider === 'google' ? '#0b57d0' : '#a1a7b0'}
-              name={navigationProvider === 'google' ? 'radio-button-on' : 'radio-button-off'}
-              size={20}
-            />
-          </Pressable>
-          <Pressable
-            accessibilityLabel="Use Waze for navigation"
-            accessibilityRole="radio"
-            accessibilityState={{ checked: navigationProvider === 'waze' }}
-            disabled={navigationProvider === null}
-            onPress={() => onChangeNavigationProvider('waze')}
-            style={({ pressed }) => [
-              styles.settingsRow,
-              pressed && styles.settingsRowPressed,
-            ]}
-          >
-            <Text style={styles.settingsRowLabel}>Waze</Text>
-            <Ionicons
-              color={navigationProvider === 'waze' ? '#0b57d0' : '#a1a7b0'}
-              name={navigationProvider === 'waze' ? 'radio-button-on' : 'radio-button-off'}
-              size={20}
-            />
-          </Pressable>
-        </View>
-        <Text style={styles.helperText}>
-          {navigationPreferenceLoadFailed
-            ? 'Stop navigation preference is unavailable. Restart the app to retry.'
-            : navigationProvider === null
-              ? 'Loading stop navigation preference…'
-              : 'Open Route uses Google Maps for multi-stop directions.'}
-        </Text>
       </View>
 
       <View style={styles.settingsSection}>

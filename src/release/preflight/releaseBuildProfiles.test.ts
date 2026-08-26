@@ -97,8 +97,8 @@ test('documents a source-only Driver pilot candidate that cannot be mistaken for
 test('distinguishes the last published Android build from the source-only pilot candidate', () => {
   const readiness = readFileSync(resolve(repoRoot, 'docs/release-readiness.md'), 'utf8');
 
-  assert.match(readiness, /last published[\s\S]*direct-distribution Android build is `1\.1\.6` \(`versionCode` `17`\)/u);
-  assert.match(readiness, /source-only pilot candidate is `1\.2\.0` \(`versionCode` `18`, iOS build `1`\)/u);
+  assert.match(readiness, /last published[\s\S]*direct-distribution Android build is `1\.2\.0` \(`versionCode` `18`\)/u);
+  assert.match(readiness, /source candidate is `1\.2\.1` \(`versionCode` `19`, iOS build `1`\)/u);
 });
 
 test('keeps the installed app name aligned across Expo, Android, and iOS', () => {
