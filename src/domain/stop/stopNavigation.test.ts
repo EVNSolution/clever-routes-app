@@ -12,27 +12,25 @@ import {
 const firstStop = sampleAssignedRoute.stops[0]!;
 
 describe('native stop map launch', () => {
-  it('opens Google Navigation with server coordinates on every platform', () => {
-    const url = buildStopNavigationUrl({ platform: 'ios', stop: firstStop });
+  it('uses the Android map resolver bridge with both the trusted coordinates and full address', () => {
+    const url = buildStopNavigationUrl({ platform: 'android', stop: firstStop });
     assert.equal(
       url,
+      'clever-routes-map://navigate?target=coordinates&address=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA&latitude=43.6487&longitude=-79.3817',
+    );
+    assert.match(url!, /target=coordinates/u);
+    assert.match(url!, /address=100%20King/u);
+    assert.match(url!, /latitude=43\.6487&longitude=-79\.3817/u);
+  });
+
+  it('keeps the existing non-Android fallback without an app-owned provider choice', () => {
+    assert.equal(
+      buildStopNavigationUrl({ platform: 'ios', stop: firstStop }),
       'https://www.google.com/maps/dir/?api=1&destination=43.6487%2C-79.3817&travelmode=driving&dir_action=navigate',
     );
-    assert.doesNotMatch(url!, /King|M5X|query=|place_id|key=/u);
-    assert.equal(
-      buildStopNavigationUrl({ platform: 'android', stop: firstStop }),
-      url,
-    );
   });
 
-  it('opens Waze navigation with server coordinates when Waze is selected', () => {
-    assert.equal(
-      buildStopNavigationUrl({ platform: 'ios', provider: 'waze', stop: firstStop }),
-      'https://waze.com/ul?ll=43.6487%2C-79.3817&navigate=yes',
-    );
-  });
-
-  it('opens Waze address search when the server selects the address target', async () => {
+  it('hands address-authoritative stops to the Android resolver with coordinates as context', async () => {
     const addressTargetStop: AssignedRouteStop = {
       ...firstStop,
       navigationTarget: 'ADDRESS',
@@ -42,14 +40,13 @@ describe('native stop map launch', () => {
     const result = await openStopNavigation({
       linking: { openURL: async (url) => openedUrls.push(url) },
       platform: 'android',
-      provider: 'waze',
       stop: addressTargetStop,
     });
 
     assert.deepEqual(result, {
       kind: 'opened',
-      message: 'Waze search opened for 100 King St W, Toronto, ON, M5X 1A9, CA.',
-      url: 'https://waze.com/ul?q=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
+      message: 'Map navigation requested for 100 King St W, Toronto, ON, M5X 1A9, CA.',
+      url: 'clever-routes-map://navigate?target=address&address=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA&latitude=43.6487&longitude=-79.3817',
     });
     assert.deepEqual(openedUrls, [result.url]);
   });
@@ -81,8 +78,8 @@ describe('native stop map launch', () => {
 
     assert.deepEqual(result, {
       kind: 'opened',
-      message: 'Google Maps navigation opened for 100 King St W, Toronto, ON, M5X 1A9, CA.',
-      url: 'https://www.google.com/maps/dir/?api=1&destination=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA&travelmode=driving&dir_action=navigate',
+      message: 'Map navigation requested for 100 King St W, Toronto, ON, M5X 1A9, CA.',
+      url: 'clever-routes-map://navigate?target=address&address=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA&latitude=43.6487&longitude=-79.3817',
     });
     assert.deepEqual(openedUrls, [result.url]);
   });
@@ -148,7 +145,7 @@ describe('native stop map launch', () => {
 
     assert.equal(
       buildStopNavigationUrl({ platform: 'android', stop: addressOnlyStop }),
-      'https://www.google.com/maps/dir/?api=1&destination=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA&travelmode=driving&dir_action=navigate',
+      'clever-routes-map://navigate?target=address&address=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
     );
   });
 
@@ -160,7 +157,7 @@ describe('native stop map launch', () => {
 
     assert.equal(
       buildStopNavigationUrl({ platform: 'android', stop: invalidCoordinateStop }),
-      'https://www.google.com/maps/dir/?api=1&destination=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA&travelmode=driving&dir_action=navigate',
+      'clever-routes-map://navigate?target=address&address=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
     );
   });
 
@@ -172,7 +169,7 @@ describe('native stop map launch', () => {
 
     assert.equal(
       buildStopNavigationUrl({ platform: 'android', stop: placeholderCoordinateStop }),
-      'https://www.google.com/maps/dir/?api=1&destination=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA&travelmode=driving&dir_action=navigate',
+      'clever-routes-map://navigate?target=address&address=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
     );
   });
 
@@ -216,7 +213,7 @@ describe('native stop map launch', () => {
 
     assert.deepEqual(result, {
       kind: 'opened',
-      message: 'Google Maps navigation opened for 43.6487,-79.3817.',
+      message: 'Map navigation requested for 43.6487,-79.3817.',
       url: 'https://www.google.com/maps/dir/?api=1&destination=43.6487%2C-79.3817&travelmode=driving&dir_action=navigate',
     });
     assert.deepEqual(openedUrls, ['https://www.google.com/maps/dir/?api=1&destination=43.6487%2C-79.3817&travelmode=driving&dir_action=navigate']);

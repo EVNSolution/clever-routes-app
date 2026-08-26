@@ -139,10 +139,11 @@ Do not use `expo run:android` or a Development Build as Android QA evidence. Tho
 
 `cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied
 to committed source. `cli.appVersionSource` is `remote`; the last published
-direct-distribution Android build is `1.1.6` (`versionCode` `17`). The current
-source-only pilot candidate is `1.2.0` (`versionCode` `18`, iOS build `1`) and
-has not been signed, built as a native artifact, or published. Future production
-store builds use `autoIncrement` to avoid duplicate build numbers.
+direct-distribution Android build is `1.2.0` (`versionCode` `18`). The current
+source candidate is `1.2.1` (`versionCode` `19`, iOS build `1`) and
+has not been published. A local self-contained smoke APK is verification input,
+not publication evidence. Future production store builds use `autoIncrement` to
+avoid duplicate build numbers.
 
 Before running any preview/production EAS build for evidence, run:
 
