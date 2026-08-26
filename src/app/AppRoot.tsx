@@ -150,7 +150,6 @@ import {
   type CompletionPendingRestoreIdentity,
 } from '../domain/operations/completionPendingRestore';
 import { getExpoDriverSyncIdentity } from '../platform/expo/secureStore/expoDriverSyncIdentity';
-import { OperationalPills } from '../ui/components/OperationalPills';
 import { buildDriverOperationalPillValues } from '../ui/components/operationalPillModel';
 import { captureProofPhoto, type ProofPhotoCaptureResult, type ProofPhotoCaptureSource } from '../domain/proof/proofPhotoCapture';
 import {
@@ -5517,32 +5516,33 @@ function DriverApp() {
 
           {screen === 'routeSession' && selectedRoute !== null ? (
             <>
-              <OperationalPills
-                onTakeover={() => { void handleDriverSyncTakeover(); }}
-                values={operationalPillValues}
-              />
+              {driverSyncHealth?.conflict === true ? (
+                <View style={styles.driverSyncTakeoverAction}>
+                  <SecondaryButton label="Use This Device" onPress={() => { void handleDriverSyncTakeover(); }} />
+                </View>
+              ) : null}
               <RouteSessionScreen
-              allStopsCompleted={allStopsCompleted}
-              company={currentCompany}
-              completedStopIds={completedStopIds}
-              currentNavigationStepIndex={navigationStepIndex}
-              deliveryFinishResult={deliveryFinishResult}
-              isFinishingRoute={isFinishingRoute}
-              isRecordingArrival={isRecordingArrival}
-              isStartingRoute={isStartingRoute}
-              mapStyleUrl={driverMapStyleUrl}
-              onArrived={handleArrivedAtStep}
-              onCopyAddress={(address) => { void handleCopyAddress(address); }}
-              onFinishRoute={handleManualFinishRoute}
-              onOpenNavigation={() => handleOpenNavigationForStop(currentStop)}
-              onOpenRouteNavigation={() => handleOpenRouteNavigation(selectedRoute)}
-              onOpenStop={handleOpenStopFromRouteSession}
-              onStartRoute={() => handleStartRoute(selectedRoute.id)}
-              route={selectedRoute}
-              routeProgress={routeProgress}
-              routeStartedEventResult={routeStartedEventResult}
-              routeStatus={routeStatus}
-              stop={currentStop}
+                allStopsCompleted={allStopsCompleted}
+                company={currentCompany}
+                completedStopIds={completedStopIds}
+                currentNavigationStepIndex={navigationStepIndex}
+                deliveryFinishResult={deliveryFinishResult}
+                isFinishingRoute={isFinishingRoute}
+                isRecordingArrival={isRecordingArrival}
+                isStartingRoute={isStartingRoute}
+                mapStyleUrl={driverMapStyleUrl}
+                onArrived={handleArrivedAtStep}
+                onCopyAddress={(address) => { void handleCopyAddress(address); }}
+                onFinishRoute={handleManualFinishRoute}
+                onOpenNavigation={() => handleOpenNavigationForStop(currentStop)}
+                onOpenRouteNavigation={() => handleOpenRouteNavigation(selectedRoute)}
+                onOpenStop={handleOpenStopFromRouteSession}
+                onStartRoute={() => handleStartRoute(selectedRoute.id)}
+                route={selectedRoute}
+                routeProgress={routeProgress}
+                routeStartedEventResult={routeStartedEventResult}
+                routeStatus={routeStatus}
+                stop={currentStop}
               />
             </>
           ) : null}
@@ -8045,6 +8045,10 @@ const styles = StyleSheet.create({
   routeSessionContainer: {
     gap: 0,
     paddingHorizontal: 0,
+  },
+  driverSyncTakeoverAction: {
+    paddingHorizontal: 22,
+    paddingVertical: 12,
   },
   screenStack: {
     gap: 22,

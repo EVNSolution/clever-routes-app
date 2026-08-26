@@ -6,9 +6,11 @@ const source = readFileSync(new URL('./AppRoot.tsx', import.meta.url), 'utf8');
 const pillModelSource = readFileSync(new URL('../ui/components/operationalPillModel.ts', import.meta.url), 'utf8');
 
 describe('driver operations resilience runtime', () => {
-  it('runs heartbeat independently while online and foreground and surfaces lease state', () => {
+  it('runs heartbeat independently without rendering unsolicited operational pills', () => {
     assert.match(source, /createDriverSyncHeartbeatScheduler\([\s\S]*hasActiveSession:[\s\S]*isForeground: \(\) => AppState\.currentState === 'active'[\s\S]*isOnline: \(\) => networkReachability === 'online'/u);
-    assert.match(source, /createDriverSyncTakeoverApiClient[\s\S]*accountAccessToken:[\s\S]*<OperationalPills[\s\S]*onTakeover=\{\(\) => \{ void handleDriverSyncTakeover\(\); \}\}/u);
+    assert.doesNotMatch(source, /<OperationalPills/u);
+    assert.match(source, /createDriverSyncTakeoverApiClient[\s\S]*const handleDriverSyncTakeover[\s\S]*\.takeover\(/u);
+    assert.match(source, /driverSyncHealth\?\.conflict === true[\s\S]*label="Use This Device"[\s\S]*handleDriverSyncTakeover/u);
   });
 
   it('surfaces independent operational values including progress gap and keeps completion pending visible', () => {
