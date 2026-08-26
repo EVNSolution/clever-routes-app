@@ -42,6 +42,16 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /markActiveRouteStarted/u);
   });
 
+  it('restores first-stop progress from a durable queued pickup without duplicating pickup', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+
+    assert.match(appSource, /const pickupCompletionQueueState = getPickupCompletionQueueState\(queue, restoredActiveSession\.route\.id\)/u);
+    assert.match(appSource, /pickupIsUnconfirmed[\s\S]*&& !hasDurablePickupEvidence/u);
+    assert.match(appSource, /hasDurablePickupEvidence[\s\S]*getAssignedRouteProgressAfterPickup\(restoredActiveSession\.route\)\.navigationStepIndex/u);
+    assert.match(appSource, /hasDurablePickupEvidence[\s\S]*saveActiveRouteSession\(\{[\s\S]*pickupCompleted: true/u);
+    assert.match(appSource, /pickupCompletionQueueState === 'reconciliation'[\s\S]*setRouteStartRecoveryState\('sync_pending'\)/u);
+  });
+
   it('does not resurrect a server in-progress route while its local terminal event is queued', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
 
@@ -78,7 +88,7 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(restoreSource, /setScreen\('routeSession'\)/u);
   });
 
-  it('starts GPS tracking inside Store Pickup before switching to a compact stop task', () => {
+  it('shows pickup guidance before start and a compact delivery task after start', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const componentSource = getRouteSessionComponentSource();
 
@@ -93,7 +103,7 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const currentTaskPayment = stop === null \? null : formatAssignedRoutePaymentSummary\(stop\)/u);
     assert.match(componentSource, /const currentTaskPaymentAmount = stop === null[\s\S]*\? null[\s\S]*: formatAssignedRouteCompactPaymentAmount\(stop\.totalPriceAmount, stop\.currencyCode\)/u);
     assert.match(componentSource, /<View style=\{styles\.currentTaskMetaRow\}>[\s\S]*currentTaskAddress !== null \? \([\s\S]*<Text style=\{styles\.currentTaskAddressText\}>\{currentTaskAddress\}<\/Text>[\s\S]*\) : null[\s\S]*<Text style=\{styles\.currentTaskPaymentAmount\}>\{currentTaskPaymentAmount\}<\/Text>/u);
-    assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*<PrimaryButton compact disabled=\{isRecordingArrival\} label="Arrive" loading=\{isRecordingArrival\} onPress=\{onArrived\} \/>[\s\S]*<SecondaryButton compact label="Navigate" onPress=\{onOpenNavigation\} \/>[\s\S]*<\/View>/u);
+    assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*<PrimaryButton compact disabled=\{isStartingRoute \|\| isRecordingArrival\} label="Arrive" loading=\{isStartingRoute \|\| isRecordingArrival\} onPress=\{onArrived\} \/>[\s\S]*<SecondaryButton compact label="Navigate" onPress=\{onOpenNavigation\} \/>[\s\S]*<\/View>/u);
     assert.match(componentSource, /const etaSnapshot = route\.etaSnapshot \?\? null/u);
     assert.match(componentSource, /const nextStopEta = etaSnapshot\?\.nextStopEta \?\? null/u);
     assert.match(componentSource, /const remainingRouteEta = etaSnapshot\?\.remainingRouteEta \?\? null/u);
@@ -116,12 +126,9 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(componentSource, /onViewCurrentStop/u);
   });
 
-  it('keeps Store Pickup active after GPS starts until pickup is completed', () => {
+  it('can recover an older active session whose pickup was not yet confirmed', () => {
     const componentSource = getRouteSessionComponentSource();
     const appSource = readFileSync(appRootPath, 'utf8');
-    const startRouteSessionStart = appSource.indexOf('async function startRouteSessionAfterConfirmed(');
-    const startRouteSessionEnd = appSource.indexOf('\n\n  function handleOpenRouteSession(', startRouteSessionStart);
-    const startRouteSessionSource = appSource.slice(startRouteSessionStart, startRouteSessionEnd);
 
     assert.match(componentSource, /const isPickupTask = routeStatus === 'active' && currentNavigationStepIndex === COMPANY_STEP_INDEX/u);
     assert.match(componentSource, /const currentTaskTitle = isPickupTask \? 'Store Pickup' : stop === null \? 'Next Stop'/u);
@@ -135,8 +142,6 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: pickupProgress\.navigationStepIndex,[\s\S]*pickupCompleted: true/u);
     assert.match(appSource, /setCompletedStopIds\(pickupProgress\.completedStopIds\)/u);
     assert.match(appSource, /setNavigationStepIndex\(pickupProgress\.navigationStepIndex\)/u);
-    assert.doesNotMatch(startRouteSessionSource, /applyEtaSnapshotToRoute/u);
-    assert.doesNotMatch(startRouteSessionSource, /applyEtaUpdateToRoute/u);
   });
 
   it('keeps pickup queued copy truthful and refreshes route access immediately after queued 401', () => {
@@ -203,6 +208,7 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(openSource, /Alert\.alert|buildOutOfOrderStopArrivalWarning|saveActiveRouteSession/u);
 
     assert.notEqual(arriveStart, -1);
+    assert.match(arriveSource, /if \(isStartingRoute \|\| routeStartRecoveryState !== 'idle'\) \{[\s\S]*return;/u);
     assert.match(arriveSource, /buildOutOfOrderStopArrivalWarning\(\{/u);
     assert.match(arriveSource, /showOperationalDialog\(warning\.title, warning\.message/u);
     assert.match(arriveSource, /text: 'Arrive'/u);
@@ -245,16 +251,66 @@ describe('route session current task behavior', () => {
     ), /address2|province|postalCode|countryCode/u);
   });
 
-  it('starts GPS tracking on Store Pickup before the first delivery stop', () => {
+  it('starts GPS tracking on the first delivery stop without a separate pickup action', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
+    const start = appSource.indexOf('async function startRouteSessionAfterConfirmed(');
+    const end = appSource.indexOf('\n\n  function handleOpenRouteSession(', start);
+    const startSource = appSource.slice(start, end);
 
-    assert.match(appSource, /const initialStepIndex = COMPANY_STEP_INDEX/u);
-    assert.match(appSource, /saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: initialStepIndex/u);
+    assert.match(appSource, /const initialProgress = getAssignedRouteProgressAfterPickup\(routeSession\.route\)/u);
+    assert.match(appSource, /const initialStepIndex = initialProgress\.navigationStepIndex/u);
+    assert.match(startSource, /saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: COMPANY_STEP_INDEX,[\s\S]*routePlanId: routeSession\.route\.id/u);
+    assert.doesNotMatch(startSource.slice(
+      startSource.indexOf('const activeRouteSaved'),
+      startSource.indexOf('const continuousResult'),
+    ), /pickupCompleted: true|navigationStepIndex: initialStepIndex/u);
     assert.match(appSource, /setNavigationStepIndex\(initialStepIndex\)/u);
     assert.match(appSource, /notification: buildActiveRouteForegroundNotification\(\{[\s\S]*currentStepIndex: initialStepIndex,[\s\S]*route: routeSession\.route,[\s\S]*\}\)/u);
+    assert.match(appSource, /recordPickupCompletedAfterDeliveryStart\(\{[\s\S]*deliveryStart,[\s\S]*driverEventService: eventService,[\s\S]*routePlanId: routeSession\.route\.id/u);
+    assert.match(appSource, /setCompletedStopIds\(initialProgress\.completedStopIds\)/u);
+    assert.match(startSource, /const pickupPersisted = await driverAccessTokenStore\.saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: initialStepIndex,[\s\S]*pickupCompleted: true/u);
+    assert.ok(startSource.indexOf('setNavigationStepIndex(initialStepIndex)') < startSource.indexOf('recordRouteStartedAfterDeliveryStart'));
+    assert.ok(startSource.indexOf("setScreen('routeSession')") < startSource.indexOf('recordRouteStartedAfterDeliveryStart'));
+    assert.ok(startSource.indexOf('recordPickupCompletedAfterDeliveryStart') < startSource.indexOf('const pickupPersisted'));
+    assert.match(startSource, /let routeStartDurablyCommitted = false/u);
+    assert.match(startSource, /runRouteStartDurabilityBoundary\(\{/u);
+    assert.match(startSource, /routeStartedResult\.kind === 'recorded'[\s\S]*markRouteStartDurablyCommitted\(\)/u);
+    assert.match(startSource, /routeStartedResult\.kind === 'queued'[\s\S]*await waitForOfflineQueuePersistence\(queue\);[\s\S]*markRouteStartDurablyCommitted\(\)/u);
+    assert.match(startSource, /rollback: async[\s\S]*clearAndStopActiveLocationSession[\s\S]*resetActiveRouteProgress/u);
+    assert.match(startSource, /recover: async[\s\S]*setRouteStartRecoveryState\('sync_pending'\)[\s\S]*remains active/u);
     assert.doesNotMatch(appSource, /GPS tracking (?:is active|started)/u);
     assert.doesNotMatch(appSource, /formatContinuousLocationResult/u);
     assert.doesNotMatch(appSource, /continuousLocationResult !== null \? <StatusBanner/u);
+  });
+
+  it('blocks every arrival entry while route-start events are still finalizing', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const recordStart = appSource.indexOf('const recordStopArrival = useCallback(');
+    const recordEnd = appSource.indexOf('\n\n  const handleStopArrivalNotificationPress', recordStart);
+    const recordSource = appSource.slice(recordStart, recordEnd);
+    const activateStart = appSource.indexOf('async function activateAndRecordStopArrival(');
+    const activateEnd = appSource.indexOf('\n\n  function handleOpenStopFromRouteSession', activateStart);
+    const activateSource = appSource.slice(activateStart, activateEnd);
+    const detailsStart = appSource.indexOf('function handleArriveFromStopDetails(');
+    const detailsEnd = appSource.indexOf('\n\n  async function handleOpenRouteNavigation(', detailsStart);
+    const detailsSource = appSource.slice(detailsStart, detailsEnd);
+
+    assert.match(appSource, /const canArriveFromStopDetails = [\s\S]*&& !isStartingRoute/u);
+    assert.match(recordSource, /if \(isStartingRoute \|\| routeStartRecoveryState !== 'idle'\) \{[\s\S]*Route start is still syncing/u);
+    assert.match(activateSource, /if \(isStartingRoute \|\| routeStartRecoveryState !== 'idle'\) \{[\s\S]*Route start is still syncing/u);
+    assert.match(detailsSource, /if \(isStartingRoute \|\| routeStartRecoveryState !== 'idle'\) \{[\s\S]*Route start is still being finalized/u);
+    assert.match(appSource, /async function handleArrivedAtStep\(\) \{[\s\S]*routeStartRecoveryState === 'pickup_retry' && !isCompanyStep[\s\S]*Route start is still syncing/u);
+  });
+
+  it('reopens Store Pickup only after an exact pre-pickup refresh recovery', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+
+    assert.match(appSource, /const refreshRecovery = resolveRouteStartRefreshRecovery\(\{[\s\S]*executionStatus: restoredActiveSession\.companyGuidance\.executionStatus[\s\S]*pickupQueueState: pickupCompletionQueueState/u);
+    assert.match(appSource, /refreshRecovery === 'pickup_retry'[\s\S]*setRouteStartRecoveryState\('pickup_retry'\)[\s\S]*complete Store Pickup again/u);
+    assert.match(appSource, /pickupIsUnconfirmed[\s\S]*\? COMPANY_STEP_INDEX/u);
+    assert.match(appSource, /if \(isCompanyStep\) \{[\s\S]*runPickupRetryStateMachine\(\{/u);
+    assert.match(appSource, /activateFirstStop: \(\) => \{[\s\S]*setNavigationStepIndex\(pickupProgress\.navigationStepIndex\)/u);
+    assert.match(appSource, /recordPickup: \(\) => recordPickupCompletedAfterDeliveryStart\(\{/u);
   });
 
   it('opens the exact stop details screen when the foreground notification is pressed', () => {

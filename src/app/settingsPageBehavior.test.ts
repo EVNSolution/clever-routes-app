@@ -58,9 +58,33 @@ describe('Settings page behavior', () => {
     assert.match(settingsPage, /onPress=\{onLogout\}/u);
 
     assert.doesNotMatch(settingsPage, /Profile editing|Display Name|Store Name/u);
-    assert.doesNotMatch(settingsPage, /Navigation App|Navigation Mode/u);
+    assert.match(settingsPage, />STOP NAVIGATION APP</u);
+    assert.match(settingsPage, />Google Maps</u);
+    assert.match(settingsPage, /Open Route uses Google Maps for multi-stop directions\./u);
+    assert.match(settingsPage, /accessibilityLabel="Use Google Maps for navigation"/u);
+    assert.match(settingsPage, /accessibilityLabel="Use Waze for navigation"/u);
+    assert.match(settingsPage, /navigationProvider === 'google'/u);
+    assert.match(settingsPage, /navigationProvider === 'waze'/u);
+    assert.match(settingsPage, /onChangeNavigationProvider\('google'\)/u);
+    assert.match(settingsPage, /onChangeNavigationProvider\('waze'\)/u);
     assert.doesNotMatch(settingsPage, /Logout and reset this device/u);
     assert.doesNotMatch(settingsPage, /Needs Review|CONSENT_COPY_VERSIONS|Allowed \u00b7|Denied \u00b7/u);
+  });
+
+  it('restores the saved navigation provider and persists changes from Settings', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const settingsPage = getSettingsPageSource();
+
+    assert.match(source, /const \[navigationProvider, setNavigationProvider\] = useState<NavigationProvider \| null>\(null\)/u);
+    assert.match(source, /const \[navigationPreferenceLoadFailed, setNavigationPreferenceLoadFailed\] = useState\(false\)/u);
+    assert.match(source, /const navigationPreferenceRevisionRef = useRef\(0\)/u);
+    assert.match(source, /const loadRevision = navigationPreferenceRevisionRef\.current[\s\S]*navigationPreferenceStore\.load\(\)[\s\S]*navigationPreferenceRevisionRef\.current === loadRevision[\s\S]*setNavigationProvider\(savedProvider\)/u);
+    assert.match(source, /async function handleChangeNavigationProvider\(provider: NavigationProvider\)/u);
+    assert.match(source, /navigationPreferenceRevisionRef\.current \+= 1[\s\S]*setNavigationProvider\(provider\)[\s\S]*await navigationPreferenceStore\.save\(provider\)/u);
+    assert.match(source, /catch \{[\s\S]*const persistedProvider = await navigationPreferenceStore\.load\(\)[\s\S]*setNavigationProvider\(persistedProvider\)/u);
+    assert.match(source, /navigationProvider === null[\s\S]*navigationPreferenceLoadFailed[\s\S]*Restart the app to retry[\s\S]*Navigation app setting is still loading/u);
+    assert.match(settingsPage, /navigationPreferenceLoadFailed[\s\S]*Stop navigation preference is unavailable\. Restart the app to retry\.[\s\S]*Loading stop navigation preference/u);
+    assert.match(source, /<SettingsPage[\s\S]*navigationProvider=\{navigationProvider\}[\s\S]*onChangeNavigationProvider=\{\(provider\) => \{ void handleChangeNavigationProvider\(provider\); \}\}/u);
   });
 
   it('opens the published policy and restores consent for an authenticated session', () => {

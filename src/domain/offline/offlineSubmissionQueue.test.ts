@@ -12,9 +12,11 @@ import {
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
   OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY,
   createRouteOrderedDriverEventService,
+  getPickupCompletionQueueState,
   createInMemoryOfflineSubmissionQueue,
   createPersistentOfflineSubmissionQueue,
   getOfflineSubmissionQueueSummary,
+  hasPendingPickupCompletion,
   getPendingRouteEnd,
   recoverPendingRouteEndReceipt,
   retryOfflineSubmissions,
@@ -1062,6 +1064,22 @@ describe('offline submission queue', () => {
 
     assert.equal(pending.length, 1);
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'PICKUP_COMPLETED');
+    assert.equal(hasPendingPickupCompletion(queue, 'route-1'), true);
+    assert.equal(hasPendingPickupCompletion(queue, 'route-2'), false);
+  });
+
+  it('does not treat quarantined pickup evidence as retryable pending work', () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const queued = queue.enqueueDriverEvent({
+      clientEventId: 'pickup-completed-reconciliation',
+      eventType: 'PICKUP_COMPLETED',
+      occurredAt: new Date('2026-05-12T11:01:00.000Z'),
+      routePlanId: 'route-1',
+    });
+    queue.quarantine(queued.queueItemId, 'route_not_in_progress');
+
+    assert.equal(getPickupCompletionQueueState(queue, 'route-1'), 'reconciliation');
+    assert.equal(hasPendingPickupCompletion(queue, 'route-1'), false);
   });
 
   it('requests route lookup after a queued pickup completion sync succeeds', async () => {

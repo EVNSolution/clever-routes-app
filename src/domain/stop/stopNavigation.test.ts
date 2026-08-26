@@ -25,6 +25,35 @@ describe('native stop map launch', () => {
     );
   });
 
+  it('opens Waze navigation with server coordinates when Waze is selected', () => {
+    assert.equal(
+      buildStopNavigationUrl({ platform: 'ios', provider: 'waze', stop: firstStop }),
+      'https://waze.com/ul?ll=43.6487%2C-79.3817&navigate=yes',
+    );
+  });
+
+  it('opens Waze address search when the server selects the address target', async () => {
+    const addressTargetStop: AssignedRouteStop = {
+      ...firstStop,
+      navigationTarget: 'ADDRESS',
+    };
+    const openedUrls: string[] = [];
+
+    const result = await openStopNavigation({
+      linking: { openURL: async (url) => openedUrls.push(url) },
+      platform: 'android',
+      provider: 'waze',
+      stop: addressTargetStop,
+    });
+
+    assert.deepEqual(result, {
+      kind: 'opened',
+      message: 'Waze search opened for 100 King St W, Toronto, ON, M5X 1A9, CA.',
+      url: 'https://waze.com/ul?q=100%20King%20St%20W%2C%20Toronto%2C%20ON%2C%20M5X%201A9%2C%20CA',
+    });
+    assert.deepEqual(openedUrls, [result.url]);
+  });
+
   it('falls back to the full Canadian address when coordinates are unavailable', () => {
     const addressOnlyStop: AssignedRouteStop = {
       ...firstStop,
