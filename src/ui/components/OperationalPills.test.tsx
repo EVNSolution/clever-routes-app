@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import {
@@ -8,17 +8,15 @@ import {
 } from './operationalPillModel';
 import { projectRouteProgress } from '../../domain/route/routeProgressProjection';
 
-describe('operational pills', () => {
+describe('operational notification state', () => {
   it('keeps Alert, Route, GPS, Device, Server, Sync, and Gap independently labeled', () => {
     assert.deepEqual(buildOperationalPills({
       alert: 'None', device: 'This device', gap: '0 stops', gps: 'Fresh', route: 'Active', server: 'Healthy', sync: '1 pending',
     }).map((pill) => pill.label), ['Alert', 'Route', 'GPS', 'Device', 'Server', 'Sync', 'Gap']);
   });
 
-  it('uses accessible pill values without separator-dot presentation', () => {
-    const source = readFileSync(new URL('./OperationalPills.tsx', import.meta.url), 'utf8');
-    assert.match(source, /accessibilityLabel=\{`\$\{pill\.label\}: \$\{pill\.value\}`\}/u);
-    assert.doesNotMatch(source, /[•·]/u);
+  it('does not keep a Route Session pill component', () => {
+    assert.equal(existsSync(new URL('./OperationalPills.tsx', import.meta.url)), false);
   });
 
   it('shows Kitchener device 11/11, server 1/11, gap 10, and GPS near stop 11 independently', () => {
