@@ -94,11 +94,11 @@ test('documents a source-only Driver pilot candidate that cannot be mistaken for
   assert.match(runbook, /five minutes/u);
 });
 
-test('distinguishes the last published Android build from the source-only pilot candidate', () => {
+test('keeps source version separate from public release evidence', () => {
   const readiness = readFileSync(resolve(repoRoot, 'docs/release-readiness.md'), 'utf8');
 
-  assert.match(readiness, /last published[\s\S]*direct-distribution Android build is `1\.2\.0` \(`versionCode` `18`\)/u);
-  assert.match(readiness, /source candidate is `1\.2\.1` \(`versionCode` `19`, iOS build `1`\)/u);
+  assert.match(readiness, /reviewed native[\s\S]*source version is `1\.2\.2` \(`versionCode` `20`, iOS build `1`\)/u);
+  assert.match(readiness, /Publication is[\s\S]*proved separately by the public release manifest and downloadable artifact/u);
 });
 
 test('keeps the installed app name aligned across Expo, Android, and iOS', () => {

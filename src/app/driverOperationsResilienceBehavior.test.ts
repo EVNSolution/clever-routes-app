@@ -74,7 +74,7 @@ describe('driver operations resilience runtime', () => {
 
   it('binds ordinary retry and receipt recovery effects to the captured account epoch', () => {
     const ordinaryRetryIndex = source.indexOf('const retryOfflineSubmissionsForSessions = useCallback');
-    const ordinarySignalIndex = source.indexOf('const lifecycleSignal = combineDriverSyncAbortSignals([', ordinaryRetryIndex);
+    const ordinarySignalIndex = source.indexOf('const lifecycleSignal = driverSyncLifecycleAbortControllerRef.current.signal;', ordinaryRetryIndex);
     const ordinaryOwnerIndex = source.indexOf('const accountOwnerHash = queue.getAccountOwnerHash();', ordinarySignalIndex);
     const ordinaryDomainGuardIndex = source.indexOf('isCurrent,', ordinaryOwnerIndex);
     const ordinaryCleanupGuardIndex = source.indexOf('if (!isCurrent()) return false;', ordinaryDomainGuardIndex);
@@ -102,6 +102,31 @@ describe('driver operations resilience runtime', () => {
     assert.match(source.slice(durableLeaseIndex, cleanupDomainIndex), /persisted\.routeAccess\.assignmentGeneration === lease\.assignmentGeneration/u);
     assert.match(source.slice(durableLeaseIndex, cleanupDomainIndex), /persistedSessionInstanceId === lease\.sessionInstanceId/u);
     assert.match(source.slice(cleanupHelperIndex, source.indexOf('const selectedPhoneCountry', cleanupHelperIndex)), /sessionInstanceId: lease\.sessionInstanceId/u);
+  });
+
+  it('does not invalidate durable route-end recovery when the active route epoch changes', () => {
+    const routeEpochStart = source.indexOf('useEffect(() => {\n    if (driverSyncRouteEpochRef.current === activeDriverSyncRouteEpoch) return;');
+    const routeEpochEnd = source.indexOf('\n  }, [activeDriverSyncRouteEpoch]);', routeEpochStart);
+    const routeEpochSource = source.slice(routeEpochStart, routeEpochEnd);
+    assert.ok(routeEpochStart > 0 && routeEpochEnd > routeEpochStart);
+    assert.match(routeEpochSource, /driverSyncRouteAbortControllerRef\.current\.abort\(\)/u);
+    assert.doesNotMatch(routeEpochSource, /driverSyncAccountEpochRef\.current \+= 1/u);
+
+    const retryStart = source.indexOf('const retryOfflineSubmissionsForSessions = useCallback');
+    const retryEnd = source.indexOf('\n  const usesSelectedRouteContext', retryStart);
+    const retrySource = source.slice(retryStart, retryEnd);
+    assert.match(retrySource, /const lifecycleSignal = driverSyncLifecycleAbortControllerRef\.current\.signal/u);
+    assert.doesNotMatch(retrySource, /driverSyncRouteAbortControllerRef\.current\.signal/u);
+
+    const receiptStart = source.indexOf('const retryCompletionPendingReceipt = useCallback');
+    const receiptEnd = source.indexOf('\n  useEffect(() => {', receiptStart);
+    const receiptSource = source.slice(receiptStart, receiptEnd);
+    assert.match(receiptSource, /const lifecycleSignal = driverSyncLifecycleAbortControllerRef\.current\.signal/u);
+    assert.doesNotMatch(receiptSource, /driverSyncRouteAbortControllerRef\.current\.signal/u);
+
+    const finishStart = source.indexOf('async function finishRoute(');
+    const finishEnd = source.indexOf('\n  async function handleManualFinishRoute', finishStart);
+    assert.match(source.slice(finishStart, finishEnd), /driverSyncRouteAbortControllerRef\.current\.signal/u);
   });
 
   it('does not destroy cached completion identity when ACK-clear token refresh cannot find the ended route', () => {

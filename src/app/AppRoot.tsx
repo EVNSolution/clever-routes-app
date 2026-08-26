@@ -526,7 +526,6 @@ function DriverApp() {
     driverSyncHeartbeatSchedulerRef.current = null;
     completionClearRetrySchedulerRef.current?.stop();
     completionClearRetrySchedulerRef.current = null;
-    driverSyncAccountEpochRef.current += 1;
     setDriverSyncHealth(null);
   }, [activeDriverSyncRouteEpoch]);
 
@@ -1381,10 +1380,7 @@ function DriverApp() {
     }
 
     const requestEpoch = driverSyncAccountEpochRef.current;
-    const lifecycleSignal = combineDriverSyncAbortSignals([
-      driverSyncLifecycleAbortControllerRef.current.signal,
-      driverSyncRouteAbortControllerRef.current.signal,
-    ]);
+    const lifecycleSignal = driverSyncLifecycleAbortControllerRef.current.signal;
     retryingOfflineSubmissionsEpochRef.current = requestEpoch;
     let completedWithoutRetainedFailures = true;
     let isCurrent = () => !lifecycleSignal.aborted
@@ -3284,10 +3280,7 @@ function DriverApp() {
     const routePlanId = pendingIdentity?.activeRouteSession.routePlanId ?? null;
     if (runtimeConfig.mode !== 'live' || routePlanId === null) return true;
     const requestEpoch = driverSyncAccountEpochRef.current;
-    const lifecycleSignal = combineDriverSyncAbortSignals([
-      driverSyncLifecycleAbortControllerRef.current.signal,
-      driverSyncRouteAbortControllerRef.current.signal,
-    ]);
+    const lifecycleSignal = driverSyncLifecycleAbortControllerRef.current.signal;
     let queue = offlineSubmissionQueue;
     let isCurrent = () => !lifecycleSignal.aborted
       && requestEpoch === driverSyncAccountEpochRef.current;
@@ -5469,6 +5462,7 @@ function DriverApp() {
                 deliveryFinishResult={deliveryFinishResult}
                 isFinishingRoute={isFinishingRoute}
                 isRecordingArrival={isRecordingArrival}
+                isRefreshingRoutes={isRefreshingRoutes}
                 isStartingRoute={isStartingRoute}
                 mapStyleUrl={driverMapStyleUrl}
                 onArrived={handleArrivedAtStep}
@@ -5477,7 +5471,9 @@ function DriverApp() {
                 onOpenNavigation={() => handleOpenNavigationForStop(currentStop)}
                 onOpenRouteNavigation={() => handleOpenRouteNavigation(selectedRoute)}
                 onOpenStop={handleOpenStopFromRouteSession}
+                onRetryRouteSync={() => { void handleRefreshRoutes(); }}
                 onStartRoute={() => handleStartRoute(selectedRoute.id)}
+                pendingRouteEnd={selectedRouteSession?.pendingRouteEnd}
                 route={selectedRoute}
                 routeProgress={routeProgress}
                 routeStartedEventResult={routeStartedEventResult}
@@ -6177,6 +6173,7 @@ function RouteSessionScreen({
   deliveryFinishResult,
   isFinishingRoute,
   isRecordingArrival,
+  isRefreshingRoutes,
   isStartingRoute,
   mapStyleUrl,
   onArrived,
@@ -6185,7 +6182,9 @@ function RouteSessionScreen({
   onOpenNavigation,
   onOpenRouteNavigation,
   onOpenStop,
+  onRetryRouteSync,
   onStartRoute,
+  pendingRouteEnd,
   route,
   routeProgress,
   routeStartedEventResult,
@@ -6199,6 +6198,7 @@ function RouteSessionScreen({
   deliveryFinishResult: DeliveryFinishResult | null;
   isFinishingRoute: boolean;
   isRecordingArrival: boolean;
+  isRefreshingRoutes: boolean;
   isStartingRoute: boolean;
   mapStyleUrl: string;
   onArrived(): void;
@@ -6207,7 +6207,9 @@ function RouteSessionScreen({
   onOpenNavigation(): void;
   onOpenRouteNavigation(): void;
   onOpenStop(stop: AssignedRouteStop): void;
+  onRetryRouteSync(): void;
   onStartRoute(): void;
+  pendingRouteEnd?: PendingRouteEnd;
   route: AssignedRoute;
   routeProgress: RouteProgressProjection;
   routeStartedEventResult: RouteStartedRecordResult | null;
@@ -6282,18 +6284,38 @@ function RouteSessionScreen({
       </View>
 
       {routeStatus === 'ready' ? (
-        <View style={styles.routeSessionSection}>
-          <Text style={styles.sectionTitle}>Store Pickup</Text>
-          {company?.pickupGuidance?.trim() ? (
-            <Text style={styles.bodyText}>{company.pickupGuidance}</Text>
-          ) : null}
-          <PrimaryButton
-            disabled={isStartingRoute}
-            label="Start Session"
-            loading={isStartingRoute}
-            onPress={onStartRoute}
-          />
-        </View>
+        pendingRouteEnd !== undefined ? (
+          <View accessibilityRole="alert" style={styles.backgroundLocationWarning}>
+            <View style={styles.backgroundLocationWarningCopy}>
+              <Text style={styles.backgroundLocationWarningTitle}>Final status syncing</Text>
+              <Text style={styles.backgroundLocationWarningBody}>
+                {pendingRouteEnd === 'released'
+                  ? 'This session was deleted on this device, but the server has not confirmed the route release. Start is unavailable until sync finishes.'
+                  : 'This route is waiting for server completion confirmation. Start is unavailable until sync finishes.'}
+              </Text>
+            </View>
+            <SecondaryButton
+              compact
+              disabled={isRefreshingRoutes}
+              label="Retry Sync"
+              loading={isRefreshingRoutes}
+              onPress={onRetryRouteSync}
+            />
+          </View>
+        ) : (
+          <View style={styles.routeSessionSection}>
+            <Text style={styles.sectionTitle}>Store Pickup</Text>
+            {company?.pickupGuidance?.trim() ? (
+              <Text style={styles.bodyText}>{company.pickupGuidance}</Text>
+            ) : null}
+            <PrimaryButton
+              disabled={isStartingRoute}
+              label="Start Session"
+              loading={isStartingRoute}
+              onPress={onStartRoute}
+            />
+          </View>
+        )
       ) : null}
 
       {routeStatus === 'active' && !allStopsCompleted ? (
