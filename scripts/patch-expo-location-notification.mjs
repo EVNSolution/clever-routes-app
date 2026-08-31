@@ -117,6 +117,11 @@ const patches = [
   },
   {
     file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
+    before: `      val nextStopIntent = addStopAction("Next Stop", "next_stop")`,
+    after: `      val nextStopIntent = addStopAction("Complete Stop", "next_stop")`,
+  },
+  {
+    file: 'node_modules/expo-location/android/src/main/java/expo/modules/location/services/LocationTaskService.kt',
     before: `        val compactView = RemoteViews(mParentContext.packageName, compactLayoutId)\n        compactView.setTextViewText(titleViewId, title)`,
     after: `        val compactView = RemoteViews(mParentContext.packageName, compactLayoutId)\n        val compactTextColor = if (\n          resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES\n        ) Color.WHITE else Color.rgb(32, 33, 36)\n        compactView.setTextViewText(titleViewId, title)\n        compactView.setTextColor(titleViewId, compactTextColor)\n        compactView.setTextColor(addProofViewId, compactTextColor)\n        compactView.setTextColor(nextStopViewId, compactTextColor)`,
   },

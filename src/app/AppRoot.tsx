@@ -105,7 +105,10 @@ import {
 import { createExpoContinuousLocationStreamService, registerContinuousLocationTaskObserver } from '../platform/expo/location/expoContinuousLocationStreamService';
 import { createExpoForegroundLocationSnapshotService } from '../platform/expo/location/expoForegroundLocationSnapshotService';
 import { createExpoForegroundLocationPermissionService } from '../platform/expo/location/expoLocationPermissionService';
-import { createExpoStopNavigationLinking } from '../platform/expo/navigation/expoStopNavigationLinking';
+import {
+  createExpoStopNavigationLinking,
+  openExpoDefaultMapAppSettings,
+} from '../platform/expo/navigation/expoStopNavigationLinking';
 import {
   bindExpoOfflineSubmissionQueueAccount,
   getExpoOfflineSubmissionQueue,
@@ -940,6 +943,13 @@ function DriverApp() {
     setMessage(null);
     setScreen('settings');
     void loadAccountProfile();
+  }
+
+  function handleOpenDefaultMapAppSettings(): void {
+    setMessage(null);
+    void openExpoDefaultMapAppSettings().catch(() => {
+      setMessage('Default app settings could not be opened.');
+    });
   }
 
   function handleOpenConsentDocument(): void {
@@ -2012,7 +2022,7 @@ function DriverApp() {
         });
         setMessage(result.kind === 'queued'
           ? `${result.message} Completing the stop next.`
-          : 'Arrival confirmed. Completing this stop and preparing next-stop navigation.');
+          : 'Arrival confirmed. Completing this stop and opening the next stop details.');
         return true;
       }
 
@@ -3914,6 +3924,7 @@ function DriverApp() {
       const routeStartedAt = new Date();
       const initialProgress = getAssignedRouteProgressAfterPickup(routeSession.route);
       const initialStepIndex = initialProgress.navigationStepIndex;
+      const firstDeliveryStop = routeSession.route.stops[initialStepIndex - 1] ?? null;
       const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
         completedStopIds: initialProgress.completedStopIds,
         navigationStepIndex: COMPANY_STEP_INDEX,
@@ -3946,9 +3957,7 @@ function DriverApp() {
 
       setCompletedStopIds(initialProgress.completedStopIds);
       setNavigationStepIndex(initialStepIndex);
-      if (screenRef.current === requestScreen) {
-        setScreen('routeSession');
-      } else if (notificationRegistration.kind === 'registered') {
+      if (screenRef.current !== requestScreen && notificationRegistration.kind === 'registered') {
         setMessage('Route started. Open it from My Routes to continue.');
       }
       if (notificationRegistration.kind !== 'registered') {
@@ -4027,6 +4036,13 @@ function DriverApp() {
       });
       if (!pickupPersisted) {
         throw new Error('Pickup progress could not be saved after route start.');
+      }
+      if (screenRef.current === requestScreen) {
+        if (firstDeliveryStop === null) {
+          setScreen('routeSession');
+        } else {
+          openRouteStopDetails(firstDeliveryStop);
+        }
       }
       setRouteStartRecoveryState('idle');
         },
@@ -4252,7 +4268,11 @@ function DriverApp() {
         return;
       }
       if (screenRef.current === requestScreen) {
-        setScreen('routeSession');
+        if (pickupStop === undefined) {
+          setScreen('routeSession');
+        } else {
+          openRouteStopDetails(pickupStop);
+        }
       }
       setMessage(pickupMessage);
       return;
@@ -4304,6 +4324,12 @@ function DriverApp() {
     await recordStopArrival(selectedStop, 'stopDetails', requestScreen);
   }
 
+  function openRouteStopDetails(stop: AssignedRouteStop) {
+    setSelectedStopDetailsId(stop.deliveryStopId);
+    setStopDetailsReturnScreen('routeSession');
+    setScreen('stopDetails');
+  }
+
   function handleOpenStopFromRouteSession(stop: AssignedRouteStop) {
     if (selectedRoute === null) {
       setMessage('No route is available to review.');
@@ -4316,9 +4342,7 @@ function DriverApp() {
       return;
     }
 
-    setSelectedStopDetailsId(selectedStop.deliveryStopId);
-    setStopDetailsReturnScreen('routeSession');
-    setScreen('stopDetails');
+    openRouteStopDetails(selectedStop);
   }
 
   function handleArriveFromStopDetails() {
@@ -4569,7 +4593,6 @@ function DriverApp() {
     options?: {
       failureNote?: string;
       failureReason?: StopProofFailureReason;
-      openNextNavigation?: boolean;
       switchToRoutePlanId?: string;
     },
   ) {
@@ -4710,28 +4733,13 @@ function DriverApp() {
         return;
       }
       setNavigationStepIndex(nextNavigationStepIndex);
-      if (screenRef.current === requestScreen) {
-        setScreen('routeSession');
-      }
       const nextStop = selectedRoute.stops[nextNavigationStepIndex - 1] ?? null;
-      if (options?.openNextNavigation === true && nextStop !== null) {
-        if (continuousLocationStreamService.updateLocationNotification !== undefined) {
-          try {
-            await continuousLocationStreamService.updateLocationNotification({
-              notification: buildActiveRouteForegroundNotification({
-                currentStepIndex: nextNavigationStepIndex,
-                operationalState: operationalPillValues,
-                route: selectedRoute,
-              }),
-              taskName: CONTINUOUS_LOCATION_TASK_NAME,
-            });
-          } catch (error) {
-            const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
-            console.warn(`[location] Route notification could not be updated before navigation: ${errorMessage}`);
-          }
+      if (screenRef.current === requestScreen) {
+        if (nextStop === null) {
+          setScreen('routeSession');
+        } else {
+          openRouteStopDetails(nextStop);
         }
-        await handleOpenNavigationForStop(nextStop);
-        return;
       }
       setMessage(
         isSkipped
@@ -4759,7 +4767,7 @@ function DriverApp() {
       setMessage('The arrival alert is no longer for the current stop. No stop was completed.');
       return;
     }
-    await handleTerminalStop(currentStop, 'delivered', { openNextNavigation: true });
+    await handleTerminalStop(currentStop, 'delivered');
   };
 
   async function finishActiveRouteForSwitch(
@@ -5431,6 +5439,7 @@ function DriverApp() {
               isLoadingAccountProfile={isLoadingAccountProfile}
               isRequestingAccountDeletion={isRequestingAccountDeletion}
               onEditName={handleOpenAccountName}
+              onOpenDefaultMapAppSettings={handleOpenDefaultMapAppSettings}
               onOpenConsentDocument={handleOpenConsentDocument}
               onLogout={handleLogout}
               onRequestAccountDeletion={handleRequestAccountDeletion}
@@ -5988,6 +5997,7 @@ function SettingsPage({
   isLoadingAccountProfile,
   isRequestingAccountDeletion,
   onEditName,
+  onOpenDefaultMapAppSettings,
   onOpenConsentDocument,
   onLogout,
   onRequestAccountDeletion,
@@ -6000,6 +6010,7 @@ function SettingsPage({
   isLoadingAccountProfile: boolean;
   isRequestingAccountDeletion: boolean;
   onEditName(): void;
+  onOpenDefaultMapAppSettings(): void;
   onOpenConsentDocument(): void;
   onLogout(): void;
   onRequestAccountDeletion(): void;
@@ -6037,6 +6048,26 @@ function SettingsPage({
           </View>
         </View>
       </View>
+
+      {Platform.OS === 'android' ? (
+        <View style={styles.settingsSection}>
+          <Text style={styles.settingsSectionLabel}>NAVIGATION</Text>
+          <View style={styles.settingsGroup}>
+            <Pressable
+              accessibilityLabel="Open Default Map App Settings"
+              accessibilityRole="button"
+              onPress={onOpenDefaultMapAppSettings}
+              style={({ pressed }) => [
+                styles.settingsRow,
+                pressed && styles.settingsRowPressed,
+              ]}
+            >
+              <Text style={styles.settingsRowLabel}>Default Map App</Text>
+              <Ionicons color="#a1a7b0" name="chevron-forward" size={20} />
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.settingsSection}>
         <Text style={styles.settingsSectionLabel}>CONSENT</Text>

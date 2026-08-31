@@ -84,6 +84,20 @@ describe('route session current task behavior', () => {
     assert.ok(startSource.indexOf('resetActiveRouteProgress();') < startSource.indexOf('startDeliveryWithForegroundPermission'));
   });
 
+  it('opens the first delivery details after route start and pickup are durably saved', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const start = appSource.indexOf('async function startRouteSessionAfterConfirmed(');
+    const end = appSource.indexOf('\n\n  function handleOpenRouteSession(', start);
+    const startSource = appSource.slice(start, end);
+    const pickupSavedIndex = startSource.indexOf("throw new Error('Pickup progress could not be saved after route start.')");
+    const openDetailsIndex = startSource.indexOf('openRouteStopDetails(firstDeliveryStop)');
+
+    assert.match(startSource, /const firstDeliveryStop = routeSession\.route\.stops\[initialStepIndex - 1\] \?\? null/u);
+    assert.match(startSource, /if \(screenRef\.current === requestScreen\) \{[\s\S]*firstDeliveryStop === null[\s\S]*setScreen\('routeSession'\)[\s\S]*openRouteStopDetails\(firstDeliveryStop\)/u);
+    assert.ok(pickupSavedIndex >= 0);
+    assert.ok(openDetailsIndex > pickupSavedIndex);
+  });
+
   it('returns to My Routes after restoring an active session on app launch', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const restoreStart = appSource.indexOf('if (restoredActiveSession !== null) {');
@@ -213,8 +227,7 @@ describe('route session current task behavior', () => {
 
     assert.notEqual(openStart, -1);
     assert.notEqual(openEnd, -1);
-    assert.match(openSource, /setSelectedStopDetailsId\(selectedStop\.deliveryStopId\)/u);
-    assert.match(openSource, /setScreen\('stopDetails'\)/u);
+    assert.match(openSource, /openRouteStopDetails\(selectedStop\)/u);
     assert.doesNotMatch(openSource, /Alert\.alert|buildOutOfOrderStopArrivalWarning|saveActiveRouteSession/u);
 
     assert.notEqual(arriveStart, -1);
@@ -280,8 +293,8 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /setCompletedStopIds\(initialProgress\.completedStopIds\)/u);
     assert.match(startSource, /const pickupPersisted = await driverAccessTokenStore\.saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: initialStepIndex,[\s\S]*pickupCompleted: true/u);
     assert.ok(startSource.indexOf('setNavigationStepIndex(initialStepIndex)') < startSource.indexOf('recordRouteStartedAfterDeliveryStart'));
-    assert.ok(startSource.indexOf("setScreen('routeSession')") < startSource.indexOf('recordRouteStartedAfterDeliveryStart'));
     assert.ok(startSource.indexOf('recordPickupCompletedAfterDeliveryStart') < startSource.indexOf('const pickupPersisted'));
+    assert.ok(startSource.indexOf('openRouteStopDetails(firstDeliveryStop)') > startSource.indexOf('const pickupPersisted'));
     assert.match(startSource, /let routeStartDurablyCommitted = false/u);
     assert.match(startSource, /runRouteStartDurabilityBoundary\(\{/u);
     assert.match(startSource, /routeStartedResult\.kind === 'recorded'[\s\S]*markRouteStartDurablyCommitted\(\)/u);
@@ -448,9 +461,9 @@ describe('route session current task behavior', () => {
     const terminalSource = appSource.slice(terminalBegin, terminalEnd);
 
     assert.match(startSource, /const requestScreen = screenRef\.current/u);
-    assert.match(startSource, /if \(screenRef\.current === requestScreen\) \{[\s\S]*setScreen\('routeSession'\);[\s\S]*\}/u);
+    assert.match(startSource, /if \(screenRef\.current === requestScreen\) \{[\s\S]*openRouteStopDetails\(firstDeliveryStop\);[\s\S]*\}/u);
     assert.match(terminalSource, /const requestScreen = screenRef\.current/u);
-    assert.match(terminalSource, /if \(screenRef\.current === requestScreen\) \{[\s\S]*setScreen\('routeSession'\);[\s\S]*\}/u);
+    assert.match(terminalSource, /if \(screenRef\.current === requestScreen\) \{[\s\S]*openRouteStopDetails\(nextStop\);[\s\S]*\}/u);
   });
 
   it('switches routes only after the active stop and route session are durably ended', () => {
@@ -888,10 +901,12 @@ describe('stop completion proof copy', () => {
     assert.match(appSource, /const queue = offlineSubmissionQueue \?\? await getExpoOfflineSubmissionQueue\(\)[\s\S]*?offlineQueue: queue/u);
   });
 
-  it('returns directly to Route Session after completing a non-final stop', () => {
+  it('opens the next delivery details after completing a non-final stop', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
 
-    assert.match(appSource, /const activeRouteSaved = await driverAccessTokenStore\.saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: nextNavigationStepIndex,[\s\S]*routePlanId: selectedRoute\.id,[\s\S]*\}\);[\s\S]*if \(!activeRouteSaved\)[\s\S]*setNavigationStepIndex\(nextNavigationStepIndex\);[\s\S]*setScreen\('routeSession'\);/u);
+    assert.match(appSource, /function openRouteStopDetails\(stop: AssignedRouteStop\)[\s\S]*setSelectedStopDetailsId\(stop\.deliveryStopId\)[\s\S]*setStopDetailsReturnScreen\('routeSession'\)[\s\S]*setScreen\('stopDetails'\)/u);
+    assert.match(appSource, /const activeRouteSaved = await driverAccessTokenStore\.saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: nextNavigationStepIndex,[\s\S]*routePlanId: selectedRoute\.id,[\s\S]*\}\);[\s\S]*if \(!activeRouteSaved\)[\s\S]*setNavigationStepIndex\(nextNavigationStepIndex\);[\s\S]*const nextStop = selectedRoute\.stops\[nextNavigationStepIndex - 1\] \?\? null;[\s\S]*if \(screenRef\.current === requestScreen\)[\s\S]*openRouteStopDetails\(nextStop\)/u);
+    assert.doesNotMatch(appSource, /openNextNavigation/u);
     assert.doesNotMatch(appSource, /stopCompleted|StopCompletedScreen|Stop Completed|Find Next Stop when ready/u);
   });
 });
