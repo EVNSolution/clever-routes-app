@@ -69,7 +69,7 @@ describe('Settings page behavior', () => {
     assert.doesNotMatch(settingsPage, /Needs Review|CONSENT_COPY_VERSIONS|Allowed \u00b7|Denied \u00b7/u);
   });
 
-  it('leaves map app choice to the platform instead of storing a CLEVER preference', () => {
+  it('keeps provider-specific choices out of Settings while Android owns selection', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const settingsPage = getSettingsPageSource();
 
