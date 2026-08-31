@@ -40,7 +40,7 @@ export function createOfflineRetryScheduler(input: {
     return Math.max(0, Math.min(policy.maxDelayMs, Math.round(base * jitterMultiplier)));
   }
 
-  function scheduleNext() {
+  function scheduleNext(delayOverrideMs?: number) {
     cancelScheduled();
     if (
       !started
@@ -63,11 +63,13 @@ export function createOfflineRetryScheduler(input: {
           running = false;
           scheduleNext();
         });
-    }, getDelayMs());
+    }, delayOverrideMs ?? getDelayMs());
   }
 
   return {
-    notifyConditionsChanged: scheduleNext,
+    notifyConditionsChanged: (options?: { immediate?: boolean }) => {
+      scheduleNext(options?.immediate === true ? 0 : undefined);
+    },
     recordFailure: () => {
       failureCount += 1;
       scheduleNext();

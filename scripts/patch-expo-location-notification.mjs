@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const SUPPORTED_EXPO_LOCATION_VERSION = '56.0.24';
+const SUPPORTED_EXPO_LOCATION_VERSION = '56.0.25';
 const expoLocationPackagePath = resolve(
   process.cwd(),
   'node_modules/expo-location/package.json',

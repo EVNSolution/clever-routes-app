@@ -544,6 +544,7 @@ describe('encrypted driver evidence store', () => {
         replayed.push(event.clientEventId);
         return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
       } },
+      now,
       proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
       queue,
     });
@@ -584,6 +585,7 @@ describe('encrypted driver evidence store', () => {
           throw new Error('response unavailable before restart');
         },
       },
+      now,
       queue,
     });
     await queue.whenPersisted();
@@ -617,6 +619,7 @@ describe('encrypted driver evidence store', () => {
           };
         },
       },
+      now,
       queue: restartedQueue,
     });
     await restartedQueue.whenPersisted();

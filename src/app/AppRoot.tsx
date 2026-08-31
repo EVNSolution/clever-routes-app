@@ -3210,7 +3210,9 @@ function DriverApp() {
       retry: retryPendingSubmissionsAfterNetworkRecovery,
       schedule: (run, delayMs) => setTimeout(run, delayMs),
     });
-    const subscription = AppState.addEventListener('change', () => scheduler.notifyConditionsChanged());
+    const subscription = AppState.addEventListener('change', (state) => scheduler.notifyConditionsChanged({
+      immediate: state === 'active',
+    }));
     scheduler.start();
     return () => {
       subscription.remove();
