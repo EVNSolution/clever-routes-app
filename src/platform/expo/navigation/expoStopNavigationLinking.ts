@@ -1,22 +1,18 @@
 import { Linking, NativeModules, Platform } from 'react-native';
 
+import {
+  openWithAndroidMapHandler,
+  type AndroidMapHandlerBridge,
+} from '../../../domain/navigation/androidMapHandlerSelection';
 import type { StopNavigationLinking } from '../../../domain/stop/stopNavigation';
+import { createExpoAndroidMapHandlerStore } from '../storage/expoAndroidMapHandlerStore';
 
-type CleverMapNavigationModule = {
-  open(url: string): Promise<void>;
-  openDefaultAppsSettings(): Promise<void>;
-};
+type CleverMapNavigationModule = AndroidMapHandlerBridge;
 
-export function openExpoDefaultMapAppSettings(): Promise<void> {
-  if (Platform.OS !== 'android') {
-    return Linking.openSettings();
-  }
+const androidMapHandlerStore = createExpoAndroidMapHandlerStore();
 
-  const nativeModule = NativeModules.CleverMapNavigation as CleverMapNavigationModule | undefined;
-  if (nativeModule?.openDefaultAppsSettings === undefined) {
-    return Promise.reject(new Error('Android default app settings module is unavailable.'));
-  }
-  return nativeModule.openDefaultAppsSettings();
+export function resetExpoDefaultMapApp(): Promise<void> {
+  return androidMapHandlerStore.clear();
 }
 
 export function createExpoStopNavigationLinking(): StopNavigationLinking {
@@ -26,11 +22,19 @@ export function createExpoStopNavigationLinking(): StopNavigationLinking {
         return Linking.openURL(url);
       }
 
-      const nativeModule = NativeModules.CleverMapNavigation as CleverMapNavigationModule | undefined;
-      if (nativeModule?.open === undefined) {
-        return Promise.reject(new Error('Android map navigation module is unavailable.'));
-      }
-      return nativeModule.open(url);
+      return openWithAndroidMapHandler({
+        bridge: getAndroidMapHandlerBridge(),
+        store: androidMapHandlerStore,
+        url,
+      });
     },
   };
+}
+
+function getAndroidMapHandlerBridge(): CleverMapNavigationModule {
+  const nativeModule = NativeModules.CleverMapNavigation as CleverMapNavigationModule | undefined;
+  if (nativeModule?.open === undefined || nativeModule.pickMapApp === undefined) {
+    throw new Error('Android map navigation module is unavailable.');
+  }
+  return nativeModule;
 }

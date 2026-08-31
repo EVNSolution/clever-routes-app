@@ -95,9 +95,20 @@ test('documents a source-only Driver pilot candidate that cannot be mistaken for
 });
 
 test('keeps source version separate from public release evidence', () => {
+  const appConfig = readJson<{
+    expo?: {
+      version?: string;
+      ios?: { buildNumber?: string };
+      android?: { versionCode?: number };
+    };
+  }>('app.json');
   const readiness = readFileSync(resolve(repoRoot, 'docs/release-readiness.md'), 'utf8');
 
-  assert.match(readiness, /reviewed native[\s\S]*source version is `1\.2\.4` \(`versionCode` `22`, iOS build `1`\)/u);
+  assert.ok(readiness.includes(
+    `source version is \`${appConfig.expo?.version}\` (`
+    + `\`versionCode\` \`${appConfig.expo?.android?.versionCode}\`, `
+    + `iOS build \`${appConfig.expo?.ios?.buildNumber}\`)`,
+  ));
   assert.match(readiness, /Publication is[\s\S]*proved separately by the public release manifest and downloadable artifact/u);
 });
 

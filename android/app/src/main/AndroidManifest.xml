@@ -40,6 +40,5 @@
         <data android:scheme="exp+clever-routes-app"/>
       </intent-filter>
     </activity>
-    <activity android:name=".MapNavigationActivity" android:exported="false" android:theme="@android:style/Theme.Translucent.NoTitleBar"/>
   </application>
 </manifest>
