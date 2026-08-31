@@ -36,24 +36,33 @@ describe('Android map navigation handoff', () => {
     assert.match(platformAdapter, /return Linking\.openURL\(url\)/u);
   });
 
-  it('honors an Android default handler and otherwise presents installed map choices', () => {
+  it('honors an Android default handler and otherwise delegates choice to the native resolver', () => {
     assert.match(activity, /resolveDefaultPackage\(genericIntent\)/u);
-    assert.match(activity, /queryMapHandlers\(genericIntent\)/u);
-    assert.match(activity, /Intent\.createChooser\(genericIntent, "Open navigation with"\)/u);
-    assert.match(activity, /Intent\.EXTRA_INITIAL_INTENTS/u);
-    assert.match(activity, /Intent\.EXTRA_EXCLUDE_COMPONENTS/u);
-    assert.match(activity, /ComponentName\(it\.packageName, it\.name\)/u);
+    assert.match(activity, /val launchIntent = resolveDefaultPackage\(genericIntent\)[\s\S]*\?: genericIntent/u);
+    assert.match(activity, /openMapIntent\(launchIntent\)/u);
+    assert.doesNotMatch(activity, /Intent\.createChooser/u);
+    assert.doesNotMatch(activity, /Intent\.EXTRA_INITIAL_INTENTS|Intent\.EXTRA_EXCLUDE_COMPONENTS/u);
     assert.match(activity, /Intent\(Intent\.ACTION_VIEW, uri\)\.setPackage\(packageName\)/u);
     assert.match(activity, /catch \(_: ActivityNotFoundException\)/u);
     assert.match(activity, /catch \(_: SecurityException\)/u);
-    assert.doesNotMatch(activity, /startActivity\(launchIntent\)/u);
   });
 
   it('gives Waze its supported address search while retaining trusted coordinates', () => {
     assert.match(activity, /const val WAZE_PACKAGE = "com\.waze"/u);
+    assert.match(activity, /appendQueryParameter\("q", destination\.address \?: coordinates\)/u);
     assert.match(activity, /builder\.appendQueryParameter\("q", destination\.address\)/u);
     assert.match(activity, /builder\.appendQueryParameter\("ll", it\)/u);
     assert.match(activity, /appendQueryParameter\("navigate", "yes"\)/u);
     assert.match(activity, /Uri\.parse\("geo:\$coordinates"\)/u);
+  });
+
+  it('opens Android default-app settings through the existing native bridge', () => {
+    assert.match(nativeModule, /import android\.provider\.Settings/u);
+    assert.match(nativeModule, /fun openDefaultAppsSettings\(promise: Promise\)/u);
+    assert.match(nativeModule, /Settings\.ACTION_MANAGE_DEFAULT_APPS_SETTINGS/u);
+    assert.match(nativeModule, /Settings\.ACTION_SETTINGS/u);
+    assert.match(nativeModule, /resolveActivity\(reactApplicationContext\.packageManager\)/u);
+    assert.match(platformAdapter, /openExpoDefaultMapAppSettings/u);
+    assert.match(platformAdapter, /nativeModule\.openDefaultAppsSettings\(\)/u);
   });
 });

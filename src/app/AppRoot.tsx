@@ -105,7 +105,10 @@ import {
 import { createExpoContinuousLocationStreamService, registerContinuousLocationTaskObserver } from '../platform/expo/location/expoContinuousLocationStreamService';
 import { createExpoForegroundLocationSnapshotService } from '../platform/expo/location/expoForegroundLocationSnapshotService';
 import { createExpoForegroundLocationPermissionService } from '../platform/expo/location/expoLocationPermissionService';
-import { createExpoStopNavigationLinking } from '../platform/expo/navigation/expoStopNavigationLinking';
+import {
+  createExpoStopNavigationLinking,
+  openExpoDefaultMapAppSettings,
+} from '../platform/expo/navigation/expoStopNavigationLinking';
 import {
   bindExpoOfflineSubmissionQueueAccount,
   getExpoOfflineSubmissionQueue,
@@ -940,6 +943,13 @@ function DriverApp() {
     setMessage(null);
     setScreen('settings');
     void loadAccountProfile();
+  }
+
+  function handleOpenDefaultMapAppSettings(): void {
+    setMessage(null);
+    void openExpoDefaultMapAppSettings().catch(() => {
+      setMessage('Default app settings could not be opened.');
+    });
   }
 
   function handleOpenConsentDocument(): void {
@@ -5431,6 +5441,7 @@ function DriverApp() {
               isLoadingAccountProfile={isLoadingAccountProfile}
               isRequestingAccountDeletion={isRequestingAccountDeletion}
               onEditName={handleOpenAccountName}
+              onOpenDefaultMapAppSettings={handleOpenDefaultMapAppSettings}
               onOpenConsentDocument={handleOpenConsentDocument}
               onLogout={handleLogout}
               onRequestAccountDeletion={handleRequestAccountDeletion}
@@ -5988,6 +5999,7 @@ function SettingsPage({
   isLoadingAccountProfile,
   isRequestingAccountDeletion,
   onEditName,
+  onOpenDefaultMapAppSettings,
   onOpenConsentDocument,
   onLogout,
   onRequestAccountDeletion,
@@ -6000,6 +6012,7 @@ function SettingsPage({
   isLoadingAccountProfile: boolean;
   isRequestingAccountDeletion: boolean;
   onEditName(): void;
+  onOpenDefaultMapAppSettings(): void;
   onOpenConsentDocument(): void;
   onLogout(): void;
   onRequestAccountDeletion(): void;
@@ -6037,6 +6050,26 @@ function SettingsPage({
           </View>
         </View>
       </View>
+
+      {Platform.OS === 'android' ? (
+        <View style={styles.settingsSection}>
+          <Text style={styles.settingsSectionLabel}>NAVIGATION</Text>
+          <View style={styles.settingsGroup}>
+            <Pressable
+              accessibilityLabel="Open Default Map App Settings"
+              accessibilityRole="button"
+              onPress={onOpenDefaultMapAppSettings}
+              style={({ pressed }) => [
+                styles.settingsRow,
+                pressed && styles.settingsRowPressed,
+              ]}
+            >
+              <Text style={styles.settingsRowLabel}>Default Map App</Text>
+              <Ionicons color="#a1a7b0" name="chevron-forward" size={20} />
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.settingsSection}>
         <Text style={styles.settingsSectionLabel}>CONSENT</Text>

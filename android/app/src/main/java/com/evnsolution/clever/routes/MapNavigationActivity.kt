@@ -2,7 +2,6 @@ package com.evnsolution.clever.routes
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
-import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
@@ -24,43 +23,10 @@ class MapNavigationActivity : Activity() {
       return
     }
 
-    val handlers = queryMapHandlers(genericIntent)
-    val handlerPackages = handlers
-      .mapNotNull { it.activityInfo?.packageName }
-      .distinct()
-    if (handlerPackages.isEmpty()) {
-      showFailureAndFinish()
-      return
-    }
-
-    val defaultPackage = resolveDefaultPackage(genericIntent)
-    val launchIntent = defaultPackage
-      ?.takeIf(handlerPackages::contains)
+    val launchIntent = resolveDefaultPackage(genericIntent)
       ?.let { buildIntentForPackage(it, destination) }
-
-    if (launchIntent != null) {
-      openMapIntent(launchIntent)
-      return
-    }
-
-    if (handlerPackages.size == 1) {
-      openMapIntent(buildIntentForPackage(handlerPackages.first(), destination))
-    } else {
-      val chooser = Intent.createChooser(genericIntent, "Open navigation with")
-      val wazeComponents = handlers.mapNotNull { handler ->
-        handler.activityInfo
-          ?.takeIf { it.packageName == WAZE_PACKAGE }
-          ?.let { ComponentName(it.packageName, it.name) }
-      }
-      if (wazeComponents.isNotEmpty()) {
-        chooser.putExtra(
-          Intent.EXTRA_INITIAL_INTENTS,
-          arrayOf(buildIntentForPackage(WAZE_PACKAGE, destination)),
-        )
-        chooser.putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, wazeComponents.toTypedArray())
-      }
-      openMapIntent(chooser)
-    }
+      ?: genericIntent
+    openMapIntent(launchIntent)
   }
 
   private fun readDestination(uri: Uri?): StopNavigationDestination? {
@@ -86,7 +52,9 @@ class MapNavigationActivity : Activity() {
       destination.target == "address" && destination.address != null ->
         Uri.parse("geo:0,0").buildUpon().appendQueryParameter("q", destination.address).build()
       coordinates != null ->
-        Uri.parse("geo:$coordinates").buildUpon().appendQueryParameter("q", coordinates).build()
+        Uri.parse("geo:$coordinates").buildUpon()
+          .appendQueryParameter("q", destination.address ?: coordinates)
+          .build()
       destination.address != null ->
         Uri.parse("geo:0,0").buildUpon().appendQueryParameter("q", destination.address).build()
       else -> null
@@ -125,17 +93,6 @@ class MapNavigationActivity : Activity() {
       it == "android" || activityName.contains("ResolverActivity") || activityName.contains("ChooserActivity")
     }
   }
-
-  private fun queryMapHandlers(intent: Intent): List<ResolveInfo> =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-      packageManager.queryIntentActivities(
-        intent,
-        PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong()),
-      )
-    } else {
-      @Suppress("DEPRECATION")
-      packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
-    }
 
   private fun resolveActivity(intent: Intent): ResolveInfo? =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
