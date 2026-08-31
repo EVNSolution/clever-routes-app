@@ -83,15 +83,15 @@ describe('notification action behavior', () => {
       /notifiedStopIds: notifiedStopArrivalIdsRef\.current/gu,
     )?.length ?? 0;
 
-    assert.equal(foregroundNotificationBuildCount, 5);
+    assert.equal(foregroundNotificationBuildCount, 4);
     assert.equal(notifiedStopInputCount, 0);
     assert.doesNotMatch(appRootSource, /showStopActions:/u);
   });
 
-  it('runs Next Stop through the durable completion path before opening navigation', () => {
+  it('runs notification Complete Stop through the durable path before opening next-stop details', () => {
     assert.match(appRootSource, /action === 'next_stop'/u);
     assert.match(appRootSource, /setPendingStopArrivalCompletion\(\{[\s\S]*deliveryStopId: stop\.deliveryStopId,[\s\S]*routePlanId: routeSession\.route\.id/u);
-    assert.match(appRootSource, /handleTerminalStop\(currentStop, 'delivered', \{ openNextNavigation: true \}\)/u);
+    assert.match(appRootSource, /handleTerminalStop\(currentStop, 'delivered'\)/u);
     assert.match(appRootSource, /completedStopIds: nextCompletedStopIds,[\s\S]*navigationStepIndex: nextNavigationStepIndex/u);
     assert.match(appRootSource, /activeRouteSession\?\.completedStopIds/u);
 
@@ -100,15 +100,14 @@ describe('notification action behavior', () => {
       appRootSource.indexOf('completeStopFromNotificationRef.current = async'),
     );
     const saveIndex = completionSource.indexOf('saveActiveRouteSession');
-    const notificationIndex = completionSource.indexOf('updateLocationNotification');
-    const navigationIndex = completionSource.indexOf('await handleOpenNavigationForStop(nextStop)');
+    const detailsIndex = completionSource.indexOf('openRouteStopDetails(nextStop)');
 
     assert.ok(saveIndex >= 0);
-    assert.ok(notificationIndex > saveIndex);
-    assert.ok(navigationIndex > notificationIndex);
+    assert.ok(detailsIndex > saveIndex);
+    assert.doesNotMatch(completionSource, /handleOpenNavigationForStop|openNextNavigation/u);
   });
 
-  it('runs Arrive, Add Proof, and Next Stop through one GPS-backed arrival executor', () => {
+  it('runs Arrive, Add Proof, and notification Complete Stop through one GPS-backed arrival executor', () => {
     const arrivalStart = appRootSource.indexOf('const recordStopArrival = useCallback(');
     const arrivalEnd = appRootSource.indexOf('\n\n  const handleStopArrivalNotificationPress', arrivalStart);
     const arrivalSource = appRootSource.slice(arrivalStart, arrivalEnd);

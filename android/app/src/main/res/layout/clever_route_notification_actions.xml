@@ -39,7 +39,7 @@
         android:paddingStart="8dp"
         android:paddingEnd="8dp"
         android:singleLine="true"
-        android:text="Next Stop"
+        android:text="Complete Stop"
         android:textAllCaps="false"
         android:textSize="12sp" />
 

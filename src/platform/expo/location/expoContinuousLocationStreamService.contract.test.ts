@@ -97,7 +97,7 @@ describe('Expo continuous location wiring', () => {
     assert.match(serviceSource, /appendQueryParameter\("action", action\)/u);
     assert.match(serviceSource, /builder\.addAction\(0, title, actionIntent\)/u);
     assert.match(serviceSource, /addStopAction\("Add Proof", "add_proof"\)/u);
-    assert.match(serviceSource, /addStopAction\("Next Stop", "next_stop"\)/u);
+    assert.match(serviceSource, /addStopAction\("Complete Stop", "next_stop"\)/u);
     assert.match(serviceSource, /RemoteViews\(mParentContext\.packageName, compactLayoutId\)/u);
     assert.match(serviceSource, /builder\.setCustomContentView\(compactView\)/u);
     assert.match(serviceSource, /Configuration\.UI_MODE_NIGHT_MASK/u);
@@ -106,6 +106,7 @@ describe('Expo continuous location wiring', () => {
     assert.match(compactActionLayoutSource, /<LinearLayout[^>]*android:layout_height="40dp"/u);
     assert.match(compactActionLayoutSource, /android:id="@\+id\/notification_add_proof"[\s\S]*android:singleLine="true"/u);
     assert.match(compactActionLayoutSource, /android:id="@\+id\/notification_next_stop"[\s\S]*android:singleLine="true"/u);
+    assert.match(compactActionLayoutSource, /android:id="@\+id\/notification_next_stop"[\s\S]*android:text="Complete Stop"/u);
     assert.match(resourceKeepSource, /tools:keep="@layout\/clever_route_notification_actions"/u);
     assert.match(serviceSource, /fun updateNotification\(taskName: String, serviceOptions: Bundle\): Boolean/u);
     assert.match(serviceSource, /sActiveServices\[taskName\]\?\.updateForeground/u);
@@ -121,7 +122,7 @@ describe('Expo continuous location wiring', () => {
     assert.match(patchSource, /\.setContentTitle\("CLEVER Routes"\)/u);
     assert.match(patchSource, /\.setVisibility\(Notification\.VISIBILITY_PRIVATE\)/u);
     assert.match(patchSource, /addStopAction\("Add Proof", "add_proof"\)/u);
-    assert.match(patchSource, /addStopAction\("Next Stop", "next_stop"\)/u);
+    assert.match(patchSource, /addStopAction\("Complete Stop", "next_stop"\)/u);
     assert.match(patchSource, /builder\.setCustomContentView\(compactView\)/u);
     assert.match(stopArrivalNotificationSource, /lockscreenVisibility: Notifications\.AndroidNotificationVisibility\.PRIVATE/u);
     assert.match(stopArrivalNotificationSource, /const STOP_ARRIVAL_CHANNEL_ID = 'stop-arrivals-v2'/u);
@@ -131,7 +132,7 @@ describe('Expo continuous location wiring', () => {
     assert.match(stopArrivalNotificationSource, /enableVibrate: true/u);
     assert.doesNotMatch(stopArrivalNotificationSource, /Notifications\.setNotificationCategoryAsync/u);
     assert.doesNotMatch(stopArrivalNotificationSource, /buttonTitle: 'Add Proof'/u);
-    assert.doesNotMatch(stopArrivalNotificationSource, /buttonTitle: 'Next Stop'/u);
+    assert.doesNotMatch(stopArrivalNotificationSource, /buttonTitle: 'Complete Stop'/u);
     assert.doesNotMatch(stopArrivalNotificationSource, /categoryIdentifier/u);
     assert.match(stopArrivalNotificationSource, /channelId: STOP_ARRIVAL_CHANNEL_ID/u);
     assert.doesNotMatch(stopArrivalNotificationSource, /handledStopArrivalResponseIds/u);
