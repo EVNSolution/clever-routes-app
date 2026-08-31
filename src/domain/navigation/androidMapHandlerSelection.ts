@@ -62,19 +62,6 @@ export async function openWithAndroidMapHandler(input: {
   }
 }
 
-export async function changeAndroidMapHandler(input: {
-  bridge: AndroidMapHandlerBridge;
-  store: AndroidMapHandlerStore;
-}): Promise<boolean> {
-  const packageName = await input.bridge.pickMapApp(null);
-  if (packageName === null) {
-    return false;
-  }
-
-  await input.store.save(packageName);
-  return true;
-}
-
 async function selectAndSave(
   bridge: AndroidMapHandlerBridge,
   store: AndroidMapHandlerStore,

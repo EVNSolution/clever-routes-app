@@ -1,7 +1,6 @@
 import { Linking, NativeModules, Platform } from 'react-native';
 
 import {
-  changeAndroidMapHandler,
   openWithAndroidMapHandler,
   type AndroidMapHandlerBridge,
 } from '../../../domain/navigation/androidMapHandlerSelection';
@@ -12,16 +11,8 @@ type CleverMapNavigationModule = AndroidMapHandlerBridge;
 
 const androidMapHandlerStore = createExpoAndroidMapHandlerStore();
 
-export async function openExpoDefaultMapAppSettings(): Promise<void> {
-  if (Platform.OS !== 'android') {
-    await Linking.openSettings();
-    return;
-  }
-
-  await changeAndroidMapHandler({
-    bridge: getAndroidMapHandlerBridge(),
-    store: androidMapHandlerStore,
-  });
+export function resetExpoDefaultMapApp(): Promise<void> {
+  return androidMapHandlerStore.clear();
 }
 
 export function createExpoStopNavigationLinking(): StopNavigationLinking {

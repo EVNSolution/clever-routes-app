@@ -51,9 +51,9 @@ describe('Settings page behavior', () => {
     assert.match(settingsPage, /acceptedLocation \? 'Allowed' : 'Denied'/u);
     assert.match(settingsPage, /Platform\.OS === 'android'/u);
     assert.match(settingsPage, />NAVIGATION</u);
-    assert.match(settingsPage, /accessibilityLabel="Open Default Map App Settings"/u);
-    assert.match(settingsPage, />Default Map App</u);
-    assert.match(settingsPage, /onPress=\{onOpenDefaultMapAppSettings\}/u);
+    assert.match(settingsPage, /accessibilityLabel="Reset Default Map App"/u);
+    assert.match(settingsPage, />Reset Default Map App</u);
+    assert.match(settingsPage, /onPress=\{onResetDefaultMapApp\}/u);
     assert.match(settingsPage, />ABOUT</u);
     assert.match(settingsPage, />Version</u);
     assert.match(settingsPage, />ACCOUNT ACTIONS</u);
@@ -77,9 +77,10 @@ describe('Settings page behavior', () => {
     assert.doesNotMatch(source, /createExpoNavigationPreferenceStore/u);
     assert.doesNotMatch(settingsPage, /STOP NAVIGATION APP|Google Maps|Waze/u);
     assert.match(source, /const stopNavigationLinking = useMemo\(\(\) => createExpoStopNavigationLinking\(\), \[\]\)/u);
-    assert.match(source, /openExpoDefaultMapAppSettings/u);
-    assert.match(source, /function handleOpenDefaultMapAppSettings\(\): void/u);
-    assert.match(source, /openExpoDefaultMapAppSettings\(\)\.catch/u);
+    assert.match(source, /resetExpoDefaultMapApp/u);
+    assert.match(source, /function handleResetDefaultMapApp\(\): void/u);
+    assert.match(source, /resetExpoDefaultMapApp\(\)\s*\.then/u);
+    assert.match(source, /Default map app reset\. Choose one the next time you navigate\./u);
     assert.match(source, /openStopNavigation\(\{[\s\S]*linking: stopNavigationLinking,[\s\S]*platform: Platform\.OS,[\s\S]*stop,[\s\S]*\}\)/u);
   });
 

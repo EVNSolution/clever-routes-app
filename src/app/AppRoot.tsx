@@ -107,7 +107,7 @@ import { createExpoForegroundLocationSnapshotService } from '../platform/expo/lo
 import { createExpoForegroundLocationPermissionService } from '../platform/expo/location/expoLocationPermissionService';
 import {
   createExpoStopNavigationLinking,
-  openExpoDefaultMapAppSettings,
+  resetExpoDefaultMapApp,
 } from '../platform/expo/navigation/expoStopNavigationLinking';
 import {
   bindExpoOfflineSubmissionQueueAccount,
@@ -945,11 +945,15 @@ function DriverApp() {
     void loadAccountProfile();
   }
 
-  function handleOpenDefaultMapAppSettings(): void {
+  function handleResetDefaultMapApp(): void {
     setMessage(null);
-    void openExpoDefaultMapAppSettings().catch(() => {
-      setMessage('Default app settings could not be opened.');
-    });
+    void resetExpoDefaultMapApp()
+      .then(() => {
+        setMessage('Default map app reset. Choose one the next time you navigate.');
+      })
+      .catch(() => {
+        setMessage('Default map app could not be reset. Try again.');
+      });
   }
 
   function handleOpenConsentDocument(): void {
@@ -5441,10 +5445,10 @@ function DriverApp() {
               isLoadingAccountProfile={isLoadingAccountProfile}
               isRequestingAccountDeletion={isRequestingAccountDeletion}
               onEditName={handleOpenAccountName}
-              onOpenDefaultMapAppSettings={handleOpenDefaultMapAppSettings}
               onOpenConsentDocument={handleOpenConsentDocument}
               onLogout={handleLogout}
               onRequestAccountDeletion={handleRequestAccountDeletion}
+              onResetDefaultMapApp={handleResetDefaultMapApp}
               phoneE164={verifiedDriverPhoneE164 ?? phoneE164Preview}
             />
           ) : null}
@@ -5999,10 +6003,10 @@ function SettingsPage({
   isLoadingAccountProfile,
   isRequestingAccountDeletion,
   onEditName,
-  onOpenDefaultMapAppSettings,
   onOpenConsentDocument,
   onLogout,
   onRequestAccountDeletion,
+  onResetDefaultMapApp,
   phoneE164,
 }: {
   acceptedLocation: boolean;
@@ -6012,10 +6016,10 @@ function SettingsPage({
   isLoadingAccountProfile: boolean;
   isRequestingAccountDeletion: boolean;
   onEditName(): void;
-  onOpenDefaultMapAppSettings(): void;
   onOpenConsentDocument(): void;
   onLogout(): void;
   onRequestAccountDeletion(): void;
+  onResetDefaultMapApp(): void;
   phoneE164: string | null;
 }) {
   return (
@@ -6056,16 +6060,16 @@ function SettingsPage({
           <Text style={styles.settingsSectionLabel}>NAVIGATION</Text>
           <View style={styles.settingsGroup}>
             <Pressable
-              accessibilityLabel="Open Default Map App Settings"
+              accessibilityLabel="Reset Default Map App"
               accessibilityRole="button"
-              onPress={onOpenDefaultMapAppSettings}
+              onPress={onResetDefaultMapApp}
               style={({ pressed }) => [
                 styles.settingsRow,
                 pressed && styles.settingsRowPressed,
               ]}
             >
-              <Text style={styles.settingsRowLabel}>Default Map App</Text>
-              <Ionicons color="#a1a7b0" name="chevron-forward" size={20} />
+              <Text style={styles.settingsRowLabel}>Reset Default Map App</Text>
+              <Ionicons color="#a1a7b0" name="refresh" size={20} />
             </Pressable>
           </View>
         </View>

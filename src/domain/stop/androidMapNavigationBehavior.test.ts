@@ -53,11 +53,11 @@ describe('Android map navigation handoff', () => {
     assert.match(nativeModule, /Uri\.parse\("geo:\$coordinates"\)/u);
   });
 
-  it('persists the selected handler outside Settings UI and reuses the same picker to change it', () => {
+  it('persists the selected handler outside Settings UI and resets it without opening the picker', () => {
     assert.match(platformAdapter, /createExpoAndroidMapHandlerStore/u);
     assert.match(platformAdapter, /openWithAndroidMapHandler/u);
-    assert.match(platformAdapter, /changeAndroidMapHandler/u);
-    assert.match(platformAdapter, /pickMapApp/u);
-    assert.match(platformAdapter, /openExpoDefaultMapAppSettings/u);
+    assert.match(platformAdapter, /androidMapHandlerStore\.clear\(\)/u);
+    assert.match(platformAdapter, /resetExpoDefaultMapApp/u);
+    assert.doesNotMatch(platformAdapter, /changeAndroidMapHandler/u);
   });
 });

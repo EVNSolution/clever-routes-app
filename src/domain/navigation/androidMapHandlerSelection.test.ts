@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  changeAndroidMapHandler,
   createAndroidMapHandlerStore,
   openWithAndroidMapHandler,
 } from './androidMapHandlerSelection';
@@ -137,39 +136,13 @@ describe('Android map handler selection', () => {
     assert.equal(openCalls, 0);
   });
 
-  it('keeps the existing selection when Settings picker is cancelled', async () => {
+  it('clears the saved package so the next navigation asks Android again', async () => {
     const storage = createMemoryStorage('com.google.android.apps.maps');
     const store = createAndroidMapHandlerStore(storage);
 
-    const changed = await changeAndroidMapHandler({
-      bridge: {
-        open: async () => undefined,
-        pickMapApp: async (url) => {
-          assert.equal(url, null);
-          return null;
-        },
-      },
-      store,
-    });
+    await store.clear();
 
-    assert.equal(changed, false);
-    assert.equal(storage.value(), 'com.google.android.apps.maps');
-  });
-
-  it('replaces the saved package when Settings picker selects another map app', async () => {
-    const storage = createMemoryStorage('com.google.android.apps.maps');
-    const store = createAndroidMapHandlerStore(storage);
-
-    const changed = await changeAndroidMapHandler({
-      bridge: {
-        open: async () => undefined,
-        pickMapApp: async () => 'com.waze',
-      },
-      store,
-    });
-
-    assert.equal(changed, true);
-    assert.equal(storage.value(), 'com.waze');
+    assert.equal(storage.value(), null);
   });
 
   it('normalizes blank persisted values to no selection', async () => {
