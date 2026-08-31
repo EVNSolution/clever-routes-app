@@ -191,6 +191,13 @@ describe('stop proof event flow', () => {
 
   it('queues stop proof driver event when the live event submission fails', async () => {
     const memoryQueue = createInMemoryOfflineSubmissionQueue();
+    const orderedEventContract = {
+      appVersion: '1.2.3',
+      assignmentGeneration: '14',
+      driverContractVersion: 2 as const,
+      expectedRouteVersionId: '44444444-4444-4444-8444-444444444444',
+      versionCode: 21,
+    };
     let releasePersistence: () => void = () => undefined;
     let persistenceStarted = false;
     const persistenceGate = new Promise<void>((resolve) => {
@@ -208,6 +215,7 @@ describe('stop proof event flow', () => {
     const resultPromise = recordStopProofEventAfterDeliveryStart({
       deliveryStart: activeDelivery,
       driverEventService: {
+        prepareDriverEvent: (event) => ({ ...event, ...orderedEventContract }),
         recordDriverEvent: async () => {
           throw new Error('network offline');
         },
@@ -235,6 +243,59 @@ describe('stop proof event flow', () => {
     assert.equal(result.reason, 'record_failed');
     assert.equal(queue.listPending().length, 1);
     assert.equal(queue.listPending()[0]?.kind, 'driver_event');
+    const pending = queue.listPending()[0];
+    assert.deepEqual(pending?.kind === 'driver_event' ? {
+      appVersion: pending.event.appVersion,
+      assignmentGeneration: pending.event.assignmentGeneration,
+      driverContractVersion: pending.event.driverContractVersion,
+      eventType: pending.event.eventType,
+      expectedRouteVersionId: pending.event.expectedRouteVersionId,
+      versionCode: pending.event.versionCode,
+    } : null, {
+      ...orderedEventContract,
+      eventType: 'STOP_DELIVERED',
+    });
+  });
+
+  it('queues a prepared STOP_FAILED event with the live ordered identity', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const orderedEventContract = {
+      appVersion: '1.2.3',
+      assignmentGeneration: '14',
+      driverContractVersion: 2 as const,
+      expectedRouteVersionId: '44444444-4444-4444-8444-444444444444',
+      versionCode: 21,
+    };
+
+    const result = await recordStopProofEventAfterDeliveryStart({
+      deliveryStart: activeDelivery,
+      driverEventService: {
+        prepareDriverEvent: (event) => ({ ...event, ...orderedEventContract }),
+        recordDriverEvent: async () => { throw new Error('network offline'); },
+      },
+      input: {
+        action: 'failed',
+        deliveryStopId: 'stop-2',
+        note: 'Customer unavailable',
+        reason: 'CUSTOMER_UNAVAILABLE',
+        routePlanId: 'route-1',
+      },
+      offlineQueue: queue,
+    });
+
+    assert.equal(result.kind, 'queued');
+    const pending = queue.listPending()[0];
+    assert.deepEqual(pending?.kind === 'driver_event' ? {
+      appVersion: pending.event.appVersion,
+      assignmentGeneration: pending.event.assignmentGeneration,
+      driverContractVersion: pending.event.driverContractVersion,
+      eventType: pending.event.eventType,
+      expectedRouteVersionId: pending.event.expectedRouteVersionId,
+      versionCode: pending.event.versionCode,
+    } : null, {
+      ...orderedEventContract,
+      eventType: 'STOP_FAILED',
+    });
   });
 
   it('marks queued stop proof events as requiring route lookup when live event returns unauthorized', async () => {

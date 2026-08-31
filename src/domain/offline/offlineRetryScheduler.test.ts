@@ -98,8 +98,8 @@ describe('offline retry scheduler', () => {
     scheduler.start();
     assert.deepEqual(delays, []);
     foreground = true;
-    scheduler.notifyConditionsChanged();
-    assert.deepEqual(delays, [1_000]);
+    scheduler.notifyConditionsChanged({ immediate: true });
+    assert.deepEqual(delays, [0]);
   });
 
   it('backs off after a hung completion receipt and ignores late APPLIED until the next lookup', async () => {

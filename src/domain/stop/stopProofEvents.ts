@@ -4,7 +4,12 @@ import {
   getDriverApiRequiresRouteLookup,
   getDriverApiRequiresRouteReconciliation,
 } from '../../api/deliveryServer/driverApiError';
-import type { DriverEventRecordResult, DriverEventService, DriverEventType } from '../events/driverEvents';
+import {
+  prepareDriverEventForPersistence,
+  type DriverEventRecordResult,
+  type DriverEventService,
+  type DriverEventType,
+} from '../events/driverEvents';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 import type { ProofMediaReference } from '../proof/proofMediaUpload';
 import type { ProofSignatureReference } from '../proof/proofSignatureCapture';
@@ -55,14 +60,14 @@ export async function recordStopProofEventAfterDeliveryStart(input: {
     };
   }
 
-  const event = {
+  const event = prepareDriverEventForPersistence(input.driverEventService, {
     clientEventId: createClientEventId(`stop-${input.input.action}`),
     deliveryStopId: input.input.deliveryStopId,
     eventType: getStopProofEventType(input.input.action),
     occurredAt: input.input.occurredAt ?? new Date(),
     payload: { proof: getStopProofPayload(input.input) },
     routePlanId: input.input.routePlanId,
-  };
+  });
 
   try {
     const result = await input.driverEventService.recordDriverEvent(event);

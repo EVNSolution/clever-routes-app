@@ -223,11 +223,14 @@ export async function recordRouteStartedAfterDeliveryStart(input: {
     };
   }
 
-  const event = createRouteStartedDriverEvent({
-    ...(input.clientEventId === undefined ? {} : { clientEventId: input.clientEventId }),
-    occurredAt: input.occurredAt ?? new Date(),
-    routePlanId: input.routePlanId,
-  });
+  const event = prepareDriverEventForPersistence(
+    input.driverEventService,
+    createRouteStartedDriverEvent({
+      ...(input.clientEventId === undefined ? {} : { clientEventId: input.clientEventId }),
+      occurredAt: input.occurredAt ?? new Date(),
+      routePlanId: input.routePlanId,
+    }),
+  );
 
   try {
     const result = await input.driverEventService.recordDriverEvent(event);
@@ -285,7 +288,7 @@ export async function recordStopArrivedAfterDeliveryStart(input: {
   }
 
   const occurredAt = input.arrivalEvidence?.recordedAt ?? input.occurredAt ?? new Date();
-  const event: DriverEventInput = {
+  const event = prepareDriverEventForPersistence(input.driverEventService, {
     clientEventId: input.clientEventId ?? `stop-arrived-${input.deliveryStopId}-${occurredAt.getTime().toString(36)}`,
     deliveryStopId: input.deliveryStopId,
     eventType: 'STOP_ARRIVED',
@@ -298,7 +301,7 @@ export async function recordStopArrivedAfterDeliveryStart(input: {
       payload: { distanceToPlannedStopMeters: input.arrivalEvidence.distanceToPlannedStopMeters },
     }),
     routePlanId: input.routePlanId,
-  };
+  });
 
   try {
     const result = await input.driverEventService.recordDriverEvent(event);
@@ -336,11 +339,14 @@ export async function recordPickupCompletedAfterDeliveryStart(input: {
   }
 
   const occurredAt = input.occurredAt ?? new Date();
-  const event: DriverEventInput = createPickupCompletedDriverEvent({
-    clientEventId: input.clientEventId,
-    occurredAt,
-    routePlanId: input.routePlanId,
-  });
+  const event = prepareDriverEventForPersistence(
+    input.driverEventService,
+    createPickupCompletedDriverEvent({
+      clientEventId: input.clientEventId,
+      occurredAt,
+      routePlanId: input.routePlanId,
+    }),
+  );
 
   try {
     const result = await input.driverEventService.recordDriverEvent(event);

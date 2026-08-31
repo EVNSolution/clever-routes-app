@@ -830,6 +830,7 @@ export async function recoverPendingRouteEndReceipt(input: {
   if (!isCurrent()) return 'pending';
   input.queue.acknowledge(item.queueItemId);
   input.queue.discardRouteSubmissions(input.routePlanId);
+  await input.queue.whenPersisted();
   return 'acknowledged';
 }
 
@@ -949,10 +950,11 @@ export async function retryOfflineSubmissions(input: {
           }
           if (resolution.kind === 'acknowledge') {
             input.queue.acknowledge(item.queueItemId);
+            discarded += input.queue.discardRouteSubmissions(item.event.routePlanId);
+            await input.queue.whenPersisted();
             succeeded += 1;
             completedRoutePlanIds.add(item.event.routePlanId);
             completionAcknowledgedRoutePlanIds.add(item.event.routePlanId);
-            discarded += input.queue.discardRouteSubmissions(item.event.routePlanId);
             continue;
           }
         }
@@ -970,6 +972,7 @@ export async function retryOfflineSubmissions(input: {
       }
       if (!isCurrent()) break;
       input.queue.acknowledge(item.queueItemId);
+      await input.queue.whenPersisted();
       succeeded += 1;
       if (item.kind === 'driver_event' && isTerminalStopDriverEvent(item) && item.event.deliveryStopId != null) {
         serverConfirmedStopIds.add(item.event.deliveryStopId);

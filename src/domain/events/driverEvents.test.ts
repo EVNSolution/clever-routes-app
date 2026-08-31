@@ -346,10 +346,20 @@ describe('driver event API boundary', () => {
 
   it('queues STOP_ARRIVED when the server cannot receive the arrival signal', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
+    const orderedEventContract = {
+      appVersion: '1.2.3',
+      assignmentGeneration: '14',
+      driverContractVersion: 2 as const,
+      expectedRouteVersionId: '44444444-4444-4444-8444-444444444444',
+      versionCode: 21,
+    };
     const result = await recordStopArrivedAfterDeliveryStart({
       deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
       deliveryStopId: 'stop-1',
-      driverEventService: { recordDriverEvent: async () => { throw new Error('network offline'); } },
+      driverEventService: {
+        prepareDriverEvent: (event) => ({ ...event, ...orderedEventContract }),
+        recordDriverEvent: async () => { throw new Error('network offline'); },
+      },
       offlineQueue: queue,
       routePlanId: 'route-1',
     });
@@ -357,14 +367,26 @@ describe('driver event API boundary', () => {
     assert.equal(result.kind, 'queued');
     const pending = queue.listPending()[0];
     assert.equal(pending?.kind === 'driver_event' ? pending.event.eventType : null, 'STOP_ARRIVED');
+    assert.deepEqual(pending?.kind === 'driver_event' ? {
+      appVersion: pending.event.appVersion,
+      assignmentGeneration: pending.event.assignmentGeneration,
+      driverContractVersion: pending.event.driverContractVersion,
+      expectedRouteVersionId: pending.event.expectedRouteVersionId,
+      versionCode: pending.event.versionCode,
+    } : null, orderedEventContract);
   });
 
   it('queues route started when the live event submission fails', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
+    const orderedEventContract = {
+      appVersion: '1.2.3', assignmentGeneration: '14', driverContractVersion: 2 as const,
+      expectedRouteVersionId: '44444444-4444-4444-8444-444444444444', versionCode: 21,
+    };
 
     const result = await recordRouteStartedAfterDeliveryStart({
       deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
       driverEventService: {
+        prepareDriverEvent: (event) => ({ ...event, ...orderedEventContract }),
         recordDriverEvent: async () => {
           throw new Error('network offline');
         },
@@ -379,6 +401,13 @@ describe('driver event API boundary', () => {
     assert.equal(pending.length, 1);
     assert.equal(pending[0]?.kind, 'driver_event');
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'ROUTE_STARTED');
+    assert.deepEqual(pending[0]?.kind === 'driver_event' ? {
+      appVersion: pending[0].event.appVersion,
+      assignmentGeneration: pending[0].event.assignmentGeneration,
+      driverContractVersion: pending[0].event.driverContractVersion,
+      expectedRouteVersionId: pending[0].event.expectedRouteVersionId,
+      versionCode: pending[0].event.versionCode,
+    } : null, orderedEventContract);
   });
 
   it('queues route started with re-lookup guidance when live driver event returns unauthorized', async () => {
@@ -506,9 +535,14 @@ describe('driver event API boundary', () => {
 
   it('queues PICKUP_COMPLETED when a recorded response omits etaSnapshot', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
+    const orderedEventContract = {
+      appVersion: '1.2.3', assignmentGeneration: '14', driverContractVersion: 2 as const,
+      expectedRouteVersionId: '44444444-4444-4444-8444-444444444444', versionCode: 21,
+    };
     const service = createDriverEventsApiClient({
       accessToken: 'fixture-driver-access-token',
       baseUrl: 'https://delivery.example.com',
+      orderedEventContract,
       fetchImpl: async () => ({
         ok: true,
         status: 202,
@@ -534,5 +568,12 @@ describe('driver event API boundary', () => {
     const pending = queue.listPending();
     assert.equal(pending.length, 1);
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'PICKUP_COMPLETED');
+    assert.deepEqual(pending[0]?.kind === 'driver_event' ? {
+      appVersion: pending[0].event.appVersion,
+      assignmentGeneration: pending[0].event.assignmentGeneration,
+      driverContractVersion: pending[0].event.driverContractVersion,
+      expectedRouteVersionId: pending[0].event.expectedRouteVersionId,
+      versionCode: pending[0].event.versionCode,
+    } : null, orderedEventContract);
   });
 });

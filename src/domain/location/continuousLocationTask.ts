@@ -5,6 +5,7 @@ import type {
 import type { DriverAuthService } from '../driverAuth/driverAuth';
 import {
   createRouteStartedDriverEvent,
+  prepareDriverEventForPersistence,
   type DriverEventService,
 } from '../events/driverEvents';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
@@ -94,10 +95,13 @@ export async function processContinuousLocationTaskBatch(input: {
   });
   let routeStartReady = persistedAccess.activeRouteSession.routeStartedRecordedAt !== undefined;
   if (!routeStartReady) {
-    const routeStartedEvent = createRouteStartedDriverEvent({
-      occurredAt: new Date(sessionGeneration),
-      routePlanId,
-    });
+    const routeStartedEvent = prepareDriverEventForPersistence(
+      driverEventService,
+      createRouteStartedDriverEvent({
+        occurredAt: new Date(sessionGeneration),
+        routePlanId,
+      }),
+    );
     try {
       await driverEventService.recordDriverEvent(routeStartedEvent);
       routeStartReady = await input.driverAccessTokenStore.markActiveRouteStarted(routePlanId, sessionGeneration);

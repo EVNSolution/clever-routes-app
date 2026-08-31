@@ -471,6 +471,61 @@ describe('offline submission queue', () => {
     assert.equal(queue.listPending().length, 1);
   });
 
+  it('durably ACKs each accepted prefix before attempting the next queued event', async () => {
+    let releaseFirstAckPersistence: () => void = () => undefined;
+    const firstAckPersistenceGate = new Promise<void>((resolve) => {
+      releaseFirstAckPersistence = resolve;
+    });
+    let holdFirstAckPersistence = true;
+    const storage = createMemoryStorage();
+    const originalSetItem = storage.setItem;
+    storage.setItem = async (key, value) => {
+      if (holdFirstAckPersistence && value.includes('"state":"ACKNOWLEDGED"')) {
+        holdFirstAckPersistence = false;
+        await firstAckPersistenceGate;
+      }
+      await originalSetItem(key, value);
+    };
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    for (const [clientEventId, deliveryStopId] of [['durable-ack-1', 'stop-1'], ['durable-ack-2', 'stop-2']] as const) {
+      queue.enqueueDriverEvent({
+        appVersion: '1.2.3', assignmentGeneration: '14', clientEventId, deliveryStopId,
+        driverContractVersion: 2, eventType: 'STOP_DELIVERED',
+        expectedRouteVersionId: '44444444-4444-4444-8444-444444444444',
+        occurredAt: new Date('2026-08-31T06:30:00.000Z'), routePlanId: 'route-durable-ack', versionCode: 21,
+      });
+    }
+    await queue.whenPersisted();
+
+    const attempts: string[] = [];
+    const retry = retryOfflineSubmissions({
+      driverEventService: {
+        recordDriverEvent: async (event) => {
+          attempts.push(event.clientEventId);
+          if (attempts.length === 2) throw new Error('simulated interruption after persisted prefix');
+          return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+        },
+      },
+      proofMediaUploadService: createMockProofMediaUploadService(),
+      queue,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(attempts, ['durable-ack-1']);
+    releaseFirstAckPersistence();
+    assert.deepEqual(await retry, {
+      discarded: 0,
+      failed: 1,
+      retried: 2,
+      serverConfirmedStopIds: ['stop-1'],
+      succeeded: 1,
+    });
+    await queue.whenPersisted();
+
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    assert.deepEqual(restarted.listPending().map((item) => item.queueItemId), ['driver-event:durable-ack-2']);
+  });
+
   it('handles an abort-ignoring late proof rejection without an unhandled rejection or state mutation', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueProofMediaUpload({
