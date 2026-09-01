@@ -6445,13 +6445,16 @@ function RouteSessionScreen({
             <View style={styles.routeSessionEtaRows}>
               {currentTaskEtaFailure !== null ? (
                 <Text style={styles.currentTaskEtaWarningText}>{currentTaskEtaFailure}</Text>
-              ) : null}
-              {currentTaskNextStopEta !== null ? (
-                <Text style={styles.currentTaskEtaText}>Estimated arrival time at next stop: {currentTaskNextStopEta}</Text>
-              ) : null}
-              {currentTaskRouteCompletionEta !== null ? (
-                <Text style={styles.currentTaskEtaText}>Estimated completion time: {currentTaskRouteCompletionEta}</Text>
-              ) : null}
+              ) : (
+                <>
+                  {currentTaskNextStopEta !== null ? (
+                    <Text style={styles.currentTaskEtaText}>Estimated arrival time at next stop: {currentTaskNextStopEta}</Text>
+                  ) : null}
+                  {currentTaskRouteCompletionEta !== null ? (
+                    <Text style={styles.currentTaskEtaText}>Estimated completion time: {currentTaskRouteCompletionEta}</Text>
+                  ) : null}
+                </>
+              )}
             </View>
           ) : null}
         </View>
