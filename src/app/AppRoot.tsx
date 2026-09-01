@@ -289,7 +289,9 @@ type RouteLoadOptions = {
 };
 
 const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
-const DRIVER_CONSENT_DOCUMENT_URL = 'https://clever-route-api.cleversystem.ai/privacy';
+const ROUTES_APP_PRIVACY_URL = 'https://clever-route-api.cleversystem.ai/routes-app/privacy';
+const ROUTES_APP_SUPPORT_URL = 'https://clever-route-api.cleversystem.ai/routes-app/support';
+const ROUTES_APP_ACCOUNT_DELETION_URL = 'https://clever-route-api.cleversystem.ai/routes-app/account-deletion';
 const ROUTES_APP_UPDATE_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 const DRIVER_RESTORE_LOADING_TIMEOUT_MS = 8_000;
 const PULL_REFRESH_DRAG_RESISTANCE = 0.72;
@@ -957,8 +959,20 @@ function DriverApp() {
   }
 
   function handleOpenConsentDocument(): void {
-    void Linking.openURL(DRIVER_CONSENT_DOCUMENT_URL).catch(() => {
+    void Linking.openURL(ROUTES_APP_PRIVACY_URL).catch(() => {
       setMessage('Policy document could not be opened.');
+    });
+  }
+
+  function handleOpenSupport(): void {
+    void Linking.openURL(ROUTES_APP_SUPPORT_URL).catch(() => {
+      setMessage('Support information could not be opened.');
+    });
+  }
+
+  function handleOpenAccountDeletionInformation(): void {
+    void Linking.openURL(ROUTES_APP_ACCOUNT_DELETION_URL).catch(() => {
+      setMessage('Account deletion information could not be opened.');
     });
   }
 
@@ -5445,7 +5459,9 @@ function DriverApp() {
               isLoadingAccountProfile={isLoadingAccountProfile}
               isRequestingAccountDeletion={isRequestingAccountDeletion}
               onEditName={handleOpenAccountName}
+              onOpenAccountDeletionInformation={handleOpenAccountDeletionInformation}
               onOpenConsentDocument={handleOpenConsentDocument}
+              onOpenSupport={handleOpenSupport}
               onLogout={handleLogout}
               onRequestAccountDeletion={handleRequestAccountDeletion}
               onResetDefaultMapApp={handleResetDefaultMapApp}
@@ -6003,7 +6019,9 @@ function SettingsPage({
   isLoadingAccountProfile,
   isRequestingAccountDeletion,
   onEditName,
+  onOpenAccountDeletionInformation,
   onOpenConsentDocument,
+  onOpenSupport,
   onLogout,
   onRequestAccountDeletion,
   onResetDefaultMapApp,
@@ -6016,7 +6034,9 @@ function SettingsPage({
   isLoadingAccountProfile: boolean;
   isRequestingAccountDeletion: boolean;
   onEditName(): void;
+  onOpenAccountDeletionInformation(): void;
   onOpenConsentDocument(): void;
+  onOpenSupport(): void;
   onLogout(): void;
   onRequestAccountDeletion(): void;
   onResetDefaultMapApp(): void;
@@ -6119,6 +6139,19 @@ function SettingsPage({
       <View style={styles.settingsSection}>
         <Text style={styles.settingsSectionLabel}>ABOUT</Text>
         <View style={styles.settingsGroup}>
+          <Pressable
+            accessibilityLabel="Open Support"
+            accessibilityRole="button"
+            onPress={onOpenSupport}
+            style={({ pressed }) => [
+              styles.settingsRow,
+              styles.settingsRowSeparated,
+              pressed && styles.settingsRowPressed,
+            ]}
+          >
+            <Text style={styles.settingsRowLabel}>Support</Text>
+            <Ionicons color="#a1a7b0" name="chevron-forward" size={20} />
+          </Pressable>
           <View style={styles.settingsRow}>
             <Text style={styles.settingsRowLabel}>Version</Text>
             <Text style={styles.settingsRowValue}>{appVersion}</Text>
@@ -6128,6 +6161,19 @@ function SettingsPage({
 
       <View style={styles.settingsSection}>
         <Text style={styles.settingsSectionLabel}>ACCOUNT ACTIONS</Text>
+        <Pressable
+          accessibilityLabel="Read Account Deletion Information"
+          accessibilityRole="button"
+          onPress={onOpenAccountDeletionInformation}
+          style={({ pressed }) => [
+            styles.settingsGroup,
+            styles.settingsRow,
+            pressed && styles.settingsRowPressed,
+          ]}
+        >
+          <Text style={styles.settingsRowLabel}>Account Deletion Information</Text>
+          <Ionicons color="#a1a7b0" name="chevron-forward" size={20} />
+        </Pressable>
         <Pressable
           accessibilityLabel="Delete Account"
           accessibilityRole="button"

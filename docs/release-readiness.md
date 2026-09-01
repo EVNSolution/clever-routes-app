@@ -6,18 +6,29 @@ This document tracks the non-code evidence needed before a production iOS/Androi
 
 ## Distribution decision
 
-The app targets native iPhone and Android phone runtime. Android uses the
-existing direct APK channel temporarily, and the owner intends to move to Google
-Play in one later migration. `eas.json` still defines the store build-profile
-scaffolding for that migration:
+The app targets native iPhone and Android phone runtime. The existing direct APK
+channel remains the fallback until the Google Play production release is live.
+The current Android candidate is promoted as one immutable AAB through Play
+internal testing and production review; it is not rebuilt between tracks.
+`eas.json` defines the store build profile used for that candidate:
 
-- Current Android channel: stable `/routes-app` browser handoff to the managed
+- Android fallback channel: stable `/routes-app` browser handoff to the managed
   `clever-routes-latest.apk` file
-- Later Android channel: Google Play testing or production track
+- Android store channel: Google Play internal testing, then production review
 - iOS channel: App Store/TestFlight or an approved private distribution path
 - Apple Business Manager Custom Apps and managed Google Play/private app for restricted driver distribution
 
 Do not add final store listing copy, screenshots, signing ownership, or public license terms without an explicit owner decision. `docs/store-privacy-disclosure-draft.md` is a non-final worksheet for owner/legal review only.
+
+### CLEVER Routes public release URLs
+
+- Privacy: `https://clever-route-api.cleversystem.ai/routes-app/privacy`
+- Support: `https://clever-route-api.cleversystem.ai/routes-app/support`
+- Account deletion: `https://clever-route-api.cleversystem.ai/routes-app/account-deletion`
+
+All three pages are server-owned public documents. The app opens them from
+Settings. The authenticated in-app deletion action remains a separate server
+request flow and signs the driver out after the server accepts the request.
 
 ### Direct Android update contract
 
@@ -139,7 +150,7 @@ Do not use `expo run:android` or a Development Build as Android QA evidence. Tho
 
 `cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied
 to committed source. `cli.appVersionSource` is `remote`; the reviewed native
-source version is `1.2.6` (`versionCode` `24`, iOS build `1`). Publication is
+source version is `1.2.7` (`versionCode` `25`, iOS build `1`). Publication is
 proved separately by the public release manifest and downloadable artifact,
 not by this source document. A local self-contained smoke APK is verification
 input, not publication evidence. Future production store builds use
@@ -211,12 +222,13 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 
 - Foreground location use: active delivery route tracking and location updates.
 - Background location use: only after delivery start and only when native background tracking is enabled.
-- Camera/photos: proof-of-delivery photo capture/upload.
+- Camera/photos: proof-of-delivery photo capture/upload. Android library selection uses the system photo picker and the final bundle must not carry `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`, `READ_EXTERNAL_STORAGE`, or `WRITE_EXTERNAL_STORAGE`.
 - Contacts/address book: current app uses manual E.164 phone entry and should not request Contacts permissions unless a future owner-approved feature changes that. `npm run check:native-release` rejects source-controlled Android Contacts permissions or iOS Contacts usage descriptions before EAS evidence builds.
 - Driver identifiers: E.164 phone account, server-issued account/refresh and route-scoped access tokens, route assignment identifiers.
 - Proof media: photo file, signature metadata, and related stop/route identifiers.
 - Offline evidence: SQLCipher-encrypted retry payloads and file URI references are separated into workflow, sensitive, quarantine, and location tables; its key is separate in SecureStore and local backups are excluded.
 - Offline evidence policy: location samples can be discarded after five retained attempts, after 72 hours, route completion, or account change. Ordered workflow/proof items are quarantined at retry limits, route conflicts, or sign-out and require explicit reconciliation. Server-rejected proof media remains non-retryable.
+- Account deletion: the authenticated app request is queued by the server, revokes account sessions during processing, removes push-token access, tombstones deletable personal fields, and preserves only legally/operationally retained records. The public deletion page contains no anonymous destructive form; support verifies the requester before an operator processes the server request ID.
 - Server proof-media rejection/retention support: `clever-delivery-server` now has a proof-media scan rejection hook, `DRIVER_PROOF_MEDIA_RETENTION_DAYS`, and `npm run driver:proof-media:cleanup` for local/manual or cron-style cleanup; production object storage, scanner backend, and scheduler deployment evidence are still pending.
 - Support contact: company/operator support contact must be available in route guidance or store support metadata.
 
@@ -238,7 +250,7 @@ stable work items instead of unowned notes:
 | Blocker | Tracking issue | Scope |
 | --- | --- | --- |
 | Physical iOS/Android device smoke evidence for background tracking, proof capture, offline retry/discard, token recovery, and route completion cleanup | EVNSolution/clever-routes-app#72 | Driver app evidence collection |
-| Owner-controlled Expo/EAS project, Apple/Google signing credentials, EAS preview/production environment values, store/private distribution policy, owner/legal-approved privacy disclosure copy, and public license/reuse decision | EVNSolution/clever-routes-app#73 | Native build/distribution approval |
+| Android 1.2.7 production AAB, Play metadata/policy forms, review access, background-location video, exact-artifact device smoke, and pre-launch report | EVNSolution/clever-routes-app#231 | Current Google Play production-readiness work |
 | Production proof-media object storage ownership, signed retrieval/access-control, scanner backend/private evidence storage, and deployed cleanup/scheduler evidence | EVNSolution/clever-delivery-server#71 | Delivery-server proof media hardening |
 
 The baseline context-monorepo service pointer is complete:

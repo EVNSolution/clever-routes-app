@@ -1,4 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
+import { Platform } from 'react-native';
 
 import type {
   ProofPhotoCaptureLaunchResult,
@@ -15,6 +16,10 @@ export function createExpoProofPhotoCaptureService(): ProofPhotoCaptureService {
 }
 
 async function requestImagePickerPermission(source: ProofPhotoCaptureSource): Promise<ProofPhotoCapturePermissionResult> {
+  if (source === 'library' && Platform.OS === 'android') {
+    return 'granted';
+  }
+
   const permission = source === 'camera'
     ? await ImagePicker.requestCameraPermissionsAsync()
     : await ImagePicker.requestMediaLibraryPermissionsAsync();

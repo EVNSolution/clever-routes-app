@@ -58,6 +58,8 @@ test('keeps source-controlled Android versions aligned across Expo and Gradle', 
   const versionCode = Number(androidBuildGradle.match(/\bversionCode\s+(\d+)/u)?.[1]);
   const versionName = androidBuildGradle.match(/\bversionName\s+"([^"]+)"/u)?.[1];
 
+  assert.equal(appConfig.expo?.version, '1.2.7');
+  assert.equal(appConfig.expo?.android?.versionCode, 25);
   assert.equal(appConfig.expo?.ios?.bundleIdentifier, 'com.evnsolution.clever.routes');
   assert.equal(appConfig.expo?.ios?.buildNumber, '1');
   assert.equal(appConfig.expo?.android?.package, 'com.evnsolution.clever.routes');
@@ -195,11 +197,23 @@ test('exposes one reviewed direct Android publisher command', () => {
 });
 
 test('keeps source-controlled native release metadata aligned and minimally privileged', () => {
+  const appConfig = readJson<{
+    expo?: { android?: { blockedPermissions?: string[] } };
+  }>('app.json');
   const androidManifest = readFileSync(resolve(repoRoot, 'android/app/src/main/AndroidManifest.xml'), 'utf8');
   const androidGradleProperties = readFileSync(resolve(repoRoot, 'android/gradle.properties'), 'utf8');
   const iosInfoPlist = readFileSync(resolve(repoRoot, 'ios/CleverRoutes/Info.plist'), 'utf8');
 
   assert.doesNotMatch(androidManifest, /android\.permission\.SYSTEM_ALERT_WINDOW/u);
+  assert.doesNotMatch(
+    androidManifest,
+    /android\.permission\.(?:READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|READ_MEDIA_IMAGES|READ_MEDIA_VIDEO)"(?![^>]*tools:node="remove")/u,
+  );
+  assert.deepEqual(appConfig.expo?.android?.blockedPermissions, [
+    'android.permission.READ_EXTERNAL_STORAGE',
+    'android.permission.RECORD_AUDIO',
+    'android.permission.WRITE_EXTERNAL_STORAGE',
+  ]);
   assert.doesNotMatch(androidGradleProperties, /^expo\.devlauncher\.configureInRelease\s*=\s*true\s*$/mu);
   assert.doesNotMatch(androidGradleProperties, /^expo\.devmenu\.configureInRelease\s*=\s*true\s*$/mu);
   assert.match(iosInfoPlist, /<key>CFBundleShortVersionString<\/key>\s*<string>\$\(MARKETING_VERSION\)<\/string>/u);
