@@ -136,6 +136,7 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const currentTaskEtaFailure = etaSnapshot\?\.status === 'FAILED'[\s\S]*ETA unavailable/u);
     assert.match(componentSource, /const showRouteEtaRows = !isPickupTask[\s\S]*etaSnapshot !== null[\s\S]*etaSnapshot\.status === 'READY' \|\| etaSnapshot\.status === 'FAILED'/u);
     assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*label="Arrive"[\s\S]*label="Navigate"[\s\S]*<\/View>[\s\S]*showRouteEtaRows \? \(/u);
+    assert.match(componentSource, /currentTaskEtaFailure !== null \? \([\s\S]*currentTaskEtaWarningText[\s\S]*\) : \(\s*<>[\s\S]*currentTaskNextStopEta !== null/u);
     assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Estimated arrival time at next stop: \{currentTaskNextStopEta\}<\/Text>/u);
     assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Estimated completion time: \{currentTaskRouteCompletionEta\}<\/Text>/u);
     assert.doesNotMatch(componentSource, /Next stop:|Route complete:|currentTaskNextStopDistance|currentTaskRouteCompletionDistance/u);
