@@ -2214,15 +2214,18 @@ This section supersedes older navigation, icon, and route-list guidance where th
 - Use a quiet iOS-style inset-grouped list: light neutral page background, small uppercase gray section labels, white rounded groups, and thin inset separators.
 - Keep a centered `Settings` title with a circular icon-only back control. The back control must expose the accessibility label `Back`.
 - Show only settings backed by current app state:
-  - `ACCOUNT`: read-only phone number.
+  - `ACCOUNT`: editable global account name and read-only phone number.
   - `CONSENT`: privacy and location status as `Allowed` or `Denied`; each row opens the published policy document.
-  - `ABOUT`: app version.
+  - `ABOUT`: CLEVER Routes support link and app version.
+  - `ACCOUNT ACTIONS`: public account-deletion information and the authenticated deletion request.
   - A standalone destructive `Sign Out` row.
 - Restore the accepted consent state with an authenticated session because that
   session can only be created after both required login consents are accepted.
 - Keep labels and values terse. Do not append consent versions, middle-dot metadata, or explanatory phrases to rows.
 - Do not use dashboard-card borders, elevated shadows, placeholder panels, or explanatory helper paragraphs on this page.
-- Do not add navigation preferences, account deletion, support links, or diagnostic actions until those behaviors and destinations exist.
+- Keep navigation provider choices out of Settings; Android owns the default-handler selection and Settings exposes only its reset action.
+- Open privacy, support, and account-deletion information only at the deployed CLEVER Routes public URLs. Keep the authenticated `Delete Account` action separate from the public explanation link.
+- Do not add diagnostic actions.
 
 ## Driver Naming — Phase 2
 

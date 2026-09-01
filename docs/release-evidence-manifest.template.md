@@ -46,6 +46,9 @@ copy after verification.
 | Evidence storage location | pending |
 | Synthetic data only? | yes / no |
 | Production validation approval reference, if any | pending / n/a |
+| Privacy policy URL | `https://clever-route-api.cleversystem.ai/routes-app/privacy` |
+| Support URL | `https://clever-route-api.cleversystem.ai/routes-app/support` |
+| Account-deletion URL | `https://clever-route-api.cleversystem.ai/routes-app/account-deletion` |
 
 ## Build evidence
 
@@ -105,7 +108,9 @@ Result values: `pass`, `fail`, `blocked`, or `not-run`.
 | Privacy policy URL approved | pending | pending | pending | pending |
 | App Store privacy answers reviewed | pending | pending | pending | pending |
 | Google Play Data safety answers reviewed | pending | pending | pending | pending |
+| Stable synthetic Play review account and assigned route verified | pending | pending | pending | Do not store credentials in git or GitHub |
 | Background location review rationale approved | pending | pending | pending | pending |
+| Background-location demonstration video accepted | pending | pending | pending | Show disclosure, runtime permission, active-route tracking, and tracking stop |
 | Photo/video permission review approved | pending | pending | pending | pending |
 | Google Play minimum-scope permission review completed | pending | pending | pending | Location/photo-video reviewed; Contacts permissions absent in native manifest |
 | Store/private distribution path approved | pending | pending | pending | pending |

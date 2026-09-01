@@ -56,8 +56,8 @@ Runtime source anchors for this worksheet:
 | Company/shop/route guidance | App displays company, shop, route name/date, pickup/support contact. | Usually not user-collected driver data by itself, but route assignment context is linked to driver workflow. | Usually app content/operational data, but route assignment context may be linked to driver. | Confirm whether any displayed support contact is personal data. |
 | Foreground location | App requests while-in-use location only after explicit delivery start and records location update events. | Location / Precise Location, linked to driver, purpose: App Functionality. | Location / Precise location, collected for App functionality. | Confirm whether approximate-only fallback is acceptable for any workflow. |
 | Background-capable location | App can start a named continuous location task after `delivery_active`; native config enables iOS/Android background support. | Location / Precise Location, linked to driver, purpose: App Functionality; disclose background use in review notes. | Location / Precise location and background location declaration; core purpose is active delivery tracking. | Confirm store review justification, in-app prominent disclosure, and production wording. |
-| Camera proof photo | App can launch camera through Expo ImagePicker and upload proof photo media. | User Content / Photos or Videos, linked to driver/stop/route, purpose: App Functionality. | Photos and videos, collected for App functionality. | Confirm if production build uses scoped picker/camera only and avoids broad media library permissions. |
-| Photo library proof attachment | App can attach proof photos from library through Expo ImagePicker. | User Content / Photos or Videos, linked to driver/stop/route, purpose: App Functionality. | Photos and videos, collected for App functionality. | Confirm Android permission manifest after native build and whether Play photo/video declaration is needed. |
+| Camera proof photo | App can launch its in-app Expo Camera surface and upload proof photo media. | User Content / Photos or Videos, linked to driver/stop/route, purpose: App Functionality. | Photos and videos, collected for App functionality. | Confirm the final physical-device camera flow and denial handling. |
+| Photo library proof attachment | App can attach one selected proof photo through the Android system photo picker / Expo ImagePicker. Android does not request `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`, `READ_EXTERNAL_STORAGE`, or `WRITE_EXTERNAL_STORAGE`; picker-granted URI access is limited to the selected item. | User Content / Photos or Videos, linked to driver/stop/route, purpose: App Functionality. | Photos and videos, collected for App functionality; broad photo/video access is not requested. | Confirm the final Play form describes one-time/infrequent picker access rather than broad library access. |
 | Signature proof | App stores signer name plus signature stroke/point counts as metadata, not raw signature image data. | User Content / Other User Content or Other Data; linked to proof event, purpose: App Functionality. | Personal info / Name if signer name is personal data; also app content/proof metadata. | Confirm whether signer name is driver, recipient, or other person and update privacy policy. |
 | Proof media references | Server returns media id, storage key, content type, upload time, optional hash/size; server-side scan rejection hook support exists before accepted media persistence, and rejected proof media is not queued as durable proof. | Identifiers / Other Data linked to proof media and route, purpose: App Functionality. | Files and docs or Other data, collected for App functionality depending on final Play form taxonomy. | Confirm production object storage, signed access, retention, deletion, deployed scanner backend, and monitoring evidence. |
 | Driver events | App sends route/stop events such as route started, location updated, stop delivered/failed, route completed. | Other Data / App Activity depending on final taxonomy; linked to driver, purpose: App Functionality. | App activity and/or Other data, collected for App functionality. | Confirm event retention and support/audit use. |
@@ -82,9 +82,14 @@ Runtime source anchors for this worksheet:
 - Deletion: transient location evidence can be cleared by route completion,
   account change, retry limit, or the 72-hour age limit. Ordered workflow and
   proof evidence is quarantined at retry limits or sign-out until explicit
-  reconciliation; proof-media scan rejection remains non-retryable. Server-side
-  deletion/retention is not production-final until proof-media storage and
-  scheduled cleanup evidence are approved.
+  reconciliation; proof-media scan rejection remains non-retryable. The server
+  now queues authenticated account-deletion requests, revokes account sessions
+  during processing, removes push tokens, tombstones deletable personal fields,
+  and retains only records required for legal or operational purposes. Public
+  guidance is available at
+  `https://clever-route-api.cleversystem.ai/routes-app/account-deletion`; it does
+  not expose an anonymous destructive form. Production proof-media object
+  storage and scanner evidence remain separate release follow-up work.
 
 ## Store review notes to prepare
 
@@ -133,9 +138,18 @@ support feature needs contact selection, open a new issue first and prefer the
 minimum-scope system contact picker or equivalent alternative instead of broad
 Contacts permission.
 
+## Published CLEVER Routes documents
+
+- Privacy: `https://clever-route-api.cleversystem.ai/routes-app/privacy`
+- Support: `https://clever-route-api.cleversystem.ai/routes-app/support`
+- Account deletion: `https://clever-route-api.cleversystem.ai/routes-app/account-deletion`
+
+These URLs are deployed inputs for app and store metadata. Owner/legal must
+still approve the final disclosure answers entered in Google Play Console.
+
 ## Pre-submission blockers
 
-- Owner-approved privacy policy URL naming EVNSolution / CLEVER Routes.
+- Owner/legal approval of the live CLEVER Routes privacy wording and final Play answers.
 - App Store Connect App Privacy answers reviewed against the final build.
 - Google Play Data safety answers reviewed against the final build.
 - Google Play background location declaration, if production Android build keeps
@@ -143,7 +157,6 @@ Contacts permission.
 - Google Play minimum-scope permission review completed for location,
   photo/video, and Contacts permissions; current app should not request Contacts
   permissions.
-- Production proof-media object storage, signed access, scanner backend deployment
-  evidence, and scheduled cleanup evidence.
+- Production proof-media object storage, signed access, and scanner backend deployment evidence.
 - Physical iOS/Android device smoke matrix in `docs/release-readiness.md`.
 - App Store / Play Store or private distribution path decision.

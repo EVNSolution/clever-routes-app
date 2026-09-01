@@ -55,8 +55,12 @@ describe('Settings page behavior', () => {
     assert.match(settingsPage, />Reset Default Map App</u);
     assert.match(settingsPage, /onPress=\{onResetDefaultMapApp\}/u);
     assert.match(settingsPage, />ABOUT</u);
+    assert.match(settingsPage, /accessibilityLabel="Open Support"/u);
+    assert.match(settingsPage, /onPress=\{onOpenSupport\}/u);
     assert.match(settingsPage, />Version</u);
     assert.match(settingsPage, />ACCOUNT ACTIONS</u);
+    assert.match(settingsPage, /accessibilityLabel="Read Account Deletion Information"/u);
+    assert.match(settingsPage, /onPress=\{onOpenAccountDeletionInformation\}/u);
     assert.match(settingsPage, /accessibilityLabel="Delete Account"/u);
     assert.match(settingsPage, /onPress=\{onRequestAccountDeletion\}/u);
     assert.match(settingsPage, /accessibilityLabel="Sign Out"/u);
@@ -87,12 +91,38 @@ describe('Settings page behavior', () => {
   it('opens the published policy and restores consent for an authenticated session', () => {
     const source = readFileSync(appRootPath, 'utf8');
 
-    assert.match(source, /DRIVER_CONSENT_DOCUMENT_URL/u);
-    assert.match(source, /Linking\.openURL\(DRIVER_CONSENT_DOCUMENT_URL\)/u);
+    assert.match(
+      source,
+      /ROUTES_APP_PRIVACY_URL = 'https:\/\/clever-route-api\.cleversystem\.ai\/routes-app\/privacy'/u,
+    );
+    assert.match(
+      source,
+      /ROUTES_APP_SUPPORT_URL = 'https:\/\/clever-route-api\.cleversystem\.ai\/routes-app\/support'/u,
+    );
+    assert.match(
+      source,
+      /ROUTES_APP_ACCOUNT_DELETION_URL = 'https:\/\/clever-route-api\.cleversystem\.ai\/routes-app\/account-deletion'/u,
+    );
+    assert.match(source, /Linking\.openURL\(ROUTES_APP_PRIVACY_URL\)/u);
+    assert.match(source, /Linking\.openURL\(ROUTES_APP_SUPPORT_URL\)/u);
+    assert.match(source, /Linking\.openURL\(ROUTES_APP_ACCOUNT_DELETION_URL\)/u);
     assert.match(
       source,
       /setAcceptedPrivacy\(true\);\s+setAcceptedLocation\(true\);\s+setScreen\('mainTabs'\);\s+setIsDriverRestoreComplete\(true\);\s+await handleLoginAndLoadRoutes/u,
     );
+  });
+
+  it('uses the Android system photo picker without requesting broad media access', () => {
+    const photoCaptureSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../platform/expo/camera/expoProofPhotoCaptureService.ts'),
+      'utf8',
+    );
+
+    assert.match(
+      photoCaptureSource,
+      /source === 'library' && Platform\.OS === 'android'\) \{\s+return 'granted';/u,
+    );
+    assert.match(photoCaptureSource, /ImagePicker\.launchImageLibraryAsync/u);
   });
 
   it('edits the global CLEVER Routes account name on a dedicated page', () => {
