@@ -9,8 +9,8 @@ describe('route map geojson model', () => {
     const model = buildRouteMapGeoJson(sampleAssignedRoute);
 
     assert.notEqual(model, null);
-    assert.deepEqual(model?.depotFeature.geometry.coordinates, sampleAssignedRoute.routeGeometry?.coordinates[0]);
-    assert.equal(model?.depotFeature.properties.label, 'D');
+    assert.deepEqual(model?.depotFeature?.geometry.coordinates, sampleAssignedRoute.routeGeometry?.coordinates[0]);
+    assert.equal(model?.depotFeature?.properties.label, 'D');
     assert.deepEqual(model?.stopCollection.features.map((feature) => feature.properties.label), ['1', '2']);
     assert.deepEqual(model?.stopCollection.features.map((feature) => feature.geometry.coordinates), [
       [-79.3817, 43.6487],
@@ -172,7 +172,32 @@ describe('route map geojson model', () => {
     assert.equal(readDriverMapStyleUrl('  https://maps.example.com/style.json  '), 'https://maps.example.com/style.json');
   });
 
-  it('does not render an interactive map when route geometry is missing', () => {
-    assert.equal(buildRouteMapGeoJson({ ...sampleAssignedRoute, routeGeometry: null }), null);
+  it('renders confirmed stop coordinates without inventing a route line when geometry is missing', () => {
+    const model = buildRouteMapGeoJson({
+      ...sampleAssignedRoute,
+      routeGeometry: null,
+      routeStopPoints: [],
+      stops: sampleAssignedRoute.stops.map((stop, index) => index === 1
+        ? { ...stop, coordinates: null }
+        : stop),
+    });
+
+    assert.notEqual(model, null);
+    assert.equal(model?.depotFeature, null);
+    assert.equal(model?.routeFeature, null);
+    assert.deepEqual(model?.excludedStopSequences, [2]);
+    assert.deepEqual(model?.stopCollection.features.map((feature) => feature.properties.sequence), [1]);
+  });
+
+  it('does not render an interactive map when no stop location can be confirmed', () => {
+    assert.equal(buildRouteMapGeoJson({
+      ...sampleAssignedRoute,
+      routeGeometry: null,
+      routeStopPoints: [],
+      stops: sampleAssignedRoute.stops.map((stop) => ({
+        ...stop,
+        coordinates: { latitude: 0, longitude: 0 },
+      })),
+    }), null);
   });
 });

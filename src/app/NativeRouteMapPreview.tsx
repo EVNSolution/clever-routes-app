@@ -12,7 +12,7 @@ import {
 import * as Location from 'expo-location';
 import type { Feature, FeatureCollection, Point } from 'geojson';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { AssignedRoute } from '../domain/route/assignedRoute';
 import { buildRouteLegFeature, buildRouteMapGeoJson, buildRouteProgressFeature, groupRouteStopFeaturesByCoordinate, type RouteMapGeoJsonModel } from './routeMapGeoJson';
@@ -616,6 +616,11 @@ export function NativeRouteMapPreview({
           </GeoJSONSource>
         ) : null}
       </Map>
+      {model !== null && model.excludedStopSequences.length > 0 ? (
+        <View accessibilityRole="text" pointerEvents="none" style={styles.excludedStopNotice}>
+          <Text style={styles.excludedStopNoticeText}>{formatExcludedStopMessage(model.excludedStopSequences)}</Text>
+        </View>
+      ) : null}
       <View pointerEvents="box-none" style={styles.mapControls}>
         <Pressable
           accessibilityLabel="Center on next destination"
@@ -662,17 +667,21 @@ function buildRouteMarkerCollection(
   currentStepIndex: number,
   currentStopSequence: number | null,
 ): FeatureCollection<Point, RouteMarkerProperties> {
-  return {
-    type: 'FeatureCollection',
-    features: [
-      {
+  const depotMarker: Feature<Point, RouteMarkerProperties>[] = model.depotFeature === null
+    ? []
+    : [{
         ...model.depotFeature,
         properties: {
           ...model.depotFeature.properties,
           groupSize: 1,
           markerState: currentStepIndex > 0 ? 'completed' : 'current',
         },
-      },
+      }];
+
+  return {
+    type: 'FeatureCollection',
+    features: [
+      ...depotMarker,
       ...groupRouteStopFeaturesByCoordinate(model.stopCollection.features).map((group): Feature<Point, RouteMarkerProperties> => {
         const sequences = group.features.map((feature) => feature.properties.sequence);
         const firstFeature = group.features[0];
@@ -705,21 +714,22 @@ function buildRouteMarkerCollection(
 function getCurrentDestinationCoordinate(
   model: RouteMapGeoJsonModel,
   currentStopSequence: number | null,
-): RouteCoordinate {
+): RouteCoordinate | null {
   if (currentStopSequence === null) {
-    return model.depotFeature.geometry.coordinates as RouteCoordinate;
+    return model.depotFeature?.geometry.coordinates as RouteCoordinate | undefined ?? null;
   }
 
-  return (model.stopCollection.features.find((feature) => feature.properties.sequence === currentStopSequence)?.geometry.coordinates
-    ?? model.depotFeature.geometry.coordinates) as RouteCoordinate;
+  return model.stopCollection.features.find(
+    (feature) => feature.properties.sequence === currentStopSequence,
+  )?.geometry.coordinates as RouteCoordinate | undefined ?? null;
 }
 
 function getCurrentDestinationFocusCoordinate(
   model: RouteMapGeoJsonModel,
   currentStopSequence: number | null,
-): RouteCoordinate {
+): RouteCoordinate | null {
   const deliveryCoordinate = getCurrentDestinationCoordinate(model, currentStopSequence);
-  if (currentStopSequence === null) {
+  if (deliveryCoordinate === null || currentStopSequence === null) {
     return deliveryCoordinate;
   }
 
@@ -734,6 +744,12 @@ function getCurrentDestinationFocusCoordinate(
     (deliveryCoordinate[0] + snappedCoordinate[0]) / 2,
     (deliveryCoordinate[1] + snappedCoordinate[1]) / 2,
   ];
+}
+
+function formatExcludedStopMessage(sequences: number[]): string {
+  return sequences.length === 1
+    ? `Stop ${sequences[0]} was excluded from the map because its location could not be confirmed.`
+    : `Stops ${sequences.join(', ')} were excluded from the map because their locations could not be confirmed.`;
 }
 
 function buildCurrentTripBounds(
@@ -762,6 +778,24 @@ const styles = StyleSheet.create({
   },
   map: {
     flex: 1,
+  },
+  excludedStopNotice: {
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    borderColor: '#d0d5dd',
+    borderRadius: 10,
+    borderWidth: 1,
+    bottom: 16,
+    left: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    position: 'absolute',
+    right: 76,
+  },
+  excludedStopNoticeText: {
+    color: '#344054',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
   },
   mapControlButton: {
     alignItems: 'center',

@@ -19,7 +19,8 @@ export type RouteStopFeatureGroup = {
 
 export type RouteMapGeoJsonModel = {
   bounds: [west: number, south: number, east: number, north: number];
-  depotFeature: RouteDepotFeature;
+  depotFeature: RouteDepotFeature | null;
+  excludedStopSequences: number[];
   routeFeature: RouteLineFeature | null;
   snappedStopCollection: RouteSnappedStopFeatureCollection;
   stopCollection: RouteStopFeatureCollection;
@@ -38,20 +39,18 @@ export function readDriverMapStyleUrl(value: string | null | undefined): string 
 
 export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel | null {
   const routeCoordinates = normalizeRouteCoordinates(route.routeGeometry?.coordinates ?? []);
-  if (routeCoordinates.length < 2) {
-    return null;
-  }
-
   const routeStopPointsById = new Map(route.routeStopPoints.map((point) => [point.deliveryStopId, point]));
   const snappedStopFeatures: RouteSnappedStopFeature[] = [];
 
   const stopFeatures: RouteStopFeature[] = route.stops
     .map((stop): RouteStopFeature | null => {
       const routeStopPoint = routeStopPointsById.get(stop.deliveryStopId);
-      const coordinates = readStopLngLat(stop.coordinates)
-        ?? routeStopPoint?.inputCoordinates
-        ?? routeStopPoint?.snappedCoordinates;
-      if (!isRenderableLngLat(coordinates)) {
+      const coordinates = [
+        readStopLngLat(stop.coordinates),
+        routeStopPoint?.inputCoordinates ?? null,
+        routeStopPoint?.snappedCoordinates ?? null,
+      ].find(isRenderableLngLat) ?? null;
+      if (coordinates === null) {
         return null;
       }
 
@@ -89,23 +88,29 @@ export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel
     .filter((feature): feature is RouteStopFeature => feature !== null)
     .sort((left, right) => left.properties.sequence - right.properties.sequence);
 
-  const depotCoordinates = routeCoordinates[0];
-  const depotFeature: RouteDepotFeature = {
-    type: 'Feature',
-    geometry: {
-      type: 'Point',
-      coordinates: depotCoordinates,
-    },
-    properties: {
-      kind: 'depot',
-      label: 'D',
-      sequence: 0,
-    },
-  };
+  const hasRouteGeometry = routeCoordinates.length >= 2;
+  if (!hasRouteGeometry && stopFeatures.length === 0) {
+    return null;
+  }
+
+  const depotCoordinates = hasRouteGeometry ? routeCoordinates[0] ?? null : null;
+  const depotFeature: RouteDepotFeature | null = depotCoordinates === null
+    ? null
+    : {
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: depotCoordinates,
+        },
+        properties: {
+          kind: 'depot',
+          label: 'D',
+          sequence: 0,
+        },
+      };
 
   const bounds = calculateBounds([
-    ...routeCoordinates,
-    depotCoordinates,
+    ...(hasRouteGeometry ? routeCoordinates : []),
     ...stopFeatures.map((feature) => feature.geometry.coordinates as AssignedRouteLngLat),
     ...snappedStopFeatures.map((feature) => feature.geometry.coordinates as AssignedRouteLngLat),
   ]);
@@ -116,7 +121,10 @@ export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel
   return {
     bounds,
     depotFeature,
-    routeFeature: hasRoadFollowingGeometry(routeCoordinates, stopFeatures.length)
+    excludedStopSequences: route.stops
+      .filter((stop) => !stopFeatures.some((feature) => feature.properties.sequence === stop.sequence))
+      .map((stop) => stop.sequence),
+    routeFeature: hasRouteGeometry && hasRoadFollowingGeometry(routeCoordinates, stopFeatures.length)
       ? {
           type: 'Feature',
           geometry: {
@@ -286,7 +294,7 @@ function readStopLngLat(coordinates: AssignedRoute['stops'][number]['coordinates
 
 function calculateBounds(coordinates: AssignedRouteLngLat[]): RouteMapGeoJsonModel['bounds'] | null {
   const renderableCoordinates = coordinates.filter(isRenderableLngLat);
-  if (renderableCoordinates.length < 2) {
+  if (renderableCoordinates.length === 0) {
     return null;
   }
 
@@ -370,6 +378,7 @@ function isRenderableLngLat(value: unknown): value is AssignedRouteLngLat {
     value[0] >= -180 &&
     value[0] <= 180 &&
     value[1] >= -90 &&
-    value[1] <= 90
+    value[1] <= 90 &&
+    !(value[0] === 0 && value[1] === 0)
   );
 }

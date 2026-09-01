@@ -217,7 +217,7 @@ import {
 import { NativeRouteMapPreview } from './NativeRouteMapPreview';
 import { getBottomChromeOffset, getBottomChromePadding } from './appLayoutMetrics';
 import { formatRouteListUpdatedAt } from './routeListBehavior';
-import { readDriverMapStyleUrl } from './routeMapGeoJson';
+import { buildRouteMapGeoJson, readDriverMapStyleUrl } from './routeMapGeoJson';
 import { ROUTE_VISUAL_STATE_COLORS, ROUTE_VISUAL_STATE_SURFACES } from './routeVisualState';
 import { splitStopItemName } from './stopItemDisplay';
 import { buildRouteInventory } from './routeInventory';
@@ -7330,7 +7330,8 @@ function MapOverview({
   showUserLocation?: boolean;
 }) {
   const previewKey = route.routeMapPreview?.imageUrl ?? null;
-  const interactiveMapKey = `${mapStyleUrl}:${route.id}:${route.routeGeometry?.coordinates.length ?? 0}:${showUserLocation ? 'live' : 'preview'}`;
+  const interactiveMapModel = useMemo(() => buildRouteMapGeoJson(route), [route]);
+  const interactiveMapKey = `${mapStyleUrl}:${route.id}:${route.routeGeometry?.coordinates.length ?? 0}:${interactiveMapModel?.stopCollection.features.length ?? 0}:${showUserLocation ? 'live' : 'preview'}`;
   const [previewLoadState, setPreviewLoadState] = useState<{ key: string | null; status: 'failed' } | null>(null);
   const [interactiveMapState, setInteractiveMapState] = useState<{ key: string; status: 'failed' } | null>(null);
   const previewLoadStatus = previewLoadState?.key === previewKey ? previewLoadState.status : 'idle';
@@ -7346,7 +7347,7 @@ function MapOverview({
   }, [interactiveMapKey]);
   const canvasStyle = [styles.mapCanvas, styles.routeSessionMapCanvas];
 
-  if (interactiveMapStatus === 'idle' && (showUserLocation || (route.routeGeometry !== null && route.routeGeometry.coordinates.length >= 2))) {
+  if (interactiveMapStatus === 'idle' && (showUserLocation || interactiveMapModel !== null)) {
     return (
       <View style={canvasStyle}>
         <NativeRouteMapPreview
@@ -7380,27 +7381,9 @@ function MapOverview({
   }
 
   return (
-    <View style={canvasStyle}>
-      <View style={[styles.mapBlock, styles.mapBlockOne]} />
-      <View style={[styles.mapBlock, styles.mapBlockTwo]} />
-      <View style={[styles.mapRoad, styles.mapRoadOne]} />
-      <View style={[styles.mapRoad, styles.mapRoadTwo]} />
-      <View style={[styles.mapRouteLine, styles.mapRouteLineOne]} />
-      <View style={[styles.mapRouteLine, styles.mapRouteLineTwo]} />
-      {route.stops.slice(0, 3).map((stop, index) => {
-        const isCurrentStop = currentStepIndex === index + 1;
-
-        return (
-          <View key={stop.deliveryStopId} style={[styles.mapMarker, getMapMarkerStyle(index), isCurrentStop && styles.mapMarkerCurrent]}>
-            <Text style={styles.mapMarkerText}>{stop.sequence}</Text>
-          </View>
-        );
-      })}
-      <View style={styles.mapLastMarker}><Text style={styles.mapLastMarkerText}>{currentStepIndex >= route.stops.length ? 'Last' : currentStepIndex === COMPANY_STEP_INDEX ? 'Pickup' : `Stop ${currentStepIndex}`}</Text></View>
-      <View style={styles.mapPreviewFallback}>
-        <Text style={styles.mapPreviewFallbackTitle}>Route preview</Text>
-        <Text style={styles.mapPreviewFallbackText}>{previewState.message}</Text>
-      </View>
+    <View accessibilityRole="text" style={styles.mapUnavailable}>
+      <Text style={styles.mapUnavailableTitle}>Map unavailable</Text>
+      <Text style={styles.mapUnavailableText}>{previewState.message}</Text>
     </View>
   );
 }
@@ -7907,16 +7890,6 @@ function formatStopCount(count: number): string {
 
 function formatLocalCompletedTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function getMapMarkerStyle(index: number) {
-  const positions = [
-    { left: '18%', top: '26%' },
-    { left: '47%', top: '38%' },
-    { left: '64%', top: '52%' },
-  ] as const;
-
-  return positions[index] ?? positions[positions.length - 1];
 }
 
 function getFileNameFromUri(uri: string, deliveryStopId: string): string {
@@ -8919,7 +8892,6 @@ const styles = StyleSheet.create({
   },
   routeSessionMap: {
     backgroundColor: '#f3f8fb',
-    height: 430,
     overflow: 'hidden',
   },
   routeSessionMapCanvas: {
@@ -9178,142 +9150,26 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
     textTransform: 'uppercase',
   },
-  mapPreviewFallback: {
-    backgroundColor: 'rgba(255, 255, 255, 0.92)',
-    borderColor: '#d0d5dd',
-    borderRadius: 18,
-    borderWidth: 1,
-    bottom: 24,
-    left: 18,
+  mapUnavailable: {
+    backgroundColor: '#f8fafc',
+    borderBottomColor: '#e4e7ec',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e4e7ec',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: 4,
     paddingHorizontal: 16,
-    paddingVertical: 14,
-    position: 'absolute',
-    right: 18,
+    paddingVertical: 18,
   },
-  mapPreviewFallbackTitle: {
+  mapUnavailableTitle: {
     color: '#101828',
     fontSize: 15,
     fontWeight: '900',
-    marginBottom: 4,
   },
-  mapPreviewFallbackText: {
+  mapUnavailableText: {
     color: '#475467',
     fontSize: 13,
     fontWeight: '700',
     lineHeight: 18,
-  },
-  mapBlock: {
-    backgroundColor: '#dff3e8',
-    borderRadius: 10,
-    opacity: 0.78,
-    position: 'absolute',
-  },
-  mapBlockOne: {
-    height: 90,
-    left: 18,
-    top: 86,
-    transform: [{ rotate: '-8deg' }],
-    width: 86,
-  },
-  mapBlockTwo: {
-    height: 120,
-    right: 30,
-    top: 140,
-    transform: [{ rotate: '10deg' }],
-    width: 78,
-  },
-  mapRoad: {
-    backgroundColor: '#ffffff',
-    borderRadius: 999,
-    height: 8,
-    opacity: 0.95,
-    position: 'absolute',
-    width: 380,
-  },
-  mapRoadOne: {
-    left: -30,
-    top: 130,
-    transform: [{ rotate: '24deg' }],
-  },
-  mapRoadTwo: {
-    left: -10,
-    top: 250,
-    transform: [{ rotate: '-18deg' }],
-  },
-  mapRouteLine: {
-    backgroundColor: '#0b57d0',
-    borderRadius: 999,
-    height: 7,
-    position: 'absolute',
-  },
-  mapRouteLineOne: {
-    left: 76,
-    top: 144,
-    transform: [{ rotate: '28deg' }],
-    width: 154,
-  },
-  mapRouteLineTwo: {
-    left: 186,
-    top: 212,
-    transform: [{ rotate: '72deg' }],
-    width: 140,
-  },
-  currentLocationPulse: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(11, 87, 208, 0.16)',
-    borderColor: 'rgba(11, 87, 208, 0.18)',
-    borderRadius: 54,
-    borderWidth: 14,
-    height: 108,
-    justifyContent: 'center',
-    left: '40%',
-    position: 'absolute',
-    top: '42%',
-    width: 108,
-  },
-  currentLocationDot: {
-    backgroundColor: '#0b57d0',
-    borderColor: '#ffffff',
-    borderRadius: 14,
-    borderWidth: 4,
-    height: 28,
-    width: 28,
-  },
-  mapMarker: {
-    alignItems: 'center',
-    backgroundColor: '#0b57d0',
-    borderRadius: 15,
-    height: 30,
-    justifyContent: 'center',
-    position: 'absolute',
-    width: 30,
-  },
-  mapMarkerCurrent: {
-    backgroundColor: ROUTE_VISUAL_STATE_COLORS.current,
-    borderColor: '#ffffff',
-    borderRadius: 19,
-    borderWidth: 3,
-    height: 38,
-    width: 38,
-  },
-  mapMarkerText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '900',
-  },
-  mapLastMarker: {
-    backgroundColor: '#475467',
-    borderRadius: 16,
-    bottom: 110,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    position: 'absolute',
-    right: 22,
-  },
-  mapLastMarkerText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '900',
   },
   photoActionSheetOverlay: {
     bottom: 0,
