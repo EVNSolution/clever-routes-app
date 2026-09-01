@@ -737,6 +737,17 @@ describe('route session current task behavior', () => {
     assert.match(nativeMapSource, /androidView="texture"/u);
   });
 
+  it('never fabricates route roads, paths, or stop markers when map data is unavailable', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const nativeMapSource = readFileSync(nativeMapPath, 'utf8');
+
+    assert.doesNotMatch(appSource, /mapBlock|mapRoad|mapRouteLine|mapMarker|mapLastMarker|getMapMarkerStyle/u);
+    assert.match(appSource, /accessibilityRole="text" style=\{styles\.mapUnavailable\}/u);
+    assert.match(appSource, /Map unavailable/u);
+    assert.match(nativeMapSource, /model\.excludedStopSequences/u);
+    assert.match(nativeMapSource, /Stops .* were excluded from the map because their locations could not be confirmed/u);
+  });
+
   it('does not keep the removed full-screen route preview surface', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
 
@@ -749,7 +760,7 @@ describe('route session current task behavior', () => {
 
     assert.match(appSource, /const isLiveLocationEnabled = selectedRoute !== null[\s\S]*deliveryStartResult\?\.kind === 'delivery_active'[\s\S]*activeRoutePlanId === selectedRoute\.id[\s\S]*deliveryFinishResult\?\.flowState !== 'delivery_finished'/u);
     assert.match(appSource, /showUserLocation=\{routeStatus === 'active'\}/u);
-    assert.match(appSource, /showUserLocation \|\| \(route\.routeGeometry !== null/u);
+    assert.match(appSource, /showUserLocation \|\| interactiveMapModel !== null/u);
     assert.doesNotMatch(appSource, /View Live|Back to Routes|LiveTrackingScreen|liveMapPreview/u);
     assert.doesNotMatch(appSource, /liveLocationStatusOverlay|GPS active|Locating GPS|GPS unavailable/u);
 
