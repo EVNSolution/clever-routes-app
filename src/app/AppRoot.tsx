@@ -594,7 +594,7 @@ function DriverApp() {
 
     showOperationalDialog(
       'Background location',
-      'Precise location is used in the background during an active route to update delivery progress.',
+      'CLEVER Routes collects precise location data to update delivery progress during an active route, even when the app is closed or not in use.',
       [
         { style: 'cancel', text: 'Not Now' },
         {

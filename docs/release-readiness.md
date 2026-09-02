@@ -150,7 +150,7 @@ Do not use `expo run:android` or a Development Build as Android QA evidence. Tho
 
 `cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied
 to committed source. `cli.appVersionSource` is `remote`; the reviewed native
-source version is `1.2.9` (`versionCode` `27`, iOS build `1`). Publication is
+source version is `1.2.10` (`versionCode` `28`, iOS build `1`). Publication is
 proved separately by the public release manifest and downloadable artifact,
 not by this source document. A local self-contained smoke APK is verification
 input, not publication evidence. Future production store builds use
@@ -251,7 +251,7 @@ stable work items instead of unowned notes:
 | --- | --- | --- |
 | Physical iOS/Android device smoke evidence for background tracking, proof capture, offline retry/discard, token recovery, and route completion cleanup | EVNSolution/clever-routes-app#72 | Driver app evidence collection |
 | Android 1.2.8 production AAB, Play metadata/policy forms, review access, background-location video, exact-artifact device smoke, and pre-launch report | EVNSolution/clever-routes-app#231 | Current Google Play production-readiness work |
-| Android 1.2.9 background-location disclosure and permission retry hotfix | EVNSolution/clever-routes-app#237 | Replaces the 1.2.8 Play candidate before public-test review |
+| Android 1.2.10 background-location review disclosure and evidence refresh | EVNSolution/clever-routes-app#237 | Replaces the 1.2.9 Play candidate with compliant reviewer copy and a continuous device demonstration |
 | Production proof-media object storage ownership, signed retrieval/access-control, scanner backend/private evidence storage, and deployed cleanup/scheduler evidence | EVNSolution/clever-delivery-server#71 | Delivery-server proof media hardening |
 
 The baseline context-monorepo service pointer is complete:

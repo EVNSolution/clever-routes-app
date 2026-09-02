@@ -78,7 +78,7 @@ describe('background location lifecycle wiring', () => {
 
     assert.match(
       permissionFlow,
-      /Precise location is used in the background during an active route to update delivery progress\./u,
+      /CLEVER Routes collects precise location data to update delivery progress during an active route, even when the app is closed or not in use\./u,
     );
     assert.match(permissionFlow, /text: 'Privacy Policy'/u);
     assert.match(permissionFlow, /Linking\.openURL\(ROUTES_APP_PRIVACY_URL\)/u);
