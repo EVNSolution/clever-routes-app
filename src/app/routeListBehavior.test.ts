@@ -109,11 +109,12 @@ describe('routes list behavior', () => {
     const source = getRoutesPageSource();
 
     assert.match(source, /backgroundLocationPermission === 'denied'/u);
-    assert.match(source, />Allow all the time required<\/Text>/u);
+    assert.match(source, />Background location required<\/Text>/u);
     assert.match(
       source,
-      /CLEVER Routes collects your precise location during an active route, even when the app is closed or not in use\./u,
+      />\s*Used in the background during an active route to update delivery progress\.\s*<\/Text>/u,
     );
+    assert.doesNotMatch(source, /even when the app is closed or not in use/u);
     assert.match(source, /accessibilityLabel="Review background location access"/u);
     assert.match(source, />Review & Allow<\/Text>/u);
     assert.match(source, /const isStartDisabled = [\s\S]*backgroundLocationPermission !== 'granted'/u);
