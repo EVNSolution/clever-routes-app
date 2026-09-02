@@ -59,6 +59,10 @@ describe('background location lifecycle wiring', () => {
     assert.match(permissionHandler, /foregroundPermission\.status !== 'granted'[\s\S]*Linking\.openSettings\(\)/u);
     assert.match(permissionHandler, /requestContinuousLocationBackgroundPermission/u);
     assert.match(permissionHandler, /await refreshBackgroundLocationPermission\(\)/u);
+    assert.match(
+      permissionHandler,
+      /result\.reason === 'background_permission_denied'[\s\S]*await Linking\.openSettings\(\)/u,
+    );
     assert.match(appStateSource, /state === 'active'[\s\S]*refreshBackgroundLocationPermission/u);
     assert.match(appStateSource, /state === 'active'[\s\S]*!isStartingRoute[\s\S]*screen === 'mainTabs'[\s\S]*handleRefreshRoutes/u);
     assert.match(source, /isDriverRestoreComplete && screen === 'mainTabs'[\s\S]*refreshBackgroundLocationPermission/u);
@@ -74,10 +78,11 @@ describe('background location lifecycle wiring', () => {
 
     assert.match(
       permissionFlow,
-      /collects your precise location while a delivery route is in progress, even when the app is closed or not in use/u,
+      /Precise location is used in the background during an active route to update delivery progress\./u,
     );
-    assert.match(permissionFlow, /live route progress and arrival records/u);
-    assert.match(permissionFlow, /Location tracking stops when the route ends/u);
+    assert.match(permissionFlow, /text: 'Privacy Policy'/u);
+    assert.match(permissionFlow, /Linking\.openURL\(ROUTES_APP_PRIVACY_URL\)/u);
+    assert.doesNotMatch(permissionFlow, /live route progress and arrival records/u);
     assert.match(permissionFlow, /text: 'Not Now'/u);
     assert.match(permissionFlow, /text: 'Continue'/u);
     assert.match(permissionFlow, /onPress: requestBackgroundLocationPermissionAfterDisclosure/u);

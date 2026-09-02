@@ -573,6 +573,9 @@ function DriverApp() {
       await refreshBackgroundLocationPermission();
       if (result.kind === 'blocked') {
         setMessage(result.message);
+        if (result.reason === 'background_permission_denied') {
+          await Linking.openSettings();
+        }
       }
     } finally {
       setIsRequestingBackgroundLocation(false);
@@ -590,10 +593,15 @@ function DriverApp() {
     }
 
     showOperationalDialog(
-      'Allow background location',
-      'CLEVER Routes collects your precise location while a delivery route is in progress, even when the app is closed or not in use. This keeps the store’s live route progress and arrival records up to date. Location tracking stops when the route ends.',
+      'Background location',
+      'Precise location is used in the background during an active route to update delivery progress.',
       [
         { style: 'cancel', text: 'Not Now' },
+        {
+          onPress: () => { void Linking.openURL(ROUTES_APP_PRIVACY_URL); },
+          style: 'cancel',
+          text: 'Privacy Policy',
+        },
         {
           onPress: requestBackgroundLocationPermissionAfterDisclosure,
           text: 'Continue',
@@ -5873,9 +5881,9 @@ function MyRoutesPage({
       {backgroundLocationPermission === 'denied' ? (
         <View accessibilityRole="alert" style={styles.backgroundLocationWarning}>
           <View style={styles.backgroundLocationWarningCopy}>
-            <Text style={styles.backgroundLocationWarningTitle}>Allow all the time required</Text>
+            <Text style={styles.backgroundLocationWarningTitle}>Background location required</Text>
             <Text style={styles.backgroundLocationWarningBody}>
-              CLEVER Routes collects your precise location during an active route, even when the app is closed or not in use.
+              Used in the background during an active route to update delivery progress.
             </Text>
           </View>
           <Pressable
