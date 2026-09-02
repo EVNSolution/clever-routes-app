@@ -4709,6 +4709,9 @@ function DriverApp() {
         setMessage('Driver access expired. Refreshing route assignments while this stop remains queued.');
         return;
       }
+      if (result.kind === 'recorded' && result.etaUpdate !== undefined) {
+        applyEtaUpdateToRoute(selectedRoute.id, result.etaUpdate);
+      }
 
       const nextCompletedStopIds = [...new Set([...completedStopIds, stop.deliveryStopId])];
       setCompletedStopIds(nextCompletedStopIds);

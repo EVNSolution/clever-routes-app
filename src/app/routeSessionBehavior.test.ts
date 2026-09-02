@@ -467,6 +467,24 @@ describe('route session current task behavior', () => {
     assert.match(terminalSource, /if \(screenRef\.current === requestScreen\) \{[\s\S]*openRouteStopDetails\(nextStop\);[\s\S]*\}/u);
   });
 
+  it('applies a recorded stop completion ETA update without applying queued results', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const terminalBegin = appSource.indexOf('async function handleTerminalStop(');
+    const terminalEnd = appSource.indexOf('\n\n  completeStopFromNotificationRef.current', terminalBegin);
+    const terminalSource = appSource.slice(terminalBegin, terminalEnd);
+
+    assert.notEqual(terminalBegin, -1);
+    assert.notEqual(terminalEnd, -1);
+    assert.match(
+      terminalSource,
+      /if \(result\.kind === 'recorded' && result\.etaUpdate !== undefined\) \{[\s\S]*applyEtaUpdateToRoute\(selectedRoute\.id, result\.etaUpdate\);[\s\S]*\}/u,
+    );
+    assert.equal(
+      terminalSource.match(/applyEtaUpdateToRoute\(selectedRoute\.id, result\.etaUpdate\)/gu)?.length,
+      1,
+    );
+  });
+
   it('switches routes only after the active stop and route session are durably ended', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const startBegin = appSource.indexOf('function handleStartRoute(');
