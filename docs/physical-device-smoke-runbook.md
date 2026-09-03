@@ -64,6 +64,108 @@ Examples:
 - `clever-routes-android-pixel8-background-tracking-20260513-1030-7fc4331.mp4`
 - `clever-routes-ios-iphone15-session-reset-20260513-1045-7fc4331.txt`
 
+## Android Waze smoke from a Toronto Store Pickup location
+
+Use this procedure when the connected Android phone is physically outside Canada but Waze must be checked against a Toronto assigned-stop destination. The destination must remain the address and coordinates supplied by the app. Only the phone's current location is mocked.
+
+Waze documents `q` as an address search, `ll` as coordinates, and `navigate=yes` as the request to navigate to the destination: <https://developers.google.com/waze/deeplinks>.
+
+### Safety boundary
+
+- Use a synthetic or production-approved `Ready` route.
+- Resolve the current Store Pickup latitude and longitude from the approved route/depot source. Do not copy a customer stop into the current-location variables.
+- Do not press `Start Session`, `Arrive`, `Skip Stop`, or any other CLEVER operational mutation during this smoke. After the handoff, do not interact with Waze; `navigate=yes` can start guidance automatically.
+- Do not put exact production coordinates, customer data, screenshots, or raw `dumpsys location` output in git or GitHub.
+- These commands were verified on a Samsung Android 13 physical device. Recheck `adb shell cmd location help` before using them on a different Android version.
+
+### Start the temporary location stream
+
+Connect the phone by USB, replace the two placeholders, and run this block in a dedicated terminal. Keep it running while opening Waze. Press `Ctrl-C` after the turn-by-turn guidance screen appears; the exit trap removes the test providers and restores the original location-switch state.
+
+```bash
+set -eu
+
+store_pickup_latitude='<STORE_PICKUP_LATITUDE>'
+store_pickup_longitude='<STORE_PICKUP_LONGITUDE>'
+initial_location_enabled="$(adb shell cmd location is-location-enabled | tr -d '\r')"
+adb_shell_uid="$(adb shell id -u | tr -d '\r')"
+
+cleanup_mock_location() {
+  set +e
+  for provider_name in gps network fused; do
+    adb shell cmd location providers remove-test-provider "$provider_name" >/dev/null 2>&1
+  done
+  adb shell appops set "$adb_shell_uid" android:mock_location deny
+  if [ "$initial_location_enabled" = 'true' ]; then
+    adb shell cmd location set-location-enabled false
+    adb shell cmd location set-location-enabled true
+  else
+    adb shell cmd location set-location-enabled false
+  fi
+}
+trap cleanup_mock_location EXIT INT TERM
+
+adb devices -l
+adb shell appops set "$adb_shell_uid" android:mock_location allow
+
+for provider_name in gps network fused; do
+  adb shell cmd location providers remove-test-provider "$provider_name" >/dev/null 2>&1 || true
+  adb shell cmd location providers add-test-provider "$provider_name"
+  adb shell cmd location providers set-test-provider-enabled "$provider_name" true
+done
+
+mock_provider_count="$(adb shell dumpsys location | rg -c '^\s+(gps|network|fused) provider \[mock\]:' || true)"
+if [ "$mock_provider_count" != '3' ]; then
+  echo "Expected 3 mock providers, found $mock_provider_count. Stop and investigate before opening Waze."
+  exit 1
+fi
+
+while :; do
+  for provider_name in gps network fused; do
+    if ! adb shell cmd location providers set-test-provider-location "$provider_name" \
+      --location "$store_pickup_latitude,$store_pickup_longitude" \
+      --accuracy 5 >/dev/null 2>&1; then
+      # Some vendor builds can replace a test provider while Waze starts.
+      adb shell cmd location providers add-test-provider "$provider_name"
+      adb shell cmd location providers set-test-provider-enabled "$provider_name" true
+      adb shell cmd location providers set-test-provider-location "$provider_name" \
+        --location "$store_pickup_latitude,$store_pickup_longitude" \
+        --accuracy 5
+    fi
+  done
+  sleep 1
+done
+```
+
+Mocking only `gps` is insufficient for this test. Waze can still receive a Seoul value from Android's `network` or `fused` location state. Keep all three providers aligned and refreshed until Waze starts guidance.
+
+### Run and classify the Waze check
+
+1. Confirm the test route still shows `Ready`.
+2. Open `Detail`, select an assigned delivery stop, and tap `Navigate` once.
+3. Confirm Waze starts turn-by-turn guidance for the same assigned-stop destination without requiring a separate `View routes` or `Go` tap. This automatic start is the expected `navigate=yes` behavior.
+4. Confirm the map and route remain within Toronto. ETA and distance vary with traffic and route choice; judge locality, not an exact saved value.
+5. Press `Ctrl-C` in the location-stream terminal and run the cleanup checks below.
+
+Interpret failures before changing app or server code:
+
+| Observation | Classification |
+| --- | --- |
+| Waze shows roughly `10,000 km` or an overseas route | Test-location failure: a real or cached Seoul provider is still active. Recheck all three providers; do not change the assigned stop. |
+| Waze finds the right destination but opens only its place card or route chooser | The installed APK is stale or the Waze link lacks `navigate=yes`. Verify the installed build before investigating geocoding. |
+| Waze opens directly but the destination itself is wrong | Assigned-stop payload or app deep-link construction failure. Compare the displayed destination with the approved synthetic stop. |
+| All three providers are current and Waze still reports no route | Check Waze connectivity/GPS state before treating it as an app or OSRM failure. |
+
+### Verify cleanup
+
+```bash
+adb shell cmd location is-location-enabled
+adb shell appops get "$(adb shell id -u | tr -d '\r')" android:mock_location
+adb shell dumpsys location | rg '^\s+(gps|network|fused) provider \[mock\]:|^\s+last location=.* mock\]' || true
+```
+
+The location-enabled result must match its pre-test value, the mock-location app-op must be `deny`, and the final command must print nothing. Return to CLEVER Routes and confirm the route is still `Ready`.
+
 ## Smoke sequence
 
 Run the full sequence once on a real iPhone and once on a real Android phone.
@@ -77,7 +179,7 @@ Use synthetic route, stop, proof, and signature data unless production validatio
 | Multi-company guidance | Shop/company name, route name/date, timezone, pickup guidance, and support contact match the test assignment. | Wrong tenant/company guidance appears. |
 | Consent gate | Required location-information and personal-information consent can be recorded; failure/retry state is visible if simulated. | Assigned route appears before consent success. |
 | Assigned route and stop list | Route summary and ordered stop cards match synthetic route data. | Wrong route, wrong date/timezone, or another driver's stop appears. |
-| Stop-card OS map handoff | `Open map` launches the native map handler from coordinates; address fallback works for a stop without coordinates. | Map opens the wrong destination or no fallback exists. |
+| Stop-card OS map handoff | `Open map` launches the native map handler from coordinates; address fallback works for a stop without coordinates. On Android, the selected Waze handler starts guidance directly without a second `View routes` or `Go` tap. | Map opens the wrong destination, no fallback exists, or Waze stops at a place card/route chooser. |
 | Delivery start foreground location | OS foreground location prompt appears only after explicit delivery start; denial keeps delivery out of `delivery_active`. | Location prompt appears before delivery start or denial still activates delivery. |
 | Continuous/background-capable tracking | Background permission prompt and foreground service/background indicator behavior match the platform; `LOCATION_UPDATED` events record or queue. | Tracking starts before active delivery or cannot be stopped. |
 | Proof capture | Camera/library photo and signature drawing success/denial/unavailable states are visible. | Proof controls are available before active delivery or failed capture becomes durable proof. |
