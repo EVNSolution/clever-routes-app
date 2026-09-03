@@ -863,6 +863,72 @@ describe('encrypted driver evidence store', () => {
     assert.equal(db.tables.get('evidence_journal')?.size, 1);
   });
 
+  it('persists only changed queue rows instead of rewriting retained audit history', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '89'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const owner = 'cc'.repeat(32);
+    const retainedItems = Array.from({ length: 50 }, (_, index) => ({
+      accountOwnerHash: owner,
+      attempts: 1,
+      enqueuedAt: '2026-09-01T00:00:00.000Z',
+      event: {
+        clientEventId: `retained-${index}`,
+        eventType: 'STOP_DELIVERED',
+        occurredAt: '2026-09-01T00:00:00.000Z',
+        routePlanId: 'route-retained',
+      },
+      journal: [
+        { at: '2026-09-01T00:00:00.000Z', code: 'ENQUEUED', kind: 'ENQUEUED' },
+        { at: '2026-09-01T00:00:01.000Z', code: 'SERVER_ACK', kind: 'ACK' },
+      ],
+      kind: 'driver_event',
+      queueItemId: `driver-event:retained-${index}`,
+      queueSequence: index + 1,
+      state: 'ACKNOWLEDGED',
+    }));
+    await store.setItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY, JSON.stringify({ items: retainedItems, version: 2 }));
+    const runCountBeforeIncrement = db.runCalls.length;
+    const commandCountBeforeIncrement = db.commands.length;
+    const routeRelease = {
+      accountOwnerHash: owner,
+      attempts: 0,
+      enqueuedAt: '2026-09-03T00:00:00.000Z',
+      event: {
+        clientEventId: 'route-release-increment',
+        eventType: 'ROUTE_PAUSED',
+        occurredAt: '2026-09-03T00:00:00.000Z',
+        routePlanId: 'route-retained',
+      },
+      journal: [{ at: '2026-09-03T00:00:00.000Z', code: 'ENQUEUED', kind: 'ENQUEUED' }],
+      kind: 'driver_event',
+      queueItemId: 'driver-event:route-release-increment',
+      queueSequence: 51,
+      state: 'PENDING',
+    };
+
+    await store.setItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY, JSON.stringify({
+      items: [...retainedItems, routeRelease],
+      version: 2,
+    }));
+
+    const incrementalRuns = db.runCalls.slice(runCountBeforeIncrement);
+    const incrementalCommands = db.commands.slice(commandCountBeforeIncrement);
+    assert.equal(incrementalRuns.filter(({ sql }) => /INSERT OR REPLACE INTO workflow_evidence/u.test(sql)).length, 1);
+    assert.equal(incrementalRuns.filter(({ sql }) => /INTO evidence_journal/u.test(sql)).length, 1);
+    assert.equal(incrementalCommands.some((sql) => /^DELETE FROM (workflow_evidence|location_batches);$/u.test(sql.trim())), false);
+    assert.equal(db.tables.get('workflow_evidence')?.size, 51);
+    assert.equal(db.tables.get('evidence_journal')?.size, 101);
+    const reread = JSON.parse(await store.getItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
+      items: { event?: { clientEventId?: string }; queueItemId?: string }[];
+    };
+    assert.equal(reread.items.length, 51);
+    assert.equal(reread.items.at(-1)?.event?.clientEventId, 'route-release-increment');
+  });
+
   it('bounds corrupt migration quarantine by encoded bytes', async () => {
     const db = createDatabase();
     const corrupt = `{"broken":"${'한'.repeat(30_000)}`;

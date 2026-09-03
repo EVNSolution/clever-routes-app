@@ -32,7 +32,7 @@ export type ContinuousLocationTaskResult =
       routePlanId: string;
       sessionGeneration: string;
     }
-  | { kind: 'ignored'; reason: 'inactive_route' }
+  | { kind: 'ignored'; reason: 'completion_pending' | 'inactive_route' }
   | {
       kind: 'processed';
       queuedCount?: number;
@@ -68,7 +68,7 @@ export async function processContinuousLocationTaskBatch(input: {
 
   const routePlanId = persistedAccess.activeRouteSession.routePlanId;
   if (persistedAccess.activeRouteSession.status === 'completion_pending') {
-    return { kind: 'processed', recordedCount: 0, routePlanId };
+    return { kind: 'ignored', reason: 'completion_pending' };
   }
   const sessionGeneration = persistedAccess.activeRouteSession.startedAt
     ?? persistedAccess.activeRouteSession.updatedAt;
@@ -140,6 +140,13 @@ export async function processContinuousLocationTaskBatch(input: {
   });
 
   if (recorded.kind === 'route_not_in_progress') {
+    if (await isPersistedActiveRouteSessionCompletionPending({
+      driverAccessTokenStore: input.driverAccessTokenStore,
+      routePlanId,
+      sessionGeneration,
+    })) {
+      return { kind: 'ignored', reason: 'completion_pending' };
+    }
     const cleared = await input.driverAccessTokenStore.clearActiveRouteSession(routePlanId, sessionGeneration);
     if (cleared) {
       input.offlineQueue.blockRouteSubmissionsForReconciliation(routePlanId);
@@ -158,6 +165,13 @@ export async function processContinuousLocationTaskBatch(input: {
       routePlanId,
     };
   }
+  if (await isPersistedActiveRouteSessionCompletionPending({
+    driverAccessTokenStore: input.driverAccessTokenStore,
+    routePlanId,
+    sessionGeneration,
+  })) {
+    return { kind: 'ignored', reason: 'completion_pending' };
+  }
   await input.offlineQueue.whenPersisted();
 
   if (routeRevoked) {
@@ -174,6 +188,26 @@ export async function processContinuousLocationTaskBatch(input: {
     recordedCount: recorded.recordedCount,
     routePlanId,
   };
+}
+
+async function isPersistedActiveRouteSessionCompletionPending(input: {
+  driverAccessTokenStore: Pick<DriverAccessTokenStore, 'loadActiveDriverAccess'>;
+  routePlanId: string;
+  sessionGeneration: string;
+}): Promise<boolean> {
+  const persistedAccess = await input.driverAccessTokenStore.loadActiveDriverAccess();
+  if (
+    (persistedAccess.kind !== 'active' && persistedAccess.kind !== 'refresh_required')
+    || persistedAccess.activeRouteSession === undefined
+  ) {
+    return false;
+  }
+
+  const activeSessionGeneration = persistedAccess.activeRouteSession.startedAt
+    ?? persistedAccess.activeRouteSession.updatedAt;
+  return persistedAccess.activeRouteSession.routePlanId === input.routePlanId
+    && activeSessionGeneration === input.sessionGeneration
+    && persistedAccess.activeRouteSession.status === 'completion_pending';
 }
 
 async function refreshPersistedDriverAccess(input: {
@@ -237,6 +271,7 @@ async function isPersistedActiveRouteSessionCurrent(input: {
   return (
     (persistedAccess.kind === 'active' || persistedAccess.kind === 'refresh_required')
     && persistedAccess.activeRouteSession?.routePlanId === input.routePlanId
+    && persistedAccess.activeRouteSession.status === 'active'
     && (persistedAccess.activeRouteSession.startedAt ?? persistedAccess.activeRouteSession.updatedAt) === input.sessionGeneration
     && persistedAccess.routeAccess?.routePlanId === input.routePlanId
   );

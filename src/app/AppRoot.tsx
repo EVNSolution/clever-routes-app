@@ -2438,8 +2438,8 @@ function DriverApp() {
     setRouteSyncState('loading');
     setMessage(null);
     setVerifiedDriverPhoneE164(phoneE164);
-    setRouteSessions([]);
     if (shouldResetProgress) {
+      setRouteSessions([]);
       resetRouteProgress();
     }
 
@@ -4897,6 +4897,11 @@ function DriverApp() {
         ...(options?.eventPayload === undefined ? {} : { eventPayload: options.eventPayload }),
         ...(options?.now === undefined ? {} : { now: options.now }),
         offlineQueue: queue,
+        ...(options?.routeEnd === 'released' ? {
+          onPhaseTiming: ({ elapsedMs, phase }) => {
+            console.info(`[route-release] phase=${phase} elapsedMs=${elapsedMs}`);
+          },
+        } : {}),
         onServerAcknowledged: async (outboxEntry, signal) => {
           if (completionSubmission === undefined) return;
           await sendCompletionAcknowledgedHeartbeatBeforeCleanup({
@@ -5988,7 +5993,7 @@ function MyRoutesPage({
                       <SecondaryButton compact disabled={isContinueDisabled} label="Continue" onPress={() => onContinueRoute(session.route.id)} />
                     </View>
                     <View style={styles.routeActionButton}>
-                      <DangerButton compact disabled={isDeleteDisabled} label="Delete" loading={isDeletingRoute} onPress={() => onDeleteRoute(session.route.id)} />
+                      <DangerButton compact disabled={isDeleteDisabled} label={isDeletingRoute ? 'Releasing route...' : 'Delete'} loading={isDeletingRoute} onPress={() => onDeleteRoute(session.route.id)} />
                     </View>
                   </View>
                 ) : (
@@ -7233,7 +7238,12 @@ function SecondaryButton({ compact, disabled, label, loading, onPress }: { compa
 function DangerButton({ compact, disabled, label, loading, onPress }: { compact?: boolean; disabled?: boolean; label: string; loading?: boolean; onPress(): void }) {
   return (
     <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.dangerButton, compact === true && styles.compactButton, disabled === true && styles.buttonDisabled]}>
-      {loading === true ? <ActivityIndicator color="#b42318" /> : <Text style={[styles.dangerButtonText, compact === true && styles.compactButtonText]}>{label}</Text>}
+      {loading === true ? (
+        <View style={styles.buttonLoadingContent}>
+          <ActivityIndicator color="#b42318" size="small" />
+          <Text style={[styles.dangerButtonText, compact === true && styles.compactButtonText]}>{label}</Text>
+        </View>
+      ) : <Text style={[styles.dangerButtonText, compact === true && styles.compactButtonText]}>{label}</Text>}
     </Pressable>
   );
 }
@@ -8403,6 +8413,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     textAlign: 'center',
+  },
+  buttonLoadingContent: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
   },
   buttonDisabled: {
     opacity: 0.5,

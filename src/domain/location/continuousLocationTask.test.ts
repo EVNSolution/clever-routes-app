@@ -138,6 +138,83 @@ describe('continuous location background task', () => {
     }]);
   });
 
+  it('stops a captured location batch after route completion becomes pending', async () => {
+    const store = createTokenStore();
+    await saveActiveRoute(store);
+    let releaseFirstLocation: () => void = () => undefined;
+    const firstLocationReleased = new Promise<void>((resolve) => {
+      releaseFirstLocation = resolve;
+    });
+    let markFirstLocationStarted: () => void = () => undefined;
+    const firstLocationStarted = new Promise<void>((resolve) => {
+      markFirstLocationStarted = resolve;
+    });
+    const recordedClientEventIds: string[] = [];
+
+    const task = processContinuousLocationTaskBatch({
+      createDriverEventService: () => ({
+        recordDriverEvent: async (event) => {
+          recordedClientEventIds.push(event.clientEventId);
+          if (recordedClientEventIds.length === 1) {
+            markFirstLocationStarted();
+            await firstLocationReleased;
+          }
+          return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+        },
+      }),
+      driverAccessTokenStore: store,
+      driverAuthService: createMockDriverAuthService(),
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-07-16T10:01:00.000Z') },
+        { latitude: 43.6533, longitude: -79.3833, occurredAt: new Date('2026-07-16T10:01:10.000Z') },
+      ],
+      offlineQueue: createInMemoryOfflineSubmissionQueue(),
+      routeAccessService: createMockRouteAccessService(),
+    });
+
+    await firstLocationStarted;
+    assert.equal(await store.markActiveRouteCompletionPending({
+      clientEventId: 'route-released-after-first-location',
+      occurredAt: '2026-07-16T10:01:05.000Z',
+      routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+    }), true);
+    releaseFirstLocation();
+
+    assert.deepEqual(await task, {
+      kind: 'ignored',
+      reason: 'completion_pending',
+    });
+    assert.equal(recordedClientEventIds.length, 1);
+  });
+
+  it('ignores a new location batch while route completion is pending', async () => {
+    const store = createTokenStore();
+    await saveActiveRoute(store);
+    assert.equal(await store.markActiveRouteCompletionPending({
+      clientEventId: 'route-released-before-location',
+      occurredAt: '2026-07-16T10:00:30.000Z',
+      routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+    }), true);
+    let serviceCreations = 0;
+
+    const result = await processContinuousLocationTaskBatch({
+      createDriverEventService: () => {
+        serviceCreations += 1;
+        return createMockDriverEventService();
+      },
+      driverAccessTokenStore: store,
+      driverAuthService: createMockDriverAuthService(),
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-07-16T10:01:00.000Z') },
+      ],
+      offlineQueue: createInMemoryOfflineSubmissionQueue(),
+      routeAccessService: createMockRouteAccessService(),
+    });
+
+    assert.deepEqual(result, { kind: 'ignored', reason: 'completion_pending' });
+    assert.equal(serviceCreations, 0);
+  });
+
   it('ignores missing or mismatched active route state', async () => {
     const missingStore = createTokenStore();
     await missingStore.saveAuthenticatedDriver({ accountAccess, phoneE164: '+14165550123' });
@@ -347,6 +424,45 @@ describe('continuous location background task', () => {
       assert.equal(persisted.activeRouteSession, undefined);
       assert.equal(persisted.driverAccess, undefined);
       assert.equal(persisted.routeAccess, undefined);
+    }
+  });
+
+  it('does not clear a route release that becomes pending before a stale location receives 409', async () => {
+    const store = createTokenStore();
+    await saveActiveRoute(store);
+    const queue = createInMemoryOfflineSubmissionQueue();
+
+    const result = await processContinuousLocationTaskBatch({
+      createDriverEventService: () => ({
+        recordDriverEvent: async () => {
+          assert.equal(await store.markActiveRouteCompletionPending({
+            clientEventId: 'route-release-won-race',
+            occurredAt: '2026-07-16T10:01:01.000Z',
+            routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+          }), true);
+          throw createDriverApiHttpError({
+            code: 'ROUTE_NOT_IN_PROGRESS',
+            endpoint: 'Driver event record',
+            status: 409,
+          });
+        },
+      }),
+      driverAccessTokenStore: store,
+      driverAuthService: createMockDriverAuthService(),
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-07-16T10:01:00.000Z') },
+      ],
+      offlineQueue: queue,
+      routeAccessService: createMockRouteAccessService(),
+    });
+
+    assert.deepEqual(result, { kind: 'ignored', reason: 'completion_pending' });
+    assert.deepEqual(queue.listPending(), []);
+    const persisted = await store.loadActiveDriverAccess();
+    assert.equal(persisted.kind, 'active');
+    if (persisted.kind === 'active') {
+      assert.equal(persisted.activeRouteSession?.status, 'completion_pending');
+      assert.equal(persisted.activeRouteSession?.completionClientEventId, 'route-release-won-race');
     }
   });
 

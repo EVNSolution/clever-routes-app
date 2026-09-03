@@ -54,7 +54,6 @@ const runtimeServices = createDriverRuntimeServices({ config: runtimeConfig });
 const expoLocationNotificationModule = Platform.OS === 'android'
   ? requireNativeModule<ExpoLocationNotificationModule>('ExpoLocation')
   : null;
-const activeTaskExecutions = new Set<Promise<void>>();
 let continuousLocationTaskObserver: ContinuousLocationTaskObserver | null = null;
 let locationTaskOperationQueue = Promise.resolve();
 
@@ -108,6 +107,7 @@ async function stopContinuousLocationTaskIfInactive(): Promise<void> {
     const hasActiveRoute = (
       (persistedAccess.kind === 'active' || persistedAccess.kind === 'refresh_required')
       && persistedAccess.activeRouteSession !== undefined
+      && persistedAccess.activeRouteSession.status === 'active'
       && persistedAccess.routeAccess?.routePlanId === persistedAccess.activeRouteSession.routePlanId
     );
     if (!hasActiveRoute) {
@@ -168,13 +168,9 @@ async function executeContinuousLocationTask(input: {
 }
 
 if (!TaskManager.isTaskDefined(CONTINUOUS_LOCATION_TASK_NAME)) {
-  TaskManager.defineTask<ExpoLocationTaskData>(CONTINUOUS_LOCATION_TASK_NAME, ({ data, error }) => {
-    const execution = executeContinuousLocationTask({ data, error });
-    activeTaskExecutions.add(execution);
-    return execution.finally(() => {
-      activeTaskExecutions.delete(execution);
-    });
-  });
+  TaskManager.defineTask<ExpoLocationTaskData>(CONTINUOUS_LOCATION_TASK_NAME, ({ data, error }) => (
+    executeContinuousLocationTask({ data, error })
+  ));
 }
 
 export function createExpoContinuousLocationStreamService(): ContinuousLocationStreamService {
@@ -209,18 +205,12 @@ export function createExpoContinuousLocationStreamService(): ContinuousLocationS
       }
     },
     startLocationUpdates: ({ notification, taskName }) => runLocationTaskOperation(() => startExpoLocationUpdates(taskName, notification)),
-    stopLocationUpdates: async (taskName) => {
-      await Promise.allSettled(Array.from(activeTaskExecutions));
-      await runLocationTaskOperation(() => stopExpoLocationUpdates(taskName));
-    },
-    stopLocationUpdatesIfCurrent: async (taskName, isCurrent) => {
-      await Promise.allSettled(Array.from(activeTaskExecutions));
-      return runLocationTaskOperation(async () => {
-        if (!(await isCurrent())) return false;
-        await stopExpoLocationUpdates(taskName);
-        return true;
-      });
-    },
+    stopLocationUpdates: (taskName) => runLocationTaskOperation(() => stopExpoLocationUpdates(taskName)),
+    stopLocationUpdatesIfCurrent: (taskName, isCurrent) => runLocationTaskOperation(async () => {
+      if (!(await isCurrent())) return false;
+      await stopExpoLocationUpdates(taskName);
+      return true;
+    }),
     updateLocationNotification: ({ notification, taskName }) => runLocationTaskOperation(async () => {
       if (
         expoLocationNotificationModule !== null

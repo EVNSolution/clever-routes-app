@@ -493,12 +493,32 @@ async function replaceQueueRows(database: EvidenceDatabase, items: Record<string
   await database.withExclusiveTransactionAsync(async (transaction) => {
     const retainedItems = items.filter((item) => !isExpiredTerminalEvidence(item, now));
     const expiredItems = items.filter((item) => isExpiredTerminalEvidence(item, now));
-    const retainedRecordKeys = new Set(retainedItems.map(getRecordKey));
+    const retainedRows = retainedItems.map((item) => serializeQueueRow(item, now));
+    const retainedRecordKeys = new Set(retainedRows.map((row) => row.recordKey));
+    const retainedRowsByRecordKey = new Map(retainedRows.map((row) => [row.recordKey, row]));
+    const existingRecordRows = new Map<string, StoredRow>();
+    for (const table of RECORD_TABLES) {
+      const rows = await transaction.getAllAsync<StoredRow>(
+        `SELECT record_key AS recordKey, payload FROM ${table};`,
+      );
+      for (const row of rows) existingRecordRows.set(`${table}:${row.recordKey}`, row);
+    }
     const existingSensitiveRows = await transaction.getAllAsync<StoredRow>(
       'SELECT record_key AS recordKey, payload FROM sensitive_evidence;',
     );
-    await transaction.execAsync('DELETE FROM workflow_evidence;');
-    await transaction.execAsync('DELETE FROM location_batches;');
+    const existingSensitiveRecordKeys = new Set(existingSensitiveRows.map((row) => row.recordKey));
+    const existingJournalRows = await transaction.getAllAsync<StoredRow>(
+      'SELECT record_key AS recordKey, payload FROM evidence_journal;',
+    );
+    const existingJournalRecordKeys = new Set(existingJournalRows.map((row) => row.recordKey));
+    for (const table of ['workflow_evidence', 'location_batches'] as const) {
+      for (const [existingKey, existingRow] of existingRecordRows) {
+        if (!existingKey.startsWith(`${table}:`)) continue;
+        const retainedRow = retainedRowsByRecordKey.get(existingRow.recordKey);
+        if (retainedRow?.table === table) continue;
+        await transaction.runAsync(`DELETE FROM ${table} WHERE record_key = ?;`, existingRow.recordKey);
+      }
+    }
     for (const row of existingSensitiveRows) {
       if (!retainedRecordKeys.has(row.recordKey)) {
         await transaction.runAsync('DELETE FROM sensitive_evidence WHERE record_key = ?;', row.recordKey);
@@ -509,7 +529,34 @@ async function replaceQueueRows(database: EvidenceDatabase, items: Record<string
       await transaction.runAsync('DELETE FROM migration_quarantine WHERE record_key = ?;', recordKey);
       await transaction.runAsync('DELETE FROM sensitive_evidence WHERE record_key = ?;', recordKey);
     }
-    await writeQueueRows(transaction, retainedItems, now);
+    for (const row of retainedRows) {
+      if (existingRecordRows.get(`${row.table}:${row.recordKey}`)?.payload !== row.payload) {
+        await writeQueueRecord(transaction, row);
+      }
+      if (row.sensitivePayload !== null && !existingSensitiveRecordKeys.has(row.recordKey)) {
+        await transaction.runAsync(
+          'INSERT OR IGNORE INTO sensitive_evidence (record_key, account_owner_hash, queue_sequence, payload, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?);',
+          row.recordKey,
+          row.ownerHash,
+          row.sequence,
+          row.sensitivePayload,
+          new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+          row.createdAt,
+        );
+      }
+      for (const journalEntry of row.journalEntries) {
+        if (existingJournalRecordKeys.has(journalEntry.recordKey)) continue;
+        await transaction.runAsync(
+          'INSERT OR IGNORE INTO evidence_journal (record_key, account_owner_hash, queue_sequence, payload, created_at) VALUES (?, ?, ?, ?, ?);',
+          journalEntry.recordKey,
+          row.ownerHash,
+          row.sequence,
+          journalEntry.payload,
+          journalEntry.createdAt,
+        );
+        existingJournalRecordKeys.add(journalEntry.recordKey);
+      }
+    }
     const cutoff = new Date(now.getTime() - OFFLINE_EVIDENCE_AUDIT_RETENTION_MS).toISOString();
     await transaction.runAsync('DELETE FROM evidence_journal WHERE created_at < ?;', cutoff);
     await transaction.runAsync('DELETE FROM support_export_markers WHERE created_at < ?;', cutoff);
@@ -519,45 +566,81 @@ async function replaceQueueRows(database: EvidenceDatabase, items: Record<string
 
 async function writeQueueRows(database: EvidenceDatabase, items: Record<string, unknown>[], now: Date) {
   for (const item of items) {
-    const queueItemId = typeof item.queueItemId === 'string' ? item.queueItemId : `invalid:${Date.now()}`;
-    const ownerHash = typeof item.accountOwnerHash === 'string' ? item.accountOwnerHash : 'legacy-unbound-owner';
-    const recordKey = `${ownerHash}:${queueItemId}`;
-    const table = classifyItem(item);
-    const journal = normalizeJournalEntries(item.journal, now);
-    const normalizedItem = { ...item, journal };
-    const envelope = redactReplayPayload(normalizedItem);
-    const sequence = readQueueSequence(item);
-    const createdAt = readIsoTimestamp(item.enqueuedAt) ?? now.toISOString();
-    await database.runAsync(
-      `INSERT OR REPLACE INTO ${table} (record_key, account_owner_hash, queue_sequence, payload, created_at) VALUES (?, ?, ?, ?, ?);`,
-      recordKey,
-      ownerHash,
-      sequence,
-      JSON.stringify(envelope),
-      createdAt,
-    );
-    if (hasSensitiveReplayPayload(normalizedItem)) {
+    const row = serializeQueueRow(item, now);
+    await writeQueueRecord(database, row);
+    if (row.sensitivePayload !== null) {
       await database.runAsync(
         'INSERT OR IGNORE INTO sensitive_evidence (record_key, account_owner_hash, queue_sequence, payload, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?);',
-        recordKey,
-        ownerHash,
-        sequence,
-        JSON.stringify(extractSensitiveReplay(normalizedItem)),
+        row.recordKey,
+        row.ownerHash,
+        row.sequence,
+        row.sensitivePayload,
         new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-        createdAt,
+        row.createdAt,
       );
     }
-    for (const [index, entry] of journal.entries()) {
+    for (const journalEntry of row.journalEntries) {
       await database.runAsync(
         'INSERT OR IGNORE INTO evidence_journal (record_key, account_owner_hash, queue_sequence, payload, created_at) VALUES (?, ?, ?, ?, ?);',
-        `${recordKey}:${index}:${typeof (entry as Record<string, unknown>).at === 'string' ? (entry as Record<string, unknown>).at : ''}`,
-        ownerHash,
-        sequence,
-        JSON.stringify(entry),
-        (entry as Record<string, unknown>).at,
+        journalEntry.recordKey,
+        row.ownerHash,
+        row.sequence,
+        journalEntry.payload,
+        journalEntry.createdAt,
       );
     }
   }
+}
+
+type SerializedQueueRow = {
+  createdAt: string;
+  journalEntries: { createdAt: string; payload: string; recordKey: string }[];
+  ownerHash: string;
+  payload: string;
+  recordKey: string;
+  sensitivePayload: string | null;
+  sequence: number;
+  table: (typeof RECORD_TABLES)[number];
+};
+
+function serializeQueueRow(item: Record<string, unknown>, now: Date): SerializedQueueRow {
+  const queueItemId = typeof item.queueItemId === 'string' ? item.queueItemId : `invalid:${Date.now()}`;
+  const ownerHash = typeof item.accountOwnerHash === 'string' ? item.accountOwnerHash : 'legacy-unbound-owner';
+  const recordKey = `${ownerHash}:${queueItemId}`;
+  const journal = normalizeJournalEntries(item.journal, now);
+  const normalizedItem = { ...item, journal };
+  return {
+    createdAt: readIsoTimestamp(item.enqueuedAt) ?? now.toISOString(),
+    journalEntries: journal.map((entry, index) => {
+      const createdAt = typeof (entry as Record<string, unknown>).at === 'string'
+        ? (entry as Record<string, unknown>).at as string
+        : now.toISOString();
+      return {
+        createdAt,
+        payload: JSON.stringify(entry),
+        recordKey: `${recordKey}:${index}:${createdAt}`,
+      };
+    }),
+    ownerHash,
+    payload: JSON.stringify(redactReplayPayload(normalizedItem)),
+    recordKey,
+    sensitivePayload: hasSensitiveReplayPayload(normalizedItem)
+      ? JSON.stringify(extractSensitiveReplay(normalizedItem))
+      : null,
+    sequence: readQueueSequence(item),
+    table: classifyItem(item),
+  };
+}
+
+async function writeQueueRecord(database: EvidenceDatabase, row: SerializedQueueRow) {
+  await database.runAsync(
+    `INSERT OR REPLACE INTO ${row.table} (record_key, account_owner_hash, queue_sequence, payload, created_at) VALUES (?, ?, ?, ?, ?);`,
+    row.recordKey,
+    row.ownerHash,
+    row.sequence,
+    row.payload,
+    row.createdAt,
+  );
 }
 
 function classifyItem(item: Record<string, unknown>): (typeof RECORD_TABLES)[number] {

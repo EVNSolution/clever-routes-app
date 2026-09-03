@@ -203,6 +203,52 @@ describe('delivery finish route cleanup', () => {
     assert.deepEqual(queue.listPendingCompletionClearRoutePlanIds(), ['route-1']);
   });
 
+  it('bounds a hung route release attempt after durable persistence and keeps one retryable release', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const stream = createMockStreamService();
+    const expirations: (() => void)[] = [];
+    const attemptSignal: { current: AbortSignal | null } = { current: null };
+    let routeSessionDeactivated = false;
+
+    const finish = finishDeliveryAfterActive({
+      deactivateActiveRouteSession: async () => {
+        routeSessionDeactivated = true;
+        return true;
+      },
+      deliveryStart: {
+        flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active',
+      },
+      driverEventAttemptCancelTimeout: () => undefined,
+      driverEventAttemptScheduleTimeout: (expire) => { expirations.push(expire); return expire; },
+      driverEventAttemptTimeoutMs: 10,
+      driverEventService: {
+        recordDriverEvent: (_event, options) => {
+          attemptSignal.current = options?.signal ?? null;
+          return new Promise(() => undefined);
+        },
+      },
+      now: new Date('2026-07-20T03:10:00.000Z'),
+      offlineQueue: queue,
+      routeEnd: 'released',
+      routePlanId: 'route-1',
+      streamService: stream.service,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(routeSessionDeactivated, true);
+    assert.deepEqual(stream.stoppedTasks, ['clever-routes-continuous-location']);
+    assert.equal(attemptSignal.current?.aborted, false);
+    expirations.shift()?.();
+
+    const result = await finish;
+    assert.equal(attemptSignal.current?.aborted, true);
+    assert.equal(result.kind, 'queued');
+    assert.equal(result.kind === 'queued' ? result.monitoringMode : null, 'stopped');
+    assert.deepEqual(queue.listPending().map((item) => (
+      item.kind === 'driver_event' ? item.event.eventType : item.kind
+    )), ['ROUTE_PAUSED']);
+  });
+
   it('attaches prepared route termination metadata to the completion event', async () => {
     const driverEvents = createMockDriverEventService();
     const stream = createMockStreamService();
