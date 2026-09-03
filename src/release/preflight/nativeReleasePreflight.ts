@@ -1,4 +1,5 @@
 export type NativeReleasePreflightCheckId =
+  | 'android.direct.runtime'
   | 'eas.preview'
   | 'eas.production'
   | 'expo.identity'
@@ -57,6 +58,7 @@ export type NativeReleasePreflightInput = {
     submit?: Record<string, unknown>;
   };
   envExample: string;
+  packageScripts: Record<string, string>;
   iosNativeProject?: {
     infoPlist?: string;
     privacyManifest?: string;
@@ -79,6 +81,7 @@ export function runNativeReleasePreflight(input: NativeReleasePreflightInput): N
     checkExpoPermissions(input.appConfig),
     checkEasPreview(input.easConfig),
     checkEasProduction(input.easConfig),
+    checkDirectAndroidRuntime(input.packageScripts),
     checkRuntimeEnvExample(input.envExample),
     checkIosNativeProject(input.iosNativeProject, input.appConfig)
   ];
@@ -96,6 +99,29 @@ export function runNativeReleasePreflight(input: NativeReleasePreflightInput): N
     failures,
     ok: failures.length === 0
   };
+}
+
+const DIRECT_ANDROID_RELEASE_SCRIPTS = [
+  'build:android:device-smoke',
+  'build:android:distribution',
+  'build:android:distribution:clean',
+] as const;
+const CANONICAL_DIRECT_ANDROID_RUNTIME = /&&\s+NODE_ENV=production\s+EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live\s+EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https:\/\/clever-route\.cleversystem\.ai\s+\.\/gradlew\b/u;
+
+function checkDirectAndroidRuntime(packageScripts: Record<string, string>): NativeReleasePreflightCheck {
+  for (const scriptName of DIRECT_ANDROID_RELEASE_SCRIPTS) {
+    if (!CANONICAL_DIRECT_ANDROID_RUNTIME.test(packageScripts[scriptName] ?? '')) {
+      return fail(
+        'android.direct.runtime',
+        `${scriptName} must inject the canonical live runtime on the Gradle command itself.`,
+      );
+    }
+  }
+
+  return pass(
+    'android.direct.runtime',
+    'Direct Android release commands inject the canonical live runtime before Gradle starts.',
+  );
 }
 
 function checkExpoIdentity(appConfig: NativeReleasePreflightInput['appConfig']): NativeReleasePreflightCheck {

@@ -119,11 +119,16 @@ Android commands are intentionally separated so a QA phone cannot be overwritten
 | `npm run android:dev:install` | Install the arm64 `debugOptimized` development client after native dependency/config changes only |
 | `npm run android:dev:start` | Reuse the installed development client for normal JS/TS work through Metro |
 | `npm run android:qa:build` | Build the self-contained EAS `preview` APK for QA/device evidence |
-| `npm run build:android:device-smoke` | Build a local arm64 self-contained release-mode APK for smoke diagnostics; not a distributable signed artifact |
-| `npm run build:android:distribution` | Reuse Gradle outputs/cache for the reviewed direct-distribution APK |
-| `npm run build:android:distribution:clean` | Force a clean direct-distribution build only for reproducibility or cache-recovery diagnosis |
+| `npm run build:android:device-smoke` | Build a local arm64 self-contained release-mode APK for smoke diagnostics with the canonical live runtime; not a distributable signed artifact |
+| `npm run build:android:distribution` | Reuse Gradle outputs/cache for the reviewed direct-distribution APK with the canonical live runtime |
+| `npm run build:android:distribution:clean` | Force a clean direct-distribution build with the canonical live runtime only for reproducibility or cache-recovery diagnosis |
 
-The ambiguous `npm run android` command is intentionally absent. Development builds require Metro and must not be installed on QA devices.
+The direct release-mode commands inject `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live` and
+`EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://clever-route.cleversystem.ai` on the
+Gradle process itself. They therefore do not require `.env.local`, and a local mock
+override cannot leak into their bundled runtime. The ambiguous `npm run android`
+command is intentionally absent. Development builds require Metro and must not be
+installed on QA devices.
 
 Run `npm run check:native-release` before EAS builds or release PRs. It validates source-controlled Expo/EAS identity, permission, profile, and public runtime env baseline only; owner-controlled Expo/EAS project values, Apple/Google signing authority, store/private distribution approval, privacy copy, and license decisions remain external release blockers.
 

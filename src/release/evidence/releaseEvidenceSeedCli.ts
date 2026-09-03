@@ -24,6 +24,7 @@ function readInput(): NativeReleasePreflightInput {
     appConfig: readJson('app.json'),
     easConfig: readJson('eas.json'),
     envExample: readFileSync(resolve(repoRoot, '.env.example'), 'utf8'),
+    packageScripts: readJson<{ scripts?: Record<string, string> }>('package.json').scripts ?? {},
     ...(iosProjectPbxproj === undefined
       ? {}
       : {
