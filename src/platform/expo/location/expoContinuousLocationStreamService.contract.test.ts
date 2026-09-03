@@ -18,6 +18,7 @@ const patchScriptPath = join(currentDirectory, '..', '..', '..', '..', 'scripts'
 const mainActivityPath = join(currentDirectory, '..', '..', '..', '..', 'android', 'app', 'src', 'main', 'java', 'com', 'evnsolution', 'clever', 'routes', 'MainActivity.kt');
 const compactActionLayoutPath = join(currentDirectory, '..', '..', '..', '..', 'android', 'app', 'src', 'main', 'res', 'layout', 'clever_route_notification_actions.xml');
 const resourceKeepPath = join(currentDirectory, '..', '..', '..', '..', 'android', 'app', 'src', 'main', 'res', 'raw', 'keep.xml');
+const proguardRulesPath = join(currentDirectory, '..', '..', '..', '..', 'android', 'app', 'proguard-rules.pro');
 const queueStoragePath = join(currentDirectory, '..', 'storage', 'expoOfflineSubmissionQueueStorage.ts');
 const secureStorePath = join(currentDirectory, '..', 'secureStore', 'expoSecureDriverAccessTokenStore.ts');
 const stopArrivalNotificationServicePath = join(currentDirectory, '..', 'notifications', 'expoStopArrivalNotificationService.ts');
@@ -141,6 +142,15 @@ describe('Expo continuous location wiring', () => {
     assert.match(mainActivitySource, /override fun onNewIntent\(intent: Intent\)/u);
     assert.match(mainActivitySource, /setIntent\(intent\)/u);
     assert.match(patchSource, /Unsupported expo-location source/u);
+  });
+
+  it('keeps the manifest-loaded headless task implementation in minified releases', () => {
+    const proguardRules = readFileSync(proguardRulesPath, 'utf8');
+
+    assert.match(
+      proguardRules,
+      /-keep class expo\.modules\.adapters\.react\.apploader\.RNHeadlessAppLoader \{ \*; \}/u,
+    );
   });
 
   it('fails closed outside the exact supported Expo Location source version', () => {
