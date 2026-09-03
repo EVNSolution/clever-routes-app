@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +30,8 @@ function currentInput(): NativeReleasePreflightInput {
   return {
     appConfig: readJson('app.json'),
     easConfig: readJson('eas.json'),
-    envExample: readFileSync(resolve(repoRoot, '.env.example'), 'utf8')
+    envExample: readFileSync(resolve(repoRoot, '.env.example'), 'utf8'),
+    packageScripts: readJson<{ scripts?: Record<string, string> }>('package.json').scripts ?? {},
   };
 }
 
@@ -36,10 +47,80 @@ test('native release preflight passes for the committed Expo and EAS config', ()
       'expo.permissions',
       'eas.preview',
       'eas.production',
+      'android.direct.runtime',
       'runtime.env.example',
       'ios.native'
     ]
   );
+});
+
+test('direct Android release commands inject the canonical live runtime without .env.local', () => {
+  const input = currentInput();
+  const result = runNativeReleasePreflight(input);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    result.checks.find((check) => check.id === 'android.direct.runtime'),
+    {
+      id: 'android.direct.runtime',
+      message: 'Direct Android release commands inject the canonical live runtime before Gradle starts.',
+      ok: true,
+    },
+  );
+
+  const fixtureRoot = mkdtempSync(resolve(tmpdir(), 'clever-routes-release-env-'));
+  const androidRoot = resolve(fixtureRoot, 'android');
+  mkdirSync(androidRoot);
+  writeFileSync(
+    resolve(androidRoot, 'gradlew'),
+    '#!/bin/sh\nprintf "%s\\n%s\\n" "$EXPO_PUBLIC_DRIVER_RUNTIME_MODE" "$EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL"\n',
+  );
+  chmodSync(resolve(androidRoot, 'gradlew'), 0o755);
+
+  try {
+    assert.equal(existsSync(resolve(fixtureRoot, '.env.local')), false);
+    for (const scriptName of [
+      'build:android:device-smoke',
+      'build:android:distribution',
+      'build:android:distribution:clean',
+    ]) {
+      const output = execFileSync('/bin/sh', ['-c', input.packageScripts[scriptName] ?? ''], {
+        cwd: fixtureRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: 'https://wrong.example.com',
+          EXPO_PUBLIC_DRIVER_RUNTIME_MODE: 'mock',
+        },
+      });
+      assert.equal(output, 'live\nhttps://clever-route.cleversystem.ai\n');
+    }
+  } finally {
+    rmSync(fixtureRoot, { force: true, recursive: true });
+  }
+});
+
+test('native release preflight rejects direct Android commands that can inherit mock or missing runtime config', () => {
+  const input = currentInput();
+
+  for (const scriptName of [
+    'build:android:device-smoke',
+    'build:android:distribution',
+    'build:android:distribution:clean',
+  ]) {
+    const result = runNativeReleasePreflight({
+      ...input,
+      packageScripts: {
+        ...input.packageScripts,
+        [scriptName]: 'cd android && NODE_ENV=production ./gradlew app:assembleRelease',
+      },
+    });
+
+    assert.deepEqual(result.failures, [{
+      id: 'android.direct.runtime',
+      message: `${scriptName} must inject the canonical live runtime on the Gradle command itself.`,
+    }]);
+  }
 });
 
 test('prepares the ignored Firebase config during EAS builds', () => {

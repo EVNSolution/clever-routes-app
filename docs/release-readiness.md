@@ -148,9 +148,16 @@ The native binary build path uses Expo EAS profiles:
 
 Do not use `expo run:android` or a Development Build as Android QA evidence. Those binaries require Metro and include developer tooling. Use `npm run android:qa:build` for the self-contained EAS preview APK. `npm run build:android:device-smoke` is limited to local release-mode diagnostics and does not establish signing or distribution evidence.
 
+The direct `build:android:device-smoke`, `build:android:distribution`, and
+`build:android:distribution:clean` commands set the canonical live runtime values
+directly on the Gradle process. They do not read `.env.local` as release
+configuration, even when a developer keeps that ignored file for local work.
+`.env.example` remains the documented live/mock development template; deliberate
+mock work still requires `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock` with no server URL.
+
 `cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied
 to committed source. `cli.appVersionSource` is `remote`; the reviewed native
-source version is `1.2.11` (`versionCode` `29`, iOS build `1`). Publication is
+source version is `1.2.12` (`versionCode` `30`, iOS build `1`). Publication is
 proved separately by the public release manifest and downloadable artifact,
 not by this source document. A local self-contained smoke APK is verification
 input, not publication evidence. Future production store builds use

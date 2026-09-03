@@ -58,8 +58,8 @@ test('keeps source-controlled Android versions aligned across Expo and Gradle', 
   const versionCode = Number(androidBuildGradle.match(/\bversionCode\s+(\d+)/u)?.[1]);
   const versionName = androidBuildGradle.match(/\bversionName\s+"([^"]+)"/u)?.[1];
 
-  assert.equal(appConfig.expo?.version, '1.2.11');
-  assert.equal(appConfig.expo?.android?.versionCode, 29);
+  assert.equal(appConfig.expo?.version, '1.2.12');
+  assert.equal(appConfig.expo?.android?.versionCode, 30);
   assert.equal(appConfig.expo?.ios?.bundleIdentifier, 'com.evnsolution.clever.routes');
   assert.equal(appConfig.expo?.ios?.buildNumber, '1');
   assert.equal(appConfig.expo?.android?.package, 'com.evnsolution.clever.routes');
@@ -147,6 +147,10 @@ test('separates Android development, QA, and self-contained smoke commands', () 
   assert.match(scripts['prepare:android:firebase:local'] ?? '', /prepare-google-services\.mjs --allow-existing/u);
   assert.match(scripts['build:android:device-smoke'] ?? '', /app:assembleRelease/u);
   assert.match(scripts['build:android:device-smoke'] ?? '', /reactNativeArchitectures=arm64-v8a/u);
+  assert.match(
+    scripts['build:android:device-smoke'] ?? '',
+    /EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https:\/\/clever-route\.cleversystem\.ai \.\/gradlew/u,
+  );
   assert.doesNotMatch(scripts['build:android:device-smoke'] ?? '', /app:clean/u);
 });
 
@@ -168,6 +172,14 @@ test('keeps incremental and clean direct-download Android builds explicit', () =
   assert.match(command, /android\.enableMinifyInReleaseBuilds=true/u);
   assert.match(command, /android\.enableShrinkResourcesInReleaseBuilds=true/u);
   assert.match(command, /expo\.useLegacyPackaging=true/u);
+  assert.match(
+    command,
+    /EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https:\/\/clever-route\.cleversystem\.ai \.\/gradlew/u,
+  );
+  assert.match(
+    cleanCommand,
+    /EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https:\/\/clever-route\.cleversystem\.ai \.\/gradlew/u,
+  );
   assert.doesNotMatch(command, /android\.enableBundleCompression=true/u);
   assert.match(gradleProperties, /^org\.gradle\.caching=true$/mu);
   assert.match(gradleProperties, /^org\.gradle\.workers\.max=4$/mu);
