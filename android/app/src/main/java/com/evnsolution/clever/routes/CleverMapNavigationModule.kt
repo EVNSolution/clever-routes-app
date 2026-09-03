@@ -162,6 +162,7 @@ class CleverMapNavigationModule(
     val coordinates = destination.coordinatePair()
     destination.address?.let { builder.appendQueryParameter("q", it) }
     coordinates?.let { builder.appendQueryParameter("ll", it) }
+    builder.appendQueryParameter("navigate", "yes")
     return builder.build()
   }
 

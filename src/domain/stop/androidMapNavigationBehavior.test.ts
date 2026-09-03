@@ -45,11 +45,11 @@ describe('Android map navigation handoff', () => {
     assert.match(nativeModule, /catch \([^)]*: SecurityException\)/u);
   });
 
-  it('always gives Waze its supported address search without forcing an impossible route', () => {
+  it('asks Waze to start navigation to the assigned stop destination', () => {
     assert.match(nativeModule, /const val WAZE_PACKAGE = "com\.waze"/u);
     assert.match(nativeModule, /destination\.address\?\.let \{ builder\.appendQueryParameter\("q", it\) \}/u);
     assert.match(nativeModule, /coordinates\?\.let \{ builder\.appendQueryParameter\("ll", it\) \}/u);
-    assert.doesNotMatch(nativeModule, /appendQueryParameter\("navigate", "yes"\)/u);
+    assert.match(nativeModule, /appendQueryParameter\("navigate", "yes"\)/u);
     assert.match(nativeModule, /Uri\.parse\("geo:\$coordinates"\)/u);
   });
 
