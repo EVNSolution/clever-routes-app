@@ -88,10 +88,10 @@ describe('routes list behavior', () => {
     assert.doesNotMatch(source, /<DataRow label="Date"/u);
     assert.doesNotMatch(source, /Previous Route|Next Route|routePager|selectRelativeRoute/u);
     assert.match(source, /\{isRouteCardExpanded \? \([\s\S]*?<\/>[\s\S]*?\) : null\}[\s\S]*?label="Start"[\s\S]*?label="Detail"/u);
-    assert.match(source, /routeCardStatus === 'active'[\s\S]*?label="Continue"[\s\S]*?label="Delete"/u);
-    assert.match(source, /<DangerButton[\s\S]*?label="Delete"/u);
+    assert.match(source, /routeCardStatus === 'active'[\s\S]*?label="Continue"[\s\S]*?label=\{isDeletingRoute \? 'Releasing route\.\.\.' : 'Delete'\}/u);
+    assert.match(source, /<DangerButton[\s\S]*?label=\{isDeletingRoute \? 'Releasing route\.\.\.' : 'Delete'\}/u);
     assert.match(source, /<SecondaryButton[\s\S]*?compact[\s\S]*?label="Continue"/u);
-    assert.match(source, /<DangerButton[\s\S]*?compact[\s\S]*?label="Delete"/u);
+    assert.match(source, /<DangerButton[\s\S]*?compact[\s\S]*?label=\{isDeletingRoute \? 'Releasing route\.\.\.' : 'Delete'\}/u);
     assert.match(source, /<PrimaryButton[\s\S]*?compact[\s\S]*?label="Start"/u);
     assert.match(source, /<SecondaryButton compact label="Detail"/u);
     assert.match(source, /<View style=\{styles\.routeActionRow\}>/u);
@@ -178,6 +178,24 @@ describe('routes list behavior', () => {
     assert.match(finishSource, /executionStatus: 'READY'/u);
     assert.match(finishSource, /Route session deleted\. Route returned to Ready\./u);
     assert.doesNotMatch(finishSource, /filter\(\(session\) => session\.route\.id !== route\.id\)/u);
+    assert.match(source, /label=\{isDeletingRoute \? 'Releasing route\.\.\.' : 'Delete'\}/u);
+  });
+
+  it('preserves known route cards while an in-place refresh loads', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const loadSource = source.slice(
+      source.indexOf('const handleLoginAndLoadRoutes = useCallback('),
+      source.indexOf('const handleRefreshRoutes = useCallback(', source.indexOf('const handleLoginAndLoadRoutes = useCallback(')),
+    );
+
+    assert.match(loadSource, /if \(shouldResetProgress\) \{\s*setRouteSessions\(\[\]\);\s*resetRouteProgress\(\);\s*\}/u);
+    assert.doesNotMatch(
+      loadSource.slice(
+        loadSource.indexOf("setRouteSyncState('loading');"),
+        loadSource.indexOf('if (shouldResetProgress)'),
+      ),
+      /setRouteSessions\(\[\]\)/u,
+    );
   });
 
   it('removes routes that are no longer assigned on the server', () => {

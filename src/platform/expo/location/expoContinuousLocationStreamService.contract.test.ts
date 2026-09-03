@@ -31,11 +31,19 @@ describe('Expo continuous location wiring', () => {
     assert.match(source, /processContinuousLocationTaskBatch/u);
     assert.match(source, /getExpoOfflineSubmissionQueue/u);
     assert.match(source, /stopContinuousLocationTaskIfInactive/u);
-    assert.match(source, /activeTaskExecutions/u);
+    assert.match(source, /activeRouteSession\.status === 'active'/u);
     assert.match(source, /ensureLocationUpdatesStarted/u);
-    assert.match(source, /stopLocationUpdatesIfCurrent: async \(taskName, isCurrent\) => \{[\s\S]*runLocationTaskOperation\(async \(\) => \{[\s\S]*if \(!\(await isCurrent\(\)\)\) return false;[\s\S]*stopExpoLocationUpdates\(taskName\)/u);
+    assert.match(source, /stopLocationUpdatesIfCurrent: \(taskName, isCurrent\) => runLocationTaskOperation\(async \(\) => \{[\s\S]*if \(!\(await isCurrent\(\)\)\) return false;[\s\S]*stopExpoLocationUpdates\(taskName\)/u);
     assert.doesNotMatch(source, /let continuousLocationTaskHandler/u);
     assert.doesNotMatch(source, /registerContinuousLocationTaskHandler/u);
+  });
+
+  it('does not delay native tracking shutdown behind in-flight location submissions', () => {
+    const source = readFileSync(locationServicePath, 'utf8');
+
+    assert.doesNotMatch(source, /activeTaskExecutions|Promise\.allSettled/u);
+    assert.match(source, /stopLocationUpdates: \(taskName\) => runLocationTaskOperation\(\(\) => stopExpoLocationUpdates\(taskName\)\)/u);
+    assert.match(source, /stopLocationUpdatesIfCurrent: \(taskName, isCurrent\) => runLocationTaskOperation\(async \(\) => \{/u);
   });
 
   it('requests ten-second high-accuracy updates without a movement threshold', () => {

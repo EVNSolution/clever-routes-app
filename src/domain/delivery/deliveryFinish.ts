@@ -27,7 +27,7 @@ export type DeliveryFinishResult =
       flowState: 'delivery_finished';
       kind: 'recorded';
       message: string;
-      monitoringMode: 'stopped';
+      monitoringMode: 'stopped' | 'stopping';
       stoppedTaskName: string;
     }
   | {
@@ -39,8 +39,23 @@ export type DeliveryFinishResult =
       requiresRouteLookup?: true;
       requiresRouteReconciliation?: true;
       stoppedTaskName: string;
-      monitoringMode: 'reduced';
+      monitoringMode: 'reduced' | 'stopped' | 'stopping';
     };
+
+export type DeliveryFinishPhaseTiming = {
+  elapsedMs: number;
+  phase:
+    | 'event_persisted'
+    | 'finish_resolved'
+    | 'live_attempt_failed'
+    | 'location_stop_failed'
+    | 'location_stop_requested'
+    | 'location_stopped'
+    | 'route_session_deactivated'
+    | 'server_acknowledged';
+};
+
+const ROUTE_END_LIVE_ATTEMPT_TIMEOUT_MS = 10_000;
 
 export async function finishDeliveryAfterActive(input: {
   deactivateActiveRouteSession?: (completion: {
@@ -49,6 +64,9 @@ export async function finishDeliveryAfterActive(input: {
     routeEnd: 'completed' | 'released';
   }) => Promise<boolean>;
   deliveryStart: DeliveryStartResult;
+  driverEventAttemptCancelTimeout?: (handle: unknown) => void;
+  driverEventAttemptScheduleTimeout?: (expire: () => void, timeoutMs: number) => unknown;
+  driverEventAttemptTimeoutMs?: number;
   driverEventService: DriverEventService;
   eventPayload?: Record<string, unknown>;
   now?: Date;
@@ -57,6 +75,7 @@ export async function finishDeliveryAfterActive(input: {
     entry: OfflineCompletionClearOutboxEntry,
     signal: AbortSignal,
   ) => Promise<void>;
+  onPhaseTiming?: (timing: DeliveryFinishPhaseTiming) => void;
   onServerAcknowledgedCancelTimeout?: (handle: unknown) => void;
   onServerAcknowledgedScheduleTimeout?: (expire: () => void, timeoutMs: number) => unknown;
   onServerAcknowledgedTimeoutMs?: number;
@@ -75,6 +94,14 @@ export async function finishDeliveryAfterActive(input: {
   }
 
   const occurredAt = input.now ?? new Date();
+  const startedAtMs = Date.now();
+  const reportPhase = (phase: DeliveryFinishPhaseTiming['phase']) => {
+    try {
+      input.onPhaseTiming?.({ elapsedMs: Math.max(0, Date.now() - startedAtMs), phase });
+    } catch {
+      // Diagnostic timing must never affect the durable route-end workflow.
+    }
+  };
   const routeReleased = input.routeEnd === 'released';
   const event = prepareDriverEventForPersistence(input.driverEventService, {
     clientEventId: createRouteEndClientEventId(occurredAt, routeReleased),
@@ -87,6 +114,7 @@ export async function finishDeliveryAfterActive(input: {
   if (preparedQueueItem !== undefined) {
     await input.offlineQueue?.whenPersisted();
   }
+  reportPhase('event_persisted');
 
   if (
     input.deactivateActiveRouteSession !== undefined
@@ -107,10 +135,39 @@ export async function finishDeliveryAfterActive(input: {
       reason: 'active_session_changed',
     };
   }
+  reportPhase('route_session_deactivated');
 
   const taskName = input.taskName ?? CONTINUOUS_LOCATION_TASK_NAME;
+  const releaseLocationStop = {
+    state: 'stopping' as 'failed' | 'stopped' | 'stopping',
+  };
+  if (routeReleased) {
+    reportPhase('location_stop_requested');
+    void (async () => {
+      try {
+        await input.streamService.stopLocationUpdates(taskName);
+        releaseLocationStop.state = 'stopped';
+        reportPhase('location_stopped');
+      } catch {
+        releaseLocationStop.state = 'failed';
+        reportPhase('location_stop_failed');
+      }
+    })();
+  }
   try {
-    const result = await input.driverEventService.recordDriverEvent(event);
+    const result = await runBoundedAsyncOperation(
+      (signal) => input.driverEventService.recordDriverEvent(event, { signal }),
+      {
+        ...(input.driverEventAttemptCancelTimeout === undefined
+          ? {}
+          : { cancel: input.driverEventAttemptCancelTimeout }),
+        ...(input.driverEventAttemptScheduleTimeout === undefined
+          ? {}
+          : { schedule: input.driverEventAttemptScheduleTimeout }),
+        timeoutMs: input.driverEventAttemptTimeoutMs ?? ROUTE_END_LIVE_ATTEMPT_TIMEOUT_MS,
+      },
+    );
+    reportPhase('server_acknowledged');
     if (preparedQueueItem !== undefined) {
       input.offlineQueue?.acknowledge(preparedQueueItem.queueItemId);
     }
@@ -145,7 +202,11 @@ export async function finishDeliveryAfterActive(input: {
         // The durable completion-clear outbox retries independently of route-session cleanup.
       }
     }
-    await input.streamService.stopLocationUpdates(taskName);
+    if (!routeReleased) {
+      await input.streamService.stopLocationUpdates(taskName);
+      reportPhase('location_stopped');
+    }
+    reportPhase('finish_resolved');
 
     return {
       discardedQueuedItems,
@@ -158,10 +219,11 @@ export async function finishDeliveryAfterActive(input: {
         : discardedQueuedItems > 0
         ? `Delivery finished. ${discardedQueuedItems} queued route submission${discardedQueuedItems === 1 ? '' : 's'} discarded after route completion was recorded.`
         : 'Delivery finished and route completion was recorded.',
-      monitoringMode: 'stopped',
+      monitoringMode: routeReleased && releaseLocationStop.state !== 'stopped' ? 'stopping' : 'stopped',
       stoppedTaskName: taskName,
     };
   } catch (error) {
+    reportPhase('live_attempt_failed');
     if (input.offlineQueue === undefined) {
       throw error;
     }
@@ -175,6 +237,7 @@ export async function finishDeliveryAfterActive(input: {
       input.offlineQueue.blockRouteSubmissionsForReconciliation(input.routePlanId);
     }
     await input.offlineQueue.whenPersisted();
+    reportPhase('finish_resolved');
     return {
       flowState: 'delivery_finished',
       kind: 'queued',
@@ -188,7 +251,13 @@ export async function finishDeliveryAfterActive(input: {
         ? {}
         : { requiresRouteReconciliation: true as const }),
       stoppedTaskName: taskName,
-      monitoringMode: 'reduced',
+      monitoringMode: routeReleased
+        ? releaseLocationStop.state === 'stopped'
+          ? 'stopped'
+          : releaseLocationStop.state === 'failed'
+            ? 'reduced'
+            : 'stopping'
+        : 'reduced',
     };
   }
 }
