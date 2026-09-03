@@ -150,7 +150,7 @@ Do not use `expo run:android` or a Development Build as Android QA evidence. Tho
 
 `cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied
 to committed source. `cli.appVersionSource` is `remote`; the reviewed native
-source version is `1.2.10` (`versionCode` `28`, iOS build `1`). Publication is
+source version is `1.2.11` (`versionCode` `29`, iOS build `1`). Publication is
 proved separately by the public release manifest and downloadable artifact,
 not by this source document. A local self-contained smoke APK is verification
 input, not publication evidence. Future production store builds use

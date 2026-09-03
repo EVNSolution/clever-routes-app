@@ -11,4 +11,8 @@
 -keep class com.swmansion.reanimated.** { *; }
 -keep class com.facebook.react.turbomodule.** { *; }
 
+# Expo TaskManager resolves this loader by the class name stored in AndroidManifest.xml.
+# Keep the exact name and implementation so minified background location jobs can load JS.
+-keep class expo.modules.adapters.react.apploader.RNHeadlessAppLoader { *; }
+
 # Add any project specific keep options here:
