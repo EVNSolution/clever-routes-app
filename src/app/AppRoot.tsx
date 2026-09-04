@@ -256,7 +256,11 @@ type AppScreen =
   | 'stopDetails';
 type RouteStatus = RouteSessionStatus;
 type RouteSyncState = 'error' | 'idle' | 'loading' | 'ready';
-type RouteRecoveryRefreshReason = 'driver_access_expired' | 'pickup_eta_snapshot_synced' | 'route_not_in_progress';
+type RouteRecoveryRefreshReason =
+  | 'driver_access_expired'
+  | 'pickup_eta_snapshot_synced'
+  | 'rolling_eta_snapshot_synced'
+  | 'route_not_in_progress';
 type RouteStartRecoveryState = 'idle' | 'pickup_retry' | 'sync_pending';
 type BackgroundLocationPermissionState = BackgroundPermissionResult | 'checking';
 type CompletedDeliveriesFilter = 'all' | 'delivered' | 'issues';
@@ -1579,16 +1583,16 @@ function DriverApp() {
           setRouteRecoveryRefreshReason('route_not_in_progress');
           setMessage('Route ended or released on server. Unsynced delivery results were preserved for reconciliation.');
         } else if (result.requiresRouteLookup === true) {
-          setRouteRecoveryRefreshReason(
-            result.routeLookupReason === 'pickup_eta_snapshot_synced'
-              ? 'pickup_eta_snapshot_synced'
-              : 'driver_access_expired',
-          );
-          setMessage(
-            result.routeLookupReason === 'pickup_eta_snapshot_synced'
-              ? 'Pickup synced. Refreshing route ETA.'
-              : 'Driver access expired. Refreshing route assignments.',
-          );
+          if (result.routeLookupReason === 'rolling_eta_snapshot_synced') {
+            setRouteRecoveryRefreshReason('rolling_eta_snapshot_synced');
+            setMessage('Stop completion synced. Refreshing route ETA.');
+          } else if (result.routeLookupReason === 'pickup_eta_snapshot_synced') {
+            setRouteRecoveryRefreshReason('pickup_eta_snapshot_synced');
+            setMessage('Pickup synced. Refreshing route ETA.');
+          } else {
+            setRouteRecoveryRefreshReason('driver_access_expired');
+            setMessage('Driver access expired. Refreshing route assignments.');
+          }
         }
       }
       await waitForOfflineQueuePersistence(queue);
@@ -3133,6 +3137,8 @@ function DriverApp() {
           setMessage('Route ended or released on server. Unsynced delivery results were preserved for reconciliation.');
         } else if (recoveryReason === 'pickup_eta_snapshot_synced') {
           setMessage('Pickup synced. Route ETA refreshed.');
+        } else if (recoveryReason === 'rolling_eta_snapshot_synced') {
+          setMessage('Stop completion synced. Route ETA refreshed.');
         }
       });
     }, 0);
@@ -4709,8 +4715,18 @@ function DriverApp() {
         setMessage('Driver access expired. Refreshing route assignments while this stop remains queued.');
         return;
       }
+      if (result.kind === 'recorded' && result.etaSnapshot !== undefined) {
+        applyEtaSnapshotToRoute(selectedRoute.id, result.etaSnapshot);
+      }
       if (result.kind === 'recorded' && result.etaUpdate !== undefined) {
         applyEtaUpdateToRoute(selectedRoute.id, result.etaUpdate);
+      }
+      if (
+        result.kind === 'recorded'
+        && action === 'delivered'
+        && result.etaSnapshot === undefined
+      ) {
+        setRouteRecoveryRefreshReason('rolling_eta_snapshot_synced');
       }
 
       const nextCompletedStopIds = [...new Set([...completedStopIds, stop.deliveryStopId])];

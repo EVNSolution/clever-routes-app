@@ -467,7 +467,7 @@ describe('route session current task behavior', () => {
     assert.match(terminalSource, /if \(screenRef\.current === requestScreen\) \{[\s\S]*openRouteStopDetails\(nextStop\);[\s\S]*\}/u);
   });
 
-  it('applies a recorded stop completion ETA update without applying queued results', () => {
+  it('applies the authoritative ETA snapshot and stop updates from a recorded completion', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const terminalBegin = appSource.indexOf('async function handleTerminalStop(');
     const terminalEnd = appSource.indexOf('\n\n  completeStopFromNotificationRef.current', terminalBegin);
@@ -477,11 +477,23 @@ describe('route session current task behavior', () => {
     assert.notEqual(terminalEnd, -1);
     assert.match(
       terminalSource,
+      /if \(result\.kind === 'recorded' && result\.etaSnapshot !== undefined\) \{[\s\S]*applyEtaSnapshotToRoute\(selectedRoute\.id, result\.etaSnapshot\);[\s\S]*\}/u,
+    );
+    assert.match(
+      terminalSource,
       /if \(result\.kind === 'recorded' && result\.etaUpdate !== undefined\) \{[\s\S]*applyEtaUpdateToRoute\(selectedRoute\.id, result\.etaUpdate\);[\s\S]*\}/u,
+    );
+    assert.equal(
+      terminalSource.match(/applyEtaSnapshotToRoute\(selectedRoute\.id, result\.etaSnapshot\)/gu)?.length,
+      1,
     );
     assert.equal(
       terminalSource.match(/applyEtaUpdateToRoute\(selectedRoute\.id, result\.etaUpdate\)/gu)?.length,
       1,
+    );
+    assert.match(
+      terminalSource,
+      /result\.kind === 'recorded'[\s\S]*action === 'delivered'[\s\S]*result\.etaSnapshot === undefined[\s\S]*setRouteRecoveryRefreshReason\('rolling_eta_snapshot_synced'\)/u,
     );
   });
 
