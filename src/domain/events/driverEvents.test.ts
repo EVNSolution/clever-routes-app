@@ -240,6 +240,48 @@ describe('driver event API boundary', () => {
     assert.equal(result.etaUpdate?.updatedStops[0]?.estimatedArrivalAt, '2026-05-12T11:28:00.000Z');
   });
 
+  it('accepts the server-authoritative ETA update returned with a failed event', async () => {
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          data: {
+            duplicate: false,
+            etaUpdate: {
+              actualArrivalAt: null,
+              deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+              delaySeconds: null,
+              previousEstimatedArrivalAt: null,
+              serverReceivedAt: '2026-05-12T11:17:00.000Z',
+              trigger: 'STOP_FAILED',
+              updatedStops: [{
+                deliveryStopId: sampleAssignedRoute.stops[1]!.deliveryStopId,
+                estimatedArrivalAt: '2026-05-12T11:28:00.000Z',
+                sequence: 2,
+              }],
+            },
+            eventId: 'evt_failed_1',
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await service.recordDriverEvent({
+      clientEventId: 'stop-failed-1',
+      deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+      eventType: 'STOP_FAILED',
+      occurredAt: new Date('2026-05-12T11:17:00.000Z'),
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.etaUpdate?.trigger, 'STOP_FAILED');
+    assert.equal(result.etaUpdate?.updatedStops[0]?.estimatedArrivalAt, '2026-05-12T11:28:00.000Z');
+  });
+
   it('treats duplicate driver event responses as recorded idempotently', async () => {
     const service = createDriverEventsApiClient({
       accessToken: 'fixture-driver-access-token',

@@ -76,7 +76,7 @@ export type DriverRouteEtaUpdate = {
   delaySeconds: number | null;
   previousEstimatedArrivalAt: string | null;
   serverReceivedAt: string;
-  trigger: 'ROUTE_STARTED' | 'STOP_ARRIVED' | 'STOP_DELIVERED' | 'PICKUP_COMPLETED';
+  trigger: 'ROUTE_STARTED' | 'STOP_ARRIVED' | 'STOP_DELIVERED' | 'STOP_FAILED' | 'PICKUP_COMPLETED';
   updatedStops: DriverRouteEtaStopUpdate[];
   etaStatus?: 'FAILED' | 'READY';
   etaFailureCode?: string | null;
@@ -480,6 +480,7 @@ function isDriverRouteEtaUpdate(value: unknown): value is DriverRouteEtaUpdate {
       update.trigger === 'ROUTE_STARTED'
       || update.trigger === 'STOP_ARRIVED'
       || update.trigger === 'STOP_DELIVERED'
+      || update.trigger === 'STOP_FAILED'
       || update.trigger === 'PICKUP_COMPLETED'
     )
     && Array.isArray(update.updatedStops)
