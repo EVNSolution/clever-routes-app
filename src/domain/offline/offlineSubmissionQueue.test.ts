@@ -1201,6 +1201,37 @@ describe('offline submission queue', () => {
     assert.equal(queue.listPending().length, 0);
   });
 
+  it('requests route lookup after a queued stop failure sync succeeds', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'stop-failed-1',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_FAILED',
+      occurredAt: new Date('2026-05-12T11:15:00.000Z'),
+      routePlanId: 'route-1',
+    });
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => { throw new Error('unexpected proof upload'); },
+      },
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(result, {
+      discarded: 0,
+      failed: 0,
+      requiresRouteLookup: true,
+      retried: 1,
+      routeLookupReason: 'rolling_eta_snapshot_synced',
+      serverConfirmedStopIds: ['stop-1'],
+      succeeded: 1,
+    });
+    assert.equal(queue.listPending().length, 0);
+  });
+
   it('persists enqueue and discard mutations to durable storage', async () => {
     const storage = createMemoryStorage();
     const queue = await createPersistentOfflineSubmissionQueue({ storage });

@@ -493,7 +493,11 @@ describe('route session current task behavior', () => {
     );
     assert.match(
       terminalSource,
-      /result\.kind === 'recorded'[\s\S]*action === 'delivered'[\s\S]*result\.etaSnapshot === undefined[\s\S]*setRouteRecoveryRefreshReason\('rolling_eta_snapshot_synced'\)/u,
+      /result\.kind === 'recorded'[\s\S]*result\.etaSnapshot === undefined[\s\S]*setRouteRecoveryRefreshReason\('rolling_eta_snapshot_synced'\)/u,
+    );
+    assert.doesNotMatch(
+      terminalSource,
+      /result\.kind === 'recorded'\s*&& action === 'delivered'\s*&& result\.etaSnapshot === undefined/u,
     );
   });
 
