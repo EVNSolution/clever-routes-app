@@ -391,7 +391,9 @@ describe('offline submission queue', () => {
     assert.deepEqual(result, {
       discarded: 0,
       failed: 0,
+      requiresRouteLookup: true,
       retried: 2,
+      routeLookupReason: 'rolling_eta_snapshot_synced',
       serverConfirmedStopIds: ['stop-1'],
       succeeded: 2,
     });
@@ -516,7 +518,9 @@ describe('offline submission queue', () => {
     assert.deepEqual(await retry, {
       discarded: 0,
       failed: 1,
+      requiresRouteLookup: true,
       retried: 2,
+      routeLookupReason: 'rolling_eta_snapshot_synced',
       serverConfirmedStopIds: ['stop-1'],
       succeeded: 1,
     });
@@ -1166,6 +1170,37 @@ describe('offline submission queue', () => {
     assert.equal(queue.listPending().length, 0);
   });
 
+  it('requests route lookup after a queued stop delivery sync succeeds', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'stop-delivered-1',
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-05-12T11:15:00.000Z'),
+      routePlanId: 'route-1',
+    });
+
+    const result = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: {
+        uploadProofMedia: async () => { throw new Error('unexpected proof upload'); },
+      },
+      queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.deepEqual(result, {
+      discarded: 0,
+      failed: 0,
+      requiresRouteLookup: true,
+      retried: 1,
+      routeLookupReason: 'rolling_eta_snapshot_synced',
+      serverConfirmedStopIds: ['stop-1'],
+      succeeded: 1,
+    });
+    assert.equal(queue.listPending().length, 0);
+  });
+
   it('persists enqueue and discard mutations to durable storage', async () => {
     const storage = createMemoryStorage();
     const queue = await createPersistentOfflineSubmissionQueue({ storage });
@@ -1219,7 +1254,14 @@ describe('offline submission queue', () => {
     });
     await queue.whenPersisted();
 
-    assert.deepEqual(result, { discarded: 0, failed: 1, retried: 2, succeeded: 1 });
+    assert.deepEqual(result, {
+      discarded: 0,
+      failed: 1,
+      requiresRouteLookup: true,
+      retried: 2,
+      routeLookupReason: 'rolling_eta_snapshot_synced',
+      succeeded: 1,
+    });
     const stored = JSON.parse(storage.values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) ?? '{}') as {
       items: { attempts: number; kind: string; lastErrorCode?: string; queueItemId: string; state: string }[];
     };
@@ -1756,7 +1798,14 @@ describe('offline submission queue', () => {
       queue: restored,
       routePlanId: 'route-1',
     });
-    assert.deepEqual(reconciled, { discarded: 0, failed: 0, retried: 1, succeeded: 1 });
+    assert.deepEqual(reconciled, {
+      discarded: 0,
+      failed: 0,
+      requiresRouteLookup: true,
+      retried: 1,
+      routeLookupReason: 'rolling_eta_snapshot_synced',
+      succeeded: 1,
+    });
     assert.deepEqual(recorded, ['ordered-later']);
   });
 

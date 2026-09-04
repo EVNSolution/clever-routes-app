@@ -178,7 +178,7 @@ export type OfflineSubmissionRetryResult = {
   failed: number;
   reconciliationRoutePlanIds?: string[];
   requiresRouteLookup?: true;
-  routeLookupReason?: 'driver_access_expired' | 'pickup_eta_snapshot_synced';
+  routeLookupReason?: 'driver_access_expired' | 'pickup_eta_snapshot_synced' | 'rolling_eta_snapshot_synced';
   serverConfirmedStopIds?: string[];
   retried: number;
   succeeded: number;
@@ -963,6 +963,9 @@ export async function retryOfflineSubmissions(input: {
         if (item.event.eventType === 'PICKUP_COMPLETED') {
           requiresRouteLookup = true;
           routeLookupReason = 'pickup_eta_snapshot_synced';
+        } else if (item.event.eventType === 'STOP_DELIVERED') {
+          requiresRouteLookup = true;
+          routeLookupReason = 'rolling_eta_snapshot_synced';
         }
       } else {
         await runAttempt((signal) => input.proofMediaUploadService.uploadProofMedia(item.request, {

@@ -104,6 +104,17 @@ describe('driver operations resilience runtime', () => {
     assert.match(source.slice(cleanupHelperIndex, source.indexOf('const selectedPhoneCountry', cleanupHelperIndex)), /sessionInstanceId: lease\.sessionInstanceId/u);
   });
 
+  it('refreshes the assigned route after offline stop delivery syncs rolling ETA', () => {
+    const retryStart = source.indexOf('const retryOfflineSubmissionsForSessions = useCallback');
+    const retryEnd = source.indexOf('\n  const usesSelectedRouteContext', retryStart);
+    const retrySource = source.slice(retryStart, retryEnd);
+
+    assert.match(retrySource, /result\.routeLookupReason === 'rolling_eta_snapshot_synced'/u);
+    assert.match(retrySource, /setRouteRecoveryRefreshReason\('rolling_eta_snapshot_synced'\)/u);
+    assert.match(retrySource, /Stop completion synced\. Refreshing route ETA\./u);
+    assert.match(source, /recoveryReason === 'rolling_eta_snapshot_synced'[\s\S]*Stop completion synced\. Route ETA refreshed\./u);
+  });
+
   it('does not invalidate durable route-end recovery when the active route epoch changes', () => {
     const routeEpochStart = source.indexOf('useEffect(() => {\n    if (driverSyncRouteEpochRef.current === activeDriverSyncRouteEpoch) return;');
     const routeEpochEnd = source.indexOf('\n  }, [activeDriverSyncRouteEpoch]);', routeEpochStart);
