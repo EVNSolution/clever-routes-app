@@ -963,7 +963,10 @@ export async function retryOfflineSubmissions(input: {
         if (item.event.eventType === 'PICKUP_COMPLETED') {
           requiresRouteLookup = true;
           routeLookupReason = 'pickup_eta_snapshot_synced';
-        } else if (item.event.eventType === 'STOP_DELIVERED') {
+        } else if (
+          item.event.eventType === 'STOP_DELIVERED'
+          || item.event.eventType === 'STOP_FAILED'
+        ) {
           requiresRouteLookup = true;
           routeLookupReason = 'rolling_eta_snapshot_synced';
         }

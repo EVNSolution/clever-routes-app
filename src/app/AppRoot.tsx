@@ -4723,7 +4723,6 @@ function DriverApp() {
       }
       if (
         result.kind === 'recorded'
-        && action === 'delivered'
         && result.etaSnapshot === undefined
       ) {
         setRouteRecoveryRefreshReason('rolling_eta_snapshot_synced');
