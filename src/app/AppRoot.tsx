@@ -120,6 +120,7 @@ import { createExpoSecureDriverAccessTokenStore } from '../platform/expo/secureS
 import { readInstalledDriverAppVersion } from '../platform/expo/application/expoAppVersionService';
 import { createExpoConvenienceNoticesStore } from '../platform/expo/storage/expoConvenienceNoticesStore';
 import { getConvenienceNoticesCopy } from '../domain/preferences/convenienceNotices';
+import { getCompanyReturnCopy } from '../domain/route/companyReturnCopy';
 import {
   createRouteOrderedDriverEventService,
   getPickupCompletionQueueState,
@@ -5575,6 +5576,7 @@ function DriverApp() {
               <RouteSessionScreen
                 allStopsCompleted={allStopsCompleted}
                 company={currentCompany}
+                companyReturnCopy={getCompanyReturnCopy(selectedDriverLocale)}
                 completedStopIds={completedStopIds}
                 currentNavigationStepIndex={navigationStepIndex}
                 deliveryFinishResult={deliveryFinishResult}
@@ -6363,6 +6365,7 @@ function AccountNamePage({
 function RouteSessionScreen({
   allStopsCompleted,
   company,
+  companyReturnCopy,
   completedStopIds,
   currentNavigationStepIndex,
   deliveryFinishResult,
@@ -6389,6 +6392,7 @@ function RouteSessionScreen({
 }: {
   allStopsCompleted: boolean;
   company: RouteAccessCompanyGuidance | null;
+  companyReturnCopy: ReturnType<typeof getCompanyReturnCopy>;
   completedStopIds: string[];
   currentNavigationStepIndex: number;
   deliveryFinishResult: DeliveryFinishResult | null;
@@ -6455,7 +6459,7 @@ function RouteSessionScreen({
     && etaSnapshot !== null
     && (etaSnapshot.status === 'READY' || etaSnapshot.status === 'FAILED');
   const primaryProgressAction = routeStatus === 'active' && allStopsCompleted
-    ? { disabled: isFinishingRoute, label: 'Finish Route', loading: isFinishingRoute, onPress: onFinishRoute }
+    ? { disabled: isFinishingRoute, label: companyReturnCopy.finish, loading: isFinishingRoute, onPress: onFinishRoute }
     : null;
 
   return (
@@ -6576,17 +6580,15 @@ function RouteSessionScreen({
 
       {routeStatus === 'active' && allStopsCompleted ? (
         <View style={styles.routeSessionSection}>
-          <Text style={styles.sectionTitle}>Return to Company</Text>
-          <Text style={styles.bodyText}>
-            All delivery stops are complete. Tracking stays active until you return and finish the route.
-          </Text>
+          <Text style={styles.sectionTitle}>{companyReturnCopy.title}</Text>
+          <Text style={styles.bodyText}>{companyReturnCopy.body}</Text>
           <SecondaryButton
             disabled={route.depot === null}
-            label="Navigate to Company"
+            label={companyReturnCopy.navigate}
             onPress={onOpenDepotNavigation}
           />
           {route.depot === null ? (
-            <Text style={styles.helperText}>Company return coordinates are unavailable. Contact dispatch before finishing.</Text>
+            <Text style={styles.helperText}>{companyReturnCopy.missingDepot}</Text>
           ) : null}
         </View>
       ) : null}
