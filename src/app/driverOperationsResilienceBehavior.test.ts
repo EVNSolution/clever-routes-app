@@ -28,9 +28,22 @@ describe('driver operations resilience runtime', () => {
     assert.ok(receiptRecoveryIndex > 0 && receiptRecoveryIndex < hydrationIndex);
     assert.ok(retryIndex > 0 && retryIndex < pendingProjectionIndex && pendingProjectionIndex < removalIndex);
     assert.match(source, /setDurableCompletionPendingRoutePlanId[\s\S]*pendingRouteEnd\?\.kind === 'driver_event'/u);
-    assert.match(source, /Route completion is still pending server confirmation. Reduced monitoring remains active/u);
+    assert.match(source, /Route completion is still pending server confirmation. GPS tracking stays stopped/u);
     assert.match(source, /activeRouteSession\.status === 'completion_pending' \|\| session\.pendingRouteEnd === undefined/u);
     assert.match(source, /completionResolvedDuringRestore \? null : persistedActiveRouteSession/u);
+  });
+
+  it('does not restart GPS for a durably completion-pending route after relaunch', () => {
+    const restoreIndex = source.indexOf('const restoredDeliveryStart = getRestoredActiveDeliveryStartResult();');
+    const completionPendingGuardIndex = source.indexOf('if (restoredActiveSession.pendingRouteEnd !== undefined)', restoreIndex);
+    const locationRestartIndex = source.indexOf('await startContinuousLocationUpdatesAfterDeliveryStart({', restoreIndex);
+
+    assert.ok(restoreIndex > 0 && completionPendingGuardIndex > restoreIndex);
+    assert.ok(locationRestartIndex > completionPendingGuardIndex);
+    assert.match(
+      source.slice(completionPendingGuardIndex, locationRestartIndex),
+      /setContinuousLocationResult\(\{ kind: 'stopped', taskName: CONTINUOUS_LOCATION_TASK_NAME \}\)[\s\S]*return;/u,
+    );
   });
 
   it('projects completion heartbeat state only from durable queue evidence and emits transition heartbeats', () => {

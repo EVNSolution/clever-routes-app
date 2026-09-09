@@ -237,6 +237,16 @@ export async function finishDeliveryAfterActive(input: {
       input.offlineQueue.blockRouteSubmissionsForReconciliation(input.routePlanId);
     }
     await input.offlineQueue.whenPersisted();
+    let completionLocationStopped = false;
+    if (!routeReleased) {
+      try {
+        await input.streamService.stopLocationUpdates(taskName);
+        completionLocationStopped = true;
+        reportPhase('location_stopped');
+      } catch {
+        reportPhase('location_stop_failed');
+      }
+    }
     reportPhase('finish_resolved');
     return {
       flowState: 'delivery_finished',
@@ -257,7 +267,7 @@ export async function finishDeliveryAfterActive(input: {
           : releaseLocationStop.state === 'failed'
             ? 'reduced'
             : 'stopping'
-        : 'reduced',
+        : completionLocationStopped ? 'stopped' : 'reduced',
     };
   }
 }
