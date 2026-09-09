@@ -674,7 +674,7 @@ function buildRouteMarkerCollection(
         properties: {
           ...model.depotFeature.properties,
           groupSize: 1,
-          markerState: currentStepIndex > 0 ? 'completed' : 'current',
+          markerState: currentStopSequence === null ? 'current' : 'completed',
         },
       }];
 

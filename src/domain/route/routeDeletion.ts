@@ -1,8 +1,8 @@
 export const ROUTE_DELETE_CONFIRMATION = {
-  title: 'Delete active session?',
-  message: 'Are you sure you want to delete this active session? The route will return to Ready.',
+  title: 'Release active route?',
+  message: 'Release this active route back to Ready? Use this only when you cannot continue the route.',
   cancelLabel: 'Cancel',
-  confirmLabel: 'Delete',
+  confirmLabel: 'Release',
 } as const;
 
 type RouteDeletionConfirmationButton = {

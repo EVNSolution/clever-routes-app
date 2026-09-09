@@ -3,8 +3,10 @@ import { describe, it } from 'node:test';
 
 import { sampleAssignedRoute, type AssignedRoute, type AssignedRouteStop } from '../route/assignedRoute';
 import {
+  buildDepotNavigationUrl,
   buildRouteNavigationUrl,
   buildStopNavigationUrl,
+  openDepotNavigation,
   openRouteNavigation,
   openStopNavigation,
 } from './stopNavigation';
@@ -12,6 +14,44 @@ import {
 const firstStop = sampleAssignedRoute.stops[0]!;
 
 describe('native stop map launch', () => {
+  it('opens the explicit server depot for company return without using a stop', async () => {
+    const opened: string[] = [];
+
+    assert.equal(
+      buildDepotNavigationUrl({ depot: sampleAssignedRoute.depot, platform: 'android' }),
+      'clever-routes-map://navigate?target=coordinates&latitude=43.6532&longitude=-79.3832',
+    );
+    assert.equal(
+      buildDepotNavigationUrl({ depot: sampleAssignedRoute.depot, platform: 'ios' }),
+      'https://www.google.com/maps/dir/?api=1&destination=43.6532%2C-79.3832&travelmode=driving&dir_action=navigate',
+    );
+    assert.deepEqual(await openDepotNavigation({
+      depot: sampleAssignedRoute.depot,
+      linking: { openURL: (url) => { opened.push(url); } },
+      platform: 'android',
+    }), {
+      kind: 'opened',
+      message: 'Opened company return navigation in the map app.',
+      url: 'clever-routes-map://navigate?target=coordinates&latitude=43.6532&longitude=-79.3832',
+    });
+    assert.deepEqual(opened, [
+      'clever-routes-map://navigate?target=coordinates&latitude=43.6532&longitude=-79.3832',
+    ]);
+  });
+
+  it('does not infer company return from route or stop coordinates', async () => {
+    assert.equal(buildDepotNavigationUrl({ depot: null, platform: 'android' }), null);
+    assert.deepEqual(await openDepotNavigation({
+      depot: null,
+      linking: { openURL: () => { throw new Error('must not open'); } },
+      platform: 'android',
+    }), {
+      kind: 'skipped',
+      message: 'Company return location is unavailable.',
+      reason: 'missing_destination',
+    });
+  });
+
   it('uses the Android map resolver bridge with both the trusted coordinates and full address', () => {
     const url = buildStopNavigationUrl({ platform: 'android', stop: firstStop });
     assert.equal(

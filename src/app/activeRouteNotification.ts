@@ -41,6 +41,14 @@ export function buildActiveRouteForegroundNotification(input: {
     };
   }
 
+  if (input.currentStepIndex > input.route.stops.length) {
+    return {
+      body: 'All stops are complete. Return to the company and finish the route in CLEVER Routes.',
+      expandedBody: formatOperationalNotificationLines(input.operationalState).join('\n'),
+      title: 'Return to Company',
+    };
+  }
+
   const stopIndex = Math.max(0, input.currentStepIndex - 1);
   const stop = input.route.stops[stopIndex] ?? input.route.stops[0] ?? null;
   if (stop === null) {

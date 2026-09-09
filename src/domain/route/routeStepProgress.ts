@@ -46,8 +46,12 @@ export function getAssignedRouteServerProgress(route: Pick<AssignedRoute, 'stops
   const nextStopIndex = route.stops.findIndex((stop) => !TERMINAL_STOP_STATUSES.has(stop.status));
   return {
     completedStopIds,
-    navigationStepIndex: nextStopIndex < 0 ? route.stops.length : nextStopIndex + 1,
+    navigationStepIndex: nextStopIndex < 0 ? getRouteReturnStepIndex(route) : nextStopIndex + 1,
   };
+}
+
+export function getRouteReturnStepIndex(route: Pick<AssignedRoute, 'stops'>): number {
+  return route.stops.length + 1;
 }
 
 export function getAssignedRouteProgressAfterPickup(route: Pick<AssignedRoute, 'stops'>): {

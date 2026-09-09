@@ -39,6 +39,7 @@ export function readDriverMapStyleUrl(value: string | null | undefined): string 
 
 export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel | null {
   const routeCoordinates = normalizeRouteCoordinates(route.routeGeometry?.coordinates ?? []);
+  const depotCoordinates = readStopLngLat(route.depot);
   const routeStopPointsById = new Map(route.routeStopPoints.map((point) => [point.deliveryStopId, point]));
   const snappedStopFeatures: RouteSnappedStopFeature[] = [];
 
@@ -89,12 +90,11 @@ export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel
     .sort((left, right) => left.properties.sequence - right.properties.sequence);
 
   const hasRouteGeometry = routeCoordinates.length >= 2;
-  if (!hasRouteGeometry && stopFeatures.length === 0) {
+  if (!hasRouteGeometry && stopFeatures.length === 0 && !isRenderableLngLat(depotCoordinates)) {
     return null;
   }
 
-  const depotCoordinates = hasRouteGeometry ? routeCoordinates[0] ?? null : null;
-  const depotFeature: RouteDepotFeature | null = depotCoordinates === null
+  const depotFeature: RouteDepotFeature | null = !isRenderableLngLat(depotCoordinates)
     ? null
     : {
         type: 'Feature',
@@ -110,6 +110,7 @@ export function buildRouteMapGeoJson(route: AssignedRoute): RouteMapGeoJsonModel
       };
 
   const bounds = calculateBounds([
+    ...(isRenderableLngLat(depotCoordinates) ? [depotCoordinates] : []),
     ...(hasRouteGeometry ? routeCoordinates : []),
     ...stopFeatures.map((feature) => feature.geometry.coordinates as AssignedRouteLngLat),
     ...snappedStopFeatures.map((feature) => feature.geometry.coordinates as AssignedRouteLngLat),

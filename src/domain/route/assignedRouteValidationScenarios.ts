@@ -151,6 +151,7 @@ function buildValidationRoute(input: {
   ];
 
   return {
+    depot: { latitude: 43.6532, longitude: -79.3832 },
     deliveryDate: input.deliveryDate,
     id: input.id,
     name: input.name,

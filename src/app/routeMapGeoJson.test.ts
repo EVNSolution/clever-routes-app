@@ -9,7 +9,10 @@ describe('route map geojson model', () => {
     const model = buildRouteMapGeoJson(sampleAssignedRoute);
 
     assert.notEqual(model, null);
-    assert.deepEqual(model?.depotFeature?.geometry.coordinates, sampleAssignedRoute.routeGeometry?.coordinates[0]);
+    assert.deepEqual(model?.depotFeature?.geometry.coordinates, [
+      sampleAssignedRoute.depot?.longitude,
+      sampleAssignedRoute.depot?.latitude,
+    ]);
     assert.equal(model?.depotFeature?.properties.label, 'D');
     assert.deepEqual(model?.stopCollection.features.map((feature) => feature.properties.label), ['1', '2']);
     assert.deepEqual(model?.stopCollection.features.map((feature) => feature.geometry.coordinates), [
@@ -23,6 +26,19 @@ describe('route map geojson model', () => {
     assert.equal(model?.bounds.length, 4);
     assert.ok(model !== null && model.bounds[0] < model.bounds[2]);
     assert.ok(model !== null && model.bounds[1] < model.bounds[3]);
+  });
+
+  it('uses only the explicit server depot for the company marker', () => {
+    const model = buildRouteMapGeoJson({
+      ...sampleAssignedRoute,
+      depot: null,
+      routeGeometry: {
+        coordinates: [[-80, 44], ...sampleAssignedRoute.routeGeometry!.coordinates.slice(1)],
+        type: 'LineString',
+      },
+    });
+
+    assert.equal(model?.depotFeature, null);
   });
 
   it('does not add a separate road stop marker when it is less than one metre from the delivery point', () => {
@@ -175,6 +191,7 @@ describe('route map geojson model', () => {
   it('renders confirmed stop coordinates without inventing a route line when geometry is missing', () => {
     const model = buildRouteMapGeoJson({
       ...sampleAssignedRoute,
+      depot: null,
       routeGeometry: null,
       routeStopPoints: [],
       stops: sampleAssignedRoute.stops.map((stop, index) => index === 1
@@ -192,6 +209,7 @@ describe('route map geojson model', () => {
   it('does not render an interactive map when no stop location can be confirmed', () => {
     assert.equal(buildRouteMapGeoJson({
       ...sampleAssignedRoute,
+      depot: null,
       routeGeometry: null,
       routeStopPoints: [],
       stops: sampleAssignedRoute.stops.map((stop) => ({

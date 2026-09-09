@@ -148,6 +148,7 @@ const DEFAULT_ASSIGNED_ROUTE_TIMEZONE = 'America/Toronto';
 
 export type AssignedRoute = {
   deliveryDate: string;
+  depot: AssignedRouteCoordinates | null;
   id: string;
   name: string;
   routeGeometry: AssignedRouteGeometry | null;
@@ -232,6 +233,10 @@ export type FetchLike = (
 
 export const sampleAssignedRoute: AssignedRoute = {
   deliveryDate: '2026-05-12',
+  depot: {
+    latitude: 43.6532,
+    longitude: -79.3832,
+  },
   id: '11111111-1111-4111-8111-111111111111',
   name: 'Tuesday AM Route',
   routeGeometry: {
@@ -603,6 +608,7 @@ function isAssignedRoute(value: unknown): value is AssignedRoute {
   const route = value as Record<string, unknown>;
   return (
     typeof route.deliveryDate === 'string' &&
+    (route.depot === undefined || route.depot === null || isNullableAssignedRouteCoordinates(route.depot)) &&
     typeof route.id === 'string' &&
     typeof route.name === 'string' &&
     (route.routeGeometry === undefined || route.routeGeometry === null || isAssignedRouteGeometry(route.routeGeometry)) &&
@@ -621,6 +627,7 @@ function isAssignedRoute(value: unknown): value is AssignedRoute {
 function normalizeAssignedRoute(route: AssignedRoute): AssignedRoute {
   return {
     ...route,
+    depot: normalizeAssignedRouteCoordinates(route.depot),
     routeGeometry: route.routeGeometry ?? null,
     routeMapPreview: route.routeMapPreview ?? null,
     routeMetrics: route.routeMetrics ?? null,

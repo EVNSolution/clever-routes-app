@@ -191,8 +191,9 @@ MVP와 확장 경계:
 
 ### 시나리오 5: 배송 종료와 기록 정리
 
-- 배송원이 `배송 종료` 또는 route 완료 상태에 도달하면 앱은 위치 이벤트 송신을 중단한다.
-- 현재 앱은 delivery_active 이후 `Finish delivery` 동작에서 continuous location task를 중단하고 `ROUTE_COMPLETED` 이벤트를 기록한다.
+- 모든 배송 stop이 terminal 상태가 되어도 route와 continuous location tracking은 유지한다.
+- 앱은 서버가 반환한 명시적 depot 좌표로 `Return to Company` 단계를 표시하고, 재시작 또는 offline 복구 뒤에도 이 단계를 복원한다.
+- 배송원이 회사 복귀 후 명시적으로 `Finish Route`를 실행할 때만 continuous location task를 중단하고 `ROUTE_COMPLETED` 이벤트를 기록한다.
 - `ROUTE_COMPLETED` 기록이 실패하면 route completion event를 offline queue에 남기고, 기록 성공 시에만 해당 route의 local retry item을 cleanup한다.
 - 앱은 마지막 sync 상태를 표시하고, 전송 실패 이벤트가 있으면 재시도 또는 미전송 안내를 제공한다.
 - 이후 앱 재실행 시에는 당일 route 상태와 driver session/access 상태를 서버에서 다시 확인한다.
