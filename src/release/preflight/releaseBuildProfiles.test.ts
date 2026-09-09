@@ -23,7 +23,7 @@ test('defines native EAS build profiles for preview and production evidence', ()
   const eas = readJson<{
     cli?: { appVersionSource?: string; requireCommit?: boolean };
     build?: Record<string, EasBuildProfile>;
-    submit?: Record<string, unknown>;
+    submit?: Record<string, { android?: { releaseStatus?: string; track?: string } }>;
   }>('eas.json');
 
   assert.equal(eas.cli?.appVersionSource, 'remote');
@@ -40,7 +40,8 @@ test('defines native EAS build profiles for preview and production evidence', ()
   assert.equal(eas.build?.production?.developmentClient, undefined);
   assert.equal(eas.build?.production?.android?.buildType, 'app-bundle');
   assert.notEqual(eas.build?.production?.android?.withoutCredentials, true);
-  assert.deepEqual(eas.submit?.production, {});
+  assert.equal(eas.submit?.production?.android?.track, 'production');
+  assert.equal(eas.submit?.production?.android?.releaseStatus, 'completed');
 });
 
 test('keeps source-controlled Android versions aligned across Expo and Gradle', () => {
