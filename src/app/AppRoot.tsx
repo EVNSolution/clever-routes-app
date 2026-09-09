@@ -451,6 +451,12 @@ function DriverApp() {
   const isPullRefreshingRef = useRef(false);
   const pullRefreshOffset = useSharedValue(0);
   const notifiedStopArrivalIdsRef = useRef<Set<string>>(new Set());
+  const latestContinuousLocationRef = useRef<{
+    latitude: number;
+    longitude: number;
+    occurredAt: Date;
+    routePlanId: string;
+  } | null>(null);
   const isRecordingArrivalRef = useRef(false);
   const completeStopFromNotificationRef = useRef<(data: StopArrivalNotificationData) => Promise<void>>(async () => undefined);
   const hasCheckedInitialDriverRouteNotificationRef = useRef(false);
@@ -2034,8 +2040,24 @@ function DriverApp() {
     }));
     try {
       let arrivalEvidence: StopArrivalEvidence | undefined;
+      let location: { latitude: number; longitude: number; recordedAt: Date } | null = null;
       try {
-        const location = await foregroundLocationSnapshotService.getCurrentForegroundLocation();
+        location = await foregroundLocationSnapshotService.getCurrentForegroundLocation();
+      } catch {
+        const cachedLocation = latestContinuousLocationRef.current;
+        if (
+          cachedLocation !== null
+          && cachedLocation.routePlanId === routeSession.route.id
+          && Date.now() - cachedLocation.occurredAt.getTime() <= 30_000
+        ) {
+          location = {
+            latitude: cachedLocation.latitude,
+            longitude: cachedLocation.longitude,
+            recordedAt: cachedLocation.occurredAt,
+          };
+        }
+      }
+      if (location !== null) {
         const proximity = getStopArrivalProximityEvidence({
           location,
           route: routeSession.route,
@@ -2051,8 +2073,6 @@ function DriverApp() {
           longitude: location.longitude,
           recordedAt: location.recordedAt,
         };
-      } catch {
-        // Arrival must still be recorded when a fresh GPS fix is unavailable.
       }
 
       const result = await submitStopArrivalForRouteStop(routeSession, stop, arrivalEvidence);
@@ -2244,6 +2264,7 @@ function DriverApp() {
 
   useEffect(() => {
     if (deliveryStartResult?.kind !== 'delivery_active' || deliveryFinishResult?.flowState === 'delivery_finished') {
+      latestContinuousLocationRef.current = null;
       registerContinuousLocationTaskObserver(null);
       return;
     }
@@ -2275,6 +2296,14 @@ function DriverApp() {
 
       const lastLocation = locations[locations.length - 1] ?? null;
       if (lastLocation !== null) {
+        if (selectedRoute !== null) {
+          latestContinuousLocationRef.current = {
+            latitude: lastLocation.latitude,
+            longitude: lastLocation.longitude,
+            occurredAt: lastLocation.occurredAt,
+            routePlanId: selectedRoute.id,
+          };
+        }
         setLatestGpsSample({
           accuracyMeters: lastLocation.accuracyMeters ?? null,
           capturedAt: lastLocation.occurredAt.toISOString(),
@@ -2583,7 +2612,7 @@ function DriverApp() {
         if (persistedActiveRouteSession?.status !== 'completion_pending') return false;
         setRouteSyncState('error');
         setScreen('mainTabs');
-        setMessage('Route completion is still pending server confirmation. Reduced monitoring remains active while receipt recovery retries.');
+        setMessage('Route completion is still pending server confirmation. GPS tracking stays stopped while receipt recovery retries.');
         return true;
       };
       lookupResult ??= await submitAccountRouteAccess(accountAccess);
@@ -2847,6 +2876,11 @@ function DriverApp() {
         if (shouldNavigateOnSuccess) {
           setScreen('mainTabs');
         }
+        if (restoredActiveSession.pendingRouteEnd !== undefined) {
+          setContinuousLocationResult({ kind: 'stopped', taskName: CONTINUOUS_LOCATION_TASK_NAME });
+          setMessage('Route completion is still pending server confirmation. GPS tracking stays stopped while receipt recovery retries.');
+          return;
+        }
         if (AppState.currentState !== 'active') {
           setContinuousLocationResult(null);
           setMessage('Active route restored. Tracking will resume when the app is open; the server route remains active.');
@@ -2895,7 +2929,7 @@ function DriverApp() {
           setVerifiedDriverPhoneE164(null);
           setScreen('loginPhone');
           setRouteSyncState('error');
-          setMessage('Sign in again to confirm the pending route completion. Reduced monitoring remains active until the receipt is resolved.');
+          setMessage('Sign in again to confirm the pending route completion. GPS tracking stays stopped until the receipt is resolved.');
           return;
         }
         await clearAndStopActiveLocationSession();

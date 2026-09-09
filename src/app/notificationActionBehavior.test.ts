@@ -119,6 +119,9 @@ describe('notification action behavior', () => {
     assert.notEqual(arrivalEnd, -1);
     assert.match(arrivalSource, /isRecordingArrivalRef\.current = true/u);
     assert.match(arrivalSource, /foregroundLocationSnapshotService\.getCurrentForegroundLocation\(\)/u);
+    assert.match(arrivalSource, /latestContinuousLocationRef\.current/u);
+    assert.match(arrivalSource, /cachedLocation\.routePlanId === routeSession\.route\.id/u);
+    assert.match(arrivalSource, /Date\.now\(\) - cachedLocation\.occurredAt\.getTime\(\) <= 30_000/u);
     assert.match(arrivalSource, /getStopArrivalProximityEvidence\(\{/u);
     assert.match(arrivalSource, /submitStopArrivalForRouteStop\(routeSession, stop, arrivalEvidence\)/u);
     assert.match(arrivalSource, /action === 'next_stop'/u);
