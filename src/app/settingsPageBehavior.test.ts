@@ -51,6 +51,10 @@ describe('Settings page behavior', () => {
     assert.match(settingsPage, /acceptedLocation \? 'Allowed' : 'Denied'/u);
     assert.match(settingsPage, /Platform\.OS === 'android'/u);
     assert.match(settingsPage, />NAVIGATION</u);
+    assert.match(settingsPage, /convenienceNoticesCopy\.section/u);
+    assert.match(settingsPage, /accessibilityLabel=\{convenienceNoticesCopy\.label\}/u);
+    assert.match(settingsPage, /value=\{convenienceNoticesEnabled\}/u);
+    assert.match(settingsPage, /onValueChange=\{onChangeConvenienceNotices\}/u);
     assert.match(settingsPage, /accessibilityLabel="Reset Default Map App"/u);
     assert.match(settingsPage, />Reset Default Map App</u);
     assert.match(settingsPage, /onPress=\{onResetDefaultMapApp\}/u);
@@ -71,6 +75,20 @@ describe('Settings page behavior', () => {
     assert.doesNotMatch(settingsPage, /navigationProvider|onChangeNavigationProvider/u);
     assert.doesNotMatch(settingsPage, /Logout and reset this device/u);
     assert.doesNotMatch(settingsPage, /Needs Review|CONSENT_COPY_VERSIONS|Allowed \u00b7|Denied \u00b7/u);
+  });
+
+  it('suppresses only optional nearby-stop reminders when the preference is disabled', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const locationObserver = source.slice(
+      source.indexOf('registerContinuousLocationTaskObserver(async'),
+      source.indexOf('return () => registerContinuousLocationTaskObserver(null)', source.indexOf('registerContinuousLocationTaskObserver(async')),
+    );
+
+    assert.match(source, /createExpoConvenienceNoticesStore/u);
+    assert.match(source, /convenienceNoticesStore\.load\(\)\.then\(\(enabled\) => \{[\s\S]*setConvenienceNoticesEnabled\(enabled\)/u);
+    assert.match(locationObserver, /convenienceNoticesEnabled/u);
+    assert.match(locationObserver, /scheduleStopArrivalNotification/u);
+    assert.doesNotMatch(locationObserver, /pendingDriverRouteNotification/u);
   });
 
   it('keeps provider-specific choices out of Settings while Android owns selection', () => {
