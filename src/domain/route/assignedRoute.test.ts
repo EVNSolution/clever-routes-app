@@ -56,6 +56,7 @@ describe('driver assigned route UX flow', () => {
     assert.equal(result.kind, 'route_ready');
     assert.equal(result.flowState, 'route_ready');
     assert.equal(result.route.name, 'Tuesday AM Route');
+    assert.deepEqual(result.route.depot, { latitude: 43.6532, longitude: -79.3832 });
     assert.equal(result.route.stops.length, 2);
     assert.equal(formatAssignedRouteDistance(result.route.routeMetrics), '3.3 km');
     assert.equal(formatAssignedRouteDuration(result.route.routeMetrics), '14 min');

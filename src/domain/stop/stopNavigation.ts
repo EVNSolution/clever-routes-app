@@ -51,6 +51,53 @@ const GOOGLE_MAPS_DIRECTIONS_URL = 'https://www.google.com/maps/dir/';
 const ANDROID_MAP_RESOLVER_URL = 'clever-routes-map://navigate';
 const GOOGLE_MAPS_MAX_WAYPOINTS = 3;
 
+export function buildDepotNavigationUrl(input: {
+  depot: AssignedRoute['depot'];
+  platform: StopNavigationPlatform;
+}): string | null {
+  const depot = input.depot;
+  if (depot === null || !isValidCoordinatePair(depot.latitude, depot.longitude)) {
+    return null;
+  }
+
+  if (input.platform === 'android') {
+    return `${ANDROID_MAP_RESOLVER_URL}?target=coordinates&latitude=${depot.latitude}&longitude=${depot.longitude}`;
+  }
+
+  return `${GOOGLE_MAPS_DIRECTIONS_URL}?api=1&destination=${encodeURIComponent(formatCoordinatePair(depot.latitude, depot.longitude))}&travelmode=driving&dir_action=navigate`;
+}
+
+export async function openDepotNavigation(input: {
+  depot: AssignedRoute['depot'];
+  linking: StopNavigationLinking;
+  platform: StopNavigationPlatform;
+}): Promise<RouteNavigationResult> {
+  const url = buildDepotNavigationUrl(input);
+  if (url === null) {
+    return {
+      kind: 'skipped',
+      message: 'Company return location is unavailable.',
+      reason: 'missing_destination',
+    };
+  }
+
+  try {
+    await input.linking.openURL(url);
+    return {
+      kind: 'opened',
+      message: 'Opened company return navigation in the map app.',
+      url,
+    };
+  } catch {
+    return {
+      kind: 'failed',
+      message: 'Map app could not be opened for company return.',
+      reason: 'open_failed',
+      url,
+    };
+  }
+}
+
 export function buildRouteNavigationUrl(input: {
   route: AssignedRoute;
 }): string | null {

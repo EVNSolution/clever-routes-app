@@ -62,6 +62,7 @@ import {
   getAssignedRouteServerProgress,
   getCurrentRouteStop,
   getNextIncompleteRouteStepIndex,
+  getRouteReturnStepIndex,
   getStopDetailsProgressState,
   isStopCompleted,
   ROUTE_COMPANY_STEP_INDEX,
@@ -190,7 +191,7 @@ import {
   type StopProofEventResult,
   type StopProofFailureReason,
 } from '../domain/stop/stopProofEvents';
-import { openRouteNavigation, openStopNavigation } from '../domain/stop/stopNavigation';
+import { openDepotNavigation, openRouteNavigation, openStopNavigation } from '../domain/stop/stopNavigation';
 import {
   getCountrySelectorRowText,
   getSelectedCountryCardText,
@@ -1712,7 +1713,7 @@ function DriverApp() {
     && currentStop?.deliveryStopId === stopDetailsStop?.deliveryStopId
     && !isCompletingStop
     && !isRecordingArrival;
-  const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => completedStopIds.includes(stop.deliveryStopId));
+  const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => isStopCompleted(stop, completedStopIds));
   const currentCompany = selectedRouteSession?.companyGuidance ?? null;
   const isRouteBoundScreen = screen === 'arrivalCheck'
     || screen === 'completedDeliveries'
@@ -4457,6 +4458,19 @@ function DriverApp() {
     setMessage(result.message);
   }
 
+  async function handleOpenDepotNavigation() {
+    if (selectedRoute === null) {
+      setMessage('No company return location is available.');
+      return;
+    }
+    const result = await openDepotNavigation({
+      depot: selectedRoute.depot,
+      linking: stopNavigationLinking,
+      platform: Platform.OS,
+    });
+    setMessage(result.message);
+  }
+
   async function handleOpenNavigationForStop(stop: AssignedRouteStop | null) {
     if (stop === null || selectedRoute === null) {
       setMessage('No stop is available to open in map.');
@@ -4748,7 +4762,24 @@ function DriverApp() {
 
       const isLastStop = selectedRoute.stops.every((stop) => nextCompletedStopIds.includes(stop.deliveryStopId));
       if (isLastStop) {
-        await finishRoute(selectedRoute);
+        const returnStepIndex = getRouteReturnStepIndex(selectedRoute);
+        const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
+          completedStopIds: nextCompletedStopIds,
+          navigationStepIndex: returnStepIndex,
+          routePlanId: selectedRoute.id,
+        });
+        if (!activeRouteSaved) {
+          setScreen('mainTabs');
+          setMessage('The final stop was recorded, but company return progress could not be saved. Refresh routes before finishing.');
+          return;
+        }
+        setNavigationStepIndex(returnStepIndex);
+        if (screenRef.current === requestScreen) {
+          setScreen('routeSession');
+        }
+        setMessage(result.kind === 'queued'
+          ? 'Final stop saved offline. Return to the company while it syncs, then finish the route.'
+          : 'All stops completed. Return to the company, then finish the route.');
         return;
       }
 
@@ -5530,6 +5561,7 @@ function DriverApp() {
                 onArrived={handleArrivedAtStep}
                 onCopyAddress={(address) => { void handleCopyAddress(address); }}
                 onFinishRoute={handleManualFinishRoute}
+                onOpenDepotNavigation={() => { void handleOpenDepotNavigation(); }}
                 onOpenNavigation={() => handleOpenNavigationForStop(currentStop)}
                 onOpenRouteNavigation={() => handleOpenRouteNavigation(selectedRoute)}
                 onOpenStop={handleOpenStopFromRouteSession}
@@ -6008,7 +6040,7 @@ function MyRoutesPage({
                       <SecondaryButton compact disabled={isContinueDisabled} label="Continue" onPress={() => onContinueRoute(session.route.id)} />
                     </View>
                     <View style={styles.routeActionButton}>
-                      <DangerButton compact disabled={isDeleteDisabled} label={isDeletingRoute ? 'Releasing route...' : 'Delete'} loading={isDeletingRoute} onPress={() => onDeleteRoute(session.route.id)} />
+                      <DangerButton compact disabled={isDeleteDisabled} label={isDeletingRoute ? 'Releasing route...' : 'Release'} loading={isDeletingRoute} onPress={() => onDeleteRoute(session.route.id)} />
                     </View>
                   </View>
                 ) : (
@@ -6293,6 +6325,7 @@ function RouteSessionScreen({
   onArrived,
   onCopyAddress,
   onFinishRoute,
+  onOpenDepotNavigation,
   onOpenNavigation,
   onOpenRouteNavigation,
   onOpenStop,
@@ -6318,6 +6351,7 @@ function RouteSessionScreen({
   onArrived(): void;
   onCopyAddress(address: string): void;
   onFinishRoute(): void;
+  onOpenDepotNavigation(): void;
   onOpenNavigation(): void;
   onOpenRouteNavigation(): void;
   onOpenStop(stop: AssignedRouteStop): void;
@@ -6487,6 +6521,23 @@ function RouteSessionScreen({
                 </>
               )}
             </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {routeStatus === 'active' && allStopsCompleted ? (
+        <View style={styles.routeSessionSection}>
+          <Text style={styles.sectionTitle}>Return to Company</Text>
+          <Text style={styles.bodyText}>
+            All delivery stops are complete. Tracking stays active until you return and finish the route.
+          </Text>
+          <SecondaryButton
+            disabled={route.depot === null}
+            label="Navigate to Company"
+            onPress={onOpenDepotNavigation}
+          />
+          {route.depot === null ? (
+            <Text style={styles.helperText}>Company return coordinates are unavailable. Contact dispatch before finishing.</Text>
           ) : null}
         </View>
       ) : null}
@@ -7775,7 +7826,7 @@ function clampRouteNavigationStepIndex(stepIndex: number, route: AssignedRoute):
     return COMPANY_STEP_INDEX;
   }
 
-  return Math.min(Math.max(stepIndex, COMPANY_STEP_INDEX), route.stops.length);
+  return Math.min(Math.max(stepIndex, COMPANY_STEP_INDEX), getRouteReturnStepIndex(route));
 }
 
 function getRouteStatus(deliveryStartResult: DeliveryStartResult | null, deliveryFinishResult: DeliveryFinishResult | null): RouteStatus {

@@ -28,11 +28,11 @@ describe('active route deletion', () => {
     assert.notEqual(alertPayload, null);
     const [title, message, buttons, options] = alertPayload!;
     assert.equal(title, ROUTE_DELETE_CONFIRMATION.title);
-    assert.equal(message, 'Are you sure you want to delete this active session? The route will return to Ready.');
+    assert.equal(message, 'Release this active route back to Ready? Use this only when you cannot continue the route.');
     assert.deepEqual(options, { cancelable: true });
     assert.deepEqual(buttons.map(({ style, text }) => ({ style, text })), [
       { style: 'cancel', text: 'Cancel' },
-      { style: 'destructive', text: 'Delete' },
+      { style: 'destructive', text: 'Release' },
     ]);
 
     buttons[0]?.onPress?.();

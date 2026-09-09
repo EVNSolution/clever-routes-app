@@ -726,7 +726,7 @@ describe('route session current task behavior', () => {
     assert.match(nativeMapSource, /id="route-preview-line"[\s\S]*'line-color': ROUTE_VISUAL_STATE_COLORS\.upcoming,[\s\S]*'line-opacity': 1,[\s\S]*'line-width': 2\.75/u);
     assert.match(nativeMapSource, /id="route-preview-completed-line"[\s\S]*'line-color': ROUTE_VISUAL_STATE_COLORS\.completed,[\s\S]*'line-opacity': 1,[\s\S]*'line-width': 2\.75/u);
     assert.match(nativeMapSource, /id="route-preview-active-leg-line"[\s\S]*'line-color': ROUTE_VISUAL_STATE_COLORS\.current,[\s\S]*'line-opacity': 1,[\s\S]*'line-width': 3\.25/u);
-    assert.match(nativeMapSource, /markerState: currentStepIndex > 0 \? 'completed' : 'current'/u);
+    assert.match(nativeMapSource, /markerState: currentStopSequence === null \? 'current' : 'completed'/u);
     assert.match(nativeMapSource, /sequences\.every\(\(sequence\) => sequence < currentStopSequence\)[\s\S]*\? 'completed'/u);
     assert.match(nativeMapSource, /\['==', \['get', 'markerState'\], 'completed'\], ROUTE_VISUAL_STATE_COLORS\.completed/u);
     assert.match(nativeMapSource, /'circle-opacity': 1/u);

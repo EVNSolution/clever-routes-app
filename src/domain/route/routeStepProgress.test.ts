@@ -6,6 +6,7 @@ import {
   buildOutOfOrderStopArrivalWarning,
   getAssignedRouteProgressAfterPickup,
   getAssignedRouteServerProgress,
+  getRouteReturnStepIndex,
   getNextIncompleteRouteStepIndex,
   getStopDetailsProgressState,
   isStopCompleted,
@@ -21,6 +22,19 @@ describe('route step progress state', () => {
     assert.equal(isStopCompleted({ ...firstStop, status: 'FAILED' }, []), true);
     assert.equal(isStopCompleted({ ...firstStop, status: 'ASSIGNED' }, [firstStop.deliveryStopId]), true);
     assert.equal(isStopCompleted({ ...firstStop, status: 'ASSIGNED' }, []), false);
+  });
+
+  it('restores an all-terminal in-progress route at the company return step', () => {
+    const route = {
+      ...sampleAssignedRoute,
+      stops: sampleAssignedRoute.stops.map((stop) => ({ ...stop, status: 'DELIVERED' })),
+    };
+
+    assert.deepEqual(getAssignedRouteServerProgress(route), {
+      completedStopIds: route.stops.map((stop) => stop.deliveryStopId),
+      navigationStepIndex: getRouteReturnStepIndex(route),
+    });
+    assert.equal(getRouteReturnStepIndex(route), route.stops.length + 1);
   });
 
   it('restores delivered stops and the next navigation step from server route state', () => {

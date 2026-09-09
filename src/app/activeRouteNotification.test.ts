@@ -55,6 +55,17 @@ describe('active route foreground notification', () => {
     assert.doesNotMatch(buildActiveRouteForegroundNotification({ currentStepIndex: 2, route }).expandedBody ?? '', /Payment/u);
   });
 
+  it('keeps tracking visible while the driver returns to the company', () => {
+    assert.deepEqual(buildActiveRouteForegroundNotification({
+      currentStepIndex: sampleAssignedRoute.stops.length + 1,
+      route: sampleAssignedRoute,
+    }), {
+      body: 'All stops are complete. Return to the company and finish the route in CLEVER Routes.',
+      expandedBody: operationalLines,
+      title: 'Return to Company',
+    });
+  });
+
   it('keeps Store Pickup distinct from Stop 1 in the foreground notification', () => {
     assert.deepEqual(buildActiveRouteForegroundNotification({ currentStepIndex: 0, route: sampleAssignedRoute }), {
       body: 'Open CLEVER Routes to confirm pickup before the first delivery stop.',
