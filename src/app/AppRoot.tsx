@@ -16,6 +16,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -117,6 +118,8 @@ import {
 import { createExpoProofPhotoCaptureService } from '../platform/expo/camera/expoProofPhotoCaptureService';
 import { createExpoSecureDriverAccessTokenStore } from '../platform/expo/secureStore/expoSecureDriverAccessTokenStore';
 import { readInstalledDriverAppVersion } from '../platform/expo/application/expoAppVersionService';
+import { createExpoConvenienceNoticesStore } from '../platform/expo/storage/expoConvenienceNoticesStore';
+import { getConvenienceNoticesCopy } from '../domain/preferences/convenienceNotices';
 import {
   createRouteOrderedDriverEventService,
   getPickupCompletionQueueState,
@@ -397,6 +400,7 @@ function DriverApp() {
   const [routeStartRecoveryState, setRouteStartRecoveryState] = useState<RouteStartRecoveryState>('idle');
   const [lastRoutesUpdatedAt, setLastRoutesUpdatedAt] = useState<Date | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [convenienceNoticesEnabled, setConvenienceNoticesEnabled] = useState(true);
 
   const showOperationalDialog = useCallback((
     title: string,
@@ -545,11 +549,20 @@ function DriverApp() {
   const foregroundLocationSnapshotService = useMemo(() => createExpoForegroundLocationSnapshotService(), []);
   const continuousLocationStreamService = useMemo(() => createExpoContinuousLocationStreamService(), []);
   const stopArrivalNotificationService = useMemo(() => createExpoStopArrivalNotificationService(), []);
+  const convenienceNoticesStore = useMemo(() => createExpoConvenienceNoticesStore(), []);
   const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
   const mockDriverEventService = useMemo(() => createMockDriverEventService(), []);
   const mockDriverConsentService = useMemo(() => createMockDriverConsentService(), []);
   const mockAssignedRouteService = useMemo(() => createMockAssignedRouteService({ status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute }), []);
   const mockProofMediaUploadService = useMemo(() => createMockProofMediaUploadService({ mode: 'success' }), []);
+
+  useEffect(() => {
+    let active = true;
+    void convenienceNoticesStore.load().then((enabled) => {
+      if (active) setConvenienceNoticesEnabled(enabled);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [convenienceNoticesStore]);
 
   const refreshBackgroundLocationPermission = useCallback(async (): Promise<BackgroundPermissionResult> => {
     const permission = await continuousLocationStreamService.getBackgroundPermission();
@@ -969,6 +982,14 @@ function DriverApp() {
       .catch(() => {
         setMessage('Default map app could not be reset. Try again.');
       });
+  }
+
+  function handleChangeConvenienceNotices(enabled: boolean): void {
+    setConvenienceNoticesEnabled(enabled);
+    void convenienceNoticesStore.save(enabled).catch(() => {
+      setConvenienceNoticesEnabled(!enabled);
+      setMessage('Notification preference could not be saved. Try again.');
+    });
   }
 
   function handleOpenConsentDocument(): void {
@@ -2267,7 +2288,7 @@ function DriverApp() {
         route: selectedRoute,
       });
 
-      if (candidate !== null && selectedRoute !== null) {
+      if (convenienceNoticesEnabled && candidate !== null && selectedRoute !== null) {
         notifiedStopArrivalIdsRef.current.add(candidate.stop.deliveryStopId);
         await continuousLocationStreamService.updateLocationNotification?.({
           notification: buildActiveRouteForegroundNotification({
@@ -2284,6 +2305,7 @@ function DriverApp() {
     return () => registerContinuousLocationTaskObserver(null);
   }, [
     completedStopIds,
+    convenienceNoticesEnabled,
     continuousLocationStreamService,
     deliveryFinishResult,
     deliveryStartResult,
@@ -5518,9 +5540,12 @@ function DriverApp() {
               acceptedPrivacy={acceptedPrivacy}
               accountName={accountName}
               appVersion={installedDriverAppVersion?.versionName ?? 'Unknown'}
+              convenienceNoticesCopy={getConvenienceNoticesCopy(selectedDriverLocale)}
+              convenienceNoticesEnabled={convenienceNoticesEnabled}
               isLoadingAccountProfile={isLoadingAccountProfile}
               isRequestingAccountDeletion={isRequestingAccountDeletion}
               onEditName={handleOpenAccountName}
+              onChangeConvenienceNotices={handleChangeConvenienceNotices}
               onOpenAccountDeletionInformation={handleOpenAccountDeletionInformation}
               onOpenConsentDocument={handleOpenConsentDocument}
               onOpenSupport={handleOpenSupport}
@@ -6079,9 +6104,12 @@ function SettingsPage({
   acceptedPrivacy,
   accountName,
   appVersion,
+  convenienceNoticesCopy,
+  convenienceNoticesEnabled,
   isLoadingAccountProfile,
   isRequestingAccountDeletion,
   onEditName,
+  onChangeConvenienceNotices,
   onOpenAccountDeletionInformation,
   onOpenConsentDocument,
   onOpenSupport,
@@ -6094,9 +6122,12 @@ function SettingsPage({
   acceptedPrivacy: boolean;
   accountName: string | null;
   appVersion: string;
+  convenienceNoticesCopy: ReturnType<typeof getConvenienceNoticesCopy>;
+  convenienceNoticesEnabled: boolean;
   isLoadingAccountProfile: boolean;
   isRequestingAccountDeletion: boolean;
   onEditName(): void;
+  onChangeConvenienceNotices(enabled: boolean): void;
   onOpenAccountDeletionInformation(): void;
   onOpenConsentDocument(): void;
   onOpenSupport(): void;
@@ -6157,6 +6188,24 @@ function SettingsPage({
           </View>
         </View>
       ) : null}
+
+      <View style={styles.settingsSection}>
+        <Text style={styles.settingsSectionLabel}>{convenienceNoticesCopy.section}</Text>
+        <View style={styles.settingsGroup}>
+          <View style={styles.settingsRow}>
+            <View style={styles.settingsPreferenceCopy}>
+              <Text style={styles.settingsRowLabel}>{convenienceNoticesCopy.label}</Text>
+              <Text style={styles.settingsPreferenceDescription}>{convenienceNoticesCopy.description}</Text>
+            </View>
+            <Switch
+              accessibilityLabel={convenienceNoticesCopy.label}
+              accessibilityRole="switch"
+              onValueChange={onChangeConvenienceNotices}
+              value={convenienceNoticesEnabled}
+            />
+          </View>
+        </View>
+      </View>
 
       <View style={styles.settingsSection}>
         <Text style={styles.settingsSectionLabel}>CONSENT</Text>
@@ -8647,6 +8696,16 @@ const styles = StyleSheet.create({
   },
   settingsRowPressed: {
     backgroundColor: '#f4f6f8',
+  },
+  settingsPreferenceCopy: {
+    flex: 1,
+    gap: 3,
+    paddingVertical: 12,
+  },
+  settingsPreferenceDescription: {
+    color: '#7a8089',
+    fontSize: 13,
+    lineHeight: 18,
   },
   settingsRowLabel: {
     color: '#24272c',
