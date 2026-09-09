@@ -396,7 +396,7 @@ describe('delivery finish route cleanup', () => {
     )), true);
   });
 
-  it('queues route completion when live event recording fails and keeps the queued completion evidence', async () => {
+  it('queues route completion when live event recording fails, keeps the evidence, and stops tracking', async () => {
     const memoryQueue = createInMemoryOfflineSubmissionQueue();
     let releasePersistence: () => void = () => undefined;
     let persistenceStarted = false;
@@ -449,8 +449,8 @@ describe('delivery finish route cleanup', () => {
     assert.equal(routeSessionDeactivated, true);
     assert.equal(result.kind, 'queued');
     assert.equal(result.flowState, 'delivery_finished');
-    assert.deepEqual(stream.stoppedTasks, []);
-    assert.equal(result.kind === 'queued' ? result.monitoringMode : null, 'reduced');
+    assert.deepEqual(stream.stoppedTasks, ['clever-routes-continuous-location']);
+    assert.equal(result.kind === 'queued' ? result.monitoringMode : null, 'stopped');
     const pending = queue.listPending();
     assert.equal(pending.length, 1);
     assert.equal(pending[0]?.kind, 'driver_event');
