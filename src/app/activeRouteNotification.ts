@@ -30,13 +30,16 @@ export type ActiveRouteNotificationOperationalState = {
 
 export function buildActiveRouteForegroundNotification(input: {
   currentStepIndex: number;
+  detailed: boolean;
   operationalState: ActiveRouteNotificationOperationalState;
   route: AssignedRoute;
 }): ContinuousLocationNotificationContent {
   if (input.currentStepIndex <= 0) {
     return {
       body: 'Open CLEVER Routes to confirm pickup before the first delivery stop.',
-      expandedBody: formatOperationalNotificationLines(input.operationalState).join('\n'),
+      ...(input.detailed
+        ? { expandedBody: formatOperationalNotificationLines(input.operationalState).join('\n') }
+        : {}),
       title: 'Pickup & Start Route',
     };
   }
@@ -44,7 +47,9 @@ export function buildActiveRouteForegroundNotification(input: {
   if (input.currentStepIndex > input.route.stops.length) {
     return {
       body: 'All stops are complete. Return to the company and finish the route in CLEVER Routes.',
-      expandedBody: formatOperationalNotificationLines(input.operationalState).join('\n'),
+      ...(input.detailed
+        ? { expandedBody: formatOperationalNotificationLines(input.operationalState).join('\n') }
+        : {}),
       title: 'Return to Company',
     };
   }
@@ -54,7 +59,9 @@ export function buildActiveRouteForegroundNotification(input: {
   if (stop === null) {
     return {
       body: 'Open CLEVER Routes for route details.',
-      expandedBody: formatOperationalNotificationLines(input.operationalState).join('\n'),
+      ...(input.detailed
+        ? { expandedBody: formatOperationalNotificationLines(input.operationalState).join('\n') }
+        : {}),
       title: 'Route in progress',
     };
   }
@@ -81,15 +88,19 @@ export function buildActiveRouteForegroundNotification(input: {
   ].filter((value): value is string => value !== null).join('\n');
 
   return {
-    body,
-    expandedBody: [formatExpandedNotificationBody({
-      address,
-      customerNote: stop.customerNote,
-      itemCount,
-      itemTypeCount,
-      isPickupStop,
-      payment,
-    }), ...formatOperationalNotificationLines(input.operationalState)].join('\n'),
+    body: input.detailed ? body : address,
+    ...(input.detailed
+      ? {
+          expandedBody: [formatExpandedNotificationBody({
+            address,
+            customerNote: stop.customerNote,
+            itemCount,
+            itemTypeCount,
+            isPickupStop,
+            payment,
+          }), ...formatOperationalNotificationLines(input.operationalState)].join('\n'),
+        }
+      : {}),
     title: `Next stop ${stop.sequence}${eta === null ? '' : `  ETA ${eta}`}`,
     url: buildActiveRouteNotificationUrl({
       deliveryStopId: stop.deliveryStopId,

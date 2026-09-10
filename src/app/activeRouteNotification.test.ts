@@ -14,14 +14,39 @@ const defaultOperationalState = {
   alert: 'None', device: 'This device', gap: '0 stops', gps: 'Monitoring', route: 'In progress', server: 'Checking', sync: 'Active',
 };
 
-function buildActiveRouteForegroundNotification(input: { currentStepIndex: number; route: AssignedRoute }) {
-  return buildNotificationContent({ ...input, operationalState: defaultOperationalState });
+function buildActiveRouteForegroundNotification(input: {
+  currentStepIndex: number;
+  detailed?: boolean;
+  route: AssignedRoute;
+}) {
+  return buildNotificationContent({
+    currentStepIndex: input.currentStepIndex,
+    detailed: input.detailed ?? true,
+    operationalState: defaultOperationalState,
+    route: input.route,
+  });
 }
 
 describe('active route foreground notification', () => {
+  it('keeps the current stop and direct actions while compact mode removes delivery and telemetry detail', () => {
+    const notification = buildActiveRouteForegroundNotification({
+      currentStepIndex: 1,
+      detailed: false,
+      route: sampleAssignedRoute,
+    });
+
+    assert.deepEqual(notification, {
+      body: '100 King St W, Toronto',
+      title: 'Next stop 1  ETA 7:08 AM',
+      url: 'clever-routes://route-stop?routePlanId=11111111-1111-4111-8111-111111111111&deliveryStopId=22222222-2222-4222-8222-222222222222&showStopActions=true',
+    });
+    assert.doesNotMatch(JSON.stringify(notification), /Collect cash|CAD 84\.50|Customer note|Items|GPS|Server|Sync/u);
+  });
+
   it('renders the exact Kitchener progress gap as independent labeled operational lines', () => {
     const notification = buildNotificationContent({
       currentStepIndex: 11,
+      detailed: true,
       operationalState: {
         alert: 'Action needed',
         device: '11/11',

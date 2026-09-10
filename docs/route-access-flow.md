@@ -13,10 +13,10 @@ The app now has an interactive phone-first driver flow:
 3. First-registration mode submits phone + an existing Shopify invitation code + new six-digit PIN to `POST /driver/auth/verify-invite`. It does not collect a driver name and does not create or request the Shopify invitation.
 4. Successful login or registration returns an account access/refresh session with `use: driver_account`, stored in native SecureStore without persisting the PIN or invitation code.
 5. The app calls `POST /driver/route-access/lookup` with the account bearer token and `routeContext: null`; the phone number is not resent in this request.
-6. `ROUTES_FOUND` returns zero or more selectable route choices. Each choice carries company guidance, route access identifiers, and its own short-lived route-scoped driver token.
+6. `ROUTES_FOUND` returns zero or more selectable route choices. A ready route becomes selectable only after Dispatch publishes its current child version; an already active `IN_PROGRESS` route remains recoverable. Each choice carries company guidance, route access identifiers, and its own short-lived route-scoped driver token.
 7. From the driver's point of view, multi-company assignments are just multiple routes; each route card shows the company/shop and route metadata attached to that route.
 8. The app records required `LOCATION_INFORMATION` and `PERSONAL_INFORMATION` consent through the selected route token, then loads assigned-route detail for each route choice.
-9. Every created child route renders in `Ready` until delivery starts. Driver assignment does not change this execution state; a route card can open detail or start delivery.
+9. Every Dispatch-published child route renders in `Ready` until delivery starts. Assignment alone does not expose it to the driver; after publication, a route card opens a pre-start session with an obscured map and explicit Start action.
 10. Delivery start requests foreground location permission, records `ROUTE_STARTED`, and moves the route to `In progress` only when permission is granted.
 11. Route choices carry the server execution status. If secure local progress is missing but the server reports `IN_PROGRESS`, the app restores that route as active and rebuilds completed-stop progress from assigned-route stop statuses instead of presenting another Start action.
 12. Live tracking starts at the company/pickup step, then proceeds through ordered stops without presenting turn-by-turn instruction UI.

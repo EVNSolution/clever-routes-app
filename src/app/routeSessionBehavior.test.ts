@@ -24,11 +24,15 @@ function getRouteSessionComponentSource(): string {
 describe('route session current task behavior', () => {
   it('uses Route Session as the only route detail surface', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
+    const routesPageStart = appSource.indexOf('function MyRoutesPage(');
+    const routesPageEnd = appSource.indexOf('function SettingsPage(', routesPageStart);
+    const routesPageSource = appSource.slice(routesPageStart, routesPageEnd);
 
     assert.equal(existsSync(routePreviewBehaviorPath), false);
     assert.doesNotMatch(appSource, /'routePreview'|'mapPreview'|RoutePreviewScreen|MapPreviewScreen/u);
     assert.doesNotMatch(appSource, /onOpenRoutePreview|handleOpenRoutePreview|openMapPreview/u);
-    assert.match(appSource, /<SecondaryButton compact label="Detail" onPress=\{\(\) => onContinueRoute\(session\.route\.id\)\} \/>/u);
+    assert.match(routesPageSource, /accessibilityLabel=\{`Open \$\{session\.route\.name\}`\}/u);
+    assert.doesNotMatch(routesPageSource, /label="Detail"/u);
   });
 
   it('restores server in-progress routes instead of presenting them as Ready', () => {
@@ -67,7 +71,8 @@ describe('route session current task behavior', () => {
 
     assert.match(appSource, /<RouteSessionScreen[\s\S]*isRefreshingRoutes=\{isRefreshingRoutes\}[\s\S]*onRetryRouteSync=\{\(\) => \{ void handleRefreshRoutes\(\); \}\}[\s\S]*pendingRouteEnd=\{selectedRouteSession\?\.pendingRouteEnd\}/u);
     assert.match(componentSource, /pendingRouteEnd\?: PendingRouteEnd/u);
-    assert.match(componentSource, /routeStatus === 'ready' \? \([\s\S]*pendingRouteEnd !== undefined \? \([\s\S]*Final status syncing[\s\S]*Retry Sync[\s\S]*\) : \([\s\S]*label="Start Session"/u);
+    assert.match(componentSource, /routeStatus === 'ready' && pendingRouteEnd === undefined \? \([\s\S]*styles\.routeSessionPrestartOverlay[\s\S]*label="Start"/u);
+    assert.match(componentSource, /routeStatus === 'ready' && pendingRouteEnd !== undefined \? \([\s\S]*Final status syncing[\s\S]*Retry Sync/u);
     assert.doesNotMatch(componentSource, /StatusChip[^\n]*Final status syncing/u);
   });
 
@@ -112,11 +117,12 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(restoreSource, /setScreen\('routeSession'\)/u);
   });
 
-  it('shows pickup guidance before start and a compact delivery task after start', () => {
+  it('obscures the ready map behind its Start action and shows a compact delivery task after start', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const componentSource = getRouteSessionComponentSource();
 
-    assert.match(componentSource, /routeStatus === 'ready' \? \([\s\S]*<Text style=\{styles\.sectionTitle\}>Store Pickup<\/Text>[\s\S]*company\?\.pickupGuidance[\s\S]*<PrimaryButton[\s\S]*label="Start Session"[\s\S]*onPress=\{onStartRoute\}/u);
+    assert.match(componentSource, /<View style=\{styles\.routeSessionMap\}>[\s\S]*<MapOverview[\s\S]*routeStatus === 'ready' && pendingRouteEnd === undefined \? \([\s\S]*<View style=\{styles\.routeSessionPrestartOverlay\}>[\s\S]*<Text style=\{styles\.sectionTitle\}>Store Pickup<\/Text>[\s\S]*company\?\.pickupGuidance[\s\S]*Estimated time[\s\S]*formatAssignedRouteDuration\(route\.routeMetrics\)[\s\S]*Distance[\s\S]*formatAssignedRouteDistance\(route\.routeMetrics\)[\s\S]*label="Start"[\s\S]*onPress=\{onStartRoute\}/u);
+    assert.match(appSource, /routeSessionPrestartOverlay:[\s\S]*backgroundColor: 'rgba\(245, 247, 250, 0\.94\)'[\s\S]*position: 'absolute'/u);
     assert.match(componentSource, /routeStatus === 'active' && !allStopsCompleted \? \([\s\S]*<View style=\{styles\.currentTaskTitleRow\}>[\s\S]*<Text style=\{styles\.sectionTitle\}>\{currentTaskTitle\}<\/Text>[\s\S]*<StatusChip compact label=\{currentTaskPayment\.status\.label\} tone=\{currentTaskPayment\.status\.tone\} \/>[\s\S]*<\/View>/u);
     assert.match(componentSource, /const currentTaskTitle = isPickupTask \? 'Store Pickup' : stop === null \? 'Next Stop' : `Stop \$\{stop\.sequence\}`/u);
     assert.match(componentSource, /const currentTaskAddress = stop === null \? null : formatStopSearchAddress\(stop\)/u);
@@ -149,6 +155,13 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /currentTaskStatusColumn:[\s\S]*alignItems: 'flex-end',[\s\S]*marginLeft: 'auto'/u);
     assert.doesNotMatch(componentSource, /Mark as Arrived|View Stop Details|currentTaskActions/u);
     assert.doesNotMatch(componentSource, /onViewCurrentStop/u);
+  });
+
+  it('keeps route Release available inside the active route session', () => {
+    const componentSource = getRouteSessionComponentSource();
+
+    assert.match(componentSource, /onReleaseRoute\(\): void/u);
+    assert.match(componentSource, /routeStatus === 'active' \? \([\s\S]*<DangerButton[\s\S]*label=\{isDeletingRoute \? 'Releasing route\.\.\.' : 'Release'\}[\s\S]*onPress=\{onReleaseRoute\}/u);
   });
 
   it('can recover an older active session whose pickup was not yet confirmed', () => {

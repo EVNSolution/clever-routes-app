@@ -353,6 +353,38 @@ describe('driver event API boundary', () => {
     assert.deepEqual(service.recordedEvents.map((event) => event.eventType), ['ROUTE_STARTED']);
   });
 
+  it('returns the configured pickup ETA snapshot from the mock service', async () => {
+    const pickupEtaSnapshot = {
+      calculatedAt: '2026-05-12T11:00:00.000Z',
+      failureCode: null,
+      failureMessage: null,
+      nextStopEta: {
+        deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+        distanceFromPreviousMeters: 180,
+        estimatedArrivalAt: sampleAssignedRoute.stops[0]!.estimatedArrivalAt ?? null,
+        sequence: 1,
+      },
+      pickupCompletedAt: '2026-05-12T11:00:00.000Z',
+      remainingRouteEta: {
+        distanceMeters: sampleAssignedRoute.routeMetrics!.distanceMeters,
+        estimatedCompletionAt: '2026-05-12T11:14:00.000Z',
+      },
+      status: 'READY' as const,
+    };
+    const service = createMockDriverEventService({ pickupEtaSnapshot });
+
+    const result = await recordPickupCompletedAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: service,
+      occurredAt: new Date('2026-05-12T11:00:00.000Z'),
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.deepEqual(result.kind === 'recorded' ? result.etaSnapshot : null, pickupEtaSnapshot);
+    assert.equal(service.recordedEvents[0]?.eventType, 'PICKUP_COMPLETED');
+  });
+
   it('records STOP_ARRIVED only for an active delivery and applies the returned future ETA', async () => {
     const service = createDriverEventsApiClient({
       accessToken: 'fixture-driver-access-token',

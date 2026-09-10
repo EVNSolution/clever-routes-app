@@ -170,8 +170,8 @@ describe('background location lifecycle wiring', () => {
     assert.match(finishSource, /finishResult\.kind === 'recorded'[\s\S]*clearActiveRouteSession\(route\.id\)/u);
     assert.match(finishSource, /finishResult\.monitoringMode === 'stopped'/u);
     assert.doesNotMatch(finishSource, /catch \(error\) \{[\s\S]*clearAndStopActiveLocationSession\(route\.id\)/u);
-    assert.match(source, /const isStartDisabled = isStartingRoute \|\| isFinishingRoute \|\| isSwitchingRoute/u);
-    assert.doesNotMatch(source, /const isStartDisabled = [^\n]*activeRoutePlanId !== null/u);
+    assert.match(source, /if \(isStartingRoute \|\| isFinishingRoute \|\| pendingRoutePlanId !== null\) \{/u);
+    assert.match(source, /activeRoutePlanId !== null && activeRoutePlanId !== routeSession\.route\.id/u);
   });
 
   it('shares the durable queue and retries each route with its own access token', () => {
@@ -247,6 +247,7 @@ describe('background location lifecycle wiring', () => {
     assert.match(source, /Retry Storage/u);
     assert.match(source, /Delivery updates are read-only until encrypted storage is safely persisted/u);
     assert.match(source, /if \(blockMutationWhileStorageDegraded\(\)\) return/u);
-    assert.match(source, /offlineStorageState === 'STORAGE_DEGRADED'[\s\S]*disabled=\{isStartDisabled\}/u);
+    assert.match(source, /function handleStartRoute\(routeId\?: string\) \{\s*if \(blockMutationWhileStorageDegraded\(\)\) return/u);
+    assert.doesNotMatch(source, /const isStartDisabled/u);
   });
 });

@@ -119,7 +119,9 @@ import { createExpoProofPhotoCaptureService } from '../platform/expo/camera/expo
 import { createExpoSecureDriverAccessTokenStore } from '../platform/expo/secureStore/expoSecureDriverAccessTokenStore';
 import { readInstalledDriverAppVersion } from '../platform/expo/application/expoAppVersionService';
 import { createExpoConvenienceNoticesStore } from '../platform/expo/storage/expoConvenienceNoticesStore';
+import { createExpoDetailedActiveRouteNotificationStore } from '../platform/expo/storage/expoDetailedActiveRouteNotificationStore';
 import { getConvenienceNoticesCopy } from '../domain/preferences/convenienceNotices';
+import { getDetailedActiveRouteNotificationCopy } from '../domain/preferences/detailedActiveRouteNotification';
 import { getCompanyReturnCopy } from '../domain/route/companyReturnCopy';
 import {
   createRouteOrderedDriverEventService,
@@ -402,6 +404,7 @@ function DriverApp() {
   const [lastRoutesUpdatedAt, setLastRoutesUpdatedAt] = useState<Date | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [convenienceNoticesEnabled, setConvenienceNoticesEnabled] = useState(true);
+  const [detailedActiveRouteNotificationEnabled, setDetailedActiveRouteNotificationEnabled] = useState(true);
 
   const showOperationalDialog = useCallback((
     title: string,
@@ -557,8 +560,31 @@ function DriverApp() {
   const continuousLocationStreamService = useMemo(() => createExpoContinuousLocationStreamService(), []);
   const stopArrivalNotificationService = useMemo(() => createExpoStopArrivalNotificationService(), []);
   const convenienceNoticesStore = useMemo(() => createExpoConvenienceNoticesStore(), []);
+  const detailedActiveRouteNotificationStore = useMemo(() => createExpoDetailedActiveRouteNotificationStore(), []);
   const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
-  const mockDriverEventService = useMemo(() => createMockDriverEventService(), []);
+  const mockDriverEventService = useMemo(() => {
+    const firstStop = sampleAssignedRoute.stops[0]!;
+    const lastStop = sampleAssignedRoute.stops[sampleAssignedRoute.stops.length - 1]!;
+    return createMockDriverEventService({
+      pickupEtaSnapshot: {
+        calculatedAt: sampleAssignedRoute.scheduledStartAt ?? null,
+        failureCode: null,
+        failureMessage: null,
+        nextStopEta: {
+          deliveryStopId: firstStop.deliveryStopId,
+          distanceFromPreviousMeters: null,
+          estimatedArrivalAt: firstStop.estimatedArrivalAt ?? null,
+          sequence: firstStop.sequence,
+        },
+        pickupCompletedAt: sampleAssignedRoute.scheduledStartAt ?? firstStop.estimatedArrivalAt ?? null,
+        remainingRouteEta: {
+          distanceMeters: sampleAssignedRoute.routeMetrics?.distanceMeters ?? null,
+          estimatedCompletionAt: lastStop.estimatedArrivalAt ?? null,
+        },
+        status: 'READY',
+      },
+    });
+  }, []);
   const mockDriverConsentService = useMemo(() => createMockDriverConsentService(), []);
   const mockAssignedRouteService = useMemo(() => createMockAssignedRouteService({ status: 'ASSIGNED_ROUTE', route: sampleAssignedRoute }), []);
   const mockProofMediaUploadService = useMemo(() => createMockProofMediaUploadService({ mode: 'success' }), []);
@@ -570,6 +596,14 @@ function DriverApp() {
     }).catch(() => undefined);
     return () => { active = false; };
   }, [convenienceNoticesStore]);
+
+  useEffect(() => {
+    let active = true;
+    void detailedActiveRouteNotificationStore.load().then((enabled) => {
+      if (active) setDetailedActiveRouteNotificationEnabled(enabled);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [detailedActiveRouteNotificationStore]);
 
   const refreshBackgroundLocationPermission = useCallback(async (): Promise<BackgroundPermissionResult> => {
     const permission = await continuousLocationStreamService.getBackgroundPermission();
@@ -995,6 +1029,14 @@ function DriverApp() {
     setConvenienceNoticesEnabled(enabled);
     void convenienceNoticesStore.save(enabled).catch(() => {
       setConvenienceNoticesEnabled(!enabled);
+      setMessage('Notification preference could not be saved. Try again.');
+    });
+  }
+
+  function handleChangeDetailedActiveRouteNotification(enabled: boolean): void {
+    setDetailedActiveRouteNotificationEnabled(enabled);
+    void detailedActiveRouteNotificationStore.save(enabled).catch(() => {
+      setDetailedActiveRouteNotificationEnabled(!enabled);
       setMessage('Notification preference could not be saved. Try again.');
     });
   }
@@ -1805,6 +1847,7 @@ function DriverApp() {
     void continuousLocationStreamService.updateLocationNotification({
       notification: buildActiveRouteForegroundNotification({
         currentStepIndex: navigationStepIndex,
+        detailed: detailedActiveRouteNotificationEnabled,
         operationalState: operationalPillValues,
         route: selectedRoute,
       }),
@@ -1813,7 +1856,7 @@ function DriverApp() {
       const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
       console.warn(`[location] Route notification could not be updated: ${errorMessage}`);
     });
-  }, [continuousLocationStreamService, currentStop, isLiveLocationEnabled, navigationStepIndex, operationalPillValues, selectedRoute]);
+  }, [continuousLocationStreamService, currentStop, detailedActiveRouteNotificationEnabled, isLiveLocationEnabled, navigationStepIndex, operationalPillValues, selectedRoute]);
 
   useEffect(() => {
     let isMounted = true;
@@ -2323,6 +2366,7 @@ function DriverApp() {
         await continuousLocationStreamService.updateLocationNotification?.({
           notification: buildActiveRouteForegroundNotification({
             currentStepIndex: navigationStepIndex,
+            detailed: detailedActiveRouteNotificationEnabled,
             operationalState: operationalPillValues,
             route: selectedRoute,
           }),
@@ -2337,6 +2381,7 @@ function DriverApp() {
     completedStopIds,
     convenienceNoticesEnabled,
     continuousLocationStreamService,
+    detailedActiveRouteNotificationEnabled,
     deliveryFinishResult,
     deliveryStartResult,
     navigationStepIndex,
@@ -2891,6 +2936,7 @@ function DriverApp() {
             deliveryStart: restoredDeliveryStart,
             notification: buildActiveRouteForegroundNotification({
               currentStepIndex: restoredStepIndex,
+              detailed: detailedActiveRouteNotificationEnabled,
               operationalState: activeRouteSession?.status === 'completion_pending'
                 ? { ...operationalPillValues, route: 'Completion pending' }
                 : operationalPillValues,
@@ -2959,6 +3005,7 @@ function DriverApp() {
     buildDriverAccessRefresh,
     clearAndStopActiveLocationSession,
     continuousLocationStreamService,
+    detailedActiveRouteNotificationEnabled,
     driverAccessTokenStore,
     installedDriverAppVersion?.versionName,
     mockAssignedRouteService,
@@ -4033,6 +4080,7 @@ function DriverApp() {
         deliveryStart,
         notification: buildActiveRouteForegroundNotification({
           currentStepIndex: initialStepIndex,
+          detailed: detailedActiveRouteNotificationEnabled,
           operationalState: operationalPillValues,
           route: routeSession.route,
         }),
@@ -5535,14 +5583,9 @@ function DriverApp() {
             <MyRoutesPage
               activeRoutePlanId={activeRoutePlanId}
               backgroundLocationPermission={backgroundLocationPermission}
-              isDeletingRoute={isDeletingRoute}
-              isFinishingRoute={isFinishingRoute}
               isRefreshingRoutes={isRefreshingRoutes}
               isRequestingBackgroundLocation={isRequestingBackgroundLocation}
-              isStartingRoute={isStartingRoute}
-              isSwitchingRoute={pendingRoutePlanId !== null}
               offlineStorageState={offlineStorageState}
-              onDeleteRoute={handleDeleteActiveRoute}
               onOpenCompletedDeliveries={(routeId) => {
                 const routeSession = getRouteSessionForAction(routeSessions, routeId);
                 if (routeSession === null) {
@@ -5560,7 +5603,6 @@ function DriverApp() {
               onClearRouteReconciliation={handleRequestRouteReconciliationClear}
               onRetryRouteSync={() => { void handleRefreshRoutes(); }}
               onRetryStorage={() => { void recoverOfflineEvidenceStorage(); }}
-              onStartRoute={handleStartRoute}
               routeSessions={routeSessions}
               routeReconciliationCount={routeReconciliationCount}
               routeStatus={routeStatus}
@@ -5577,10 +5619,13 @@ function DriverApp() {
               appVersion={installedDriverAppVersion?.versionName ?? 'Unknown'}
               convenienceNoticesCopy={getConvenienceNoticesCopy(selectedDriverLocale)}
               convenienceNoticesEnabled={convenienceNoticesEnabled}
+              detailedActiveRouteNotificationCopy={getDetailedActiveRouteNotificationCopy(selectedDriverLocale)}
+              detailedActiveRouteNotificationEnabled={detailedActiveRouteNotificationEnabled}
               isLoadingAccountProfile={isLoadingAccountProfile}
               isRequestingAccountDeletion={isRequestingAccountDeletion}
               onEditName={handleOpenAccountName}
               onChangeConvenienceNotices={handleChangeConvenienceNotices}
+              onChangeDetailedActiveRouteNotification={handleChangeDetailedActiveRouteNotification}
               onOpenAccountDeletionInformation={handleOpenAccountDeletionInformation}
               onOpenConsentDocument={handleOpenConsentDocument}
               onOpenSupport={handleOpenSupport}
@@ -5614,6 +5659,7 @@ function DriverApp() {
                 completedStopIds={completedStopIds}
                 currentNavigationStepIndex={navigationStepIndex}
                 deliveryFinishResult={deliveryFinishResult}
+                isDeletingRoute={isDeletingRoute}
                 isFinishingRoute={isFinishingRoute}
                 isRecordingArrival={isRecordingArrival}
                 isRefreshingRoutes={isRefreshingRoutes}
@@ -5626,6 +5672,7 @@ function DriverApp() {
                 onOpenNavigation={() => handleOpenNavigationForStop(currentStop)}
                 onOpenRouteNavigation={() => handleOpenRouteNavigation(selectedRoute)}
                 onOpenStop={handleOpenStopFromRouteSession}
+                onReleaseRoute={() => handleDeleteActiveRoute(selectedRoute.id)}
                 onRetryRouteSync={() => { void handleRefreshRoutes(); }}
                 onStartRoute={() => handleStartRoute(selectedRoute.id)}
                 pendingRouteEnd={selectedRouteSession?.pendingRouteEnd}
@@ -5885,21 +5932,15 @@ function LoginDetailScreen({
 function MyRoutesPage({
   activeRoutePlanId,
   backgroundLocationPermission,
-  isDeletingRoute,
-  isFinishingRoute,
   isRefreshingRoutes,
   isRequestingBackgroundLocation,
-  isStartingRoute,
-  isSwitchingRoute,
   offlineStorageState,
-  onDeleteRoute,
   onOpenCompletedDeliveries,
   onOpenBackgroundLocationSettings,
   onContinueRoute,
   onClearRouteReconciliation,
   onRetryRouteSync,
   onRetryStorage,
-  onStartRoute,
   routeSessions,
   routeReconciliationCount,
   routeStatus,
@@ -5908,21 +5949,15 @@ function MyRoutesPage({
 }: {
   activeRoutePlanId: string | null;
   backgroundLocationPermission: BackgroundLocationPermissionState;
-  isDeletingRoute: boolean;
-  isFinishingRoute: boolean;
   isRefreshingRoutes: boolean;
   isRequestingBackgroundLocation: boolean;
-  isStartingRoute: boolean;
-  isSwitchingRoute: boolean;
   offlineStorageState: 'READY' | 'STORAGE_DEGRADED';
-  onDeleteRoute(routeId: string): void;
   onOpenCompletedDeliveries(routeId: string): void;
   onOpenBackgroundLocationSettings(): void;
   onContinueRoute(routeId: string): void;
   onClearRouteReconciliation(): void;
   onRetryRouteSync(): void;
   onRetryStorage(): void;
-  onStartRoute(routeId: string): void;
   routeSessions: RouteSession[];
   routeReconciliationCount: number;
   routeStatus: RouteStatus;
@@ -6050,21 +6085,28 @@ function MyRoutesPage({
                   ? 'active'
                   : classifiedRouteCardStatus;
             const isRouteCardExpanded = expandedRouteKey === session.route.id;
-            const isStartDisabled = isStartingRoute || isFinishingRoute || isSwitchingRoute
-              || offlineStorageState === 'STORAGE_DEGRADED'
-              || backgroundLocationPermission !== 'granted' || session.pendingRouteEnd !== undefined;
-            const isContinueDisabled = isDeletingRoute || isFinishingRoute
-              || offlineStorageState === 'STORAGE_DEGRADED'
-              || backgroundLocationPermission !== 'granted' || activeRoutePlanId !== session.route.id;
-            const isDeleteDisabled = isDeletingRoute || offlineStorageState === 'STORAGE_DEGRADED'
-              || activeRoutePlanId !== session.route.id;
 
             return (
-              <View key={session.route.id} style={styles.selectedRouteCard}>
+              <Pressable
+                accessibilityLabel={`Open ${session.route.name}`}
+                accessibilityRole="button"
+                key={session.route.id}
+                onPress={() => {
+                  if (routeCardStatus === 'completed') {
+                    onOpenCompletedDeliveries(session.route.id);
+                    return;
+                  }
+                  onContinueRoute(session.route.id);
+                }}
+                style={({ pressed }) => [
+                  styles.selectedRouteCard,
+                  pressed && styles.selectedRouteCardPressed,
+                ]}
+              >
+                <Text numberOfLines={1} style={[styles.cardTitle, styles.routeCardTitle]}>
+                  {routeIndex + 1}. {session.route.name}
+                </Text>
                 <View style={styles.routeCardHeader}>
-                  <Text numberOfLines={1} style={[styles.cardTitle, styles.routeCardTitle]}>
-                    {routeIndex + 1}. {session.route.name}
-                  </Text>
                   <Text numberOfLines={1} style={styles.routeDateText}>{session.route.deliveryDate}</Text>
                   <StatusChip
                     tone={getChipTone(routeCardStatus)}
@@ -6074,7 +6116,8 @@ function MyRoutesPage({
                     accessibilityLabel={`${isRouteCardExpanded ? 'Collapse' : 'Expand'} ${session.route.name} details`}
                     accessibilityRole="button"
                     hitSlop={8}
-                    onPress={() => {
+                    onPress={(event) => {
+                      event.stopPropagation();
                       setExpandedRouteKey((value) => value === session.route.id ? null : session.route.id);
                     }}
                     style={styles.routeToggleButton}
@@ -6092,35 +6135,7 @@ function MyRoutesPage({
                     <DataRow label="Estimated Time" value={formatAssignedRouteDuration(session.route.routeMetrics)} />
                   </>
                 ) : null}
-
-                {routeCardStatus === 'completed' ? (
-                  <PrimaryButton compact label="View Completed Deliveries" onPress={() => onOpenCompletedDeliveries(session.route.id)} />
-                ) : routeCardStatus === 'active' ? (
-                  <View style={styles.routeActionRow}>
-                    <View style={styles.routeActionButton}>
-                      <SecondaryButton compact disabled={isContinueDisabled} label="Continue" onPress={() => onContinueRoute(session.route.id)} />
-                    </View>
-                    <View style={styles.routeActionButton}>
-                      <DangerButton compact disabled={isDeleteDisabled} label={isDeletingRoute ? 'Releasing route...' : 'Release'} loading={isDeletingRoute} onPress={() => onDeleteRoute(session.route.id)} />
-                    </View>
-                  </View>
-                ) : (
-                  <View style={styles.routeActionRow}>
-                    <View style={styles.routeActionButton}>
-                      <PrimaryButton
-                        compact
-                        disabled={isStartDisabled}
-                        label="Start"
-                        loading={isStartingRoute && selectedRouteId === session.route.id}
-                        onPress={() => onStartRoute(session.route.id)}
-                      />
-                    </View>
-                    <View style={styles.routeActionButton}>
-                      <SecondaryButton compact label="Detail" onPress={() => onContinueRoute(session.route.id)} />
-                    </View>
-                  </View>
-                )}
-              </View>
+              </Pressable>
             );
           })}
         </View>
@@ -6142,10 +6157,13 @@ function SettingsPage({
   appVersion,
   convenienceNoticesCopy,
   convenienceNoticesEnabled,
+  detailedActiveRouteNotificationCopy,
+  detailedActiveRouteNotificationEnabled,
   isLoadingAccountProfile,
   isRequestingAccountDeletion,
   onEditName,
   onChangeConvenienceNotices,
+  onChangeDetailedActiveRouteNotification,
   onOpenAccountDeletionInformation,
   onOpenConsentDocument,
   onOpenSupport,
@@ -6160,10 +6178,13 @@ function SettingsPage({
   appVersion: string;
   convenienceNoticesCopy: ReturnType<typeof getConvenienceNoticesCopy>;
   convenienceNoticesEnabled: boolean;
+  detailedActiveRouteNotificationCopy: ReturnType<typeof getDetailedActiveRouteNotificationCopy>;
+  detailedActiveRouteNotificationEnabled: boolean;
   isLoadingAccountProfile: boolean;
   isRequestingAccountDeletion: boolean;
   onEditName(): void;
   onChangeConvenienceNotices(enabled: boolean): void;
+  onChangeDetailedActiveRouteNotification(enabled: boolean): void;
   onOpenAccountDeletionInformation(): void;
   onOpenConsentDocument(): void;
   onOpenSupport(): void;
@@ -6228,7 +6249,7 @@ function SettingsPage({
       <View style={styles.settingsSection}>
         <Text style={styles.settingsSectionLabel}>{convenienceNoticesCopy.section}</Text>
         <View style={styles.settingsGroup}>
-          <View style={styles.settingsRow}>
+          <View style={[styles.settingsRow, styles.settingsRowSeparated]}>
             <View style={styles.settingsPreferenceCopy}>
               <Text style={styles.settingsRowLabel}>{convenienceNoticesCopy.label}</Text>
               <Text style={styles.settingsPreferenceDescription}>{convenienceNoticesCopy.description}</Text>
@@ -6238,6 +6259,20 @@ function SettingsPage({
               accessibilityRole="switch"
               onValueChange={onChangeConvenienceNotices}
               value={convenienceNoticesEnabled}
+            />
+          </View>
+          <View style={styles.settingsRow}>
+            <View style={styles.settingsPreferenceCopy}>
+              <Text style={styles.settingsRowLabel}>{detailedActiveRouteNotificationCopy.label}</Text>
+              <Text style={styles.settingsPreferenceDescription}>
+                {detailedActiveRouteNotificationCopy.description}
+              </Text>
+            </View>
+            <Switch
+              accessibilityLabel={detailedActiveRouteNotificationCopy.label}
+              accessibilityRole="switch"
+              onValueChange={onChangeDetailedActiveRouteNotification}
+              value={detailedActiveRouteNotificationEnabled}
             />
           </View>
         </View>
@@ -6403,6 +6438,7 @@ function RouteSessionScreen({
   completedStopIds,
   currentNavigationStepIndex,
   deliveryFinishResult,
+  isDeletingRoute,
   isFinishingRoute,
   isRecordingArrival,
   isRefreshingRoutes,
@@ -6415,6 +6451,7 @@ function RouteSessionScreen({
   onOpenNavigation,
   onOpenRouteNavigation,
   onOpenStop,
+  onReleaseRoute,
   onRetryRouteSync,
   onStartRoute,
   pendingRouteEnd,
@@ -6430,6 +6467,7 @@ function RouteSessionScreen({
   completedStopIds: string[];
   currentNavigationStepIndex: number;
   deliveryFinishResult: DeliveryFinishResult | null;
+  isDeletingRoute: boolean;
   isFinishingRoute: boolean;
   isRecordingArrival: boolean;
   isRefreshingRoutes: boolean;
@@ -6442,6 +6480,7 @@ function RouteSessionScreen({
   onOpenNavigation(): void;
   onOpenRouteNavigation(): void;
   onOpenStop(stop: AssignedRouteStop): void;
+  onReleaseRoute(): void;
   onRetryRouteSync(): void;
   onStartRoute(): void;
   pendingRouteEnd?: PendingRouteEnd;
@@ -6516,41 +6555,46 @@ function RouteSessionScreen({
           mapStyleUrl={mapStyleUrl}
           showUserLocation={routeStatus === 'active'}
         />
-      </View>
-
-      {routeStatus === 'ready' ? (
-        pendingRouteEnd !== undefined ? (
-          <View accessibilityRole="alert" style={styles.backgroundLocationWarning}>
-            <View style={styles.backgroundLocationWarningCopy}>
-              <Text style={styles.backgroundLocationWarningTitle}>Final status syncing</Text>
-              <Text style={styles.backgroundLocationWarningBody}>
-                {pendingRouteEnd === 'released'
-                  ? 'This session was deleted on this device, but the server has not confirmed the route release. Start is unavailable until sync finishes.'
-                  : 'This route is waiting for server completion confirmation. Start is unavailable until sync finishes.'}
-              </Text>
-            </View>
-            <SecondaryButton
-              compact
-              disabled={isRefreshingRoutes}
-              label="Retry Sync"
-              loading={isRefreshingRoutes}
-              onPress={onRetryRouteSync}
-            />
-          </View>
-        ) : (
-          <View style={styles.routeSessionSection}>
+        {routeStatus === 'ready' && pendingRouteEnd === undefined ? (
+          <View style={styles.routeSessionPrestartOverlay}>
             <Text style={styles.sectionTitle}>Store Pickup</Text>
             {company?.pickupGuidance?.trim() ? (
-              <Text style={styles.bodyText}>{company.pickupGuidance}</Text>
+              <Text style={styles.routeSessionPrestartGuidance}>{company.pickupGuidance}</Text>
             ) : null}
-            <PrimaryButton
-              disabled={isStartingRoute}
-              label="Start Session"
-              loading={isStartingRoute}
-              onPress={onStartRoute}
-            />
+            <View style={styles.routeSessionPrestartMetrics}>
+              <MetricBlock label="Estimated time" value={formatAssignedRouteDuration(route.routeMetrics)} />
+              <MetricBlock label="Distance" value={formatAssignedRouteDistance(route.routeMetrics)} />
+            </View>
+            <View style={styles.routeSessionPrestartAction}>
+              <PrimaryButton
+                disabled={isStartingRoute}
+                label="Start"
+                loading={isStartingRoute}
+                onPress={onStartRoute}
+              />
+            </View>
           </View>
-        )
+        ) : null}
+      </View>
+
+      {routeStatus === 'ready' && pendingRouteEnd !== undefined ? (
+        <View accessibilityRole="alert" style={styles.backgroundLocationWarning}>
+          <View style={styles.backgroundLocationWarningCopy}>
+            <Text style={styles.backgroundLocationWarningTitle}>Final status syncing</Text>
+            <Text style={styles.backgroundLocationWarningBody}>
+              {pendingRouteEnd === 'released'
+                ? 'This session was deleted on this device, but the server has not confirmed the route release. Start is unavailable until sync finishes.'
+                : 'This route is waiting for server completion confirmation. Start is unavailable until sync finishes.'}
+            </Text>
+          </View>
+          <SecondaryButton
+            compact
+            disabled={isRefreshingRoutes}
+            label="Retry Sync"
+            loading={isRefreshingRoutes}
+            onPress={onRetryRouteSync}
+          />
+        </View>
       ) : null}
 
       {routeStatus === 'active' && !allStopsCompleted ? (
@@ -6737,7 +6781,15 @@ function RouteSessionScreen({
             onPress={primaryProgressAction.onPress}
           />
         ) : null}
-        {routeStatus !== 'active' ? <SecondaryButton label="Open Route" onPress={onOpenRouteNavigation} /> : null}
+        {routeStatus === 'completed' ? <SecondaryButton label="Open Route" onPress={onOpenRouteNavigation} /> : null}
+        {routeStatus === 'active' ? (
+          <DangerButton
+            disabled={isDeletingRoute}
+            label={isDeletingRoute ? 'Releasing route...' : 'Release'}
+            loading={isDeletingRoute}
+            onPress={onReleaseRoute}
+          />
+        ) : null}
       </View>
     </View>
   );
@@ -8601,6 +8653,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     ...shadow,
   },
+  selectedRouteCardPressed: {
+    backgroundColor: '#f5f8ff',
+  },
   routeCardHeader: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -9084,9 +9139,46 @@ const styles = StyleSheet.create({
   routeSessionMap: {
     backgroundColor: '#f3f8fb',
     overflow: 'hidden',
+    position: 'relative',
   },
   routeSessionMapCanvas: {
     height: 430,
+  },
+  routeSessionPrestartOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(245, 247, 250, 0.94)',
+    bottom: 0,
+    gap: 12,
+    justifyContent: 'center',
+    left: 0,
+    padding: 24,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  routeSessionPrestartGuidance: {
+    color: '#475467',
+    fontSize: 15,
+    lineHeight: 22,
+    maxWidth: 320,
+    textAlign: 'center',
+  },
+  routeSessionPrestartMetrics: {
+    backgroundColor: 'rgba(255, 255, 255, 0.82)',
+    borderColor: '#dce3ed',
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 20,
+    maxWidth: 320,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    width: '100%',
+  },
+  routeSessionPrestartAction: {
+    marginTop: 4,
+    maxWidth: 320,
+    width: '100%',
   },
   routeSessionMetaRow: {
     alignItems: 'center',

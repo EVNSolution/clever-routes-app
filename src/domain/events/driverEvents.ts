@@ -138,7 +138,9 @@ export type FetchLike = (
   status?: number;
 }>;
 
-export function createMockDriverEventService(): MockDriverEventService {
+export function createMockDriverEventService(input?: {
+  pickupEtaSnapshot?: DriverRouteEtaSnapshot;
+}): MockDriverEventService {
   const recordedEvents: DriverEventInput[] = [];
   return {
     recordedEvents,
@@ -146,6 +148,9 @@ export function createMockDriverEventService(): MockDriverEventService {
       recordedEvents.push(event);
       return {
         duplicate: false,
+        ...(event.eventType === 'PICKUP_COMPLETED' && input?.pickupEtaSnapshot !== undefined
+          ? { etaSnapshot: input.pickupEtaSnapshot }
+          : {}),
         eventId: event.clientEventId,
         status: 'recorded',
       };

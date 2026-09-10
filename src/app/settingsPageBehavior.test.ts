@@ -55,6 +55,10 @@ describe('Settings page behavior', () => {
     assert.match(settingsPage, /accessibilityLabel=\{convenienceNoticesCopy\.label\}/u);
     assert.match(settingsPage, /value=\{convenienceNoticesEnabled\}/u);
     assert.match(settingsPage, /onValueChange=\{onChangeConvenienceNotices\}/u);
+    assert.match(settingsPage, /accessibilityLabel=\{detailedActiveRouteNotificationCopy\.label\}/u);
+    assert.match(settingsPage, /value=\{detailedActiveRouteNotificationEnabled\}/u);
+    assert.match(settingsPage, /onValueChange=\{onChangeDetailedActiveRouteNotification\}/u);
+    assert.doesNotMatch(settingsPage, /SegmentedTabs|Detailed mode|Compact mode/u);
     assert.match(settingsPage, /accessibilityLabel="Reset Default Map App"/u);
     assert.match(settingsPage, />Reset Default Map App</u);
     assert.match(settingsPage, /onPress=\{onResetDefaultMapApp\}/u);
@@ -89,6 +93,15 @@ describe('Settings page behavior', () => {
     assert.match(locationObserver, /convenienceNoticesEnabled/u);
     assert.match(locationObserver, /scheduleStopArrivalNotification/u);
     assert.doesNotMatch(locationObserver, /pendingDriverRouteNotification/u);
+  });
+
+  it('persists one foreground-notification detail switch and applies it to every live notification update', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+
+    assert.match(source, /createExpoDetailedActiveRouteNotificationStore/u);
+    assert.match(source, /detailedActiveRouteNotificationStore\.load\(\)\.then\(\(enabled\) => \{[\s\S]*setDetailedActiveRouteNotificationEnabled\(enabled\)/u);
+    assert.match(source, /function handleChangeDetailedActiveRouteNotification\(enabled: boolean\): void/u);
+    assert.equal((source.match(/detailed: detailedActiveRouteNotificationEnabled/g) ?? []).length, 4);
   });
 
   it('keeps provider-specific choices out of Settings while Android owns selection', () => {
