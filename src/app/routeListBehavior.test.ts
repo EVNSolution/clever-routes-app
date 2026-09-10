@@ -55,16 +55,12 @@ describe('routes list behavior', () => {
     );
   });
 
-  it('shows every assigned route as a collapsed vertical-list card with visible side-by-side actions', () => {
+  it('uses each collapsed route card as the action while keeping expand isolated', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const source = getRoutesPageSource();
-    const routeActionRowStyles = appSource.slice(
-      appSource.indexOf('routeActionRow:'),
-      appSource.indexOf('selectedRouteCard:'),
-    );
     const routeCardListStyles = appSource.slice(
       appSource.indexOf('routeCardList:'),
-      appSource.indexOf('routeActionRow:'),
+      appSource.indexOf('selectedRouteCard:'),
     );
     const routeCardHeaderStyles = appSource.slice(
       appSource.indexOf('routeCardHeader:'),
@@ -82,22 +78,16 @@ describe('routes list behavior', () => {
     assert.match(source, /<DataRow label="Store" value=\{session\.companyGuidance\.companyDisplayName\} \/>/u);
     assert.match(source, /const isRouteCardExpanded = expandedRouteKey === session\.route\.id/u);
     assert.match(source, /setExpandedRouteKey\(\(value\) => value === session\.route\.id \? null : session\.route\.id\)/u);
-    assert.match(source, /<View style=\{styles\.routeCardHeader\}>[\s\S]*?<Text numberOfLines=\{1\} style=\{\[styles\.cardTitle, styles\.routeCardTitle\]\}>\s*\{routeIndex \+ 1\}\. \{session\.route\.name\}\s*<\/Text>[\s\S]*?<Text numberOfLines=\{1\} style=\{styles\.routeDateText\}>\{session\.route\.deliveryDate\}<\/Text>[\s\S]*?<StatusChip[\s\S]*?<Pressable[\s\S]*?style=\{styles\.routeToggleButton\}/u);
+    assert.match(source, /<Pressable[\s\S]*?accessibilityLabel=\{`Open \$\{session\.route\.name\}`\}[\s\S]*?onPress=\{\(\) => \{[\s\S]*?onContinueRoute\(session\.route\.id\)[\s\S]*?styles\.selectedRouteCard/u);
+    assert.match(source, /<Text numberOfLines=\{1\} style=\{\[styles\.cardTitle, styles\.routeCardTitle\]\}>\s*\{routeIndex \+ 1\}\. \{session\.route\.name\}\s*<\/Text>\s*<View style=\{styles\.routeCardHeader\}>[\s\S]*?<Text numberOfLines=\{1\} style=\{styles\.routeDateText\}>\{session\.route\.deliveryDate\}<\/Text>[\s\S]*?<StatusChip[\s\S]*?<Pressable/u);
     assert.match(source, /label=\{formatRouteStatus\(routeCardStatus\)\}/u);
     assert.doesNotMatch(source, /routeInitialBadge|routeInitialText|getInitials|routeCardMetaRow|routeCardStatusGroup/u);
     assert.doesNotMatch(source, /<DataRow label="Date"/u);
     assert.doesNotMatch(source, /Previous Route|Next Route|routePager|selectRelativeRoute/u);
-    assert.match(source, /\{isRouteCardExpanded \? \([\s\S]*?<\/>[\s\S]*?\) : null\}[\s\S]*?label="Start"[\s\S]*?label="Detail"/u);
-    assert.match(source, /routeCardStatus === 'active'[\s\S]*?label="Continue"[\s\S]*?label=\{isDeletingRoute \? 'Releasing route\.\.\.' : 'Release'\}/u);
-    assert.match(source, /<DangerButton[\s\S]*?label=\{isDeletingRoute \? 'Releasing route\.\.\.' : 'Release'\}/u);
-    assert.match(source, /<SecondaryButton[\s\S]*?compact[\s\S]*?label="Continue"/u);
-    assert.match(source, /<DangerButton[\s\S]*?compact[\s\S]*?label=\{isDeletingRoute \? 'Releasing route\.\.\.' : 'Release'\}/u);
-    assert.match(source, /<PrimaryButton[\s\S]*?compact[\s\S]*?label="Start"/u);
-    assert.match(source, /<SecondaryButton compact label="Detail"/u);
-    assert.match(source, /<View style=\{styles\.routeActionRow\}>/u);
+    assert.match(source, /onPress=\{\(event\) => \{\s*event\.stopPropagation\(\);[\s\S]*?setExpandedRouteKey/u);
+    assert.match(source, /routeCardStatus === 'completed'[\s\S]*?onOpenCompletedDeliveries\(session\.route\.id\)[\s\S]*?onContinueRoute\(session\.route\.id\)/u);
+    assert.doesNotMatch(source, /routeActionRow|label="Start"|label="Detail"|label="Continue"|Releasing route/u);
     assert.match(routeCardListStyles, /gap: 14/u);
-    assert.match(routeActionRowStyles, /flexDirection: 'row'/u);
-    assert.match(routeActionRowStyles, /routeActionButton:[\s\S]*flex: 1/u);
     assert.match(selectedRouteCardStyles, /gap: 8/u);
     assert.match(selectedRouteCardStyles, /paddingHorizontal: 18/u);
     assert.match(selectedRouteCardStyles, /paddingVertical: 14/u);
@@ -117,9 +107,7 @@ describe('routes list behavior', () => {
     assert.doesNotMatch(source, /even when the app is closed or not in use/u);
     assert.match(source, /accessibilityLabel="Review background location access"/u);
     assert.match(source, />Review & Allow<\/Text>/u);
-    assert.match(source, /const isStartDisabled = [\s\S]*backgroundLocationPermission !== 'granted'/u);
-    assert.match(source, /<PrimaryButton[\s\S]*disabled=\{isStartDisabled\}[\s\S]*label="Start"/u);
-    assert.match(source, /<SecondaryButton compact label="Detail"/u);
+    assert.match(source, /onContinueRoute\(session\.route\.id\)/u);
     assert.doesNotMatch(source, /opacity|pointerEvents="none"/u);
   });
 
@@ -127,19 +115,17 @@ describe('routes list behavior', () => {
     const source = getRoutesPageSource();
 
     assert.match(source, /session\.companyGuidance\.executionStatus === 'IN_PROGRESS'[\s\S]*\? 'active'/u);
-    assert.match(source, /const isContinueDisabled = [\s\S]*backgroundLocationPermission !== 'granted'[\s\S]*activeRoutePlanId !== session\.route\.id/u);
-    assert.match(source, /<SecondaryButton compact disabled=\{isContinueDisabled\} label="Continue"/u);
+    assert.match(source, /onContinueRoute\(session\.route\.id\)/u);
     assert.match(source, /executionStatus === 'IN_PROGRESS'[\s\S]*pendingRouteEnd === undefined/u);
   });
 
-  it('keeps another ready route Start available while one route is active', () => {
+  it('keeps another ready route visible while one route is active but opens the active route instead', () => {
     const source = getRoutesPageSource();
 
     assert.match(source, /visibleRouteSessions\.map\(\(session, routeIndex\) =>/u);
     assert.match(source, /\{routeIndex \+ 1\}\. \{session\.route\.name\}/u);
-    assert.match(source, /const isStartDisabled = isStartingRoute \|\| isFinishingRoute \|\| isSwitchingRoute[\s\S]*backgroundLocationPermission !== 'granted'/u);
-    assert.doesNotMatch(source, /const isStartDisabled = [^\n]*activeRoutePlanId !== null/u);
-    assert.match(source, /const isContinueDisabled = [\s\S]*activeRoutePlanId !== session\.route\.id/u);
+    assert.match(source, /onContinueRoute\(session\.route\.id\)/u);
+    assert.doesNotMatch(source, /isStartDisabled|isContinueDisabled/u);
   });
 
   it('clears acknowledged reconciliation records without deleting or refreshing the server route', () => {
