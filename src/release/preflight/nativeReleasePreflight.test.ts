@@ -291,7 +291,7 @@ test('native release preflight validates a source-controlled iOS project when pr
   assert.equal(result.checks.at(-1)?.id, 'ios.native');
 });
 
-test('keeps the Expo 56 iOS deployment target aligned at 16.4', () => {
+test('keeps the Expo 57 iOS native settings aligned at 16.4', () => {
   const podfileProperties = readJson<Record<string, unknown>>('ios/Podfile.properties.json');
   const podfile = readFileSync(resolve(repoRoot, 'ios/Podfile'), 'utf8');
   const projectPbxproj = readFileSync(
@@ -302,8 +302,17 @@ test('keeps the Expo 56 iOS deployment target aligned at 16.4', () => {
     .map((match) => match[1]);
 
   assert.equal(podfileProperties['ios.deploymentTarget'], '16.4');
+  assert.equal(podfileProperties['expo.inlineModules.watchedDirectories'], '[]');
+  assert.equal(
+    podfileProperties['expo.inlineModules.xcodeProjectTargets'],
+    '{"mainTarget":"CleverRoutes","targets":[]}',
+  );
+  assert.equal(podfileProperties['expo.camera.barcode-scanner-enabled'], 'false');
+  assert.equal(podfileProperties.newArchEnabled, undefined);
   assert.equal(podfileProperties['expo.sqlite.useSQLCipher'], 'true');
   assert.match(podfile, /podfile_properties\['ios\.deploymentTarget'\] \|\| '16\.4'/u);
+  assert.match(podfile, /ENV\['RCT_HERMES_V1_ENABLED'\]/u);
+  assert.match(podfile, /ENV\['EXPO_USE_PRECOMPILED_MODULES'\] \|\|= '1'/u);
   assert.ok(projectTargets.length > 0);
   assert.deepEqual([...new Set(projectTargets)], ['16.4']);
 });
@@ -314,7 +323,7 @@ test('keeps the MapLibre Swift package attached during CocoaPods installation', 
   assert.match(podfile, /\$MLRN\.post_install\(installer\)/u);
 });
 
-test('keeps the AppDelegate aligned with the Expo 56 Xcode 26 template', () => {
+test('keeps the AppDelegate aligned with the Expo 57 Xcode 26 template', () => {
   const appDelegate = readFileSync(resolve(repoRoot, 'ios/CleverRoutes/AppDelegate.swift'), 'utf8');
 
   assert.match(appDelegate, /^internal import Expo$/mu);
