@@ -22,6 +22,7 @@ export function createExpoForegroundLocationSnapshotService(): ForegroundLocatio
         ]);
 
         return {
+          accuracyMeters: position.coords.accuracy,
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
           recordedAt: new Date(position.timestamp),

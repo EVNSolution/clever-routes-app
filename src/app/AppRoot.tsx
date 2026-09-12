@@ -124,6 +124,12 @@ import { getConvenienceNoticesCopy } from '../domain/preferences/convenienceNoti
 import { getDetailedActiveRouteNotificationCopy } from '../domain/preferences/detailedActiveRouteNotification';
 import { getCompanyReturnCopy } from '../domain/route/companyReturnCopy';
 import {
+  classifyRouteCompletionLocation,
+  requiresDepotReturn,
+  resolveTrustedRouteEventLocation,
+  type RouteEventLocationEvidence,
+} from '../domain/route/routeEndPolicy';
+import {
   createRouteOrderedDriverEventService,
   getPickupCompletionQueueState,
   getOfflineSubmissionQueueSummary,
@@ -455,6 +461,7 @@ function DriverApp() {
   const pullRefreshOffset = useSharedValue(0);
   const notifiedStopArrivalIdsRef = useRef<Set<string>>(new Set());
   const latestContinuousLocationRef = useRef<{
+    accuracyMeters: number | null;
     latitude: number;
     longitude: number;
     occurredAt: Date;
@@ -2083,7 +2090,7 @@ function DriverApp() {
     }));
     try {
       let arrivalEvidence: StopArrivalEvidence | undefined;
-      let location: { latitude: number; longitude: number; recordedAt: Date } | null = null;
+      let location: { accuracyMeters: number | null; latitude: number; longitude: number; recordedAt: Date } | null = null;
       try {
         location = await foregroundLocationSnapshotService.getCurrentForegroundLocation();
       } catch {
@@ -2094,6 +2101,7 @@ function DriverApp() {
           && Date.now() - cachedLocation.occurredAt.getTime() <= 30_000
         ) {
           location = {
+            accuracyMeters: cachedLocation.accuracyMeters,
             latitude: cachedLocation.latitude,
             longitude: cachedLocation.longitude,
             recordedAt: cachedLocation.occurredAt,
@@ -2339,12 +2347,13 @@ function DriverApp() {
 
       const lastLocation = locations[locations.length - 1] ?? null;
       if (lastLocation !== null) {
-        if (selectedRoute !== null) {
+        if (activeRoutePlanId !== null) {
           latestContinuousLocationRef.current = {
+            accuracyMeters: lastLocation.accuracyMeters ?? null,
             latitude: lastLocation.latitude,
             longitude: lastLocation.longitude,
             occurredAt: lastLocation.occurredAt,
-            routePlanId: selectedRoute.id,
+            routePlanId: activeRoutePlanId,
           };
         }
         setLatestGpsSample({
@@ -2378,6 +2387,7 @@ function DriverApp() {
 
     return () => registerContinuousLocationTaskObserver(null);
   }, [
+    activeRoutePlanId,
     completedStopIds,
     convenienceNoticesEnabled,
     continuousLocationStreamService,
@@ -4061,6 +4071,10 @@ function DriverApp() {
       }
 
       const routeStartedAt = new Date();
+      const routeStartedLocation = await captureTrustedRouteEventLocation(
+        routeSession.route.id,
+        routeStartedAt,
+      );
       const initialProgress = getAssignedRouteProgressAfterPickup(routeSession.route);
       const initialStepIndex = initialProgress.navigationStepIndex;
       const firstDeliveryStop = routeSession.route.stops[initialStepIndex - 1] ?? null;
@@ -4068,6 +4082,14 @@ function DriverApp() {
         completedStopIds: initialProgress.completedStopIds,
         navigationStepIndex: COMPANY_STEP_INDEX,
         routePlanId: routeSession.route.id,
+        ...(routeStartedLocation === null ? {} : {
+          routeStartedLocation: {
+            accuracyMeters: routeStartedLocation.accuracyMeters,
+            latitude: routeStartedLocation.latitude,
+            longitude: routeStartedLocation.longitude,
+            recordedAt: routeStartedLocation.recordedAt.toISOString(),
+          },
+        }),
         startedAt: routeStartedAt.toISOString(),
       });
       if (!activeRouteSaved) {
@@ -4122,6 +4144,7 @@ function DriverApp() {
       const routeStartedResult = await recordRouteStartedAfterDeliveryStart({
         deliveryStart,
         driverEventService: eventService,
+        ...(routeStartedLocation === null ? {} : { locationEvidence: routeStartedLocation }),
         occurredAt: routeStartedAt,
         offlineQueue: queue,
         routePlanId: routeSession.route.id,
@@ -4883,8 +4906,12 @@ function DriverApp() {
           setScreen('routeSession');
         }
         setMessage(result.kind === 'queued'
-          ? 'Final stop saved offline. Return to the company while it syncs, then finish the route.'
-          : 'All stops completed. Return to the company, then finish the route.');
+          ? requiresDepotReturn(selectedRoute.routeEndMode)
+            ? 'Final stop saved offline. Return to the company while it syncs, then finish the route.'
+            : 'Final stop saved offline. Finish the route when ready.'
+          : requiresDepotReturn(selectedRoute.routeEndMode)
+            ? 'All stops completed. Return to the company, then finish the route.'
+            : 'All stops completed. Finish the route when ready.');
         return;
       }
 
@@ -4952,6 +4979,63 @@ function DriverApp() {
     await handleTerminalStop(currentStop, 'delivered');
   };
 
+  async function captureTrustedRouteEventLocation(
+    routePlanId: string,
+    actionAt: Date,
+  ): Promise<RouteEventLocationEvidence | null> {
+    const currentLocation = await foregroundLocationSnapshotService
+      .getCurrentForegroundLocation()
+      .catch(() => null);
+    const cachedLocation = latestContinuousLocationRef.current;
+    return resolveTrustedRouteEventLocation({
+      actionAt,
+      cachedLocation: cachedLocation === null ? null : {
+        accuracyMeters: cachedLocation.accuracyMeters,
+        latitude: cachedLocation.latitude,
+        longitude: cachedLocation.longitude,
+        recordedAt: cachedLocation.occurredAt,
+        routePlanId: cachedLocation.routePlanId,
+      },
+      currentLocation,
+      routePlanId,
+    });
+  }
+
+  async function requestRouteCompletion(
+    route: AssignedRoute,
+    onCompleted?: () => Promise<void>,
+    onCancelled?: () => void,
+  ): Promise<void> {
+    const occurredAt = new Date();
+    const locationEvidence = await captureTrustedRouteEventLocation(route.id, occurredAt);
+    const completionLocation = classifyRouteCompletionLocation({
+      depot: route.depot,
+      location: locationEvidence,
+      routeEndMode: route.routeEndMode,
+    });
+    const finish = async () => {
+      const routeEnded = await finishRoute(route, {
+        ...(locationEvidence === null ? {} : { locationEvidence }),
+        now: occurredAt,
+      });
+      if (routeEnded) await onCompleted?.();
+    };
+    if (completionLocation === 'confirmed' || completionLocation === 'not_required') {
+      await finish();
+      return;
+    }
+
+    const copy = getCompanyReturnCopy(selectedDriverLocale, true);
+    showOperationalDialog(copy.unverifiedTitle, copy.unverifiedBody, [
+      { onPress: onCancelled, style: 'cancel', text: copy.continueReturn },
+      {
+        onPress: () => { void finish(); },
+        style: 'destructive',
+        text: copy.finishUnverified,
+      },
+    ], { cancelable: false });
+  }
+
   async function finishActiveRouteForSwitch(
     activeRoute: AssignedRoute,
     targetRoutePlanId: string,
@@ -4965,23 +5049,33 @@ function DriverApp() {
       return;
     }
 
+    if (!hasRemainingStops) {
+      await requestRouteCompletion(
+        activeRoute,
+        async () => {
+          setPendingRoutePlanId(null);
+          await startRouteSessionAfterConfirmed(targetRoutePlanId);
+        },
+        () => setPendingRoutePlanId(null),
+      );
+      return;
+    }
+
     const occurredAt = new Date();
     const routeSubmission = toCompanyGuidanceSubmission(activeRouteSession);
-    const routeEnded = await finishRoute(activeRoute, hasRemainingStops
-      ? {
-          eventPayload: createDriverReleasedRoutePayload({
-            deliveryDate: activeRoute.deliveryDate,
-            occurredAt,
-            routeName: activeRoute.name,
-            routePlanId: activeRoute.id,
-            shopDomain: activeRouteSession.companyGuidance.shopDomain,
-          }),
-          now: occurredAt,
-          returnToRoutes: true,
-          routeEnd: 'released',
-          routeSubmission,
-        }
-      : undefined);
+    const routeEnded = await finishRoute(activeRoute, {
+      eventPayload: createDriverReleasedRoutePayload({
+        deliveryDate: activeRoute.deliveryDate,
+        occurredAt,
+        routeName: activeRoute.name,
+        routePlanId: activeRoute.id,
+        shopDomain: activeRouteSession.companyGuidance.shopDomain,
+      }),
+      now: occurredAt,
+      returnToRoutes: true,
+      routeEnd: 'released',
+      routeSubmission,
+    });
     if (!routeEnded) {
       setPendingRoutePlanId(null);
       return;
@@ -4993,6 +5087,7 @@ function DriverApp() {
 
   async function finishRoute(route: AssignedRoute, options?: {
     eventPayload?: Record<string, unknown>;
+    locationEvidence?: RouteEventLocationEvidence;
     now?: Date;
     returnToRoutes?: boolean;
     routeEnd?: 'completed' | 'released';
@@ -5046,6 +5141,7 @@ function DriverApp() {
           routePlanId: route.id,
         }),
         ...(options?.eventPayload === undefined ? {} : { eventPayload: options.eventPayload }),
+        ...(options?.locationEvidence === undefined ? {} : { locationEvidence: options.locationEvidence }),
         ...(options?.now === undefined ? {} : { now: options.now }),
         offlineQueue: queue,
         ...(options?.routeEnd === 'released' ? {
@@ -5175,7 +5271,7 @@ function DriverApp() {
       return;
     }
 
-    await finishRoute(selectedRoute);
+    await requestRouteCompletion(selectedRoute);
   }
 
   function updateCurrentStopDraft(patch: Partial<StopProofDraft>) {
@@ -5655,7 +5751,10 @@ function DriverApp() {
               <RouteSessionScreen
                 allStopsCompleted={allStopsCompleted}
                 company={currentCompany}
-                companyReturnCopy={getCompanyReturnCopy(selectedDriverLocale)}
+                companyReturnCopy={getCompanyReturnCopy(
+                  selectedDriverLocale,
+                  requiresDepotReturn(selectedRoute.routeEndMode),
+                )}
                 completedStopIds={completedStopIds}
                 currentNavigationStepIndex={navigationStepIndex}
                 deliveryFinishResult={deliveryFinishResult}
@@ -6660,13 +6759,17 @@ function RouteSessionScreen({
         <View style={styles.routeSessionSection}>
           <Text style={styles.sectionTitle}>{companyReturnCopy.title}</Text>
           <Text style={styles.bodyText}>{companyReturnCopy.body}</Text>
-          <SecondaryButton
-            disabled={route.depot === null}
-            label={companyReturnCopy.navigate}
-            onPress={onOpenDepotNavigation}
-          />
-          {route.depot === null ? (
-            <Text style={styles.helperText}>{companyReturnCopy.missingDepot}</Text>
+          {requiresDepotReturn(route.routeEndMode) ? (
+            <>
+              <SecondaryButton
+                disabled={route.depot === null}
+                label={companyReturnCopy.navigate}
+                onPress={onOpenDepotNavigation}
+              />
+              {route.depot === null ? (
+                <Text style={styles.helperText}>{companyReturnCopy.missingDepot}</Text>
+              ) : null}
+            </>
           ) : null}
         </View>
       ) : null}

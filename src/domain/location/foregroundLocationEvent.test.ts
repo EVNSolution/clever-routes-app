@@ -15,6 +15,7 @@ function createLocationService(): ForegroundLocationSnapshotService & { requests
     getCurrentForegroundLocation: async function getCurrentForegroundLocation() {
       this.requests += 1;
       return {
+        accuracyMeters: 14,
         latitude: 43.6487,
         longitude: -79.3817,
         recordedAt: new Date('2026-05-12T07:05:00.000Z'),
@@ -55,6 +56,7 @@ describe('foreground location update event flow', () => {
     assert.equal(locationService.requests, 1);
     assert.equal(driverEventService.recordedEvents.length, 1);
     assert.deepEqual(driverEventService.recordedEvents[0], {
+      accuracyMeters: 14,
       clientEventId: driverEventService.recordedEvents[0]?.clientEventId,
       eventType: 'LOCATION_UPDATED',
       latitude: 43.6487,

@@ -191,9 +191,11 @@ MVP와 확장 경계:
 
 ### 시나리오 5: 배송 종료와 기록 정리
 
-- 모든 배송 stop이 terminal 상태가 되어도 route와 continuous location tracking은 유지한다.
-- 앱은 서버가 반환한 명시적 depot 좌표로 `Return to Company` 단계를 표시하고, 재시작 또는 offline 복구 뒤에도 이 단계를 복원한다.
-- 배송원이 회사 복귀 후 명시적으로 `Finish Route`를 실행할 때만 continuous location task를 중단하고 `ROUTE_COMPLETED` 이벤트를 기록한다.
+- 앱은 assigned-route 응답의 `routeEndMode`를 서버 소유 종료 정책으로 사용한다. 기존 캐시에 필드가 없으면 이전 동작과 호환되도록 `RETURN_TO_DEPOT`로 취급한다.
+- `RETURN_TO_DEPOT`에서는 모든 배송 stop이 terminal 상태가 되어도 route와 continuous location tracking을 유지한다. 서버가 반환한 명시적 depot 좌표로 `Return to Company` 단계를 표시하고, 재시작 또는 offline 복구 뒤에도 이 단계를 복원한다.
+- `RETURN_TO_DEPOT`의 정상 종료는 신뢰 가능한 현재 위치가 depot 150m 이내일 때 허용한다. 위치가 범위 밖이거나 확인 불가능하면 앱은 복귀 계속과 미확인 종료를 명시적으로 구분하되, 배송원은 미확인 종료 또는 로그아웃으로 tracking을 중단할 수 있다.
+- `END_AT_LAST_STOP`에서는 마지막 배송지 처리 후 별도 depot 복귀 없이 배송원이 명시적으로 경로를 종료할 수 있다.
+- `ROUTE_STARTED`와 `ROUTE_COMPLETED`는 신뢰 가능한 one-shot 또는 같은 active route의 최신 GPS가 있으면 top-level `latitude`, `longitude`, `accuracyMeters`를 포함한다. 버튼 시각과 `clientEventId`는 위치 조회나 offline retry 때문에 바뀌지 않는다.
 - `ROUTE_COMPLETED` 기록이 실패하면 route completion event를 offline queue에 남기고, 기록 성공 시에만 해당 route의 local retry item을 cleanup한다.
 - 앱은 마지막 sync 상태를 표시하고, 전송 실패 이벤트가 있으면 재시도 또는 미전송 안내를 제공한다.
 - 이후 앱 재실행 시에는 당일 route 상태와 driver session/access 상태를 서버에서 다시 확인한다.

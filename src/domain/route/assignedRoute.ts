@@ -22,6 +22,8 @@ export type AssignedRouteCoordinates = {
 
 export type AssignedRouteNavigationTarget = 'ADDRESS' | 'COORDINATES';
 
+export type AssignedRouteEndMode = 'END_AT_LAST_STOP' | 'RETURN_TO_DEPOT';
+
 export type AssignedRouteLngLat = [number, number];
 
 export type AssignedRouteGeometry = {
@@ -154,6 +156,7 @@ export type AssignedRoute = {
   routeGeometry: AssignedRouteGeometry | null;
   routeMapPreview: AssignedRouteMapPreview | null;
   routeMetrics: AssignedRouteMetrics | null;
+  routeEndMode?: AssignedRouteEndMode;
   routeStopPoints: AssignedRouteStopPoint[];
   scheduledStartAt?: string | null;
   shopDomain: string;
@@ -262,6 +265,7 @@ export const sampleAssignedRoute: AssignedRoute = {
     distanceMeters: 3250,
     durationSeconds: 840,
   },
+  routeEndMode: 'RETURN_TO_DEPOT',
   routeStopPoints: [
     {
       deliveryStopId: '22222222-2222-4222-8222-222222222222',
@@ -614,6 +618,7 @@ function isAssignedRoute(value: unknown): value is AssignedRoute {
     (route.routeGeometry === undefined || route.routeGeometry === null || isAssignedRouteGeometry(route.routeGeometry)) &&
     (route.routeMapPreview === undefined || route.routeMapPreview === null || isAssignedRouteMapPreview(route.routeMapPreview)) &&
     (route.routeMetrics === undefined || route.routeMetrics === null || isAssignedRouteMetrics(route.routeMetrics)) &&
+    (route.routeEndMode === undefined || isAssignedRouteEndMode(route.routeEndMode)) &&
     (route.routeStopPoints === undefined || (Array.isArray(route.routeStopPoints) && route.routeStopPoints.every(isAssignedRouteStopPoint))) &&
     (route.scheduledStartAt === undefined || nullableString(route.scheduledStartAt)) &&
     typeof route.shopDomain === 'string' &&
@@ -898,6 +903,10 @@ function normalizeAssignedRouteCoordinates(value: unknown): AssignedRouteCoordin
 
 function isAssignedRouteNavigationTarget(value: unknown): value is AssignedRouteNavigationTarget {
   return value === 'ADDRESS' || value === 'COORDINATES';
+}
+
+function isAssignedRouteEndMode(value: unknown): value is AssignedRouteEndMode {
+  return value === 'END_AT_LAST_STOP' || value === 'RETURN_TO_DEPOT';
 }
 
 function isAssignedRouteLngLat(value: unknown): value is AssignedRouteLngLat {

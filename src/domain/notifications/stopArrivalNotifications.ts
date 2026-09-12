@@ -184,7 +184,7 @@ export function getStopArrivalProximityEvidence(input: {
   }
 
   const radiusMeters = input.radiusMeters ?? DEFAULT_STOP_ARRIVAL_RADIUS_METERS;
-  const distanceMeters = getDistanceMeters(input.location, destination);
+  const distanceMeters = getLocationDistanceMeters(input.location, destination);
   return {
     distanceMeters,
     isWithinRadius: distanceMeters <= radiusMeters,
@@ -217,7 +217,7 @@ function formatStopArrivalAddress(stop: AssignedRouteStop): string {
   return stop.address.address1.trim() || stop.address.city.trim() || 'Address unavailable';
 }
 
-function getDistanceMeters(a: StopArrivalLocation, b: StopArrivalLocation): number {
+export function getLocationDistanceMeters(a: StopArrivalLocation, b: StopArrivalLocation): number {
   const earthRadiusMeters = 6_371_000;
   const lat1 = toRadians(a.latitude);
   const lat2 = toRadians(b.latitude);

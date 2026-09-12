@@ -514,7 +514,7 @@ describe('route session current task behavior', () => {
     );
   });
 
-  it('switches routes only after the active stop and route session are durably ended', () => {
+  it('switches routes only after the active stop and applicable route-end policy are durably completed', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const startBegin = appSource.indexOf('function handleStartRoute(');
     const startEnd = appSource.indexOf('\n\n  async function startRouteSessionAfterConfirmed(', startBegin);
@@ -539,7 +539,7 @@ describe('route session current task behavior', () => {
     assert.match(switchSource, /await finishRoute\([\s\S]*routeEnd: 'released'/u);
     assert.match(switchSource, /await startRouteSessionAfterConfirmed\(targetRoutePlanId/u);
     assert.ok(terminalSource.indexOf('recordStopProofEventAfterDeliveryStart') < terminalSource.indexOf('finishActiveRouteForSwitch'));
-    assert.ok(switchSource.indexOf("routeEnd: 'released'") < switchSource.indexOf('startRouteSessionAfterConfirmed(targetRoutePlanId'));
+    assert.match(switchSource, /if \(!hasRemainingStops\) \{[\s\S]*requestRouteCompletion\([\s\S]*startRouteSessionAfterConfirmed\(targetRoutePlanId\)[\s\S]*return;/u);
     assert.match(switchSource, /if \(!routeEnded\) \{[\s\S]*setPendingRoutePlanId\(null\);[\s\S]*return;[\s\S]*\}[\s\S]*startRouteSessionAfterConfirmed/u);
     assert.match(startSource, /failureReason: 'OTHER'/u);
     assert.match(startSource, /Driver cancelled the current delivery before switching routes\./u);

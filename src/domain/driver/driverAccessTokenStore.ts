@@ -29,6 +29,12 @@ export type PersistedActiveRouteSession = {
   pickupCompletedAt?: string;
   routePlanId: string;
   routeStartedRecordedAt?: string;
+  routeStartedLocation?: {
+    accuracyMeters: number;
+    latitude: number;
+    longitude: number;
+    recordedAt: string;
+  };
   startedAt?: string;
   status: 'active' | 'completion_pending';
   updatedAt: string;
@@ -65,6 +71,7 @@ export type DriverAccessTokenStore = {
     navigationStepIndex: number;
     pickupCompleted?: boolean;
     routePlanId: string;
+    routeStartedLocation?: PersistedActiveRouteSession['routeStartedLocation'];
     startedAt?: string;
   }): Promise<boolean>;
   saveAuthenticatedDriver(input: {
@@ -253,6 +260,9 @@ export function createDriverAccessTokenStore(input: {
             ...(currentSession?.routeStartedRecordedAt === undefined
               ? {}
               : { routeStartedRecordedAt: currentSession.routeStartedRecordedAt }),
+            ...(currentSession?.routeStartedLocation === undefined && activeRouteSession.routeStartedLocation === undefined
+              ? {}
+              : { routeStartedLocation: currentSession?.routeStartedLocation ?? activeRouteSession.routeStartedLocation }),
             startedAt: currentSession?.startedAt ?? currentSession?.updatedAt ?? requestedStartedAt ?? now().toISOString(),
             status: 'active',
             updatedAt: now().toISOString(),
@@ -416,6 +426,26 @@ function isPersistedActiveRouteSession(value: unknown): value is PersistedActive
     (session.routeStartedRecordedAt === undefined || (
       typeof session.routeStartedRecordedAt === 'string' && Number.isFinite(Date.parse(session.routeStartedRecordedAt))
     )) &&
+    (session.routeStartedLocation === undefined || isPersistedRouteStartedLocation(session.routeStartedLocation)) &&
     typeof session.updatedAt === 'string' && Number.isFinite(Date.parse(session.updatedAt))
   );
+}
+
+function isPersistedRouteStartedLocation(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const location = value as Record<string, unknown>;
+  return typeof location.accuracyMeters === 'number'
+    && Number.isFinite(location.accuracyMeters)
+    && location.accuracyMeters >= 0
+    && typeof location.latitude === 'number'
+    && Number.isFinite(location.latitude)
+    && location.latitude >= -90
+    && location.latitude <= 90
+    && typeof location.longitude === 'number'
+    && Number.isFinite(location.longitude)
+    && location.longitude >= -180
+    && location.longitude <= 180
+    && !(location.latitude === 0 && location.longitude === 0)
+    && typeof location.recordedAt === 'string'
+    && Number.isFinite(Date.parse(location.recordedAt));
 }

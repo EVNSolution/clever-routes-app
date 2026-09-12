@@ -52,6 +52,12 @@ describe('continuous location background task', () => {
     await store.saveActiveRouteSession({
       navigationStepIndex: 0,
       routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+      routeStartedLocation: {
+        accuracyMeters: 8,
+        latitude: 43.6532,
+        longitude: -79.3832,
+        recordedAt: '2026-07-16T09:59:58.000Z',
+      },
       startedAt: '2026-07-16T10:00:00.000Z',
     });
     const driverEventService = createMockDriverEventService();
@@ -71,6 +77,15 @@ describe('continuous location background task', () => {
       'ROUTE_STARTED',
       'LOCATION_UPDATED',
     ]);
+    assert.deepEqual(driverEventService.recordedEvents[0], {
+      accuracyMeters: 8,
+      clientEventId: `route-started-${new Date('2026-07-16T10:00:00.000Z').getTime().toString(36)}`,
+      eventType: 'ROUTE_STARTED',
+      latitude: 43.6532,
+      longitude: -79.3832,
+      occurredAt: new Date('2026-07-16T10:00:00.000Z'),
+      routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+    });
   });
 
   it('queues route start before locations when the first headless submission is offline', async () => {

@@ -4,6 +4,7 @@ import type { DriverEventInput, DriverEventRecordResult, DriverEventService } fr
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 
 export type ForegroundLocationSnapshot = {
+  accuracyMeters: number | null;
   latitude: number;
   longitude: number;
   recordedAt: Date;
@@ -35,6 +36,7 @@ export async function recordForegroundLocationUpdateAfterDeliveryStart(input: {
 
   const location = await input.locationService.getCurrentForegroundLocation();
   const event: DriverEventInput = {
+    ...(location.accuracyMeters === null ? {} : { accuracyMeters: location.accuracyMeters }),
     clientEventId: createClientEventId('location-updated'),
     eventType: 'LOCATION_UPDATED',
     latitude: location.latitude,
