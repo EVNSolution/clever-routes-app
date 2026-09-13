@@ -5013,15 +5013,18 @@ function DriverApp() {
       location: locationEvidence,
       routeEndMode: route.routeEndMode,
     });
-    const finish = async () => {
+    const finish = async (
+      confirmedAt: Date,
+      confirmedLocation: RouteEventLocationEvidence | null,
+    ) => {
       const routeEnded = await finishRoute(route, {
-        ...(locationEvidence === null ? {} : { locationEvidence }),
-        now: occurredAt,
+        ...(confirmedLocation === null ? {} : { locationEvidence: confirmedLocation }),
+        now: confirmedAt,
       });
       if (routeEnded) await onCompleted?.();
     };
     if (completionLocation === 'confirmed' || completionLocation === 'not_required') {
-      await finish();
+      await finish(occurredAt, locationEvidence);
       return;
     }
 
@@ -5029,7 +5032,13 @@ function DriverApp() {
     showOperationalDialog(copy.unverifiedTitle, copy.unverifiedBody, [
       { onPress: onCancelled, style: 'cancel', text: copy.continueReturn },
       {
-        onPress: () => { void finish(); },
+        onPress: () => {
+          void (async () => {
+            const confirmedAt = new Date();
+            const confirmedLocation = await captureTrustedRouteEventLocation(route.id, confirmedAt);
+            await finish(confirmedAt, confirmedLocation);
+          })();
+        },
         style: 'destructive',
         text: copy.finishUnverified,
       },

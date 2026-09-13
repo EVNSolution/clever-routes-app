@@ -51,6 +51,9 @@ describe('company return behavior', () => {
     assert.match(completionRequest, /classifyRouteCompletionLocation/u);
     assert.match(completionRequest, /completionLocation === 'confirmed' \|\| completionLocation === 'not_required'/u);
     assert.match(completionRequest, /finishUnverified/u);
+    assert.match(completionRequest, /const confirmedAt = new Date\(\)/u);
+    assert.match(completionRequest, /captureTrustedRouteEventLocation\(route\.id, confirmedAt\)/u);
+    assert.match(completionRequest, /finish\(confirmedAt, confirmedLocation\)/u);
     assert.match(routeSwitch, /if \(!hasRemainingStops\) \{[\s\S]*requestRouteCompletion/u);
   });
 

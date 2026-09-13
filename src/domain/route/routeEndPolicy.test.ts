@@ -47,6 +47,39 @@ describe('route end policy', () => {
     }), null);
     assert.equal(resolveTrustedRouteEventLocation({
       actionAt,
+      cachedLocation: {
+        ...currentLocation,
+        recordedAt: new Date(actionAt.getTime() - 30_001),
+        routePlanId: 'route-1',
+      },
+      routePlanId: 'route-1',
+    }), null);
+    assert.equal(resolveTrustedRouteEventLocation({
+      actionAt,
+      cachedLocation: {
+        ...currentLocation,
+        recordedAt: new Date(actionAt.getTime() + 1),
+        routePlanId: 'route-1',
+      },
+      routePlanId: 'route-1',
+    }), null);
+    assert.deepEqual(resolveTrustedRouteEventLocation({
+      actionAt,
+      currentLocation: { ...currentLocation, recordedAt: new Date(actionAt.getTime() + 5_000) },
+      routePlanId: 'route-1',
+    }), { ...currentLocation, recordedAt: new Date(actionAt.getTime() + 5_000) });
+    assert.equal(resolveTrustedRouteEventLocation({
+      actionAt,
+      currentLocation: { ...currentLocation, recordedAt: new Date(actionAt.getTime() + 5_001) },
+      routePlanId: 'route-1',
+    }), null);
+    assert.equal(resolveTrustedRouteEventLocation({
+      actionAt,
+      currentLocation: { ...currentLocation, recordedAt: new Date(actionAt.getTime() + 86_400_000) },
+      routePlanId: 'route-1',
+    }), null);
+    assert.equal(resolveTrustedRouteEventLocation({
+      actionAt,
       cachedLocation: { ...currentLocation, routePlanId: 'route-2' },
       routePlanId: 'route-1',
     }), null);

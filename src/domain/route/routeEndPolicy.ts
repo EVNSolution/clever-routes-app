@@ -2,6 +2,9 @@ import type { AssignedRouteCoordinates, AssignedRouteEndMode } from './assignedR
 import { classifyGpsOperationalState } from '../location/gpsOperationalState';
 import { getLocationDistanceMeters } from '../notifications/stopArrivalNotifications';
 
+const MAX_ROUTE_EVENT_LOCATION_AGE_MS = 30_000;
+const MAX_FOREGROUND_LOCATION_DELAY_MS = 5_000;
+
 export type RouteEventLocationCandidate = {
   accuracyMeters: number | null;
   latitude: number;
@@ -30,15 +33,23 @@ export function resolveTrustedRouteEventLocation(input: {
   const cachedLocation = input.cachedLocation?.routePlanId === input.routePlanId
     ? input.cachedLocation
     : null;
-  for (const location of [input.currentLocation, cachedLocation]) {
+  for (const [location, maxFutureMs] of [
+    [input.currentLocation, MAX_FOREGROUND_LOCATION_DELAY_MS],
+    [cachedLocation, 0],
+  ] as const) {
     if (location === null || location === undefined || !isValidLocation(location)) continue;
-    const validationNow = location.recordedAt > input.actionAt ? location.recordedAt : input.actionAt;
-    if (classifyGpsOperationalState({
+    const ageMs = input.actionAt.getTime() - location.recordedAt.getTime();
+    const gpsState = classifyGpsOperationalState({
       accuracyMeters: location.accuracyMeters,
       capturedAt: location.recordedAt.toISOString(),
       distanceMeters: null,
-      now: validationNow,
-    }).safeForProximity) {
+      now: input.actionAt,
+    });
+    if (
+      ageMs >= -maxFutureMs
+      && ageMs <= MAX_ROUTE_EVENT_LOCATION_AGE_MS
+      && gpsState.accuracy === 'accurate'
+    ) {
       return {
         accuracyMeters: location.accuracyMeters,
         latitude: location.latitude,
