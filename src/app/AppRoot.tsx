@@ -309,7 +309,6 @@ const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
 const ROUTES_APP_PRIVACY_URL = 'https://clever-route-api.cleversystem.ai/routes-app/privacy';
 const ROUTES_APP_SUPPORT_URL = 'https://clever-route-api.cleversystem.ai/routes-app/support';
 const ROUTES_APP_ACCOUNT_DELETION_URL = 'https://clever-route-api.cleversystem.ai/routes-app/account-deletion';
-const GOOGLE_PLAY_ROUTES_APP_URL = 'https://play.google.com/store/apps/details?id=com.evnsolution.clever.routes';
 const ROUTES_APP_UPDATE_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 const DRIVER_RESTORE_LOADING_TIMEOUT_MS = 8_000;
 const PULL_REFRESH_DRAG_RESISTANCE = 0.72;
@@ -5516,7 +5515,7 @@ function DriverApp() {
     }
     const targetUrl = driverAppUpdateState.kind === 'required_reinstall'
       ? pendingDriverAppRelease.installation.guideUrl
-      : GOOGLE_PLAY_ROUTES_APP_URL;
+      : pendingDriverAppRelease.installUrl;
     void Linking.openURL(targetUrl).catch(() => {
       setMessage('The update page could not be opened.');
     });

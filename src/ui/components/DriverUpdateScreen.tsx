@@ -48,7 +48,7 @@ export function DriverUpdateScreen({
         style={({ pressed }) => [styles.updateButton, pressed && styles.pressed]}
       >
         <Text style={styles.updateButtonText}>
-          {isReinstall ? 'Open install guide' : 'Open Google Play'}
+          {isReinstall ? 'Open install guide' : 'Update'}
         </Text>
       </Pressable>
       {!isRequired ? (
