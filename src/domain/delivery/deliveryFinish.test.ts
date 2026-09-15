@@ -32,6 +32,37 @@ function createMockStreamService() {
 }
 
 describe('delivery finish route cleanup', () => {
+  it('records completion with captured location without replacing the button time', async () => {
+    const events = createMockDriverEventService();
+    const stream = createMockStreamService();
+    const occurredAt = new Date('2026-09-13T01:00:00.000Z');
+
+    const result = await finishDeliveryAfterActive({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: events,
+      locationEvidence: {
+        accuracyMeters: 9,
+        latitude: 43.6532,
+        longitude: -79.3832,
+        recordedAt: new Date('2026-09-13T00:59:55.000Z'),
+      },
+      now: occurredAt,
+      routePlanId: 'route-1',
+      streamService: stream.service,
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.deepEqual(events.recordedEvents[0], {
+      accuracyMeters: 9,
+      clientEventId: `route-completed-${occurredAt.getTime().toString(36)}`,
+      eventType: 'ROUTE_COMPLETED',
+      latitude: 43.6532,
+      longitude: -79.3832,
+      occurredAt,
+      routePlanId: 'route-1',
+    });
+  });
+
   it('persists decorated completion before response loss and recovers APPLIED receipt after process restart', async () => {
     const values = new Map<string, string>();
     const storage: OfflineSubmissionQueueStorage = {
@@ -430,6 +461,12 @@ describe('delivery finish route cleanup', () => {
           throw new Error('network offline');
         },
       },
+      locationEvidence: {
+        accuracyMeters: 12,
+        latitude: 43.6532,
+        longitude: -79.3832,
+        recordedAt: new Date('2026-05-12T08:34:55.000Z'),
+      },
       now: new Date('2026-05-12T08:35:00.000Z'),
       offlineQueue: queue,
       routePlanId: 'route-1',
@@ -456,6 +493,17 @@ describe('delivery finish route cleanup', () => {
     assert.equal(pending[0]?.kind, 'driver_event');
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'ROUTE_COMPLETED');
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.routePlanId : null, 'route-1');
+    assert.deepEqual(pending[0]?.kind === 'driver_event' ? {
+      accuracyMeters: pending[0].event.accuracyMeters,
+      latitude: pending[0].event.latitude,
+      longitude: pending[0].event.longitude,
+      occurredAt: pending[0].event.occurredAt,
+    } : null, {
+      accuracyMeters: 12,
+      latitude: 43.6532,
+      longitude: -79.3832,
+      occurredAt: new Date('2026-05-12T08:35:00.000Z'),
+    });
   });
 
   it('removes the prepared route end when the active session changed', async () => {

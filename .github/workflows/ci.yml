@@ -48,8 +48,8 @@ jobs:
       - name: Audit npm dependencies
         run: npm audit --audit-level=moderate
 
-      - name: Check Expo dependency alignment
-        run: npx expo install --check
+      - name: Check Expo dependency alignment against installed SDK
+        run: EXPO_OFFLINE=1 npx expo install --check
 
       - name: Check git diff whitespace
         run: git diff --check

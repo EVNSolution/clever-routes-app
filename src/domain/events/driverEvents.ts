@@ -15,6 +15,7 @@ import type {
   AssignedRouteEtaSnapshotStatus,
   AssignedRouteEtaSnapshotStop,
 } from '../route/assignedRoute';
+import type { RouteEventLocationEvidence } from '../route/routeEndPolicy';
 
 export type DriverEventType =
   | 'LOCATION_UPDATED'
@@ -216,6 +217,7 @@ export async function recordRouteStartedAfterDeliveryStart(input: {
   clientEventId?: string;
   deliveryStart: DeliveryStartResult;
   driverEventService: DriverEventService;
+  locationEvidence?: RouteEventLocationEvidence;
   occurredAt?: Date;
   offlineQueue?: OfflineSubmissionQueue;
   routePlanId: string | null;
@@ -232,6 +234,7 @@ export async function recordRouteStartedAfterDeliveryStart(input: {
     input.driverEventService,
     createRouteStartedDriverEvent({
       ...(input.clientEventId === undefined ? {} : { clientEventId: input.clientEventId }),
+      ...(input.locationEvidence === undefined ? {} : { locationEvidence: input.locationEvidence }),
       occurredAt: input.occurredAt ?? new Date(),
       routePlanId: input.routePlanId,
     }),
@@ -259,12 +262,18 @@ export async function recordRouteStartedAfterDeliveryStart(input: {
 
 export function createRouteStartedDriverEvent(input: {
   clientEventId?: string;
+  locationEvidence?: RouteEventLocationEvidence;
   occurredAt: Date;
   routePlanId: string | null;
 }): DriverEventInput {
   return {
     clientEventId: input.clientEventId ?? createRouteStartedClientEventId(input.occurredAt),
     eventType: 'ROUTE_STARTED',
+    ...(input.locationEvidence === undefined ? {} : {
+      accuracyMeters: input.locationEvidence.accuracyMeters,
+      latitude: input.locationEvidence.latitude,
+      longitude: input.locationEvidence.longitude,
+    }),
     occurredAt: input.occurredAt,
     routePlanId: input.routePlanId,
   };

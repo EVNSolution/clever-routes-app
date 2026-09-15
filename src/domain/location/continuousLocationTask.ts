@@ -98,6 +98,14 @@ export async function processContinuousLocationTaskBatch(input: {
     const routeStartedEvent = prepareDriverEventForPersistence(
       driverEventService,
       createRouteStartedDriverEvent({
+        ...(persistedAccess.activeRouteSession.routeStartedLocation === undefined ? {} : {
+          locationEvidence: {
+            accuracyMeters: persistedAccess.activeRouteSession.routeStartedLocation.accuracyMeters,
+            latitude: persistedAccess.activeRouteSession.routeStartedLocation.latitude,
+            longitude: persistedAccess.activeRouteSession.routeStartedLocation.longitude,
+            recordedAt: new Date(persistedAccess.activeRouteSession.routeStartedLocation.recordedAt),
+          },
+        }),
         occurredAt: new Date(sessionGeneration),
         routePlanId,
       }),

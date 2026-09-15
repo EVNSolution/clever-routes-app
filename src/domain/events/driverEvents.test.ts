@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   applyDriverRouteEtaUpdate,
+  createRouteStartedDriverEvent,
   createDriverEventsApiClient,
   createMockDriverEventService,
   recordPickupCompletedAfterDeliveryStart,
@@ -15,6 +16,28 @@ import { sampleAssignedRoute } from '../route/assignedRoute';
 import routeCompletedRequest from '../../test/contractFixtures/routeOperations/v1/fixtures/route-completed.request.json';
 
 describe('driver event API boundary', () => {
+  it('keeps route-start coordinates on the immutable start event while preserving the button time', () => {
+    const occurredAt = new Date('2026-09-13T01:00:00.000Z');
+    assert.deepEqual(createRouteStartedDriverEvent({
+      locationEvidence: {
+        accuracyMeters: 12,
+        latitude: 43.6532,
+        longitude: -79.3832,
+        recordedAt: new Date('2026-09-13T00:59:58.000Z'),
+      },
+      occurredAt,
+      routePlanId: 'route-1',
+    }), {
+      accuracyMeters: 12,
+      clientEventId: `route-started-${occurredAt.getTime().toString(36)}`,
+      eventType: 'ROUTE_STARTED',
+      latitude: 43.6532,
+      longitude: -79.3832,
+      occurredAt,
+      routePlanId: 'route-1',
+    });
+  });
+
   it('sends the canonical v2 lineage and build contract on every ordered event', async () => {
     let body: unknown;
     const service = createDriverEventsApiClient({

@@ -12,6 +12,7 @@ import type {
   OfflineSubmissionQueue,
 } from '../offline/offlineSubmissionQueue';
 import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
+import type { RouteEventLocationEvidence } from '../route/routeEndPolicy';
 
 export type DeliveryFinishResult =
   | {
@@ -69,6 +70,7 @@ export async function finishDeliveryAfterActive(input: {
   driverEventAttemptTimeoutMs?: number;
   driverEventService: DriverEventService;
   eventPayload?: Record<string, unknown>;
+  locationEvidence?: RouteEventLocationEvidence;
   now?: Date;
   offlineQueue?: OfflineSubmissionQueue;
   onServerAcknowledged?: (
@@ -104,6 +106,11 @@ export async function finishDeliveryAfterActive(input: {
   };
   const routeReleased = input.routeEnd === 'released';
   const event = prepareDriverEventForPersistence(input.driverEventService, {
+    ...(input.locationEvidence === undefined ? {} : {
+      accuracyMeters: input.locationEvidence.accuracyMeters,
+      latitude: input.locationEvidence.latitude,
+      longitude: input.locationEvidence.longitude,
+    }),
     clientEventId: createRouteEndClientEventId(occurredAt, routeReleased),
     eventType: routeReleased ? 'ROUTE_PAUSED' as const : 'ROUTE_COMPLETED' as const,
     occurredAt,

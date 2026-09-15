@@ -57,6 +57,7 @@ describe('driver assigned route UX flow', () => {
     assert.equal(result.flowState, 'route_ready');
     assert.equal(result.route.name, 'Tuesday AM Route');
     assert.deepEqual(result.route.depot, { latitude: 43.6532, longitude: -79.3832 });
+    assert.equal(result.route.routeEndMode, 'RETURN_TO_DEPOT');
     assert.equal(result.route.stops.length, 2);
     assert.equal(formatAssignedRouteDistance(result.route.routeMetrics), '3.3 km');
     assert.equal(formatAssignedRouteDuration(result.route.routeMetrics), '14 min');
@@ -640,6 +641,33 @@ describe('driver assigned route UX flow', () => {
     assert.deepEqual(result.route.routeStopPoints, []);
     assert.equal(formatAssignedRouteDistance(result.route.routeMetrics), 'Not available');
     assert.equal(formatAssignedRouteDuration(result.route.routeMetrics), 'Not available');
+  });
+
+  it('preserves a missing route end mode separately from explicit end-at-last-stop', async () => {
+    const { routeEndMode: _routeEndMode, ...legacyRoute } = sampleAssignedRoute;
+    const legacyClient = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({ data: { route: legacyRoute, status: 'ASSIGNED_ROUTE' } }),
+      }),
+    });
+    const explicitClient = createAssignedRouteApiClient({
+      accessToken: 'driver.jwt',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          data: { route: { ...legacyRoute, routeEndMode: 'END_AT_LAST_STOP' }, status: 'ASSIGNED_ROUTE' },
+        }),
+      }),
+    });
+
+    const legacy = await legacyClient.getAssignedRoute({ routeContext: legacyRoute.id });
+    const explicit = await explicitClient.getAssignedRoute({ routeContext: legacyRoute.id });
+    assert.equal(legacy.status === 'ASSIGNED_ROUTE' ? legacy.route.routeEndMode : null, undefined);
+    assert.equal(explicit.status === 'ASSIGNED_ROUTE' ? explicit.route.routeEndMode : null, 'END_AT_LAST_STOP');
   });
 
   it('maps route map preview helper states for missing, expired, and failed images', () => {

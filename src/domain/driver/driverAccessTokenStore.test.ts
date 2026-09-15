@@ -236,6 +236,44 @@ test('keeps a stable route-session generation and route-start acknowledgement', 
   );
 });
 
+test('persists the trusted route-start location without letting later progress replace it', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+  const routeStartedLocation = {
+    accuracyMeters: 8,
+    latitude: 43.6532,
+    longitude: -79.3832,
+    recordedAt: '2026-09-13T00:59:58.000Z',
+  };
+
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({
+    navigationStepIndex: 0,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+    routeStartedLocation,
+  });
+  await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1'],
+    navigationStepIndex: 1,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+    routeStartedLocation: {
+      accuracyMeters: 5,
+      latitude: 37.5665,
+      longitude: 126.978,
+      recordedAt: '2026-09-13T01:05:00.000Z',
+    },
+  });
+
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.deepEqual(restored.activeRouteSession?.routeStartedLocation, routeStartedLocation);
+});
+
 test('clears only the active route session without signing out', async () => {
   const storage = createMemoryStorage();
   const store = createDriverAccessTokenStore({
