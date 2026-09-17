@@ -29,7 +29,7 @@ describe('driver operations resilience runtime', () => {
     assert.ok(retryIndex > 0 && retryIndex < pendingProjectionIndex && pendingProjectionIndex < removalIndex);
     assert.match(source, /setDurableCompletionPendingRoutePlanId[\s\S]*pendingRouteEnd\?\.kind === 'driver_event'/u);
     assert.match(source, /Route completion is still pending server confirmation. GPS tracking stays stopped/u);
-    assert.match(source, /activeRouteSession\.status === 'completion_pending' \|\| session\.pendingRouteEnd === undefined/u);
+    assert.match(source, /activeRouteCompletionPending \|\| session\.pendingRouteEnd === undefined/u);
     assert.match(source, /completionResolvedDuringRestore \? null : persistedActiveRouteSession/u);
   });
 

@@ -10,13 +10,21 @@ export const DEFAULT_STOP_ARRIVAL_RADIUS_METERS = 50;
 
 export type DriverRouteNotificationAction = 'assigned' | 'cancelled' | 'changed' | 'released';
 
-export type DriverRouteNotificationData = {
+type DriverRouteNotificationBaseData = {
   action: DriverRouteNotificationAction;
-  childVersion: number;
-  routeGroupingId: string;
   routePlanId: string;
   type: typeof DRIVER_ROUTE_NOTIFICATION_TYPE;
 };
+
+export type DriverRouteNotificationData = DriverRouteNotificationBaseData & (
+  | {
+      childVersion: number;
+      routeGroupingId: string;
+    }
+  | {
+      publicationVersion: string;
+    }
+);
 
 export type DriverRouteNotificationNavigation =
   | 'active_route_protected'
@@ -88,29 +96,49 @@ export function parseDriverRouteNotificationData(
   }
   if (
     !isDriverRouteNotificationAction(data.action)
-    || typeof data.routeGroupingId !== 'string'
-    || data.routeGroupingId.trim() === ''
     || typeof data.routePlanId !== 'string'
     || data.routePlanId.trim() === ''
   ) {
     return null;
   }
-  const childVersion = typeof data.childVersion === 'number'
-    ? data.childVersion
-    : typeof data.childVersion === 'string'
-      ? Number(data.childVersion)
-      : Number.NaN;
-  if (!Number.isInteger(childVersion) || childVersion <= 0) {
-    return null;
+  const childVersion = parsePositiveInteger(data.childVersion);
+  if (
+    typeof data.routeGroupingId === 'string'
+    && data.routeGroupingId.trim() !== ''
+    && childVersion !== null
+  ) {
+    return {
+      action: data.action,
+      childVersion,
+      routeGroupingId: data.routeGroupingId,
+      routePlanId: data.routePlanId,
+      type: DRIVER_ROUTE_NOTIFICATION_TYPE,
+    };
   }
 
+  const publicationVersion = parsePublicationVersion(data.publicationVersion);
+  if (publicationVersion === null) return null;
   return {
     action: data.action,
-    childVersion,
-    routeGroupingId: data.routeGroupingId,
+    publicationVersion,
     routePlanId: data.routePlanId,
     type: DRIVER_ROUTE_NOTIFICATION_TYPE,
   };
+}
+
+function parsePublicationVersion(value: unknown): string | null {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value)
+    ? value
+    : null;
+}
+
+function parsePositiveInteger(value: unknown): number | null {
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number(value)
+      : Number.NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 export function getDriverRouteNotificationNavigation(input: {

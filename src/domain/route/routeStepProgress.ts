@@ -65,6 +65,25 @@ export function getAssignedRouteProgressAfterPickup(route: Pick<AssignedRoute, '
   };
 }
 
+export function getActiveRouteStepAfterRefresh(input: {
+  completedStopIds: string[];
+  route: Pick<AssignedRoute, 'stops'>;
+}): number {
+  const arrivedStopIndex = input.route.stops.findIndex((stop) => (
+    stop.status === 'ARRIVED' && !input.completedStopIds.includes(stop.deliveryStopId)
+  ));
+  if (arrivedStopIndex >= 0) {
+    return arrivedStopIndex + 1;
+  }
+
+  const nextIncompleteStopIndex = input.route.stops.findIndex(
+    (stop) => !isStopCompleted(stop, input.completedStopIds),
+  );
+  return nextIncompleteStopIndex < 0
+    ? getRouteReturnStepIndex(input.route)
+    : nextIncompleteStopIndex + 1;
+}
+
 export function buildOutOfOrderStopArrivalWarning(input: {
   completedStopIds: string[];
   navigationStepIndex: number;
