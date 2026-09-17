@@ -239,6 +239,12 @@ export function createDriverAccessTokenStore(input: {
         const currentSession = payload.activeRouteSession?.routePlanId === activeRouteSession.routePlanId
           ? payload.activeRouteSession
           : undefined;
+        const mergedCompletedStopIds = completedStopIds === undefined
+          ? currentSession?.completedStopIds
+          : [...new Set([
+              ...(currentSession?.completedStopIds ?? []),
+              ...completedStopIds,
+            ])];
         const requestedStartedAt = activeRouteSession.startedAt !== undefined
           && Number.isFinite(Date.parse(activeRouteSession.startedAt))
           ? activeRouteSession.startedAt
@@ -247,11 +253,7 @@ export function createDriverAccessTokenStore(input: {
           ...payload,
           savedAt: now().toISOString(),
           activeRouteSession: {
-            ...(completedStopIds === undefined
-              ? currentSession?.completedStopIds === undefined
-                ? {}
-                : { completedStopIds: currentSession.completedStopIds }
-              : { completedStopIds }),
+            ...(mergedCompletedStopIds === undefined ? {} : { completedStopIds: mergedCompletedStopIds }),
             navigationStepIndex,
             ...(currentSession?.pickupCompletedAt === undefined && activeRouteSession.pickupCompleted !== true
               ? {}

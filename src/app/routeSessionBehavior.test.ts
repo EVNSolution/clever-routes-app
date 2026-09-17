@@ -42,7 +42,7 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /getAssignedRouteServerProgress/u);
     assert.match(appSource, /const pickupIsUnconfirmed = restoredServerProgress\.navigationStepIndex === COMPANY_STEP_INDEX[\s\S]*activeRouteSession\?\.pickupCompletedAt === undefined/u);
     assert.match(appSource, /pickupIsUnconfirmed[\s\S]*\? COMPANY_STEP_INDEX/u);
-    assert.match(appSource, /setCompletedStopIds\(restoredCompletedStopIds\)/u);
+    assert.match(appSource, /setCompletedStopIds\(\(current\) => \[\.\.\.new Set\(\[/u);
     assert.match(appSource, /markActiveRouteStarted/u);
   });
 
@@ -53,6 +53,12 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /pickupIsUnconfirmed[\s\S]*&& !hasDurablePickupEvidence/u);
     assert.match(appSource, /const restoredCompletedStopIds = \[[\s\S]*activeRouteSession\?\.completedStopIds[\s\S]*restoredServerProgress\.completedStopIds/u);
     assert.match(appSource, /getActiveRouteStepAfterRefresh\(\{[\s\S]*completedStopIds: restoredCompletedStopIds,[\s\S]*route: restoredActiveSession\.route/u);
+    assert.match(appSource, /const latestAccess = await driverAccessTokenStore\.loadActiveDriverAccess\(\)[\s\S]*latestSessionInstanceId !== expectedSessionInstanceId/u);
+    assert.match(appSource, /const releaseRouteRefresh = routeProgressRefreshGuardRef\.current\.beginRefresh\(\)[\s\S]*releaseRouteRefresh\(\)/u);
+    assert.match(appSource, /const releaseProgressMutation = routeProgressRefreshGuardRef\.current\.beginMutation\(\)[\s\S]*Routes are refreshing/u);
+    assert.match(appSource, /handleRefreshRoutes\(\)\.then\(\(refreshAccepted\)[\s\S]*if \(!refreshAccepted\) return;[\s\S]*refreshRequired: false/u);
+    assert.match(appSource, /createRouteProgressRefreshGuard\(\(\) => \{[\s\S]*setRouteProgressGuardIdleRevision/u);
+    assert.match(appSource, /pendingDriverRouteNotification,[\s\S]*routeProgressGuardIdleRevision,[\s\S]*routeSyncState/u);
     assert.match(appSource, /hasDurablePickupEvidence[\s\S]*saveActiveRouteSession\(\{[\s\S]*pickupCompleted: true/u);
     assert.match(appSource, /pickupCompletionQueueState === 'reconciliation'[\s\S]*setRouteStartRecoveryState\('sync_pending'\)/u);
   });
@@ -62,7 +68,7 @@ describe('route session current task behavior', () => {
 
     assert.match(appSource, /pendingRouteEnd: getPendingRouteEnd\(queue, session\.route\.id\) \?\? undefined/u);
     assert.match(appSource, /session\.companyGuidance\.executionStatus === 'IN_PROGRESS' && session\.pendingRouteEnd === undefined/u);
-    assert.match(appSource, /session\.route\.id === activeRouteSession\.routePlanId[\s\S]*session\.pendingRouteEnd === undefined/u);
+    assert.match(appSource, /session\.route\.id === activeRoutePlanIdToRestore[\s\S]*session\.pendingRouteEnd === undefined/u);
     assert.match(appSource, /session\.pendingRouteEnd === 'completed'[\s\S]*'completed'[\s\S]*session\.pendingRouteEnd === 'released'[\s\S]*'ready'/u);
   });
 
@@ -134,7 +140,7 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const currentTaskPayment = stop === null \? null : formatAssignedRoutePaymentSummary\(stop\)/u);
     assert.match(componentSource, /const currentTaskPaymentAmount = stop === null[\s\S]*\? null[\s\S]*: formatAssignedRouteCompactPaymentAmount\(stop\.totalPriceAmount, stop\.currencyCode\)/u);
     assert.match(componentSource, /<View style=\{styles\.currentTaskMetaRow\}>[\s\S]*currentTaskAddress !== null \? \([\s\S]*<Text style=\{styles\.currentTaskAddressText\}>\{currentTaskAddress\}<\/Text>[\s\S]*\) : null[\s\S]*<Text style=\{styles\.currentTaskPaymentAmount\}>\{currentTaskPaymentAmount\}<\/Text>/u);
-    assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*<PrimaryButton compact disabled=\{isStartingRoute \|\| isRecordingArrival\} label="Arrive" loading=\{isStartingRoute \|\| isRecordingArrival\} onPress=\{onArrived\} \/>[\s\S]*<SecondaryButton compact label="Navigate" onPress=\{onOpenNavigation\} \/>[\s\S]*<\/View>/u);
+    assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*<PrimaryButton compact disabled=\{isRefreshingRoutes \|\| isStartingRoute \|\| isRecordingArrival\} label="Arrive" loading=\{isRefreshingRoutes \|\| isStartingRoute \|\| isRecordingArrival\} onPress=\{onArrived\} \/>[\s\S]*<SecondaryButton compact label="Navigate" onPress=\{onOpenNavigation\} \/>[\s\S]*<\/View>/u);
     assert.match(componentSource, /const etaSnapshot = route\.etaSnapshot \?\? null/u);
     assert.match(componentSource, /const nextStopEta = etaSnapshot\?\.nextStopEta \?\? null/u);
     assert.match(componentSource, /const remainingRouteEta = etaSnapshot\?\.remainingRouteEta \?\? null/u);
@@ -172,10 +178,10 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const isPickupTask = routeStatus === 'active' && currentNavigationStepIndex === COMPANY_STEP_INDEX/u);
     assert.match(componentSource, /const currentTaskTitle = isPickupTask \? 'Store Pickup' : stop === null \? 'Next Stop'/u);
     assert.match(componentSource, /const currentTaskAddress = stop === null \? null : formatStopSearchAddress\(stop\)/u);
-    assert.match(componentSource, /isPickupTask \? \([\s\S]*<PrimaryButton label="Pickup & Start Route" onPress=\{onArrived\} \/>[\s\S]*\) : \([\s\S]*label="Arrive"[\s\S]*label="Navigate"/u);
+    assert.match(componentSource, /isPickupTask \? \([\s\S]*<PrimaryButton disabled=\{isRefreshingRoutes\} label="Pickup & Start Route" loading=\{isRefreshingRoutes\} onPress=\{onArrived\} \/>[\s\S]*\) : \([\s\S]*label="Arrive"[\s\S]*label="Navigate"/u);
     assert.match(componentSource, /const pickupTiming = formatAssignedRoutePickupTiming\(route, pickupTimingNow\)/u);
     assert.match(componentSource, /const initialTimer = setTimeout\(\(\) => setPickupTimingNow\(Date\.now\(\)\), 0\)[\s\S]*const minuteTimer = setInterval\(\(\) => setPickupTimingNow\(Date\.now\(\)\), 60_000\)[\s\S]*clearTimeout\(initialTimer\)[\s\S]*clearInterval\(minuteTimer\)/u);
-    assert.match(componentSource, /isPickupTask \? \([\s\S]*styles\.pickupTimingGrid[\s\S]*label="Leave" value=\{pickupTiming\.leave\}[\s\S]*label="Route time" value=\{pickupTiming\.routeTime\}[\s\S]*label="Est\. finish" value=\{pickupTiming\.finish\}[\s\S]*<PrimaryButton label="Pickup & Start Route"/u);
+    assert.match(componentSource, /isPickupTask \? \([\s\S]*styles\.pickupTimingGrid[\s\S]*label="Leave" value=\{pickupTiming\.leave\}[\s\S]*label="Route time" value=\{pickupTiming\.routeTime\}[\s\S]*label="Est\. finish" value=\{pickupTiming\.finish\}[\s\S]*<PrimaryButton disabled=\{isRefreshingRoutes\} label="Pickup & Start Route"/u);
     assert.doesNotMatch(componentSource, /pickupTiming[\s\S]{0,400}[·•]/u);
     assert.match(appSource, /const pickupProgress = getAssignedRouteProgressAfterPickup\(selectedRoute\)/u);
     assert.match(appSource, /saveActiveRouteSession\(\{[\s\S]*navigationStepIndex: pickupProgress\.navigationStepIndex,[\s\S]*pickupCompleted: true/u);

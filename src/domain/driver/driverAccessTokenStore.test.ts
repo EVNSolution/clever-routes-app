@@ -158,6 +158,37 @@ test('updates same-route access generation without replacing the active session'
   assert.deepEqual(restored.activeRouteSession?.completedStopIds, ['stop-1']);
 });
 
+test('does not let a stale same-route save remove a concurrently completed stop', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1'],
+    navigationStepIndex: 2,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  });
+  await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1', 'stop-2'],
+    navigationStepIndex: 3,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  });
+  await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1'],
+    navigationStepIndex: 2,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  });
+
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.deepEqual(restored.activeRouteSession?.completedStopIds, ['stop-1', 'stop-2']);
+});
+
 test('serializes concurrent token refresh and active route cleanup', async () => {
   const storage = createMemoryStorage();
   const baseSetItem = storage.setItemAsync;

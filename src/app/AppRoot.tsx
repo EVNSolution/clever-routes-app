@@ -36,6 +36,7 @@ import {
   type OperationalDialogButton,
   type OperationalDialogState,
 } from './OperationalDialog';
+import { createRouteProgressRefreshGuard } from './routeProgressRefreshGuard';
 
 import {
   createMockAssignedRouteService,
@@ -439,6 +440,7 @@ function DriverApp() {
   const [isRequestingAccountDeletion, setIsRequestingAccountDeletion] = useState(false);
   const [isSavingAccountName, setIsSavingAccountName] = useState(false);
   const [isRefreshingRoutes, setIsRefreshingRoutes] = useState(false);
+  const [routeProgressGuardIdleRevision, setRouteProgressGuardIdleRevision] = useState(0);
   const [isRequestingBackgroundLocation, setIsRequestingBackgroundLocation] = useState(false);
   const [isStartingRoute, setIsStartingRoute] = useState(false);
   const [isRecordingArrival, setIsRecordingArrival] = useState(false);
@@ -469,6 +471,9 @@ function DriverApp() {
     routePlanId: string;
   } | null>(null);
   const isRecordingArrivalRef = useRef(false);
+  const routeProgressRefreshGuardRef = useRef(createRouteProgressRefreshGuard(() => {
+    setRouteProgressGuardIdleRevision((current) => current + 1);
+  }));
   const completeStopFromNotificationRef = useRef<(data: StopArrivalNotificationData) => Promise<void>>(async () => undefined);
   const hasCheckedInitialDriverRouteNotificationRef = useRef(false);
   const networkState = Network.useNetworkState();
@@ -1783,6 +1788,7 @@ function DriverApp() {
   const canArriveFromStopDetails = stopDetailsReturnScreen === 'routeSession'
     && routeStatus === 'active'
     && !isStartingRoute
+    && !isRefreshingRoutes
     && routeStartRecoveryState === 'idle'
     && navigationStepIndex !== COMPANY_STEP_INDEX
     && stopDetailsStop !== null
@@ -2081,6 +2087,11 @@ function DriverApp() {
       setMessage('Arrival is already being recorded. The extra action was ignored.');
       return false;
     }
+    const releaseProgressMutation = routeProgressRefreshGuardRef.current.beginMutation();
+    if (releaseProgressMutation === null) {
+      setMessage('Routes are refreshing. Try the delivery action again after the updated route is loaded.');
+      return false;
+    }
 
     isRecordingArrivalRef.current = true;
     setIsRecordingArrival(true);
@@ -2164,6 +2175,7 @@ function DriverApp() {
     } finally {
       isRecordingArrivalRef.current = false;
       setIsRecordingArrival(false);
+      releaseProgressMutation();
     }
   }, [foregroundLocationSnapshotService, isStartingRoute, routeStartRecoveryState, selectedRouteSession, setScreen, submitStopArrivalForRouteStop]);
 
@@ -2795,7 +2807,7 @@ function DriverApp() {
         ? null
         : getAssignedRouteServerProgress(serverActiveRouteSession.route);
       const serverRestoreTimestamp = new Date().toISOString();
-      const activeRouteSession: PersistedActiveRouteSession | null = effectivePersistedActiveRouteSession ?? (
+      let activeRouteSession: PersistedActiveRouteSession | null = effectivePersistedActiveRouteSession ?? (
         serverActiveRouteSession === null || serverActiveProgress === null
           ? null
           : {
@@ -2807,11 +2819,13 @@ function DriverApp() {
             }
       );
       const restoredFromServer = persistedActiveRouteSession === null && serverActiveRouteSession !== null;
+      const activeRoutePlanIdToRestore = activeRouteSession?.routePlanId ?? null;
+      const activeRouteCompletionPending = activeRouteSession?.status === 'completion_pending';
       const restoredActiveSession = activeRouteSession === null
         ? null
         : loadedSessionsWithPendingEnds.find((session) => (
-            session.route.id === activeRouteSession.routePlanId
-            && (activeRouteSession.status === 'completion_pending' || session.pendingRouteEnd === undefined)
+            session.route.id === activeRoutePlanIdToRestore
+            && (activeRouteCompletionPending || session.pendingRouteEnd === undefined)
           )) ?? null;
       const activeRouteLoadIsUnresolved = effectivePersistedActiveRouteSession !== null
         && restoredActiveSession === null
@@ -2855,6 +2869,23 @@ function DriverApp() {
       });
       void retryOfflineSubmissionsForSessions(loadedSessionsWithPendingEnds);
       if (restoredActiveSession !== null) {
+        if (effectivePersistedActiveRouteSession !== null) {
+          const latestAccess = await driverAccessTokenStore.loadActiveDriverAccess();
+          const latestActiveRouteSession = latestAccess.kind === 'active' || latestAccess.kind === 'refresh_required'
+            ? latestAccess.activeRouteSession ?? null
+            : null;
+          const expectedSessionInstanceId = effectivePersistedActiveRouteSession.startedAt
+            ?? effectivePersistedActiveRouteSession.updatedAt;
+          const latestSessionInstanceId = latestActiveRouteSession?.startedAt
+            ?? latestActiveRouteSession?.updatedAt;
+          if (
+            latestActiveRouteSession?.routePlanId !== restoredActiveSession.route.id
+            || latestSessionInstanceId !== expectedSessionInstanceId
+          ) {
+            return;
+          }
+          activeRouteSession = latestActiveRouteSession;
+        }
         const restoredServerProgress = getAssignedRouteServerProgress(restoredActiveSession.route);
         setServerConfirmedStopIds(restoredServerProgress.completedStopIds);
         const pickupCompletionQueueState = getPickupCompletionQueueState(queue, restoredActiveSession.route.id);
@@ -2894,7 +2925,10 @@ function DriverApp() {
               }),
           restoredActiveSession.route,
         );
-        setCompletedStopIds(restoredCompletedStopIds);
+        setCompletedStopIds((current) => [...new Set([
+          ...current,
+          ...restoredCompletedStopIds,
+        ])]);
         if (hasDurablePickupEvidence && activeRouteSession !== null) {
           await driverAccessTokenStore.saveActiveRouteSession({
             completedStopIds: restoredCompletedStopIds,
@@ -2902,19 +2936,6 @@ function DriverApp() {
             pickupCompleted: true,
             routePlanId: restoredActiveSession.route.id,
           });
-        }
-        if (activeRouteSession?.status === 'active' && !restoredFromServer) {
-          const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
-            completedStopIds: restoredCompletedStopIds,
-            navigationStepIndex: restoredStepIndex,
-            routePlanId: restoredActiveSession.route.id,
-            startedAt: activeRouteSession.startedAt,
-          });
-          if (!activeRouteSaved) {
-            setScreen('mainTabs');
-            setMessage('The refreshed route could not be saved locally. Refresh routes and try again.');
-            return;
-          }
         }
         if (restoredFromServer && activeRouteSession !== null) {
           const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
@@ -3045,13 +3066,18 @@ function DriverApp() {
     waitForOfflineQueuePersistence,
   ]);
 
-  const handleRefreshRoutes = useCallback(async () => {
+  const handleRefreshRoutes = useCallback(async (): Promise<boolean> => {
     if (verifiedDriverPhoneE164 === null) {
       setMessage('Saved driver phone is unavailable. Sign in again to refresh routes.');
-      return;
+      return false;
     }
     if (isRefreshingRoutes || isLoggingIn) {
-      return;
+      return false;
+    }
+    const releaseRouteRefresh = routeProgressRefreshGuardRef.current.beginRefresh();
+    if (releaseRouteRefresh === null) {
+      setMessage('Finish the current delivery action before refreshing routes.');
+      return false;
     }
 
     setMessage(null);
@@ -3065,7 +3091,7 @@ function DriverApp() {
         resetRouteProgress();
         setVerifiedDriverPhoneE164(null);
         setScreen('loginPhone');
-        return;
+        return true;
       }
       await handleLoginAndLoadRoutes(
         accountAccess,
@@ -3097,7 +3123,9 @@ function DriverApp() {
       }
     } finally {
       setIsRefreshingRoutes(false);
+      releaseRouteRefresh();
     }
+    return true;
   }, [
     clearAndStopActiveLocationSession,
     driverAccessTokenStore,
@@ -3188,12 +3216,14 @@ function DriverApp() {
       }
 
       if (pendingDriverRouteNotification.refreshRequired) {
-        setPendingDriverRouteNotification((current) => (
-          current === pendingDriverRouteNotification
-            ? { ...current, refreshRequired: false }
-            : current
-        ));
-        void handleRefreshRoutes();
+        void handleRefreshRoutes().then((refreshAccepted) => {
+          if (!refreshAccepted) return;
+          setPendingDriverRouteNotification((current) => (
+            current === pendingDriverRouteNotification
+              ? { ...current, refreshRequired: false }
+              : current
+          ));
+        });
         return;
       }
 
@@ -3239,6 +3269,7 @@ function DriverApp() {
     isNavigationInterruptionProtected,
     pendingDriverRouteNotification,
     routeSessions,
+    routeProgressGuardIdleRevision,
     routeSyncState,
     setScreen,
     verifiedDriverPhoneE164,
@@ -4370,85 +4401,94 @@ function DriverApp() {
         setMessage('Start the route before confirming pickup.');
         return;
       }
-      const requestScreen = screenRef.current;
-      const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
-      if (offlineSubmissionQueue === null) {
-        setOfflineSubmissionQueue(queue);
-      }
-
-      if (selectedRouteSession === null) {
-        setMessage('Route context was not available for pickup completion. Refresh routes and try again.');
+      const releaseProgressMutation = routeProgressRefreshGuardRef.current.beginMutation();
+      if (releaseProgressMutation === null) {
+        setMessage('Routes are refreshing. Try the delivery action again after the updated route is loaded.');
         return;
       }
-      const routeSubmission = toCompanyGuidanceSubmission(selectedRouteSession);
-      const pickupProgress = getAssignedRouteProgressAfterPickup(selectedRoute);
-      const pickupStop = selectedRoute.stops[pickupProgress.navigationStepIndex - 1];
-      const pickupStopLabel = pickupStop === undefined ? 'the next stop' : `Stop ${pickupStop.sequence}`;
-      let pickupMessage = `Store Pickup completed. Continue to ${pickupStopLabel}.`;
-      const pickupOutcome = await runPickupRetryStateMachine({
-        activateFirstStop: () => {
-          setCompletedStopIds(pickupProgress.completedStopIds);
-          setNavigationStepIndex(pickupProgress.navigationStepIndex);
-        },
-        onDurablyCommitted: async (result) => {
-          if (result.kind === 'recorded') {
-            if (result.etaSnapshot !== undefined) {
-              applyEtaSnapshotToRoute(selectedRoute.id, result.etaSnapshot);
+      try {
+        const requestScreen = screenRef.current;
+        const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+        if (offlineSubmissionQueue === null) {
+          setOfflineSubmissionQueue(queue);
+        }
+
+        if (selectedRouteSession === null) {
+          setMessage('Route context was not available for pickup completion. Refresh routes and try again.');
+          return;
+        }
+        const routeSubmission = toCompanyGuidanceSubmission(selectedRouteSession);
+        const pickupProgress = getAssignedRouteProgressAfterPickup(selectedRoute);
+        const pickupStop = selectedRoute.stops[pickupProgress.navigationStepIndex - 1];
+        const pickupStopLabel = pickupStop === undefined ? 'the next stop' : `Stop ${pickupStop.sequence}`;
+        let pickupMessage = `Store Pickup completed. Continue to ${pickupStopLabel}.`;
+        const pickupOutcome = await runPickupRetryStateMachine({
+          activateFirstStop: () => {
+            setCompletedStopIds(pickupProgress.completedStopIds);
+            setNavigationStepIndex(pickupProgress.navigationStepIndex);
+          },
+          onDurablyCommitted: async (result) => {
+            if (result.kind === 'recorded') {
+              if (result.etaSnapshot !== undefined) {
+                applyEtaSnapshotToRoute(selectedRoute.id, result.etaSnapshot);
+              }
+              if (result.etaUpdate !== undefined) {
+                applyEtaUpdateToRoute(selectedRoute.id, result.etaUpdate);
+              }
+            } else if (result.kind === 'queued') {
+              pickupMessage = `Store Pickup saved offline. Continue to ${pickupStopLabel} while syncing.`;
+              if (result.requiresRouteLookup === true) {
+                setRouteRecoveryRefreshReason('driver_access_expired');
+                pickupMessage = 'Store Pickup saved offline. Driver access expired, so route assignments are refreshing.';
+              }
             }
-            if (result.etaUpdate !== undefined) {
-              applyEtaUpdateToRoute(selectedRoute.id, result.etaUpdate);
-            }
-          } else if (result.kind === 'queued') {
-            pickupMessage = `Store Pickup saved offline. Continue to ${pickupStopLabel} while syncing.`;
-            if (result.requiresRouteLookup === true) {
-              setRouteRecoveryRefreshReason('driver_access_expired');
-              pickupMessage = 'Store Pickup saved offline. Driver access expired, so route assignments are refreshing.';
-            }
-          }
-        },
-        persistLocalCompletion: () => driverAccessTokenStore.saveActiveRouteSession({
-          completedStopIds: pickupProgress.completedStopIds,
-          navigationStepIndex: pickupProgress.navigationStepIndex,
-          pickupCompleted: true,
-          routePlanId: selectedRoute.id,
-        }),
-        persistQueued: () => waitForOfflineQueuePersistence(queue),
-        recordPickup: () => recordPickupCompletedAfterDeliveryStart({
-          deliveryStart: deliveryStartResult,
-          driverEventService: createRouteOrderedDriverEventService({
-            driverEventService: getDriverEventServiceForCurrentSubmission({
-              fallback: mockDriverEventService,
-              refreshDriverAccess: buildDriverAccessRefresh(routeSubmission),
-              runtimeConfig,
-              submission: routeSubmission,
-            }),
-            queue,
+          },
+          persistLocalCompletion: () => driverAccessTokenStore.saveActiveRouteSession({
+            completedStopIds: pickupProgress.completedStopIds,
+            navigationStepIndex: pickupProgress.navigationStepIndex,
+            pickupCompleted: true,
             routePlanId: selectedRoute.id,
           }),
-          offlineQueue: queue,
-          routePlanId: selectedRoute.id,
-        }),
-        setRecoveryState: setRouteStartRecoveryState,
-      });
-      if (pickupOutcome.kind === 'blocked') {
-        setMessage(pickupOutcome.result.kind === 'blocked'
-          ? pickupOutcome.result.message
-          : 'Store Pickup could not be recorded. Refresh routes and try again.');
-        return;
-      }
-      if (pickupOutcome.kind === 'local_save_failed') {
-        setMessage('Store Pickup could not be confirmed. Refresh the route and try again.');
-        return;
-      }
-      if (screenRef.current === requestScreen) {
-        if (pickupStop === undefined) {
-          setScreen('routeSession');
-        } else {
-          openRouteStopDetails(pickupStop);
+          persistQueued: () => waitForOfflineQueuePersistence(queue),
+          recordPickup: () => recordPickupCompletedAfterDeliveryStart({
+            deliveryStart: deliveryStartResult,
+            driverEventService: createRouteOrderedDriverEventService({
+              driverEventService: getDriverEventServiceForCurrentSubmission({
+                fallback: mockDriverEventService,
+                refreshDriverAccess: buildDriverAccessRefresh(routeSubmission),
+                runtimeConfig,
+                submission: routeSubmission,
+              }),
+              queue,
+              routePlanId: selectedRoute.id,
+            }),
+            offlineQueue: queue,
+            routePlanId: selectedRoute.id,
+          }),
+          setRecoveryState: setRouteStartRecoveryState,
+        });
+        if (pickupOutcome.kind === 'blocked') {
+          setMessage(pickupOutcome.result.kind === 'blocked'
+            ? pickupOutcome.result.message
+            : 'Store Pickup could not be recorded. Refresh routes and try again.');
+          return;
         }
+        if (pickupOutcome.kind === 'local_save_failed') {
+          setMessage('Store Pickup could not be confirmed. Refresh the route and try again.');
+          return;
+        }
+        if (screenRef.current === requestScreen) {
+          if (pickupStop === undefined) {
+            setScreen('routeSession');
+          } else {
+            openRouteStopDetails(pickupStop);
+          }
+        }
+        setMessage(pickupMessage);
+        return;
+      } finally {
+        releaseProgressMutation();
       }
-      setMessage(pickupMessage);
-      return;
     }
 
     if (currentStop === null) {
@@ -4464,37 +4504,46 @@ function DriverApp() {
       setMessage('Route start is still syncing. Wait for recovery before recording arrival.');
       return;
     }
-    const requestScreen = screenRef.current;
-    if (
-      selectedRoute === null
-      || activeRoutePlanId !== selectedRoute.id
-      || deliveryStartResult?.kind !== 'delivery_active'
-    ) {
-      setMessage('Start the route and complete Store Pickup before changing the stop order.');
+    const releaseProgressMutation = routeProgressRefreshGuardRef.current.beginMutation();
+    if (releaseProgressMutation === null) {
+      setMessage('Routes are refreshing. Try the delivery action again after the updated route is loaded.');
       return;
     }
-    const selectedStopIndex = selectedRoute.stops.findIndex(
-      (candidate) => candidate.deliveryStopId === selectedStop.deliveryStopId,
-    );
-    if (selectedStopIndex < 0 || isStopCompleted(selectedStop, completedStopIds)) {
-      setMessage('This stop is no longer available as an active delivery task.');
-      return;
-    }
+    try {
+      const requestScreen = screenRef.current;
+      if (
+        selectedRoute === null
+        || activeRoutePlanId !== selectedRoute.id
+        || deliveryStartResult?.kind !== 'delivery_active'
+      ) {
+        setMessage('Start the route and complete Store Pickup before changing the stop order.');
+        return;
+      }
+      const selectedStopIndex = selectedRoute.stops.findIndex(
+        (candidate) => candidate.deliveryStopId === selectedStop.deliveryStopId,
+      );
+      if (selectedStopIndex < 0 || isStopCompleted(selectedStop, completedStopIds)) {
+        setMessage('This stop is no longer available as an active delivery task.');
+        return;
+      }
 
-    const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
-      completedStopIds,
-      navigationStepIndex: selectedStopIndex + 1,
-      routePlanId: selectedRoute.id,
-    });
-    if (!activeRouteSaved) {
-      setMessage('The selected stop could not be saved. Refresh the route and try again.');
-      return;
-    }
+      const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
+        completedStopIds,
+        navigationStepIndex: selectedStopIndex + 1,
+        routePlanId: selectedRoute.id,
+      });
+      if (!activeRouteSaved) {
+        setMessage('The selected stop could not be saved. Refresh the route and try again.');
+        return;
+      }
 
-    setNavigationStepIndex(selectedStopIndex + 1);
-    setSelectedStopDetailsId(selectedStop.deliveryStopId);
-    setStopDetailsReturnScreen('routeSession');
-    await recordStopArrival(selectedStop, 'stopDetails', requestScreen);
+      setNavigationStepIndex(selectedStopIndex + 1);
+      setSelectedStopDetailsId(selectedStop.deliveryStopId);
+      setStopDetailsReturnScreen('routeSession');
+      await recordStopArrival(selectedStop, 'stopDetails', requestScreen);
+    } finally {
+      releaseProgressMutation();
+    }
   }
 
   function openRouteStopDetails(stop: AssignedRouteStop) {
@@ -4790,6 +4839,11 @@ function DriverApp() {
       }
       return;
     }
+    const releaseProgressMutation = routeProgressRefreshGuardRef.current.beginMutation();
+    if (releaseProgressMutation === null) {
+      setMessage('Routes are refreshing. Try the delivery action again after the updated route is loaded.');
+      return;
+    }
 
     const isRouteSwitch = routeSwitchPlanId !== null;
     const isSkipped = action === 'failed' && !isRouteSwitch;
@@ -4974,6 +5028,7 @@ function DriverApp() {
     } finally {
       setIsCompletingStop(false);
       syncOfflineQueueState(queueForStateSync);
+      releaseProgressMutation();
     }
   }
 
@@ -5807,8 +5862,8 @@ function DriverApp() {
             <StopDetailsScreen
               canArrive={canArriveFromStopDetails}
               canSkip={canSkipFromStopDetails}
-              isArriving={isRecordingArrival}
-              isSkipping={isCompletingStop}
+              isArriving={isRecordingArrival || isRefreshingRoutes}
+              isSkipping={isCompletingStop || isRefreshingRoutes}
               isReadOnly={stopDetailsReturnScreen === 'completedDeliveries'}
               onArrive={handleArriveFromStopDetails}
               onCall={() => handleCallStop(stopDetailsStop)}
@@ -5824,7 +5879,7 @@ function DriverApp() {
             <ArrivalCheckScreen
               draft={getProofDraft(proofDrafts[currentStop.deliveryStopId])}
               isCapturingPhoto={isCapturingPhoto}
-              isCompletingStop={isCompletingStop || isFinishingRoute}
+              isCompletingStop={isCompletingStop || isFinishingRoute || isRefreshingRoutes}
               onAnnounceTip={handleAnnounceCurrentTip}
               onAddPhoto={handleAddDeliveryPhoto}
               onCompleteStop={handleCompleteCurrentStop}
@@ -6743,12 +6798,12 @@ function RouteSessionScreen({
                 <MetricBlock label="Route time" value={pickupTiming.routeTime} />
                 <MetricBlock label="Est. finish" value={pickupTiming.finish} />
               </View>
-              <PrimaryButton label="Pickup & Start Route" onPress={onArrived} />
+              <PrimaryButton disabled={isRefreshingRoutes} label="Pickup & Start Route" loading={isRefreshingRoutes} onPress={onArrived} />
             </>
           ) : (
             <View style={styles.routeActionRow}>
               <View style={styles.routeActionButton}>
-                <PrimaryButton compact disabled={isStartingRoute || isRecordingArrival} label="Arrive" loading={isStartingRoute || isRecordingArrival} onPress={onArrived} />
+                <PrimaryButton compact disabled={isRefreshingRoutes || isStartingRoute || isRecordingArrival} label="Arrive" loading={isRefreshingRoutes || isStartingRoute || isRecordingArrival} onPress={onArrived} />
               </View>
               <View style={styles.routeActionButton}>
                 <SecondaryButton compact label="Navigate" onPress={onOpenNavigation} />
