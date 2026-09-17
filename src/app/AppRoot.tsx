@@ -59,6 +59,7 @@ import {
 } from '../domain/route/routeSessionClassification';
 import {
   buildOutOfOrderStopArrivalWarning,
+  getActiveRouteStepAfterRefresh,
   getAssignedRouteProgressAfterPickup,
   getAssignedRouteServerProgress,
   getCurrentRouteStop,
@@ -2878,33 +2879,42 @@ function DriverApp() {
         } else if (pickupCompletionQueueState === 'pending' || !pickupIsUnconfirmed) {
           setRouteStartRecoveryState('idle');
         }
-        const restoredStepIndex = clampRouteNavigationStepIndex(
-          hasDurablePickupEvidence
-            ? getAssignedRouteProgressAfterPickup(restoredActiveSession.route).navigationStepIndex
-            : pickupIsUnconfirmed
-              ? COMPANY_STEP_INDEX
-              : Math.max(activeRouteSession?.navigationStepIndex ?? COMPANY_STEP_INDEX, restoredServerProgress.navigationStepIndex),
-          restoredActiveSession.route,
-        );
-        setCompletedStopIds((current) => [
+        const restoredCompletedStopIds = [
           ...new Set([
-            ...current,
             ...(activeRouteSession?.completedStopIds ?? []),
             ...restoredServerProgress.completedStopIds,
           ]),
-        ]);
+        ];
+        const restoredStepIndex = clampRouteNavigationStepIndex(
+          pickupIsUnconfirmed
+            ? COMPANY_STEP_INDEX
+            : getActiveRouteStepAfterRefresh({
+                completedStopIds: restoredCompletedStopIds,
+                route: restoredActiveSession.route,
+              }),
+          restoredActiveSession.route,
+        );
+        setCompletedStopIds(restoredCompletedStopIds);
         if (hasDurablePickupEvidence && activeRouteSession !== null) {
           await driverAccessTokenStore.saveActiveRouteSession({
-            completedStopIds: [
-              ...new Set([
-                ...(activeRouteSession.completedStopIds ?? []),
-                ...restoredServerProgress.completedStopIds,
-              ]),
-            ],
+            completedStopIds: restoredCompletedStopIds,
             navigationStepIndex: restoredStepIndex,
             pickupCompleted: true,
             routePlanId: restoredActiveSession.route.id,
           });
+        }
+        if (activeRouteSession?.status === 'active' && !restoredFromServer) {
+          const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({
+            completedStopIds: restoredCompletedStopIds,
+            navigationStepIndex: restoredStepIndex,
+            routePlanId: restoredActiveSession.route.id,
+            startedAt: activeRouteSession.startedAt,
+          });
+          if (!activeRouteSaved) {
+            setScreen('mainTabs');
+            setMessage('The refreshed route could not be saved locally. Refresh routes and try again.');
+            return;
+          }
         }
         if (restoredFromServer && activeRouteSession !== null) {
           const activeRouteSaved = await driverAccessTokenStore.saveActiveRouteSession({

@@ -42,7 +42,7 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /getAssignedRouteServerProgress/u);
     assert.match(appSource, /const pickupIsUnconfirmed = restoredServerProgress\.navigationStepIndex === COMPANY_STEP_INDEX[\s\S]*activeRouteSession\?\.pickupCompletedAt === undefined/u);
     assert.match(appSource, /pickupIsUnconfirmed[\s\S]*\? COMPANY_STEP_INDEX/u);
-    assert.match(appSource, /setCompletedStopIds\(\(current\) => \[/u);
+    assert.match(appSource, /setCompletedStopIds\(restoredCompletedStopIds\)/u);
     assert.match(appSource, /markActiveRouteStarted/u);
   });
 
@@ -51,7 +51,8 @@ describe('route session current task behavior', () => {
 
     assert.match(appSource, /const pickupCompletionQueueState = getPickupCompletionQueueState\(queue, restoredActiveSession\.route\.id\)/u);
     assert.match(appSource, /pickupIsUnconfirmed[\s\S]*&& !hasDurablePickupEvidence/u);
-    assert.match(appSource, /hasDurablePickupEvidence[\s\S]*getAssignedRouteProgressAfterPickup\(restoredActiveSession\.route\)\.navigationStepIndex/u);
+    assert.match(appSource, /const restoredCompletedStopIds = \[[\s\S]*activeRouteSession\?\.completedStopIds[\s\S]*restoredServerProgress\.completedStopIds/u);
+    assert.match(appSource, /getActiveRouteStepAfterRefresh\(\{[\s\S]*completedStopIds: restoredCompletedStopIds,[\s\S]*route: restoredActiveSession\.route/u);
     assert.match(appSource, /hasDurablePickupEvidence[\s\S]*saveActiveRouteSession\(\{[\s\S]*pickupCompleted: true/u);
     assert.match(appSource, /pickupCompletionQueueState === 'reconciliation'[\s\S]*setRouteStartRecoveryState\('sync_pending'\)/u);
   });

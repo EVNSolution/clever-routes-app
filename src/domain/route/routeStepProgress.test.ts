@@ -6,6 +6,7 @@ import {
   buildOutOfOrderStopArrivalWarning,
   getAssignedRouteProgressAfterPickup,
   getAssignedRouteServerProgress,
+  getActiveRouteStepAfterRefresh,
   getRouteReturnStepIndex,
   getNextIncompleteRouteStepIndex,
   getStopDetailsProgressState,
@@ -87,6 +88,41 @@ describe('route step progress state', () => {
       completedStopIds: [],
       navigationStepIndex: 2,
     });
+  });
+
+  it('follows a redispatched stop order while preserving locally completed stops', () => {
+    const firstStop = sampleAssignedRoute.stops[0];
+    const secondStop = sampleAssignedRoute.stops[1];
+    assert.ok(firstStop);
+    assert.ok(secondStop);
+    const reorderedRoute = {
+      ...sampleAssignedRoute,
+      stops: [secondStop, firstStop],
+    };
+
+    assert.equal(getActiveRouteStepAfterRefresh({
+      completedStopIds: [firstStop.deliveryStopId],
+      route: reorderedRoute,
+    }), 1);
+  });
+
+  it('keeps an arrived stop current when a redispatch moves it', () => {
+    const firstStop = sampleAssignedRoute.stops[0];
+    const secondStop = sampleAssignedRoute.stops[1];
+    assert.ok(firstStop);
+    assert.ok(secondStop);
+    const reorderedRoute = {
+      ...sampleAssignedRoute,
+      stops: [
+        { ...secondStop, status: 'ASSIGNED' },
+        { ...firstStop, status: 'ARRIVED' },
+      ],
+    };
+
+    assert.equal(getActiveRouteStepAfterRefresh({
+      completedStopIds: [],
+      route: reorderedRoute,
+    }), 2);
   });
 
   it('keeps an out-of-order arrived stop active even when an earlier stop is already completed', () => {

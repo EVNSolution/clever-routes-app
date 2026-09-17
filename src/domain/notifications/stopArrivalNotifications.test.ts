@@ -143,6 +143,27 @@ describe('stop arrival notifications', () => {
     }), null);
   });
 
+  it('parses standalone redispatch notifications with a publication version', () => {
+    const publicationVersion = 'a'.repeat(64);
+    assert.deepEqual(parseDriverRouteNotificationData({
+      action: 'changed',
+      publicationVersion,
+      routePlanId: 'route-1',
+      type: 'driver_route_changed',
+    }), {
+      action: 'changed',
+      publicationVersion,
+      routePlanId: 'route-1',
+      type: 'driver_route_changed',
+    });
+    assert.equal(parseDriverRouteNotificationData({
+      action: 'changed',
+      publicationVersion: '4',
+      routePlanId: 'route-1',
+      type: 'driver_route_changed',
+    }), null);
+  });
+
   it('opens only the refreshed target route and protects a different active route', () => {
     assert.equal(getDriverRouteNotificationNavigation({
       action: 'assigned',
