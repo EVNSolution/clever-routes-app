@@ -759,7 +759,8 @@ describe('route session current task behavior', () => {
 
     assert.match(appSource, /projectRouteProgress\(\{[\s\S]*localCompletedStopIds: completedStopIds,[\s\S]*serverConfirmedStopIds/u);
     assert.match(appSource, /result\.serverConfirmedStopIds/u);
-    assert.match(appSource, /const progressMeta = completed \? serverConfirmed \? 'Done' : 'Syncing'/u);
+    assert.match(appSource, /completed \? serverConfirmed \? 'Done' : 'Syncing'/u);
+    assert.match(appSource, /locationInferredStopIds\.includes\(stop\.deliveryStopId\) \? 'Location inferred · review'/u);
   });
 
   it('keeps the inline session map adaptive and visually focused without disabling gestures', () => {

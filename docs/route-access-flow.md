@@ -241,3 +241,11 @@ When a downstream consent, assigned-route, driver-event, proof-media, or offline
 Driver API calls are bearer-token based and must not rely on ambient browser or WebView cookies. The app request helper applies `credentials: 'omit'`, `cache: 'no-store'`, `Cache-Control: no-store`, and `Pragma: no-cache` to live account-auth, route lookup, consent, assigned-route, event, and proof-media requests. This keeps the native session tied to server-issued account and route tokens and avoids stale route/proof responses being reused by an intermediate cache.
 
 AsyncStorage remains only as the transactional migration source for legacy queue data and is removed after verified commit. SQLCipher stores offline evidence with a separate SecureStore key; account and route access stay in their own SecureStore entries. The app clears only route cache for deleted assignments and clears the whole account on expired refresh, malformed payload, unauthorized account access, or explicit session reset.
+
+## Missed-delivery confirmation assistance
+
+The app preserves approach/dwell/exit visit candidates for all assigned stops, separate from the currently selected stop. A server-provided versioned policy must enable detection; there are no operational threshold defaults. The proposed account-authenticated completion-assistance contract owns per-candidate 24-hour deadlines, inferred outcomes and corrections, including after route/GPS collection ends. Until the server supports that contract the feature stays inactive.
+
+Candidates and explicit responses use an account-partitioned table in the existing SQLCipher evidence database. Confirmation prompts claim one notification attempt durably and retain an in-app inbox as the recovery path. Route/completed-stop views distinguish location-inferred outcomes and link to corrections. Return navigation records intent only and never completes stops. The manual completion/failure helper independently saves the ordered event before a bounded live attempt, retaining its identity for restart/retry.
+
+See [state transitions, exceptions and validation](completion-assistance.md) and the [proposed server contract and handoff prompt](completion-assistance-server-handoff.md). This describes app source behavior, not a deployed server capability or physical-device validation.

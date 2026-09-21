@@ -3,7 +3,14 @@ import { describe, it } from 'node:test';
 
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createMockDriverEventService } from '../events/driverEvents';
-import { createInMemoryOfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
+import {
+  OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
+  createInMemoryOfflineSubmissionQueue,
+  createPersistentOfflineSubmissionQueue,
+  createRouteOrderedDriverEventService,
+  retryOfflineSubmissions,
+  type OfflineSubmissionQueueStorage,
+} from '../offline/offlineSubmissionQueue';
 import { recordStopProofEventAfterDeliveryStart } from './stopProofEvents';
 
 const activeDelivery = {
@@ -12,6 +19,16 @@ const activeDelivery = {
   locationPermission: 'foreground',
   message: 'active',
 } as const;
+
+function createMemoryStorage(): OfflineSubmissionQueueStorage & { values: Map<string, string> } {
+  const values = new Map<string, string>();
+  return {
+    getItem: async (key) => values.get(key) ?? null,
+    removeItem: async (key) => { values.delete(key); },
+    setItem: async (key, value) => { values.set(key, value); },
+    values,
+  };
+}
 
 describe('stop proof event flow', () => {
   it('does not record stop proof before delivery_active', async () => {
@@ -255,6 +272,279 @@ describe('stop proof event flow', () => {
       ...orderedEventContract,
       eventType: 'STOP_DELIVERED',
     });
+  });
+
+  it('durably persists STOP_DELIVERED before waiting for the live request', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    let releaseLiveRequest: (value: { duplicate: false; eventId: string; status: 'recorded' }) => void = () => undefined;
+    const liveRequest = new Promise<{ duplicate: false; eventId: string; status: 'recorded' }>((resolve) => {
+      releaseLiveRequest = resolve;
+    });
+    let submittedClientEventId: string | null = null;
+
+    const liveDriverEventService = {
+      prepareDriverEvent: (event: Parameters<NonNullable<ReturnType<typeof createRouteOrderedDriverEventService>['prepareDriverEvent']>>[0]) => ({
+        ...event,
+        appVersion: '1.3.0',
+        assignmentGeneration: '14',
+        driverContractVersion: 2 as const,
+        expectedRouteVersionId: '44444444-4444-4444-8444-444444444444',
+        versionCode: 36,
+      }),
+      recordDriverEvent: async (event: Parameters<ReturnType<typeof createRouteOrderedDriverEventService>['recordDriverEvent']>[0]) => {
+        submittedClientEventId = event.clientEventId;
+        return liveRequest;
+      },
+    };
+    const resultPromise = recordStopProofEventAfterDeliveryStart({
+      deliveryStart: activeDelivery,
+      driverEventService: createRouteOrderedDriverEventService({
+        driverEventService: liveDriverEventService,
+        queue,
+        routePlanId: 'route-1',
+      }),
+      input: {
+        action: 'delivered',
+        deliveryStopId: 'stop-1',
+        note: 'Persist before sending',
+        routePlanId: 'route-1',
+      },
+      offlineQueue: queue,
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const persisted = await createPersistentOfflineSubmissionQueue({ storage });
+    const pending = persisted.listPending()[0];
+    assert.equal(pending?.kind, 'driver_event');
+    assert.equal(pending?.kind === 'driver_event' ? pending.event.eventType : null, 'STOP_DELIVERED');
+    assert.equal(pending?.kind === 'driver_event' ? pending.event.clientEventId : null, submittedClientEventId);
+
+    releaseLiveRequest({ duplicate: false, eventId: submittedClientEventId!, status: 'recorded' });
+    assert.equal((await resultPromise).kind, 'recorded');
+    assert.equal((await createPersistentOfflineSubmissionQueue({ storage })).listPending().length, 0);
+  });
+
+  it('restarts with the same durable client event id after interruption before a live response', async () => {
+    const storage = createMemoryStorage();
+    const firstQueue = await createPersistentOfflineSubmissionQueue({ storage });
+    void recordStopProofEventAfterDeliveryStart({
+      attemptTimeoutMs: 15_000,
+      cancelAttemptTimeout: () => undefined,
+      deliveryStart: activeDelivery,
+      driverEventService: {
+        prepareDriverEvent: (event) => ({
+          ...event,
+          appVersion: '1.3.0',
+          assignmentGeneration: '14',
+          driverContractVersion: 2,
+          expectedRouteVersionId: '44444444-4444-4444-8444-444444444444',
+          versionCode: 36,
+        }),
+        recordDriverEvent: async () => new Promise(() => undefined),
+      },
+      input: {
+        action: 'failed',
+        deliveryStopId: 'stop-2',
+        note: 'Customer unavailable',
+        reason: 'CUSTOMER_UNAVAILABLE',
+        routePlanId: 'route-1',
+      },
+      offlineQueue: firstQueue,
+      scheduleAttemptTimeout: () => 'interrupted-process-timer',
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const beforeRestart = firstQueue.listPending()[0];
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    const afterRestart = restarted.listPending()[0];
+
+    assert.equal(beforeRestart?.kind, 'driver_event');
+    assert.equal(afterRestart?.kind, 'driver_event');
+    assert.equal(
+      afterRestart?.kind === 'driver_event' ? afterRestart.event.clientEventId : null,
+      beforeRestart?.kind === 'driver_event' ? beforeRestart.event.clientEventId : null,
+    );
+    assert.equal(afterRestart?.kind === 'driver_event' ? afterRestart.event.eventType : null, 'STOP_FAILED');
+
+    let replayedClientEventId: string | null = null;
+    const retry = await retryOfflineSubmissions({
+      driverEventService: {
+        recordDriverEvent: async (event) => {
+          replayedClientEventId = event.clientEventId;
+          return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+        },
+      },
+      orderedEventAccessIdentity: {
+        assignmentGeneration: '14',
+        driverContractVersion: 2,
+        expectedRouteVersionId: '44444444-4444-4444-8444-444444444444',
+        routePlanId: 'route-1',
+      },
+      proofMediaUploadService: {
+        uploadProofMedia: async () => { throw new Error('unexpected proof retry'); },
+      },
+      queue: restarted,
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(replayedClientEventId, beforeRestart?.kind === 'driver_event'
+      ? beforeRestart.event.clientEventId
+      : null);
+    assert.equal(retry.succeeded, 1);
+    assert.equal(restarted.listPending().length, 0);
+  });
+
+  it('does not send live when the initial durable write fails', async () => {
+    let liveCalls = 0;
+    const queue = await createPersistentOfflineSubmissionQueue({
+      storage: {
+        getItem: async () => null,
+        removeItem: async () => undefined,
+        setItem: async () => { throw new Error('storage full'); },
+      },
+    });
+
+    await assert.rejects(recordStopProofEventAfterDeliveryStart({
+      deliveryStart: activeDelivery,
+      driverEventService: {
+        recordDriverEvent: async () => {
+          liveCalls += 1;
+          return { duplicate: false, eventId: 'must-not-send', status: 'recorded' };
+        },
+      },
+      input: {
+        action: 'delivered',
+        deliveryStopId: 'stop-1',
+        note: 'No unsafe live send',
+        routePlanId: 'route-1',
+      },
+      offlineQueue: queue,
+    }), /storage full/u);
+
+    assert.equal(liveCalls, 0);
+    assert.equal(queue.storageState(), 'STORAGE_DEGRADED');
+  });
+
+  it('keeps the pre-send pending record recoverable when ACK persistence fails', async () => {
+    const values = new Map<string, string>();
+    let writes = 0;
+    const storage: OfflineSubmissionQueueStorage = {
+      getItem: async (key) => values.get(key) ?? null,
+      removeItem: async (key) => { values.delete(key); },
+      setItem: async (key, value) => {
+        writes += 1;
+        if (writes === 2) throw new Error('ack storage failed');
+        values.set(key, value);
+      },
+    };
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    let submittedClientEventId: string | null = null;
+
+    await assert.rejects(recordStopProofEventAfterDeliveryStart({
+      deliveryStart: activeDelivery,
+      driverEventService: {
+        recordDriverEvent: async (event) => {
+          submittedClientEventId = event.clientEventId;
+          return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+        },
+      },
+      input: {
+        action: 'delivered',
+        deliveryStopId: 'stop-1',
+        note: 'Server accepted, ACK write failed',
+        routePlanId: 'route-1',
+      },
+      offlineQueue: queue,
+    }), /ack storage failed/u);
+
+    assert.equal(queue.storageState(), 'STORAGE_DEGRADED');
+    const durableBeforeAck = JSON.parse(values.get(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY)!) as {
+      items: { event: { clientEventId: string }; state: string }[];
+    };
+    assert.equal(durableBeforeAck.items[0]?.event.clientEventId, submittedClientEventId);
+    assert.equal(durableBeforeAck.items[0]?.state, 'PENDING');
+    const restarted = await createPersistentOfflineSubmissionQueue({
+      storage: {
+        ...storage,
+        setItem: async (key, value) => { values.set(key, value); },
+      },
+    });
+    const restartedItem = restarted.listPending()[0];
+    assert.equal(
+      restartedItem?.kind === 'driver_event'
+        ? restartedItem.event.clientEventId
+        : null,
+      submittedClientEventId,
+    );
+  });
+
+  it('returns a durable queued result on live timeout and ignores a late success', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    let expireAttempt: () => void = () => undefined;
+    const liveSignals: AbortSignal[] = [];
+    let releaseLateSuccess: (value: { duplicate: false; eventId: string; status: 'recorded' }) => void = () => undefined;
+    const lateSuccess = new Promise<{ duplicate: false; eventId: string; status: 'recorded' }>((resolve) => {
+      releaseLateSuccess = resolve;
+    });
+    const rawService = {
+      prepareDriverEvent: (event: Parameters<NonNullable<ReturnType<typeof createRouteOrderedDriverEventService>['prepareDriverEvent']>>[0]) => ({
+        ...event,
+        appVersion: '1.3.0',
+        assignmentGeneration: '14',
+        driverContractVersion: 2 as const,
+        expectedRouteVersionId: '44444444-4444-4444-8444-444444444444',
+        versionCode: 36,
+      }),
+      recordDriverEvent: async (
+        _event: Parameters<ReturnType<typeof createRouteOrderedDriverEventService>['recordDriverEvent']>[0],
+        options?: { signal?: AbortSignal },
+      ) => {
+        if (options?.signal !== undefined) liveSignals.push(options.signal);
+        return lateSuccess;
+      },
+    };
+
+    const resultPromise = recordStopProofEventAfterDeliveryStart({
+      attemptTimeoutMs: 15_000,
+      cancelAttemptTimeout: () => undefined,
+      deliveryStart: activeDelivery,
+      driverEventService: createRouteOrderedDriverEventService({
+        driverEventService: rawService,
+        queue,
+        routePlanId: 'route-1',
+      }),
+      input: {
+        action: 'delivered',
+        deliveryStopId: 'stop-1',
+        note: 'Timeout remains recoverable',
+        routePlanId: 'route-1',
+      },
+      offlineQueue: queue,
+      scheduleAttemptTimeout: (expire, timeoutMs) => {
+        assert.equal(timeoutMs, 15_000);
+        expireAttempt = expire;
+        return 'timer-1';
+      },
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const pendingBeforeTimeout = queue.listPending()[0];
+    assert.equal(pendingBeforeTimeout?.kind, 'driver_event');
+    expireAttempt();
+    const result = await resultPromise;
+
+    assert.equal(result.kind, 'queued');
+    assert.equal(liveSignals[0]?.aborted, true);
+    assert.equal(queue.listPending()[0]?.queueItemId, pendingBeforeTimeout?.queueItemId);
+
+    releaseLateSuccess({
+      duplicate: false,
+      eventId: pendingBeforeTimeout?.kind === 'driver_event' ? pendingBeforeTimeout.event.clientEventId : 'missing',
+      status: 'recorded',
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(queue.listPending()[0]?.queueItemId, pendingBeforeTimeout?.queueItemId);
   });
 
   it('queues a prepared STOP_FAILED event with the live ordered identity', async () => {
