@@ -147,6 +147,8 @@ Shopify용 CLEVER Routes의 배송 완료 누락 보완 서버를 구현하고, 
 
 앱 기준: EVNSolution/clever-routes-app PR #289 / issue #288 / branch cc-295-completion-candidates, change-control #295 (root #145). 최신 PR head의 docs/completion-assistance-server-handoff.md와 src/domain/completion/{completionAssistance.ts,completionAssistanceSync.ts}를 먼저 읽고 동일한 wire contract v1을 구현해 주세요. 기존 dirty 작업과 다른 서비스 범위는 보존하세요.
 
+조사 배경은 2026-09-17 K-food South, routePlanId 00630d18-a4a2-4cc1-8b3b-50a66fc6e2c1입니다. 사용자 제공 관측상 14개 배송지 방문과 가게 복귀 GPS가 있지만 모든 배송지는 PENDING, 경로는 IN_PROGRESS였습니다. 이 설명은 버튼 미조작이나 장애 원인이 확정됐다는 의미가 아니며 과거 상태 변경을 승인하는 요청도 아닙니다.
+
 계정 bearer GET/POST /driver/completion-assistance, 불변 운행 account/driver/shop/배차 identity, canonical BigInt generation와 UUID route version, 전체 배정 배송지, 버전 있는 정책과 영속 후보/명령 receipt/worker를 구현하세요. 종료 운행도 본래 계정으로 응답·정정할 수 있어야 하며 예전 배차의 명령이 새 배차를 변경하면 안 됩니다.
 
 접근→연속 체류→이탈을 검증한 후보만 다루고, 저정확도·gap·한 점·통과·동일 건물 모호성은 보류하세요. 모호성은 이미 완료·실패·취소된 이웃도 포함해 판단하세요. 50m/100m/60초/200m는 탐색값이며 운영 기본값으로 확정하지 마세요.
