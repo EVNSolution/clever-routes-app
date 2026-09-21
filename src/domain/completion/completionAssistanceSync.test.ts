@@ -20,8 +20,8 @@ const owner = 'ab'.repeat(32);
 
 function run(): CompletionRun {
   return {
-    assignmentGeneration: 'assignment-1',
-    expectedRouteVersionId: 'version-1',
+    assignmentGeneration: '1',
+    expectedRouteVersionId: '11111111-1111-4111-8111-111111111111',
     policy: {
       ambiguityRadiusMeters: 100,
       dwellMs: 60_000,
@@ -47,7 +47,7 @@ function run(): CompletionRun {
 function candidate(input: Partial<CompletionCandidate> = {}): CompletionCandidate {
   return {
     arrivalAt: '2026-09-17T12:00:00.000Z',
-    assignmentGeneration: 'assignment-1',
+    assignmentGeneration: '1',
     candidateId: 'candidate-1',
     deliveryStopId: 'stop-1',
     dwellCompletedAt: '2026-09-17T12:01:00.000Z',
@@ -57,7 +57,7 @@ function candidate(input: Partial<CompletionCandidate> = {}): CompletionCandidat
       { accuracyMeters: 5, latitude: 37.502, longitude: 127, occurredAt: '2026-09-17T12:01:10.000Z' },
     ],
     exitAt: '2026-09-17T12:01:10.000Z',
-    expectedRouteVersionId: 'version-1',
+    expectedRouteVersionId: '11111111-1111-4111-8111-111111111111',
     policyVersion: 'visit-v1',
     responseDeadlineAt: '2026-09-18T12:01:10.000Z',
     revision: 0,
@@ -103,12 +103,12 @@ function controlledMemoryStore(initial: CompletionAssistanceState) {
 
 function responseCommand(): Extract<CompletionCommand, { kind: 'response' }> {
   return {
-    assignmentGeneration: 'assignment-1',
+    assignmentGeneration: '1',
     candidateId: 'candidate-1',
     commandId: 'response-command-1',
     deliveryStopId: 'stop-1',
     expectedRevision: 0,
-    expectedRouteVersionId: 'version-1',
+    expectedRouteVersionId: '11111111-1111-4111-8111-111111111111',
     kind: 'response',
     occurredAt: '2026-09-17T12:02:00.000Z',
     response: 'completed',
@@ -130,23 +130,33 @@ describe('completion assistance encrypted state adapter', () => {
       },
     };
     const first = createCompletionAssistanceStore(raw);
+    const firstResponse = responseCommand();
+    const secondResponse: Extract<CompletionCommand, { kind: 'response' }> = {
+      ...firstResponse,
+      commandId: 'response-command-2',
+      expectedRevision: 1,
+      previousResponseCommandId: firstResponse.commandId,
+      response: 'failed',
+    };
     await first.update(owner, (state) => ({
       ...state,
       bufferedLocations: [{
-        assignmentGeneration: 'assignment-1',
-        expectedRouteVersionId: 'version-1',
+        assignmentGeneration: '1',
+        expectedRouteVersionId: '11111111-1111-4111-8111-111111111111',
         routePlanId: 'route-1',
         samples: [{ accuracyMeters: 5, latitude: 37.5, longitude: 127, occurredAt: '2026-09-17T11:00:00.000Z' }],
       }],
       capability: 'supported',
       manualOutcomes: [{
-        assignmentGeneration: 'assignment-1', deliveryStopId: 'stop-1', expectedRouteVersionId: 'version-1',
+        assignmentGeneration: '1', deliveryStopId: 'stop-1', expectedRouteVersionId: '11111111-1111-4111-8111-111111111111',
         occurredAt: '2026-09-17T11:01:00.000Z', response: 'completed', routePlanId: 'route-1',
       }],
       pendingReturnIntents: [{
-        assignmentGeneration: 'assignment-1', expectedRouteVersionId: 'version-1',
+        assignmentGeneration: '1', expectedRouteVersionId: '11111111-1111-4111-8111-111111111111',
         occurredAt: '2026-09-17T11:02:00.000Z', routePlanId: 'route-1',
       }],
+      candidates: [candidate({ responseDeadlineAt: undefined })],
+      commands: [firstResponse, secondResponse],
       runs: [run()],
     }));
     const restored = await createCompletionAssistanceStore(raw).read(owner);
@@ -155,6 +165,17 @@ describe('completion assistance encrypted state adapter', () => {
     assert.equal(restored.bufferedLocations?.length, 1);
     assert.equal(restored.manualOutcomes?.length, 1);
     assert.equal(restored.pendingReturnIntents?.length, 1);
+    assert.equal(restored.candidates[0]?.responseDeadlineAt, undefined);
+    assert.deepEqual(restored.commands, [firstResponse, secondResponse]);
+
+    values.set(owner, JSON.stringify({
+      ...restored,
+      commands: [{
+        ...secondResponse,
+        previousResponseCommandId: secondResponse.commandId,
+      }],
+    }));
+    await assert.rejects(first.read(owner), /malformed/u);
 
     values.set(owner, JSON.stringify({ ...emptyCompletionAssistanceState(), schemaVersion: 2 }));
     await assert.rejects(first.read(owner), /newer schema version/u);
@@ -194,7 +215,14 @@ describe('completion assistance account synchronization', () => {
         if (init?.method === 'POST') {
           const commandId = (JSON.parse(String(init.body)) as { command: CompletionCommand }).command.commandId;
           secondIds.push(commandId);
-          return new Response(JSON.stringify({ contractVersion: 1, commandId, status: 'duplicate' }), { status: 200 });
+          return new Response(JSON.stringify({
+            candidate: candidate({
+              response: 'completed', responseAt: command.occurredAt, revision: 1, status: 'responded',
+            }),
+            contractVersion: 1,
+            commandId,
+            status: 'duplicate',
+          }), { status: 200 });
         }
         return new Response(JSON.stringify({
           candidates: [candidate({ revision: 1, status: 'responded', response: 'completed', responseAt: command.occurredAt })],
@@ -254,6 +282,7 @@ describe('completion assistance account synchronization', () => {
       accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store,
       fetchImpl: async (_url, init) => init?.method === 'POST'
         ? new Response(JSON.stringify({
+            candidate: local,
             commandId: command.commandId, contractVersion: 1, status: 'applied',
           }), { status: 200 })
         : new Response(JSON.stringify({
@@ -327,6 +356,169 @@ describe('completion assistance account synchronization', () => {
     assert.deepEqual(controlled.read(), result.state);
   });
 
+  it('replays immutable response lineage across ACK loss and accepts the canonical revision shift', async () => {
+    const first = responseCommand();
+    const second: Extract<CompletionCommand, { kind: 'response' }> = {
+      ...first,
+      commandId: 'response-command-2',
+      expectedRevision: 1,
+      occurredAt: '2026-09-19T12:03:00.000Z',
+      previousResponseCommandId: first.commandId,
+      response: 'failed',
+    };
+    const optimistic = candidate({
+      response: 'failed', responseAt: second.occurredAt, revision: 2, status: 'responded',
+    });
+    const inferred = candidate({
+      autoCompletedAt: '2026-09-18T12:01:10.000Z',
+      revision: 1,
+      status: 'inferred_completed',
+    });
+    const store = memoryStore({
+      ...emptyCompletionAssistanceState(), candidates: [optimistic], commands: [first, second], runs: [run()],
+    });
+    let authoritative = inferred;
+    let lastExplicitResponseCommandId: string | undefined;
+    let loseFirstAcknowledgement = true;
+    const firstCommandBodies: string[] = [];
+    const applied = new Map<string, CompletionCandidate>();
+    const fetchImpl = async (_url: string, init?: RequestInit): Promise<Response> => {
+      if (init?.method !== 'POST') {
+        return new Response(JSON.stringify({
+          candidates: [authoritative], contractVersion: 1, runs: [run()], serverTime: '2026-09-19T12:04:00.000Z',
+        }), { status: 200 });
+      }
+      const body = String(init.body);
+      const posted = (JSON.parse(body) as { command: CompletionCommand }).command;
+      if (posted.commandId === first.commandId) firstCommandBodies.push(body);
+      const prior = applied.get(posted.commandId);
+      if (prior !== undefined) {
+        return new Response(JSON.stringify({
+          candidate: prior, commandId: posted.commandId, contractVersion: 1, status: 'duplicate',
+        }), { status: 200 });
+      }
+      assert.equal(posted.kind, 'response');
+      if (posted.kind !== 'response') throw new Error('expected response command');
+      if (posted.commandId === first.commandId) {
+        assert.equal(posted.expectedRevision, 0);
+        assert.equal(posted.previousResponseCommandId, undefined);
+        authoritative = candidate({
+          response: 'completed', responseAt: posted.occurredAt, revision: 2, status: 'responded',
+        });
+      } else {
+        assert.equal(posted.commandId, second.commandId);
+        assert.equal(posted.expectedRevision, 1);
+        assert.equal(posted.previousResponseCommandId, lastExplicitResponseCommandId);
+        authoritative = candidate({
+          response: 'failed', responseAt: posted.occurredAt, revision: 3, status: 'responded',
+        });
+      }
+      lastExplicitResponseCommandId = posted.commandId;
+      applied.set(posted.commandId, authoritative);
+      if (posted.commandId === first.commandId && loseFirstAcknowledgement) {
+        loseFirstAcknowledgement = false;
+        throw new TypeError('connection lost after apply');
+      }
+      return new Response(JSON.stringify({
+        candidate: authoritative, commandId: posted.commandId, contractVersion: 1, status: 'applied',
+      }), { status: 200 });
+    };
+
+    await assert.rejects(synchronizeCompletionAssistance({
+      accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', fetchImpl, store,
+    }), CompletionAssistanceSyncRetryError);
+    assert.deepEqual((await store.read(owner)).commands, [first, second]);
+
+    const result = await synchronizeCompletionAssistance({
+      accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', fetchImpl, store,
+    });
+    assert.equal(firstCommandBodies.length, 2);
+    assert.equal(firstCommandBodies[0], firstCommandBodies[1]);
+    assert.deepEqual(result.state.commands, []);
+    assert.equal(result.state.candidates[0]?.revision, 3);
+    assert.equal(result.state.candidates[0]?.response, 'failed');
+    assert.equal(result.state.candidates[0]?.status, 'responded');
+  });
+
+  it('keeps response commands when an applied or duplicate ACK omits its authoritative candidate', async () => {
+    for (const status of ['applied', 'duplicate'] as const) {
+      const command = responseCommand();
+      const store = memoryStore({
+        ...emptyCompletionAssistanceState(), candidates: [candidate()], commands: [command], runs: [run()],
+      });
+      await assert.rejects(synchronizeCompletionAssistance({
+        accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store,
+        fetchImpl: async () => new Response(JSON.stringify({
+          commandId: command.commandId, contractVersion: 1, status,
+        }), { status: 200 }),
+      }), /authoritative candidate/u);
+      assert.deepEqual((await store.read(owner)).commands, [command]);
+    }
+  });
+
+  it('keeps a response command when its ACK candidate does not reflect the exact response event', async () => {
+    const command = responseCommand();
+    const mismatches: {
+      acknowledgementStatus: 'applied' | 'duplicate';
+      authoritative: CompletionCandidate;
+    }[] = [
+      {
+        acknowledgementStatus: 'applied',
+        authoritative: candidate({
+          autoCompletedAt: '2026-09-18T12:01:10.000Z', revision: 1, status: 'inferred_completed',
+        }),
+      },
+      {
+        acknowledgementStatus: 'duplicate',
+        authoritative: candidate({
+          response: 'failed', responseAt: command.occurredAt, revision: 1, status: 'responded',
+        }),
+      },
+      {
+        acknowledgementStatus: 'applied',
+        authoritative: candidate({
+          response: command.response, responseAt: '2026-09-17T12:02:00.001Z', revision: 1, status: 'responded',
+        }),
+      },
+      {
+        acknowledgementStatus: 'duplicate',
+        authoritative: candidate({
+          response: command.response, responseAt: command.occurredAt, revision: command.expectedRevision, status: 'responded',
+        }),
+      },
+    ];
+
+    for (const { acknowledgementStatus, authoritative } of mismatches) {
+      const store = memoryStore({
+        ...emptyCompletionAssistanceState(), candidates: [candidate()], commands: [command], runs: [run()],
+      });
+      await assert.rejects(synchronizeCompletionAssistance({
+        accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store,
+        fetchImpl: async () => new Response(JSON.stringify({
+          candidate: authoritative,
+          commandId: command.commandId,
+          contractVersion: 1,
+          status: acknowledgementStatus,
+        }), { status: 200 }),
+      }), /does not reflect the queued command/u);
+      assert.deepEqual((await store.read(owner)).commands, [command]);
+    }
+  });
+
+  it('keeps a response command when a rejected ACK omits an existing authoritative candidate', async () => {
+    const command = responseCommand();
+    const store = memoryStore({
+      ...emptyCompletionAssistanceState(), candidates: [candidate()], commands: [command], runs: [run()],
+    });
+    await assert.rejects(synchronizeCompletionAssistance({
+      accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store,
+      fetchImpl: async () => new Response(JSON.stringify({
+        commandId: command.commandId, contractVersion: 1, reason: 'revision_conflict', status: 'rejected',
+      }), { status: 200 }),
+    }), /current authoritative candidate/u);
+    assert.deepEqual((await store.read(owner)).commands, [command]);
+  });
+
   it('does not consume a command for a malformed or mismatched ACK', async () => {
     const command = responseCommand();
     const store = memoryStore({
@@ -367,6 +559,7 @@ describe('completion assistance account synchronization', () => {
       accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store,
       fetchImpl: async (_url, init) => init?.method === 'POST'
         ? new Response(JSON.stringify({
+            candidate: candidate(),
             commandId: command.commandId, contractVersion: 1, reason: 'revision_conflict', status: 'rejected',
           }), { status: 200 })
         : new Response(JSON.stringify({
@@ -434,7 +627,7 @@ describe('completion assistance account synchronization', () => {
       runs: [run()],
       visits: [{
         approached: true,
-        assignmentGeneration: 'assignment-1',
+        assignmentGeneration: '1',
         deliveryStopId: 'stop-1',
         dwellSampleCount: 0,
         evidence: [],
@@ -457,21 +650,40 @@ describe('completion assistance account synchronization', () => {
     assert.deepEqual(result.state.candidates, [pendingCandidate]);
   });
 
-  it('drops only runs with unsafe server policy so they cannot drive local detection', async () => {
-    const store = memoryStore(emptyCompletionAssistanceState());
+  it('disables detection for unsafe server policy while preserving actionable candidates and queued responses', async () => {
     const unsafeRun = structuredClone(run()) as CompletionRun;
     unsafeRun.policy.exitRadiusMeters = 50;
+    const awaiting = candidate();
+    const responded = candidate({
+      candidateId: 'candidate-responded',
+      response: 'completed',
+      responseAt: '2026-09-17T12:02:00.000Z',
+      revision: 1,
+      status: 'responded',
+    });
+    const held = candidate({ candidateId: 'candidate-held', holdReason: 'ambiguous', status: 'held' });
+    const queuedResponse: Extract<CompletionCommand, { kind: 'response' }> = {
+      ...responseCommand(),
+      candidateId: responded.candidateId,
+    };
+    const controlled = controlledMemoryStore({
+      ...emptyCompletionAssistanceState(), candidates: [awaiting, responded, held], runs: [run()],
+    });
     const result = await synchronizeCompletionAssistance({
-      accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store,
-      fetchImpl: async () => new Response(JSON.stringify({
-        candidates: [candidate()],
-        contractVersion: 1,
-        runs: [unsafeRun],
-        serverTime: '2026-09-17T12:03:00.000Z',
-      }), { status: 200 }),
+      accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store: controlled.store,
+      fetchImpl: async () => {
+        controlled.update((state) => ({ ...state, commands: [queuedResponse] }));
+        return new Response(JSON.stringify({
+          candidates: [awaiting, responded, held],
+          contractVersion: 1,
+          runs: [unsafeRun],
+          serverTime: '2026-09-17T12:03:00.000Z',
+        }), { status: 200 });
+      },
     });
     assert.deepEqual(result.state.runs, []);
-    assert.equal(result.state.candidates.length, 1);
+    assert.deepEqual(result.state.candidates, [awaiting, responded, held]);
+    assert.deepEqual(result.state.commands, [queuedResponse]);
   });
 
   it('marks a valid GET supported before reconcile replays buffered GPS against server policy', async () => {
@@ -487,7 +699,7 @@ describe('completion assistance account synchronization', () => {
     const store = memoryStore({
       ...emptyCompletionAssistanceState(),
       bufferedLocations: [{
-        assignmentGeneration: 'assignment-1', expectedRouteVersionId: 'version-1', routePlanId: 'route-1', samples,
+        assignmentGeneration: '1', expectedRouteVersionId: '11111111-1111-4111-8111-111111111111', routePlanId: 'route-1', samples,
       }],
       capability: 'unsupported',
     });
@@ -507,9 +719,9 @@ describe('completion assistance account synchronization', () => {
     const store = memoryStore({
       ...emptyCompletionAssistanceState(),
       manualOutcomes: [{
-        assignmentGeneration: 'assignment-1',
+        assignmentGeneration: '1',
         deliveryStopId: 'stop-1',
-        expectedRouteVersionId: 'version-1',
+        expectedRouteVersionId: '11111111-1111-4111-8111-111111111111',
         occurredAt: '2026-09-17T11:59:00.000Z',
         response: 'completed',
         routePlanId: 'route-1',
@@ -552,12 +764,74 @@ describe('completion assistance account synchronization', () => {
     }), /duplicate candidate/u);
   });
 
+  it('rejects noncanonical assignment identities from server snapshots and ACK candidates', async () => {
+    const invalidSnapshots = [
+      { candidates: [], runs: [{ ...run(), assignmentGeneration: '01' }] },
+      { candidates: [], runs: [{ ...run(), expectedRouteVersionId: 'version-1' }] },
+      { candidates: [candidate({ assignmentGeneration: '9223372036854775808' })], runs: [run()] },
+      { candidates: [candidate({ expectedRouteVersionId: 'version-1' })], runs: [run()] },
+    ];
+    for (const invalid of invalidSnapshots) {
+      const store = memoryStore(emptyCompletionAssistanceState());
+      await assert.rejects(synchronizeCompletionAssistance({
+        accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store,
+        fetchImpl: async () => new Response(JSON.stringify({
+          ...invalid, contractVersion: 1, serverTime: '2026-09-17T12:06:00.000Z',
+        }), { status: 200 }),
+      }), /snapshot is malformed/u);
+    }
+
+    const command = responseCommand();
+    const store = memoryStore({
+      ...emptyCompletionAssistanceState(), candidates: [candidate()], commands: [command], runs: [run()],
+    });
+    await assert.rejects(synchronizeCompletionAssistance({
+      accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store,
+      fetchImpl: async () => new Response(JSON.stringify({
+        candidate: candidate({ assignmentGeneration: '0' }),
+        commandId: command.commandId,
+        contractVersion: 1,
+        status: 'applied',
+      }), { status: 200 }),
+    }), /ACK is malformed/u);
+    assert.deepEqual((await store.read(owner)).commands, [command]);
+  });
+
   it('rejects inferred completion without ordered deadline and auto-processing timestamps', async () => {
     const store = memoryStore(emptyCompletionAssistanceState());
     await assert.rejects(synchronizeCompletionAssistance({
       accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store,
       fetchImpl: async () => new Response(JSON.stringify({
         candidates: [candidate({ status: 'inferred_completed' })],
+        contractVersion: 1,
+        runs: [run()],
+        serverTime: '2026-09-17T12:06:00.000Z',
+      }), { status: 200 }),
+    }), /snapshot is malformed/u);
+  });
+
+  it('requires an authoritative response deadline to equal exit plus exactly 24 hours', async () => {
+    const exitAt = Date.parse(candidate().exitAt);
+    for (const deltaMs of [-3_600_000, -1, 1, 3_600_000]) {
+      const store = memoryStore(emptyCompletionAssistanceState());
+      await assert.rejects(synchronizeCompletionAssistance({
+        accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store,
+        fetchImpl: async () => new Response(JSON.stringify({
+          candidates: [candidate({
+            responseDeadlineAt: new Date(exitAt + 24 * 60 * 60 * 1_000 + deltaMs).toISOString(),
+          })],
+          contractVersion: 1,
+          runs: [run()],
+          serverTime: '2026-09-17T12:06:00.000Z',
+        }), { status: 200 }),
+      }), /snapshot is malformed/u);
+    }
+
+    const store = memoryStore(emptyCompletionAssistanceState());
+    await assert.rejects(synchronizeCompletionAssistance({
+      accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store,
+      fetchImpl: async () => new Response(JSON.stringify({
+        candidates: [candidate({ responseDeadlineAt: undefined })],
         contractVersion: 1,
         runs: [run()],
         serverTime: '2026-09-17T12:06:00.000Z',

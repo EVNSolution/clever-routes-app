@@ -15,6 +15,7 @@ import {
   type CompletionCommand,
   type CompletionPolicy,
   type CompletionRun,
+  type CompletionRunContext,
   type CompletionSample,
 } from './completionAssistance';
 
@@ -58,6 +59,11 @@ function run(input?: Partial<CompletionRun>): CompletionRun {
 
 function initialized(inputRun = run()): CompletionAssistanceState {
   return reconcileCompletionRuns(emptyCompletionAssistanceState(), [inputRun]);
+}
+
+function runContext(inputRun = run()): CompletionRunContext {
+  const { policy: _policy, ...context } = inputRun;
+  return context;
 }
 
 function completeVisit(
@@ -210,6 +216,25 @@ describe('completion visit detection', () => {
     assert.deepEqual(state.candidates, []);
   });
 
+  it('uses terminal neighboring stops as ambiguity evidence at the same building', () => {
+    for (const terminalStatus of ['FAILED', 'DELIVERED', 'CANCELLED']) {
+      let state = initialized(run({
+        stops: [
+          { coordinates: { latitude: 0, longitude: 0 }, deliveryStopId: 'stop-1', status: 'PENDING' },
+          {
+            coordinates: { latitude: metersToLatitude(20), longitude: 0 },
+            deliveryStopId: 'terminal-neighbor',
+            status: terminalStatus,
+          },
+        ],
+      }));
+
+      state = completeVisit(state);
+
+      assert.deepEqual(state.candidates, [], terminalStatus);
+    }
+  });
+
   it('resets active dwell when a malformed GPS observation interrupts otherwise valid points', () => {
     let state = initialized();
     state = observeCompletionLocations(state, 'route-1', [
@@ -311,6 +336,56 @@ describe('completion candidate lifecycle', () => {
     assert.deepEqual(responses.map((command) => command.expectedRevision), [0, 1]);
   });
 
+  it('chains queued offline response corrections per candidate across restart', () => {
+    let state = completeVisit(initialized());
+    const candidate = state.candidates[0];
+    assert.ok(candidate);
+    state = {
+      ...state,
+      candidates: [candidate, {
+        ...candidate,
+        candidateId: 'independent-candidate',
+        deliveryStopId: 'stop-2',
+      }],
+    };
+
+    state = respondToCompletionCandidate(state, candidate.candidateId, 'completed', '2026-09-17T12:04:00.000Z');
+    state = respondToCompletionCandidate(state, 'independent-candidate', 'failed', '2026-09-17T12:04:30.000Z');
+    state = respondToCompletionCandidate(state, candidate.candidateId, 'failed', '2026-09-17T12:05:00.000Z');
+    state = structuredClone(state);
+    state = respondToCompletionCandidate(state, candidate.candidateId, 'not_completed', '2026-09-17T12:06:00.000Z');
+
+    const responses = state.commands.filter(
+      (command): command is Extract<CompletionCommand, { kind: 'response' }> => command.kind === 'response',
+    );
+    const candidateResponses = responses.filter((command) => command.candidateId === candidate.candidateId);
+    assert.deepEqual(candidateResponses.map((command) => ({
+      commandId: command.commandId,
+      previousResponseCommandId: command.previousResponseCommandId,
+      response: command.response,
+    })), [
+      {
+        commandId: candidateResponses[0]?.commandId,
+        previousResponseCommandId: undefined,
+        response: 'completed',
+      },
+      {
+        commandId: candidateResponses[1]?.commandId,
+        previousResponseCommandId: candidateResponses[0]?.commandId,
+        response: 'failed',
+      },
+      {
+        commandId: candidateResponses[2]?.commandId,
+        previousResponseCommandId: candidateResponses[1]?.commandId,
+        response: 'not_completed',
+      },
+    ]);
+    assert.equal(
+      responses.find((command) => command.candidateId === 'independent-candidate')?.previousResponseCommandId,
+      undefined,
+    );
+  });
+
   it('invalidates candidates on terminal stop state or reassignment without synthesizing terminal commands', () => {
     let state = completeVisit(initialized());
     const commandCount = state.commands.length;
@@ -332,6 +407,100 @@ describe('completion candidate lifecycle', () => {
     assert.equal(state.candidates[0]?.status, 'invalidated');
     assert.equal(state.candidates[0]?.holdReason, 'route_version_changed');
     assert.equal(state.commands.length, commandCount);
+  });
+
+  it('keeps candidate correction actionable when policy is invalid but assignment context remains valid', () => {
+    let state = completeVisit(initialized());
+    const candidate = state.candidates[0];
+    assert.ok(candidate);
+
+    state = reconcileCompletionRuns(state, [], [runContext()]);
+
+    assert.deepEqual(state.runs, []);
+    assert.deepEqual(state.visits, []);
+    assert.equal(state.candidates[0]?.status, 'awaiting_response');
+    state = respondToCompletionCandidate(state, candidate.candidateId, 'failed', '2026-09-17T12:04:00.000Z');
+    assert.equal(state.candidates[0]?.status, 'responded');
+  });
+
+  it('still invalidates candidates from invalid-policy context on identity or terminal changes', () => {
+    const original = completeVisit(initialized());
+    const reassigned = reconcileCompletionRuns(original, [], [runContext(run({
+      assignmentGeneration: 'assignment-2',
+    }))]);
+    assert.equal(reassigned.candidates[0]?.holdReason, 'assignment_changed');
+
+    const terminal = reconcileCompletionRuns(original, [], [runContext(run({
+      stops: [{ coordinates: { latitude: 0, longitude: 0 }, deliveryStopId: 'stop-1', status: 'FAILED' }],
+    }))]);
+    assert.equal(terminal.candidates[0]?.holdReason, 'stop_terminal');
+  });
+
+  it('preserves previous explicit manual state through stale invalid-policy context', () => {
+    let state = completeVisit(initialized());
+    state = recordCompletionManualResponse(
+      state,
+      'route-1',
+      'stop-1',
+      'failed',
+      '2026-09-17T12:04:00.000Z',
+      { assignmentGeneration: 'assignment-1', expectedRouteVersionId: 'route-version-1' },
+    );
+
+    state = reconcileCompletionRuns(state, [], [runContext()]);
+
+    assert.deepEqual(state.runs, []);
+    assert.equal(state.candidates[0]?.status, 'responded');
+    assert.equal(state.candidates[0]?.response, 'failed');
+  });
+
+  it('removes inferred completion projection when the same assignment has a contradictory terminal stop', () => {
+    for (const status of ['FAILED', 'CANCELLED', 'SKIPPED']) {
+      let state = completeVisit(initialized());
+      state = {
+        ...state,
+        candidates: state.candidates.map((candidate) => ({
+          ...candidate,
+          autoCompletedAt: '2026-09-18T12:01:10.000Z',
+          status: 'inferred_completed',
+        })),
+      };
+
+      state = reconcileCompletionRuns(state, [run({
+        stops: [{ coordinates: { latitude: 0, longitude: 0 }, deliveryStopId: 'stop-1', status }],
+      })]);
+
+      assert.equal(state.candidates[0]?.status, 'invalidated', status);
+      assert.equal(state.candidates[0]?.holdReason, `stop_terminal:${status.toLowerCase()}`, status);
+    }
+  });
+
+  it('keeps inferred delivered completion correctable but projects an explicit manual outcome', () => {
+    let inferred = completeVisit(initialized());
+    inferred = {
+      ...inferred,
+      candidates: inferred.candidates.map((candidate) => ({
+        ...candidate,
+        autoCompletedAt: '2026-09-18T12:01:10.000Z',
+        status: 'inferred_completed',
+      })),
+    };
+    const delivered = reconcileCompletionRuns(inferred, [run({
+      stops: [{ coordinates: { latitude: 0, longitude: 0 }, deliveryStopId: 'stop-1', status: 'DELIVERED' }],
+    })]);
+    assert.equal(delivered.candidates[0]?.status, 'inferred_completed');
+
+    const explicit = reconcileCompletionRuns(inferred, [run({
+      stops: [{
+        coordinates: { latitude: 0, longitude: 0 },
+        deliveryStopId: 'stop-1',
+        manualResponse: { response: 'failed', occurredAt: '2026-09-18T12:02:00.000Z' },
+        status: 'FAILED',
+      }],
+    })]);
+    assert.equal(explicit.candidates[0]?.status, 'responded');
+    assert.equal(explicit.candidates[0]?.response, 'failed');
+    assert.equal(explicit.candidates[0]?.responseAt, '2026-09-18T12:02:00.000Z');
   });
 
   it('preserves local tracking end and explicit response state across stale canonical snapshots', () => {

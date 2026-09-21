@@ -36,6 +36,8 @@ export type CompletionRun = {
   trackingEndedAt?: string;
 };
 
+export type CompletionRunContext = Omit<CompletionRun, 'policy'>;
+
 export type CompletionCandidate = {
   candidateId: string;
   runId: string;
@@ -79,6 +81,7 @@ export type CompletionCommand =
       response: 'completed' | 'failed' | 'not_completed';
       occurredAt: string;
       expectedRevision: number;
+      previousResponseCommandId?: string;
     }
   | {
       kind: 'return_intent';
@@ -154,6 +157,7 @@ const MAX_MANUAL_OUTCOME_IDENTITIES = 2;
 const MAX_PENDING_RETURN_IDENTITIES = 2;
 const FUTURE_SAMPLE_TOLERANCE_MS = 5 * 60 * 1_000;
 const DETECTABLE_STOP_STATUSES = new Set(['PENDING', 'ASSIGNED', 'EN_ROUTE', 'ARRIVED']);
+const CONTRADICTING_TERMINAL_STOP_STATUSES = new Set(['FAILED', 'CANCELLED', 'SKIPPED']);
 
 export function emptyCompletionAssistanceState(): CompletionAssistanceState {
   return { schemaVersion: 1, runs: [], candidates: [], commands: [], visits: [] };
@@ -206,10 +210,11 @@ export function parseCompletionPolicy(value: unknown): CompletionPolicy | null {
 export function reconcileCompletionRuns(
   state: CompletionAssistanceState,
   runs: CompletionRun[],
+  candidateRuns: CompletionRunContext[] = runs,
 ): CompletionAssistanceState {
   const previousRunById = new Map(state.runs.map((item) => [item.runId, item]));
   const manualOutcomes = trimManualOutcomes((state.manualOutcomes ?? []).filter((outcome) => (
-    !runs.some((run) => sameIdentity(run, outcome)
+    !candidateRuns.some((run) => sameIdentity(run, outcome)
       && run.stops.some((stop) => stop.deliveryStopId === outcome.deliveryStopId
         && !DETECTABLE_STOP_STATUSES.has(normalizeStatus(stop.status))))
   )));
@@ -255,12 +260,41 @@ export function reconcileCompletionRuns(
         }),
       });
     });
+  const candidateRunById = new Map(candidateRuns.map((context) => {
+    const detectionRun = reconciledRuns.find((run) => run.runId === context.runId && sameIdentity(run, context));
+    if (detectionRun !== undefined) {
+      return [context.runId, detectionRun] as const;
+    }
+    const previousRun = previousRunById.get(context.runId);
+    const canPreservePreviousManual = previousRun !== undefined && sameIdentity(previousRun, context);
+    const stops = context.stops.map((stop) => {
+      if (!DETECTABLE_STOP_STATUSES.has(normalizeStatus(stop.status))) {
+        return stop;
+      }
+      const outcome = manualOutcomes.find((item) => sameIdentity(context, item)
+        && item.deliveryStopId === stop.deliveryStopId);
+      const previousManual = canPreservePreviousManual
+        ? previousRun.stops.find((item) => item.deliveryStopId === stop.deliveryStopId)?.manualResponse
+        : undefined;
+      const manualResponse = stop.manualResponse
+        ?? previousManual
+        ?? (outcome === undefined ? undefined : { response: outcome.response, occurredAt: outcome.occurredAt });
+      return manualResponse === undefined
+        ? stop
+        : {
+            ...stop,
+            manualResponse,
+            status: manualResponse.response === 'completed' ? 'DELIVERED' : 'FAILED',
+          };
+    });
+    return [context.runId, { ...context, stops }] as const;
+  }));
   const currentRunById = new Map(reconciledRuns.map((item) => [item.runId, item]));
   const candidates = state.candidates.map((candidate) => {
     if (candidate.status === 'invalidated') {
       return candidate;
     }
-    const currentRun = currentRunById.get(candidate.runId);
+    const currentRun = candidateRunById.get(candidate.runId);
     if (currentRun === undefined) {
       return invalidateCandidate(candidate, 'run_removed');
     }
@@ -274,8 +308,20 @@ export function reconcileCompletionRuns(
     if (currentStop === undefined) {
       return invalidateCandidate(candidate, 'stop_removed');
     }
+    if (candidate.status === 'inferred_completed' && currentStop.manualResponse !== undefined) {
+      return {
+        ...candidate,
+        status: 'responded' as const,
+        response: currentStop.manualResponse.response,
+        responseAt: currentStop.manualResponse.occurredAt,
+      };
+    }
+    const currentStopStatus = normalizeStatus(currentStop.status);
+    if (candidate.status === 'inferred_completed' && CONTRADICTING_TERMINAL_STOP_STATUSES.has(currentStopStatus)) {
+      return invalidateCandidate(candidate, `stop_terminal:${currentStopStatus.toLowerCase()}`);
+    }
     if (
-      !DETECTABLE_STOP_STATUSES.has(normalizeStatus(currentStop.status))
+      !DETECTABLE_STOP_STATUSES.has(currentStopStatus)
       && candidate.status !== 'responded'
       && candidate.status !== 'inferred_completed'
     ) {
@@ -432,6 +478,7 @@ export function respondToCompletionCandidate(
     return state;
   }
 
+  const previousResponseCommandId = findLatestPendingResponseCommandId(state, candidateId);
   const command: CompletionCommand = {
     kind: 'response',
     commandId: stableId('completion-response', candidateId, String(current.revision), response, occurredAt),
@@ -444,6 +491,7 @@ export function respondToCompletionCandidate(
     response,
     occurredAt,
     expectedRevision: current.revision,
+    ...(previousResponseCommandId === undefined ? {} : { previousResponseCommandId }),
   };
   if (state.commands.some((item) => item.commandId === command.commandId)) {
     return state;
@@ -624,7 +672,10 @@ function observeRunSample(
     && isValidCoordinate(stop.coordinates)
     && DETECTABLE_STOP_STATUSES.has(normalizeStatus(stop.status))
   ));
-  const ambiguousStopIds = findAmbiguousStopIds(eligibleStops, sample, run.policy.ambiguityRadiusMeters);
+  const stopsWithCoordinates = run.stops.filter((stop) => (
+    stop.coordinates !== null && isValidCoordinate(stop.coordinates)
+  ));
+  const ambiguousStopIds = findAmbiguousStopIds(stopsWithCoordinates, sample, run.policy.ambiguityRadiusMeters);
   const isAmbiguous = ambiguousStopIds.size > 1;
   let next = state;
 
@@ -811,6 +862,19 @@ function findLatestCurrentCandidate(
       && candidate.status !== 'invalidated'
     ) {
       return candidate;
+    }
+  }
+  return undefined;
+}
+
+function findLatestPendingResponseCommandId(
+  state: CompletionAssistanceState,
+  candidateId: string,
+): string | undefined {
+  for (let index = state.commands.length - 1; index >= 0; index -= 1) {
+    const command = state.commands[index];
+    if (command?.kind === 'response' && command.candidateId === candidateId) {
+      return command.commandId;
     }
   }
   return undefined;

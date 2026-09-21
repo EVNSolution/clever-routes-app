@@ -23,6 +23,10 @@
 6. `inferred_completed` → 명시적 정정: 버전과 멱등 명령 ID로 감사 이력을 남기고 명시적 상태로 전환한다.
 7. 수동 terminal 상태·취소·재배차는 해당 후보 추정을 무효화한다. 오래된 응답으로 새 배차를 수정하지 않는다.
 
+동일 건물 모호성은 완료·실패·취소된 이웃을 포함한 전체 배정 좌표로 판단한다. 같은 배차의 실패·취소·건너뛰기도 이미 추정된 후보를 무효화하며, 명시적 수동 결과가 있으면 그 결과를 우선한다. 서버가 실제로 추정 완료한 DELIVERED 후보는 정정 가능 상태로 유지한다.
+
+서로 이어지는 오프라인 응답에는 같은 후보의 직전 미확인 명령을 `previousResponseCommandId`로 기록한다. 서버 자동 추정으로 revision이 증가해도 명시적 응답의 순서를 검증할 수 있도록 ID·계보·payload를 재시도 중 고정한다. accepted response ACK에는 해당 명령의 응답·원래 응답 시각과 진행된 revision이 반영된 authoritative candidate가 필요하며, 서버 deadline은 이탈 시각+86,400,000ms와 정확히 일치해야 한다.
+
 가게 복귀 내비 실행은 `return_intent`만 기록한다. 운행 종료 및 GPS 중지는 기존 명시적 종료 흐름을 사용하며 후보 24시간 대기와 분리한다.
 
 ## 검증 기준 (구현 전 고정)
@@ -54,6 +58,8 @@
 
 서버 미지원(404/501)에서는 후보 감지를 비활성화하고 기존 후보/응답은 보존한다. 운영 임계값 기본값이나 앱 자체 자동 완료는 없다. 서버가 이 계약과 정책을 제공하기 전 새 기능의 실운영 효과를 주장하지 않는다.
 
+서버 정책이 잘못되었거나 이해할 수 없는 경우 해당 운행의 새 방문 감지와 진행 중 체류를 중단한다. 기존 후보의 응답·정정에는 정책과 별도로 받은 운행/배차/배송지 문맥을 사용한다. 정책 오류만으로 기존 후보를 삭제하거나 무효화하지 않으며, 문맥에 확인된 취소·재배차·수동 결과는 계속 존중한다.
+
 ## 기존 완료 누락의 독립 점검
 
 확인한 결함: `recordStopProofEventAfterDeliveryStart`는 서버 요청이 거부된 후에만 큐에 저장했다. 실제 AppRoot의 `createRouteOrderedDriverEventService` 래퍼도 사전에 저장하지 않았다. 네트워크 요청 대기 중 OS 종료·업데이트 재시작이 일어나면 완료/실패 의도가 디스크에 없을 수 있었다. 또 live 요청에 제한 시간이 없었다.
@@ -72,10 +78,16 @@
 
 ## 로컬 검증 결과 (2026-09-21)
 
-- `npm run check:workspace`: source-layout, TypeScript, 전체 784 tests 통과.
+- `npm run check:workspace`: 최종 보완 후 source-layout, TypeScript, 전체 797 tests 통과.
 - `npm run lint`: 오류 0. baseline에도 있던 AppRoot `resetRouteProgress` hook dependency 경고 3개 유지.
 - `npm run build`: Android/iOS JavaScript export 통과. native APK/AAB 또는 스토어 빌드 증거가 아니다.
 - mock 환경의 Metro `/status`: `packager-status:running` 확인 후 이번 작업의 서버 종료.
 - `git diff --check`: 통과.
 - 별도 코드 리뷰에서 ACK/최신 응답 경합, 초기 저장·계정 전환, 종료 후 복귀 의사, 추정 표시 및 수동 실패·취소 우선순위를 보강하고 재검토했다.
 - 연결된 실기기는 없고 로컬 Xcode license 미수락으로 simctl도 사용하지 않았다. 실제 화면 렌더·GPS/OS 알림·업데이트 보존 검증은 남아 있다. GitHub CI는 수동 실행 전용이며 이 로컬 검증과 구분한다.
+
+## 최종 독립 검토 (2026-09-21)
+
+별도 코드 리뷰(high)와 아키텍처 검토(xhigh)를 수행해 각각 `APPROVE`, `CLEAR`를 받았다. 동일 건물의 terminal 이웃, 동일 배차 수동 결과, 오프라인 연속 정정, ACK 효과 검증, 정확한 24시간과 서버 deadline 필수 조건, canonical 배차 식별자, 잘못된 정책에서도 기존 응답 유지에 대한 결함을 보완한 뒤 재검토했다.
+
+서버 전달 계약에는 불변 run/version, 후보와 실제 배송지 결과의 원자적 투영, 추정 정정 시 이전 상태 복원, 서버 선배포와 자동처리 활성화 분리를 명시했다. 이 판정은 앱 코드와 서버 전달 준비에 대한 검토 결과이며 서버 구현·운영 배포·실기기 검증을 완료했다는 의미가 아니다.

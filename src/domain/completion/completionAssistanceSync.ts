@@ -7,6 +7,7 @@ import {
   type CompletionCandidate,
   type CompletionCommand,
   type CompletionRun,
+  type CompletionRunContext,
   type CompletionSample,
   type CompletionVisit,
 } from './completionAssistance';
@@ -36,6 +37,7 @@ export type CompletionAssistanceFetch = (
 
 const COMPLETION_ASSISTANCE_CONTRACT_VERSION = 1;
 const DEFAULT_SYNC_TIMEOUT_MS = 15_000;
+const RESPONSE_DEADLINE_MS = 24 * 60 * 60 * 1_000;
 const CANDIDATE_STATUSES = new Set([
   'awaiting_response', 'responded', 'inferred_completed', 'held', 'invalidated',
 ]);
@@ -197,6 +199,7 @@ export async function synchronizeCompletionAssistance(input: {
     }
     const acknowledgement = parseCommandAcknowledgement(payload, command.commandId);
     requireAcknowledgementCandidateIdentity(command, acknowledgement.candidate);
+    requireAcknowledgementReflectsCommand(command, acknowledgement);
     state = await updateCurrent((current) => applyCommandAcknowledgement(current, command, acknowledgement));
   }
 
@@ -216,7 +219,7 @@ export async function synchronizeCompletionAssistance(input: {
       capability: 'supported',
       candidates: mergeCandidates(current, snapshot.candidates),
     };
-    return reconcileCompletionRuns(withServerCandidates, snapshot.runs);
+    return reconcileCompletionRuns(withServerCandidates, snapshot.runs, snapshot.runContexts);
   });
   return { state, supported: true };
 }
@@ -234,6 +237,25 @@ function applyCommandAcknowledgement(
   acknowledgement: CommandAcknowledgement,
 ): CompletionAssistanceState {
   if (!state.commands.some((item) => item.commandId === command.commandId)) return state;
+  if (
+    command.kind === 'response'
+    && (acknowledgement.status === 'applied' || acknowledgement.status === 'duplicate')
+    && acknowledgement.candidate === undefined
+  ) {
+    throw new CompletionAssistanceProtocolError(
+      'Completion assistance response ACK requires an authoritative candidate.',
+    );
+  }
+  if (
+    command.kind === 'response'
+    && acknowledgement.status === 'rejected'
+    && acknowledgement.candidate === undefined
+    && state.candidates.some((candidate) => candidate.candidateId === command.candidateId)
+  ) {
+    throw new CompletionAssistanceProtocolError(
+      'Completion assistance rejected response ACK requires the current authoritative candidate.',
+    );
+  }
   const remainingCommands = state.commands.filter((item) => item.commandId !== command.commandId);
   const commandCandidateId = command.kind === 'candidate'
     ? command.candidate.candidateId
@@ -292,6 +314,28 @@ function requireAcknowledgementCandidateIdentity(
   ) {
     throw new CompletionAssistanceProtocolError(
       'Completion assistance ACK candidate identity does not match the queued command.',
+    );
+  }
+}
+
+function requireAcknowledgementReflectsCommand(
+  command: CompletionCommand,
+  acknowledgement: CommandAcknowledgement,
+): void {
+  if (
+    command.kind !== 'response'
+    || (acknowledgement.status !== 'applied' && acknowledgement.status !== 'duplicate')
+  ) return;
+  const candidate = acknowledgement.candidate;
+  if (
+    candidate === undefined
+    || candidate.status !== 'responded'
+    || candidate.response !== command.response
+    || candidate.responseAt !== command.occurredAt
+    || candidate.revision <= command.expectedRevision
+  ) {
+    throw new CompletionAssistanceProtocolError(
+      'Completion assistance response ACK authoritative candidate does not reflect the queued command.',
     );
   }
 }
@@ -371,15 +415,19 @@ function isCompletionAssistanceState(value: unknown): value is CompletionAssista
     && hasUniqueStrings(value.commands, 'commandId');
 }
 
-function parseServerSnapshot(value: unknown): { candidates: CompletionCandidate[]; runs: CompletionRun[] } {
+function parseServerSnapshot(value: unknown): {
+  candidates: CompletionCandidate[];
+  runContexts: CompletionRunContext[];
+  runs: CompletionRun[];
+} {
   if (
     !isRecord(value)
     || value.contractVersion !== COMPLETION_ASSISTANCE_CONTRACT_VERSION
     || !isTimestamp(value.serverTime)
     || !Array.isArray(value.runs)
-    || !value.runs.every(isCompletionRunStructure)
+    || !value.runs.every(isServerCompletionRunStructure)
     || !Array.isArray(value.candidates)
-    || !value.candidates.every(isCompletionCandidate)
+    || !value.candidates.every(isServerCompletionCandidate)
   ) {
     throw new Error('Completion assistance server snapshot is malformed.');
   }
@@ -391,8 +439,9 @@ function parseServerSnapshot(value: unknown): { candidates: CompletionCandidate[
   }
   // An invalid or unknown policy disables detection for that run. Other valid
   // runs and already-created candidates remain usable for explicit responses.
-  const runs = value.runs.filter(isCompletionRun);
-  return { candidates: value.candidates, runs };
+  const runs = value.runs.filter(isServerCompletionRun);
+  const runContexts = value.runs.map(toCompletionRunContext);
+  return { candidates: value.candidates, runContexts, runs };
 }
 
 function parseCommandAcknowledgement(value: unknown, expectedCommandId: string): CommandAcknowledgement {
@@ -402,7 +451,7 @@ function parseCommandAcknowledgement(value: unknown, expectedCommandId: string):
     || !isNonEmptyString(value.commandId)
     || !['applied', 'duplicate', 'rejected'].includes(String(value.status))
     || (value.reason !== undefined && typeof value.reason !== 'string')
-    || (value.candidate !== undefined && !isCompletionCandidate(value.candidate))
+    || (value.candidate !== undefined && !isServerCompletionCandidate(value.candidate))
   ) {
     throw new Error('Completion assistance command ACK is malformed.');
   }
@@ -422,7 +471,17 @@ function isCompletionRun(value: unknown): value is CompletionRun {
     && parseCompletionPolicy(value.policy) !== null;
 }
 
-function isCompletionRunStructure(value: unknown): value is Record<string, unknown> {
+function isServerCompletionRun(value: unknown): value is CompletionRun {
+  return isCompletionRun(value) && hasCanonicalServerAssignmentIdentity(value);
+}
+
+type CompletionRunStructure = CompletionRunContext & { policy: unknown };
+
+function isServerCompletionRunStructure(value: unknown): value is CompletionRunStructure {
+  return isCompletionRunStructure(value) && hasCanonicalServerAssignmentIdentity(value);
+}
+
+function isCompletionRunStructure(value: unknown): value is CompletionRunStructure {
   return isRecord(value)
     && isNonEmptyString(value.runId)
     && isNonEmptyString(value.routePlanId)
@@ -440,6 +499,18 @@ function isCompletionRunStructure(value: unknown): value is Record<string, unkno
     && (value.trackingEndedAt === undefined || isTimestamp(value.trackingEndedAt));
 }
 
+function toCompletionRunContext(run: CompletionRunStructure): CompletionRunContext {
+  return {
+    assignmentGeneration: run.assignmentGeneration,
+    expectedRouteVersionId: run.expectedRouteVersionId,
+    ...(run.routeName === undefined ? {} : { routeName: run.routeName }),
+    routePlanId: run.routePlanId,
+    runId: run.runId,
+    stops: run.stops,
+    ...(run.trackingEndedAt === undefined ? {} : { trackingEndedAt: run.trackingEndedAt }),
+  };
+}
+
 function isCompletionCandidate(value: unknown): value is CompletionCandidate {
   if (!isRecord(value)) return false;
   const status = value.status;
@@ -450,7 +521,8 @@ function isCompletionCandidate(value: unknown): value is CompletionCandidate {
     && Date.parse(value.arrivalAt) <= Date.parse(value.dwellCompletedAt)
     && Date.parse(value.dwellCompletedAt) <= Date.parse(value.exitAt)
     && (value.responseDeadlineAt === undefined
-      || (isTimestamp(value.responseDeadlineAt) && Date.parse(value.exitAt) <= Date.parse(value.responseDeadlineAt)))
+      || (isTimestamp(value.responseDeadlineAt)
+        && Date.parse(value.responseDeadlineAt) === Date.parse(value.exitAt) + RESPONSE_DEADLINE_MS))
     && (value.autoCompletedAt === undefined
       || (isTimestamp(value.autoCompletedAt)
         && value.responseDeadlineAt !== undefined
@@ -483,6 +555,12 @@ function isCompletionCandidate(value: unknown): value is CompletionCandidate {
     && (value.notified === undefined || typeof value.notified === 'boolean');
 }
 
+function isServerCompletionCandidate(value: unknown): value is CompletionCandidate {
+  return isCompletionCandidate(value)
+    && hasCanonicalServerAssignmentIdentity(value)
+    && (value.status !== 'awaiting_response' || value.responseDeadlineAt !== undefined);
+}
+
 function isCompletionCommand(value: unknown): value is CompletionCommand {
   if (!isRecord(value) || !isNonEmptyString(value.commandId) || typeof value.kind !== 'string') return false;
   if (value.kind === 'candidate') return isCompletionCandidate(value.candidate) && isTimestamp(value.occurredAt);
@@ -495,7 +573,10 @@ function isCompletionCommand(value: unknown): value is CompletionCommand {
       && isNonEmptyString(value.deliveryStopId)
       && typeof value.response === 'string' && RESPONSES.has(value.response)
       && isTimestamp(value.occurredAt)
-      && Number.isInteger(value.expectedRevision) && Number(value.expectedRevision) >= 0;
+      && Number.isInteger(value.expectedRevision) && Number(value.expectedRevision) >= 0
+      && (value.previousResponseCommandId === undefined
+        || (isNonEmptyString(value.previousResponseCommandId)
+          && value.previousResponseCommandId !== value.commandId));
   }
   return value.kind === 'return_intent'
     && isNonEmptyString(value.runId)
@@ -563,6 +644,26 @@ function isAssignmentIdentity(value: unknown): value is Record<string, unknown> 
     && isNonEmptyString(value.routePlanId)
     && isNonEmptyString(value.assignmentGeneration)
     && isNonEmptyString(value.expectedRouteVersionId);
+}
+
+function hasCanonicalServerAssignmentIdentity(value: unknown): boolean {
+  return isRecord(value)
+    && isCanonicalAssignmentGeneration(value.assignmentGeneration)
+    && isUuid(value.expectedRouteVersionId);
+}
+
+function isCanonicalAssignmentGeneration(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^[1-9][0-9]*$/u.test(value)) return false;
+  try {
+    return BigInt(value) <= 9_223_372_036_854_775_807n;
+  } catch {
+    return false;
+  }
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
 }
 
 function hasOrderedCandidateEvidence(
