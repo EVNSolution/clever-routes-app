@@ -163,6 +163,17 @@ not by this source document. A local self-contained smoke APK is verification
 input, not publication evidence. Future production store builds use
 `autoIncrement` to avoid duplicate build numbers.
 
+If a cloud build reserves a version but fails before producing an artifact,
+`production-local` inherits the same production environment and remote signing
+credentials while setting `autoIncrement=false`. Verify the reserved EAS version
+with `eas build:version:get -p android --profile production-local` and confirm no
+artifact with that version has been submitted before running
+`eas build --local -p android --profile production-local`. Supply protected local
+Firebase configuration through `CLEVER_ROUTES_GOOGLE_SERVICES_FILE`; never commit
+it. This recovery profile reuses the reserved version and is not a new-release
+version allocator. Validate package, version, signature and checksum before any
+upload; a local build does not create a cloud EAS build record.
+
 Before running any preview/production EAS build for evidence, run:
 
 ```bash
