@@ -599,6 +599,49 @@ describe('completion assistance account synchronization', () => {
     assert.equal(result.state.candidates[0]?.holdReason, 'server_rejected:revision_conflict');
   });
 
+  it('preserves rejected authoritative invalidation across the same-revision snapshot and restart', async () => {
+    const command = responseCommand();
+    const authoritative = candidate({ revision: 7, status: 'invalidated', holdReason: 'assignment_changed' });
+    const store = memoryStore({
+      ...emptyCompletionAssistanceState(), candidates: [candidate()], commands: [command], runs: [run()],
+    });
+    const fetchImpl: NonNullable<Parameters<typeof synchronizeCompletionAssistance>[0]['fetchImpl']> = async (_url, init) => (
+      new Response(JSON.stringify(init?.method === 'POST'
+        ? {
+            candidate: authoritative, commandId: command.commandId, contractVersion: 1,
+            reason: 'run_invalidated', status: 'rejected',
+          }
+        : {
+            candidates: [authoritative], contractVersion: 1, runs: [run()], serverTime: '2026-09-17T12:03:00.000Z',
+          }), { status: 200 })
+    );
+    const result = await synchronizeCompletionAssistance({
+      accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store, fetchImpl,
+    });
+    assert.deepEqual(result.state.commands, []);
+    assert.deepEqual(result.state.candidates, [authoritative]);
+    const restarted = await synchronizeCompletionAssistance({
+      accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test',
+      store: memoryStore(await store.read(owner)), fetchImpl,
+    });
+    assert.deepEqual(restarted.state.candidates, [authoritative]);
+  });
+
+  it('lets same-revision server invalidation close a previously persisted rejected conflict', async () => {
+    const authoritative = candidate({ revision: 7, status: 'invalidated', holdReason: 'assignment_changed' });
+    const store = memoryStore({
+      ...emptyCompletionAssistanceState(), runs: [run()],
+      candidates: [candidate({ revision: 7, status: 'held', holdReason: 'server_rejected:run_invalidated' })],
+    });
+    const result = await synchronizeCompletionAssistance({
+      accessToken: 'token', accountOwnerHash: owner, baseUrl: 'https://route.test', store,
+      fetchImpl: async () => new Response(JSON.stringify({
+        candidates: [authoritative], contractVersion: 1, runs: [run()], serverTime: '2026-09-17T12:03:00.000Z',
+      }), { status: 200 }),
+    });
+    assert.deepEqual(result.state.candidates, [authoritative]);
+  });
+
   it('preserves durable candidates and commands when POST proves the capability unsupported', async () => {
     const command = responseCommand();
     const pendingCandidate = candidate();

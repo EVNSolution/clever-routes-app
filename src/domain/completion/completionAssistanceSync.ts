@@ -270,7 +270,7 @@ function applyCommandAcknowledgement(
   if (acknowledgement.status === 'rejected' && !hasLaterExplicitResponse) {
     if (commandCandidateId !== null) {
       const reason = sanitizeReason(acknowledgement.reason);
-      candidates = candidates.map((candidate) => candidate.candidateId === commandCandidateId
+      candidates = candidates.map((candidate) => candidate.candidateId === commandCandidateId && candidate.status !== 'invalidated'
         ? { ...candidate, holdReason: `server_rejected:${reason}`, status: 'held' }
         : candidate);
     }
@@ -352,6 +352,7 @@ function mergeCandidates(
     const local = merged.get(server.candidateId);
     const hasRejectedConflict = local?.status === 'held'
       && local.holdReason?.startsWith('server_rejected:') === true
+      && server.status !== 'invalidated'
       && server.revision <= local.revision;
     if (hasRejectedConflict) continue;
     if (
