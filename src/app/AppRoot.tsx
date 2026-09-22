@@ -5822,7 +5822,7 @@ function DriverApp() {
 
           {(screen === 'mainTabs' || screen === 'settings' || screen === 'routeSession')
             && (completionAssistance.supported || completionAssistance.state.candidates.length > 0 || completionAssistance.error !== null) ? (
-            <Pressable accessibilityRole="button" onPress={() => setScreen('completionAssistance')} style={styles.secondaryButton}>
+            <Pressable accessibilityRole="button" onPress={() => setScreen('completionAssistance')} style={[styles.secondaryButton, styles.completionAssistanceEntryButton]}>
               <Text style={styles.secondaryButtonText}>Delivery confirmations ({completionAssistance.state.candidates.filter((candidate) => candidate.status === 'awaiting_response' || candidate.status === 'held').length})</Text>
             </Pressable>
           ) : null}
@@ -8870,6 +8870,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 16,
     paddingVertical: 14,
+  },
+  completionAssistanceEntryButton: {
+    flex: 0,
   },
   compactButton: {
     minHeight: 42,
