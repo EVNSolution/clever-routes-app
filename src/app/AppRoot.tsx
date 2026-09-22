@@ -5821,7 +5821,7 @@ function DriverApp() {
           ) : null}
 
           {(screen === 'mainTabs' || screen === 'settings' || screen === 'routeSession')
-            && (completionAssistance.supported || completionAssistance.state.candidates.length > 0 || completionAssistance.error !== null) ? (
+            && completionAssistance.state.candidates.length > 0 ? (
             <Pressable accessibilityRole="button" onPress={() => setScreen('completionAssistance')} style={[styles.secondaryButton, styles.completionAssistanceEntryButton]}>
               <Text style={styles.secondaryButtonText}>Delivery confirmations ({completionAssistance.state.candidates.filter((candidate) => candidate.status === 'awaiting_response' || candidate.status === 'held').length})</Text>
             </Pressable>
