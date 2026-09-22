@@ -80,6 +80,11 @@ function createDatabase(input?: {
         const payload = tables.get('support_export_markers')?.get(recordKey);
         return payload === undefined ? null : { payload, recordKey } as T;
       }
+      if (sql.includes('FROM completion_assistance_state')) {
+        const accountOwnerHash = String(params[0] ?? '');
+        const payload = tables.get('completion_assistance_state')?.get(accountOwnerHash);
+        return payload === undefined ? null : { payload, recordKey: accountOwnerHash } as T;
+      }
       return null;
     },
     runAsync: async (sql, ...params) => {
@@ -90,6 +95,11 @@ function createDatabase(input?: {
       const deletedTable = /DELETE FROM ([a-z_]+) WHERE record_key = \?/iu.exec(sql)?.[1];
       if (deletedTable !== undefined) {
         tables.get(deletedTable)?.delete(String(params[0]));
+        return;
+      }
+      const deletedAccountTable = /DELETE FROM ([a-z_]+) WHERE account_owner_hash = \?/iu.exec(sql)?.[1];
+      if (deletedAccountTable !== undefined) {
+        tables.get(deletedAccountTable)?.delete(String(params[0]));
         return;
       }
       const table = /INTO ([a-z_]+)/iu.exec(sql)?.[1];
@@ -109,6 +119,52 @@ function createDatabase(input?: {
 }
 
 describe('encrypted driver evidence store', () => {
+  it('atomically persists completion assistance per validated account hash', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const owner = 'a1'.repeat(32);
+    const initial = JSON.stringify({ candidates: [], commands: [], runs: [], schemaVersion: 1, visits: [] });
+
+    assert.equal(await store.readCompletionAssistanceState(owner), null);
+    assert.equal(await store.updateCompletionAssistanceState(owner, (raw) => {
+      assert.equal(raw, null);
+      return initial;
+    }), initial);
+    assert.equal(await store.readCompletionAssistanceState(owner), initial);
+
+    const updated = await store.updateCompletionAssistanceState(owner, (raw) => JSON.stringify({
+      ...(JSON.parse(raw!) as object),
+      commands: [{ commandId: 'command-1', kind: 'return_intent' }],
+    }));
+    assert.deepEqual((JSON.parse(updated) as { commands: unknown[] }).commands, [
+      { commandId: 'command-1', kind: 'return_intent' },
+    ]);
+    await store.removeCompletionAssistanceState(owner);
+    assert.equal(await store.readCompletionAssistanceState(owner), null);
+    assert.match(db.commands.join('\n'), /CREATE TABLE IF NOT EXISTS completion_assistance_state/u);
+  });
+
+  it('rejects non-SHA-256 completion assistance account keys without reading or writing rows', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '20'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+
+    await assert.rejects(store.readCompletionAssistanceState('driver@example.test'), /SHA-256 account owner hash/u);
+    await assert.rejects(
+      store.updateCompletionAssistanceState('AA'.repeat(32), () => '{}'),
+      /SHA-256 account owner hash/u,
+    );
+    await assert.rejects(store.removeCompletionAssistanceState('../all'), /SHA-256 account owner hash/u);
+    assert.equal(db.runCalls.some((call) => call.sql.includes('completion_assistance_state')), false);
+  });
+
   it('sets PRAGMA key before reading cipher or schema metadata', async () => {
     const db = createDatabase();
     await createEncryptedEvidenceStore({

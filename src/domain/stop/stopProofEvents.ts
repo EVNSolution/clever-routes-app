@@ -1,4 +1,5 @@
 import type { DeliveryStartResult } from '../delivery/deliveryStart';
+import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
 import {
   formatDriverApiErrorForDriver,
   getDriverApiRequiresRouteLookup,
@@ -47,10 +48,13 @@ export type StopProofEventResult =
   };
 
 export async function recordStopProofEventAfterDeliveryStart(input: {
+  attemptTimeoutMs?: number;
+  cancelAttemptTimeout?: (handle: unknown) => void;
   deliveryStart: DeliveryStartResult;
   driverEventService: DriverEventService;
   input: StopProofEventInput;
   offlineQueue?: OfflineSubmissionQueue;
+  scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
 }): Promise<StopProofEventResult> {
   if (input.deliveryStart.kind !== 'delivery_active') {
     return {
@@ -68,17 +72,27 @@ export async function recordStopProofEventAfterDeliveryStart(input: {
     payload: { proof: getStopProofPayload(input.input) },
     routePlanId: input.input.routePlanId,
   });
+  const queued = input.offlineQueue?.enqueueDriverEvent(event);
 
+  if (input.offlineQueue !== undefined) {
+    await input.offlineQueue.whenPersisted();
+  }
+
+  let result: DriverEventRecordResult;
   try {
-    const result = await input.driverEventService.recordDriverEvent(event);
-
-    return { ...result, kind: 'recorded' };
+    result = await runBoundedAsyncOperation(
+      (signal) => input.driverEventService.recordDriverEvent(event, { signal }),
+      {
+        ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+        ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
+        timeoutMs: input.attemptTimeoutMs ?? 15_000,
+      },
+    );
   } catch (error) {
-    if (input.offlineQueue === undefined) {
+    if (input.offlineQueue === undefined || queued === undefined) {
       throw error;
     }
 
-    const queued = input.offlineQueue.enqueueDriverEvent(event);
     const requiresRouteReconciliation = getDriverApiRequiresRouteReconciliation(error);
     if (requiresRouteReconciliation === true) {
       input.offlineQueue.blockRouteSubmissionsForReconciliation(input.input.routePlanId);
@@ -95,6 +109,13 @@ export async function recordStopProofEventAfterDeliveryStart(input: {
         : { requiresRouteReconciliation: true as const }),
     };
   }
+
+  if (input.offlineQueue !== undefined && queued !== undefined) {
+    input.offlineQueue.acknowledge(queued.queueItemId);
+    await input.offlineQueue.whenPersisted();
+  }
+
+  return { ...result, kind: 'recorded' };
 }
 
 function getStopProofEventType(action: StopProofAction): Extract<DriverEventType, 'STOP_DELIVERED' | 'STOP_FAILED'> {

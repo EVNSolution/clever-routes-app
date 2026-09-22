@@ -9,13 +9,20 @@ import {
 } from '../../../domain/offline/offlineSubmissionQueue';
 import {
   createEncryptedEvidenceStore,
+  type EncryptedEvidenceStore,
   type EvidenceDatabase,
 } from './expoEncryptedEvidenceStore';
 
 let offlineSubmissionQueuePromise: Promise<OfflineSubmissionQueue> | null = null;
+let encryptedEvidenceStorePromise: Promise<EncryptedEvidenceStore> | null = null;
 
 export async function createExpoOfflineSubmissionQueueStorage() {
-  return createEncryptedEvidenceStore({
+  return getExpoEncryptedEvidenceStore();
+}
+
+export function getExpoEncryptedEvidenceStore(): Promise<EncryptedEvidenceStore> {
+  if (encryptedEvidenceStorePromise !== null) return encryptedEvidenceStorePromise;
+  encryptedEvidenceStorePromise = createEncryptedEvidenceStore({
     keyStore: {
       getItemAsync: (key) => SecureStore.getItemAsync(key, {
         keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
@@ -31,7 +38,11 @@ export async function createExpoOfflineSubmissionQueueStorage() {
       Crypto.CryptoDigestAlgorithm.SHA256,
       Uint8Array.from(value),
     )),
+  }).catch((error: unknown) => {
+    encryptedEvidenceStorePromise = null;
+    throw error;
   });
+  return encryptedEvidenceStorePromise;
 }
 
 export function getExpoOfflineSubmissionQueue(): Promise<OfflineSubmissionQueue> {

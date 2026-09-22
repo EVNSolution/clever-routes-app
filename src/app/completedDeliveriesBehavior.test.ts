@@ -28,7 +28,9 @@ describe('Completed Deliveries behavior', () => {
     assert.match(source, /accessibilityRole="tab"/u);
     assert.match(source, /accessibilityState=\{\{ selected \}\}/u);
     assert.match(source, /onPress=\{\(\) => setSelectedFilter\(filter\.id\)\}/u);
-    assert.match(source, /getCompletedDeliveryOutcome\(stop\) === selectedFilter/u);
+    assert.match(source, /outcome\(stop\) === selectedFilter/u);
+    assert.match(source, /getCompletedDeliveryOutcome\(stop, locationInferredStopIds\.includes\(stop\.deliveryStopId\)\)/u);
+    assert.match(source, /\{ id: 'inferred', label: 'Inferred' \}/u);
     assert.doesNotMatch(source, /Proof Missing|With Issues|proofMediaResults|filterPill/u);
   });
 
@@ -36,7 +38,7 @@ describe('Completed Deliveries behavior', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const completedSource = getCompletedDeliveriesSource();
 
-    assert.match(completedSource, /<Pressable[\s\S]*accessibilityLabel=\{`Open completed Stop \$\{stop\.sequence\} details`\}[\s\S]*onPress=\{\(\) => onOpenStop\(stop\)\}/u);
+    assert.match(completedSource, /<Pressable[\s\S]*accessibilityLabel=\{`Open completed Stop \$\{stop\.sequence\} details`\}[\s\S]*onPress=\{\(\) => locationInferredStopIds\.includes\(stop\.deliveryStopId\) \? onOpenInferred\(\) : onOpenStop\(stop\)\}/u);
     assert.match(source, /setStopDetailsReturnScreen\('completedDeliveries'\);[\s\S]*setScreen\('stopDetails'\)/u);
     assert.match(source, /case 'stopDetails':[\s\S]*setScreen\(stopDetailsReturnScreen\)/u);
     assert.match(source, /isReadOnly=\{stopDetailsReturnScreen === 'completedDeliveries'\}/u);

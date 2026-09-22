@@ -164,11 +164,11 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(componentSource, /onViewCurrentStop/u);
   });
 
-  it('keeps route Release available inside the active route session', () => {
+  it('does not expose a manual route release action to the driver', () => {
     const componentSource = getRouteSessionComponentSource();
 
-    assert.match(componentSource, /onReleaseRoute\(\): void/u);
-    assert.match(componentSource, /routeStatus === 'active' \? \([\s\S]*<DangerButton[\s\S]*label=\{isDeletingRoute \? 'Releasing route\.\.\.' : 'Release'\}[\s\S]*onPress=\{onReleaseRoute\}/u);
+    assert.doesNotMatch(componentSource, /onReleaseRoute/u);
+    assert.doesNotMatch(componentSource, /Releasing route|>Release</u);
   });
 
   it('can recover an older active session whose pickup was not yet confirmed', () => {
@@ -759,7 +759,8 @@ describe('route session current task behavior', () => {
 
     assert.match(appSource, /projectRouteProgress\(\{[\s\S]*localCompletedStopIds: completedStopIds,[\s\S]*serverConfirmedStopIds/u);
     assert.match(appSource, /result\.serverConfirmedStopIds/u);
-    assert.match(appSource, /const progressMeta = completed \? serverConfirmed \? 'Done' : 'Syncing'/u);
+    assert.match(appSource, /completed \? serverConfirmed \? 'Done' : 'Syncing'/u);
+    assert.match(appSource, /locationInferredStopIds\.includes\(stop\.deliveryStopId\) \? 'Location inferred · review'/u);
   });
 
   it('keeps the inline session map adaptive and visually focused without disabling gestures', () => {

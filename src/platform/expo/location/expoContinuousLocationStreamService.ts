@@ -22,6 +22,11 @@ import {
   bindExpoOfflineSubmissionQueueAccount,
   getExpoOfflineSubmissionQueue,
 } from '../storage/expoOfflineSubmissionQueueStorage';
+import { emitCompletionAssistanceChange, recordExpoCompletionLocations, startCompletionAssistanceWork } from './expoCompletionAssistance';
+import { createExpoCompletionAssistanceStore, getCompletionAccountOwnerHash } from '../storage/expoCompletionAssistanceStore';
+import { synchronizeCompletionAssistance } from '../../../domain/completion/completionAssistanceSync';
+import { notifyCompletionCandidates } from '../../../domain/completion/completionAssistanceNotifications';
+import { showCompletionCandidateNotification } from '../notifications/expoCompletionAssistanceNotifications';
 
 export type ContinuousLocationTaskObserver = (
   locations: ContinuousLocationBatchItem[],
@@ -139,6 +144,51 @@ async function executeContinuousLocationTask(input: {
         const offlineQueue = persistedAccess.kind === 'active' || persistedAccess.kind === 'refresh_required'
           ? await bindExpoOfflineSubmissionQueueAccount(persistedAccess.driverProfile.phoneE164)
           : await getExpoOfflineSubmissionQueue();
+        let syncCompletionAfterGps: (() => Promise<void>) | null = null;
+        if (persistedAccess.kind === 'active' || persistedAccess.kind === 'refresh_required') {
+          const isCompletionSessionCurrent = async () => {
+            const latest = await driverAccessTokenStore.loadActiveDriverAccess();
+            return (latest.kind === 'active' || latest.kind === 'refresh_required')
+              && latest.driverProfile.phoneE164 === persistedAccess.driverProfile.phoneE164
+              && latest.activeRouteSession?.status === 'active'
+              && latest.activeRouteSession.startedAt === persistedAccess.activeRouteSession?.startedAt
+              && latest.routeAccess?.routePlanId === persistedAccess.routeAccess?.routePlanId
+              && latest.routeAccess?.assignmentGeneration === persistedAccess.routeAccess?.assignmentGeneration
+              && latest.routeAccess?.expectedRouteVersionId === persistedAccess.routeAccess?.expectedRouteVersionId;
+          };
+          // Candidate evidence must survive a stalled raw-GPS network request.
+          // A separate storage/network failure must not stop the existing GPS path.
+          await recordExpoCompletionLocations({
+            persistedAccess, locations, isCurrent: isCompletionSessionCurrent,
+          }).catch(() => undefined);
+          syncCompletionAfterGps = async () => {
+            const work = startCompletionAssistanceWork();
+            try {
+              const store = await createExpoCompletionAssistanceStore();
+              const accountOwnerHash = await getCompletionAccountOwnerHash(persistedAccess.driverProfile.phoneE164);
+              const assistance = await store.read(accountOwnerHash);
+              const needsSync = assistance.commands.length > 0 || (assistance.bufferedLocations?.length ?? 0) > 0;
+              if (needsSync && await isCompletionSessionCurrent()) {
+                // The raw-GPS path may just have refreshed the account token.
+                const latest = await driverAccessTokenStore.loadActiveDriverAccess();
+                if (latest.kind !== 'active' && latest.kind !== 'refresh_required') return;
+                await synchronizeCompletionAssistance({
+                  store, accountOwnerHash, baseUrl: runtimeConfig.deliveryServerBaseUrl,
+                  accessToken: latest.accountAccess.accessToken,
+                  signal: work.signal,
+                  validateCurrent: isCompletionSessionCurrent,
+                });
+                await notifyCompletionCandidates({
+                  store, accountOwnerHash, notify: (candidate) => showCompletionCandidateNotification(candidate, accountOwnerHash),
+                  isCurrent: () => !work.signal.aborted, validateCurrent: isCompletionSessionCurrent,
+                });
+                emitCompletionAssistanceChange();
+              }
+            } catch {
+              // The encrypted command remains pending for foreground/background retry.
+            } finally { work.release(); }
+          };
+        }
         taskResult = await processContinuousLocationTaskBatch({
           createDriverEventService: ({ persistedAccess, refreshDriverAccess }) => (
             createDriverApiClientsFromPersistedDriverAccess({
@@ -160,6 +210,7 @@ async function executeContinuousLocationTask(input: {
         if (taskResult.kind === 'deactivated' || taskResult.kind === 'ignored') {
           await stopContinuousLocationTaskIfInactive();
         }
+        await syncCompletionAfterGps?.();
       }
     } finally {
       await continuousLocationTaskObserver?.(locations, taskResult);

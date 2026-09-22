@@ -17,6 +17,7 @@ type EasBuildProfile = {
   developmentClient?: boolean;
   distribution?: string;
   environment?: string;
+  extends?: string;
 };
 
 test('defines native EAS build profiles for preview and production evidence', () => {
@@ -40,6 +41,8 @@ test('defines native EAS build profiles for preview and production evidence', ()
   assert.equal(eas.build?.production?.developmentClient, undefined);
   assert.equal(eas.build?.production?.android?.buildType, 'app-bundle');
   assert.notEqual(eas.build?.production?.android?.withoutCredentials, true);
+  assert.equal(eas.build?.['production-local']?.extends, 'production');
+  assert.equal(eas.build?.['production-local']?.autoIncrement, false);
   assert.equal(eas.submit?.production?.android?.track, 'production');
   assert.equal(eas.submit?.production?.android?.releaseStatus, 'completed');
 });
@@ -59,8 +62,8 @@ test('keeps source-controlled Android versions aligned across Expo and Gradle', 
   const versionCode = Number(androidBuildGradle.match(/\bversionCode\s+(\d+)/u)?.[1]);
   const versionName = androidBuildGradle.match(/\bversionName\s+"([^"]+)"/u)?.[1];
 
-  assert.equal(appConfig.expo?.version, '1.3.1');
-  assert.equal(appConfig.expo?.android?.versionCode, 37);
+  assert.equal(appConfig.expo?.version, '1.3.3');
+  assert.equal(appConfig.expo?.android?.versionCode, 39);
   assert.equal(appConfig.expo?.ios?.bundleIdentifier, 'com.evnsolution.clever.routes');
   assert.equal(appConfig.expo?.ios?.buildNumber, '1');
   assert.equal(appConfig.expo?.android?.package, 'com.evnsolution.clever.routes');

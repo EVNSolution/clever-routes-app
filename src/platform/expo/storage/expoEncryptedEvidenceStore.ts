@@ -26,6 +26,12 @@ export type EncryptedEvidenceStore = OfflineSubmissionQueueStorage & {
   exportDiagnostics(): Promise<string>;
   exportSupportQuarantine(input?: { accountOwnerHash?: string }): Promise<SupportQuarantineExport>;
   purgeExportedSupportQuarantine(input: { accountOwnerHash?: string; exportToken: string }): Promise<number>;
+  readCompletionAssistanceState(accountOwnerHash: string): Promise<string | null>;
+  removeCompletionAssistanceState(accountOwnerHash: string): Promise<void>;
+  updateCompletionAssistanceState(
+    accountOwnerHash: string,
+    mutate: (persistedState: string | null) => string,
+  ): Promise<string>;
 };
 
 export type EvidenceDatabase = {
@@ -250,11 +256,47 @@ export async function createEncryptedEvidenceStore(input: {
       });
       return purged;
     },
+    readCompletionAssistanceState: async (accountOwnerHash) => {
+      requireSha256AccountOwnerHash(accountOwnerHash);
+      const row = await database.getFirstAsync<StoredRow>(
+        'SELECT account_owner_hash AS recordKey, payload FROM completion_assistance_state WHERE account_owner_hash = ? LIMIT 1;',
+        accountOwnerHash,
+      );
+      return row?.payload ?? null;
+    },
+    removeCompletionAssistanceState: async (accountOwnerHash) => {
+      requireSha256AccountOwnerHash(accountOwnerHash);
+      await database.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          'DELETE FROM completion_assistance_state WHERE account_owner_hash = ?;',
+          accountOwnerHash,
+        );
+      });
+    },
     setItem: async (storageKey, value) => {
       if (storageKey !== OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY) return;
       const items = parseLegacyItems(value, now);
       if (items === null) throw new Error('Offline evidence payload is invalid and was not written.');
       await replaceQueueRows(database, items, now());
+    },
+    updateCompletionAssistanceState: async (accountOwnerHash, mutate) => {
+      requireSha256AccountOwnerHash(accountOwnerHash);
+      let updated: string | null = null;
+      await database.withExclusiveTransactionAsync(async (transaction) => {
+        const row = await transaction.getFirstAsync<StoredRow>(
+          'SELECT account_owner_hash AS recordKey, payload FROM completion_assistance_state WHERE account_owner_hash = ? LIMIT 1;',
+          accountOwnerHash,
+        );
+        updated = mutate(row?.payload ?? null);
+        await transaction.runAsync(
+          'INSERT OR REPLACE INTO completion_assistance_state (account_owner_hash, payload, updated_at) VALUES (?, ?, ?);',
+          accountOwnerHash,
+          updated,
+          now().toISOString(),
+        );
+      });
+      if (updated === null) throw new Error('Completion assistance state update did not complete.');
+      return updated;
     },
   };
 }
@@ -307,7 +349,18 @@ async function createSchema(database: EvidenceDatabase) {
       payload TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS completion_assistance_state (
+      account_owner_hash TEXT PRIMARY KEY NOT NULL,
+      payload TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
+}
+
+function requireSha256AccountOwnerHash(accountOwnerHash: string): void {
+  if (!/^[0-9a-f]{64}$/u.test(accountOwnerHash)) {
+    throw new Error('Completion assistance storage requires a lowercase SHA-256 account owner hash.');
+  }
 }
 
 async function migrateLegacyQueue(
