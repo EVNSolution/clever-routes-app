@@ -164,11 +164,11 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(componentSource, /onViewCurrentStop/u);
   });
 
-  it('keeps route Release available inside the active route session', () => {
+  it('does not expose a manual route release action to the driver', () => {
     const componentSource = getRouteSessionComponentSource();
 
-    assert.match(componentSource, /onReleaseRoute\(\): void/u);
-    assert.match(componentSource, /routeStatus === 'active' \? \([\s\S]*<DangerButton[\s\S]*label=\{isDeletingRoute \? 'Releasing route\.\.\.' : 'Release'\}[\s\S]*onPress=\{onReleaseRoute\}/u);
+    assert.doesNotMatch(componentSource, /onReleaseRoute/u);
+    assert.doesNotMatch(componentSource, /Releasing route|>Release</u);
   });
 
   it('can recover an older active session whose pickup was not yet confirmed', () => {

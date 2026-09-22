@@ -147,25 +147,25 @@ describe('routes list behavior', () => {
     assert.doesNotMatch(clearSource, /handleRefreshRoutes|finishRoute|deleteActiveRoute/u);
   });
 
-  it('labels the recovery action Release instead of the misleading Delete', () => {
+  it('keeps route release internal to the explicit route-switch flow', () => {
     const source = readFileSync(appRootPath, 'utf8');
-    const deleteSource = source.slice(
-      source.indexOf('async function deleteActiveRouteAfterConfirmed('),
-      source.indexOf('async function handleCallStop(', source.indexOf('async function deleteActiveRouteAfterConfirmed(')),
+    const switchSource = source.slice(
+      source.indexOf('async function finishActiveRouteForSwitch('),
+      source.indexOf('async function finishRoute(', source.indexOf('async function finishActiveRouteForSwitch(')),
     );
     const finishSource = source.slice(
       source.indexOf('async function finishRoute('),
       source.indexOf('async function handleManualFinishRoute('),
     );
 
-    assert.match(deleteSource, /routeEnd: 'released'/u);
-    assert.match(deleteSource, /createDriverReleasedRoutePayload/u);
+    assert.match(switchSource, /routeEnd: 'released'/u);
+    assert.match(switchSource, /createDriverReleasedRoutePayload/u);
     assert.match(finishSource, /routeEnd: options\?\.routeEnd/u);
     assert.match(finishSource, /executionStatus: 'READY'/u);
     assert.match(finishSource, /Route session deleted\. Route returned to Ready\./u);
     assert.doesNotMatch(finishSource, /filter\(\(session\) => session\.route\.id !== route\.id\)/u);
-    assert.match(source, /label=\{isDeletingRoute \? 'Releasing route\.\.\.' : 'Release'\}/u);
-    assert.doesNotMatch(source, /isDeletingRoute \? 'Releasing route\.\.\.' : 'Delete'/u);
+    assert.doesNotMatch(source, /handleDeleteActiveRoute|deleteActiveRouteAfterConfirmed|onReleaseRoute/u);
+    assert.doesNotMatch(source, /Releasing route|>Release</u);
   });
 
   it('preserves known route cards while an in-place refresh loads', () => {

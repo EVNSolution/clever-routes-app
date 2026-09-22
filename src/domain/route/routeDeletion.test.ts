@@ -3,44 +3,9 @@ import { describe, it } from 'node:test';
 
 import {
   createDriverReleasedRoutePayload,
-  requestActiveRouteDeletionConfirmation,
-  ROUTE_DELETE_CONFIRMATION,
 } from './routeDeletion';
 
 describe('active route deletion', () => {
-  it('requires an explicit destructive confirmation before deleting an active route', () => {
-    let confirmed = false;
-    let alertPayload: Parameters<
-      Parameters<typeof requestActiveRouteDeletionConfirmation>[0]['alertApi']['alert']
-    > | null = null;
-
-    requestActiveRouteDeletionConfirmation({
-      alertApi: {
-        alert: (...args) => {
-          alertPayload = args;
-        },
-      },
-      onConfirm: () => {
-        confirmed = true;
-      },
-    });
-
-    assert.notEqual(alertPayload, null);
-    const [title, message, buttons, options] = alertPayload!;
-    assert.equal(title, ROUTE_DELETE_CONFIRMATION.title);
-    assert.equal(message, 'Release this active route back to Ready? Use this only when you cannot continue the route.');
-    assert.deepEqual(options, { cancelable: true });
-    assert.deepEqual(buttons.map(({ style, text }) => ({ style, text })), [
-      { style: 'cancel', text: 'Cancel' },
-      { style: 'destructive', text: 'Release' },
-    ]);
-
-    buttons[0]?.onPress?.();
-    assert.equal(confirmed, false);
-    buttons[1]?.onPress?.();
-    assert.equal(confirmed, true);
-  });
-
   it('prepares a versioned route-release notification JSON without sending it', () => {
     assert.deepEqual(createDriverReleasedRoutePayload({
       deliveryDate: '2026-07-16',

@@ -256,10 +256,7 @@ import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
 import { requestActiveRouteSwitchConfirmation } from './activeRouteSwitchConfirmation';
 import { requestRouteReconciliationClearConfirmation } from './routeReconciliationClearConfirmation';
 import { persistOfflineQueueAndSyncState } from './offlineQueuePersistence';
-import {
-  createDriverReleasedRoutePayload,
-  requestActiveRouteDeletionConfirmation,
-} from '../domain/route/routeDeletion';
+import { createDriverReleasedRoutePayload } from '../domain/route/routeDeletion';
 
 type AppScreen =
   | 'accountName'
@@ -452,7 +449,6 @@ function DriverApp() {
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [isPhotoActionSheetVisible, setIsPhotoActionSheetVisible] = useState(false);
   const [isCompletingStop, setIsCompletingStop] = useState(false);
-  const [isDeletingRoute, setIsDeletingRoute] = useState(false);
   const [isFinishingRoute, setIsFinishingRoute] = useState(false);
   const isNavigationInterruptionProtected = screen === 'arrivalCheck'
     || screen === 'proofCamera'
@@ -4307,54 +4303,6 @@ function DriverApp() {
     setScreen('routeSession');
   }
 
-  function handleDeleteActiveRoute(routeId: string) {
-    if (blockMutationWhileStorageDegraded()) return;
-    if (activeRoutePlanId !== routeId) {
-      setMessage('Only the active route can be deleted.');
-      return;
-    }
-
-    requestActiveRouteDeletionConfirmation({
-      alertApi: {
-        alert: showOperationalDialog,
-      },
-      onConfirm: () => {
-        void deleteActiveRouteAfterConfirmed(routeId);
-      },
-    });
-  }
-
-  async function deleteActiveRouteAfterConfirmed(routeId: string) {
-    const routeSession = getRouteSessionForAction(routeSessions, routeId);
-    if (routeSession === null || activeRoutePlanId !== routeId) {
-      setMessage('The active route changed before it could be deleted. Refresh routes and try again.');
-      return;
-    }
-
-    const occurredAt = new Date();
-    const routeSubmission = toCompanyGuidanceSubmission(routeSession);
-    setSelectedRouteId(routeId);
-    setSubmission(routeSubmission);
-    setIsDeletingRoute(true);
-    try {
-      await finishRoute(routeSession.route, {
-        eventPayload: createDriverReleasedRoutePayload({
-          deliveryDate: routeSession.route.deliveryDate,
-          occurredAt,
-          routeName: routeSession.route.name,
-          routePlanId: routeId,
-          shopDomain: routeSession.companyGuidance.shopDomain,
-        }),
-        now: occurredAt,
-        returnToRoutes: true,
-        routeEnd: 'released',
-        routeSubmission,
-      });
-    } finally {
-      setIsDeletingRoute(false);
-    }
-  }
-
   async function handleCallStop(stop: AssignedRouteStop | null) {
     const phone = stop?.phone?.trim();
     if (phone === undefined || phone.length === 0) {
@@ -5910,7 +5858,6 @@ function DriverApp() {
                 onOpenInferred={() => setScreen('completionAssistance')}
                 currentNavigationStepIndex={navigationStepIndex}
                 deliveryFinishResult={deliveryFinishResult}
-                isDeletingRoute={isDeletingRoute}
                 isFinishingRoute={isFinishingRoute}
                 isRecordingArrival={isRecordingArrival}
                 isRefreshingRoutes={isRefreshingRoutes}
@@ -5923,7 +5870,6 @@ function DriverApp() {
                 onOpenNavigation={() => handleOpenNavigationForStop(currentStop)}
                 onOpenRouteNavigation={() => handleOpenRouteNavigation(selectedRoute)}
                 onOpenStop={handleOpenStopFromRouteSession}
-                onReleaseRoute={() => handleDeleteActiveRoute(selectedRoute.id)}
                 onRetryRouteSync={() => { void handleRefreshRoutes(); }}
                 onStartRoute={() => handleStartRoute(selectedRoute.id)}
                 pendingRouteEnd={selectedRouteSession?.pendingRouteEnd}
@@ -6700,7 +6646,6 @@ function RouteSessionScreen({
   onOpenInferred,
   currentNavigationStepIndex,
   deliveryFinishResult,
-  isDeletingRoute,
   isFinishingRoute,
   isRecordingArrival,
   isRefreshingRoutes,
@@ -6713,7 +6658,6 @@ function RouteSessionScreen({
   onOpenNavigation,
   onOpenRouteNavigation,
   onOpenStop,
-  onReleaseRoute,
   onRetryRouteSync,
   onStartRoute,
   pendingRouteEnd,
@@ -6732,7 +6676,6 @@ function RouteSessionScreen({
   onOpenInferred(): void;
   currentNavigationStepIndex: number;
   deliveryFinishResult: DeliveryFinishResult | null;
-  isDeletingRoute: boolean;
   isFinishingRoute: boolean;
   isRecordingArrival: boolean;
   isRefreshingRoutes: boolean;
@@ -6745,7 +6688,6 @@ function RouteSessionScreen({
   onOpenNavigation(): void;
   onOpenRouteNavigation(): void;
   onOpenStop(stop: AssignedRouteStop): void;
-  onReleaseRoute(): void;
   onRetryRouteSync(): void;
   onStartRoute(): void;
   pendingRouteEnd?: PendingRouteEnd;
@@ -7053,14 +6995,6 @@ function RouteSessionScreen({
           />
         ) : null}
         {routeStatus === 'completed' ? <SecondaryButton label="Open Route" onPress={onOpenRouteNavigation} /> : null}
-        {routeStatus === 'active' ? (
-          <DangerButton
-            disabled={isDeletingRoute}
-            label={isDeletingRoute ? 'Releasing route...' : 'Release'}
-            loading={isDeletingRoute}
-            onPress={onReleaseRoute}
-          />
-        ) : null}
       </View>
     </View>
   );
@@ -7716,19 +7650,6 @@ function SecondaryButton({ compact, disabled, label, loading, onPress }: { compa
   return (
     <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.secondaryButton, compact === true && styles.compactButton, disabled === true && styles.buttonDisabled]}>
       {loading === true ? <ActivityIndicator color="#0b57d0" /> : <Text style={[styles.secondaryButtonText, compact === true && styles.compactButtonText]}>{label}</Text>}
-    </Pressable>
-  );
-}
-
-function DangerButton({ compact, disabled, label, loading, onPress }: { compact?: boolean; disabled?: boolean; label: string; loading?: boolean; onPress(): void }) {
-  return (
-    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.dangerButton, compact === true && styles.compactButton, disabled === true && styles.buttonDisabled]}>
-      {loading === true ? (
-        <View style={styles.buttonLoadingContent}>
-          <ActivityIndicator color="#b42318" size="small" />
-          <Text style={[styles.dangerButtonText, compact === true && styles.compactButtonText]}>{label}</Text>
-        </View>
-      ) : <Text style={[styles.dangerButtonText, compact === true && styles.compactButtonText]}>{label}</Text>}
     </Pressable>
   );
 }
@@ -8888,29 +8809,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     textAlign: 'center',
-  },
-  dangerButton: {
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderColor: '#b42318',
-    borderRadius: 15,
-    borderWidth: 1.4,
-    minHeight: 54,
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  dangerButtonText: {
-    color: '#b42318',
-    fontSize: 16,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-  buttonLoadingContent: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
-    justifyContent: 'center',
   },
   buttonDisabled: {
     opacity: 0.5,
