@@ -321,3 +321,25 @@ it('bounds online GPS tombstones while preserving pending capacity and stable di
   assert.equal(first.journal.at(-1)?.code, 'QUEUE_CAPACITY_LOCATION');
   assert.equal(queue.listPending().length, 2);
 });
+
+it('overflows the shared production capacity around eleven hours before the 72-hour age limit', () => {
+  let time = observedAt.getTime();
+  const clock = () => new Date(time);
+  const queue = createInMemoryOfflineSubmissionQueue({ now: clock });
+  queue.enqueueDriverEvent({ clientEventId: 'reserved-start', eventType: 'ROUTE_STARTED', occurredAt: observedAt, routePlanId: 'route-1' });
+  queue.enqueueProofMediaUpload({ deliveryStopId: 'stop-1', fileName: 'proof.jpg', routePlanId: 'route-1', source: 'camera', uri: 'file:///synthetic-proof.jpg' });
+  const first = queue.enqueueDriverEvent({ clientEventId: 'capacity-0', eventType: 'LOCATION_UPDATED', occurredAt: observedAt, routePlanId: 'route-1' });
+  time += 3998 * 10_000;
+  queue.enqueueDriverEvents(Array.from({ length: 3998 }, (_, index) => ({
+    clientEventId: `capacity-${index + 1}`, eventType: 'LOCATION_UPDATED' as const,
+    occurredAt: new Date(observedAt.getTime() + (index + 1) * 10_000), routePlanId: 'route-1',
+  })));
+  assert.equal(queue.listPending().length, 4000);
+  assert.equal(queue.listPending().filter((item) => item.kind === 'driver_event' && item.event.eventType === 'LOCATION_UPDATED').length, 3998);
+  assert.ok((time - observedAt.getTime()) / 3600000 < 11.11);
+  assert.ok(time - observedAt.getTime() < 72 * 3600000);
+  assert.equal(first.state, 'DISCARDED');
+  assert.equal(first.journal.at(-1)?.code, 'QUEUE_CAPACITY_LOCATION');
+  assert.equal(queue.listPending().some((item) => item.queueItemId === 'driver-event:reserved-start'), true);
+  assert.equal(queue.listPending().some((item) => item.kind === 'proof_media'), true);
+});

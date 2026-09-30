@@ -23,7 +23,7 @@ export type SupportQuarantineExport = {
 };
 
 export type EncryptedEvidenceStore = OfflineSubmissionQueueStorage & {
-  exportDiagnostics(): Promise<string>;
+  exportDiagnostics(input?: { accountOwnerHash?: string }): Promise<string>;
   exportSupportQuarantine(input?: { accountOwnerHash?: string }): Promise<SupportQuarantineExport>;
   purgeExportedSupportQuarantine(input: { accountOwnerHash?: string; exportToken: string }): Promise<number>;
   readCompletionAssistanceState(accountOwnerHash: string): Promise<string | null>;
@@ -111,11 +111,45 @@ export async function createEncryptedEvidenceStore(input: {
   await purgeExpiredEvidence(database, now(), hexToBytes(key), input.sha256);
 
   return {
-    exportDiagnostics: async () => {
+    exportDiagnostics: async (exportInput = {}) => {
+      if (exportInput.accountOwnerHash !== undefined && !/^[0-9a-f]{64}$/u.test(exportInput.accountOwnerHash)) {
+        throw new Error('Diagnostic account owner hash is invalid.');
+      }
       const rows = await database.getAllAsync<StoredRow>(
         'SELECT record_key AS recordKey, payload FROM diagnostic_records ORDER BY created_at, record_key;',
       );
-      return JSON.stringify({ records: rows.map((row) => JSON.parse(row.payload) as unknown), schemaVersion: 2 });
+      let locationDrops: { counts: Record<string, number>; unreadableJournalCount: number; windowDays: number } | undefined;
+      if (exportInput.accountOwnerHash !== undefined) {
+        const counts: Record<string, number> = {
+          QUEUE_CAPACITY_LOCATION: 0,
+          LOCATION_RETENTION_EXPIRED: 0,
+          LOCATION_ASSIGNMENT_CHANGED: 0,
+        };
+        const cutoff = now().getTime() - OFFLINE_EVIDENCE_AUDIT_RETENTION_MS;
+        const journal = await database.getAllAsync<StoredRow & { queueSequence: number }>(
+          'SELECT record_key AS recordKey, queue_sequence AS queueSequence, payload FROM evidence_journal WHERE account_owner_hash = ? AND created_at >= ?;',
+          exportInput.accountOwnerHash, new Date(cutoff).toISOString(),
+        );
+        const seen = new Set<string>();
+        let unreadableJournalCount = 0;
+        for (const row of journal) {
+          if (!row.recordKey.startsWith(`${exportInput.accountOwnerHash}:`)) continue;
+          let entry: { at?: string; code?: string; kind?: string };
+          try { entry = JSON.parse(row.payload) as typeof entry; }
+          catch { unreadableJournalCount += 1; continue; }
+          if (entry === null || typeof entry !== 'object') { unreadableJournalCount += 1; continue; }
+          if (entry.kind === 'DISCARD' && entry.code !== undefined && Object.hasOwn(counts, entry.code)
+            && Date.parse(entry.at ?? '') >= cutoff) {
+            const key = JSON.stringify([row.queueSequence, entry.at, entry.code]);
+            if (!seen.has(key)) { counts[entry.code] += 1; seen.add(key); }
+          }
+        }
+        locationDrops = { counts, unreadableJournalCount, windowDays: 30 };
+      }
+      return JSON.stringify({
+        ...(locationDrops === undefined ? {} : { locationDrops }),
+        records: rows.map((row) => JSON.parse(row.payload) as unknown), schemaVersion: 2,
+      });
     },
     exportSupportQuarantine: async (exportInput = {}) => {
       const exportedAt = now().toISOString();

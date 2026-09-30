@@ -26,6 +26,7 @@ function createDatabase(input?: {
 }) {
   const commands: string[] = [];
   const createdAtByRecordKey = new Map<string, string>();
+  const queueSequenceByRecordKey = new Map<string, number>();
   const runCalls: { params: unknown[]; sql: string }[] = [];
   const tables = new Map<string, Map<string, string>>();
   let userVersion = input?.userVersion ?? 0;
@@ -45,7 +46,7 @@ function createDatabase(input?: {
       return [...(tables.get(table)?.entries() ?? [])]
         .map(([recordKey, payload]) => {
           if ((input?.corruptReadPayload !== true && input?.corruptReadLineage !== true) || table !== 'workflow_evidence') {
-            return { createdAt: createdAtByRecordKey.get(recordKey), recordKey, payload };
+            return { createdAt: createdAtByRecordKey.get(recordKey), queueSequence: queueSequenceByRecordKey.get(recordKey), recordKey, payload };
           }
           const parsed = JSON.parse(payload) as { event?: { clientEventId?: string } };
           if (parsed.event !== undefined) {
@@ -107,6 +108,8 @@ function createDatabase(input?: {
         const rows = tables.get(table) ?? new Map<string, string>();
         const columns = /\(([^)]+)\)\s+VALUES/iu.exec(sql)?.[1]?.split(',').map((column) => column.trim()) ?? [];
         const payloadIndex = columns.indexOf('payload');
+        const sequenceIndex = columns.indexOf('queue_sequence');
+        if (sequenceIndex >= 0) queueSequenceByRecordKey.set(String(params[0]), Number(params[sequenceIndex]));
         if (!sql.includes('INSERT OR IGNORE') || !rows.has(String(params[0]))) {
           rows.set(String(params[0]), String(params[payloadIndex]));
         }
@@ -115,7 +118,7 @@ function createDatabase(input?: {
     },
     withExclusiveTransactionAsync: async (operation) => operation(database),
   };
-  return { commands, createdAtByRecordKey, database, runCalls, tables };
+  return { commands, createdAtByRecordKey, database, queueSequenceByRecordKey, runCalls, tables };
 }
 
 describe('encrypted driver evidence store', () => {
@@ -153,6 +156,38 @@ describe('encrypted driver evidence store', () => {
     assert.equal(drops.length, 203);
     assert.equal(queue.listPending().length, 2);
     assert.equal(db.tables.get('location_batches')?.size, 202);
+    const exported = JSON.parse(await store.exportDiagnostics({ accountOwnerHash: 'a1'.repeat(32) })) as {
+      locationDrops: { counts: Record<string, number>; windowDays: number };
+    };
+    assert.equal(exported.locationDrops.windowDays, 30);
+    assert.equal(exported.locationDrops.counts.QUEUE_CAPACITY_LOCATION, 203);
+  });
+  it('exports only requested-account GPS drop counts without raw locations or identities', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const now = () => new Date('2026-09-30T10:00:00Z');
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      now, openDatabaseAsync: async () => db.database, randomBytes: async () => new Uint8Array(32),
+    });
+    const ownerA = 'a1'.repeat(32);
+    const ownerB = 'b2'.repeat(32);
+    db.tables.set('evidence_journal', new Map([
+      [`${ownerA}:private-location-a`, JSON.stringify({ at: now().toISOString(), code: 'QUEUE_CAPACITY_LOCATION', kind: 'DISCARD' })],
+      [`${ownerA}:same-transition-new-journal-index`, JSON.stringify({ at: now().toISOString(), code: 'QUEUE_CAPACITY_LOCATION', kind: 'DISCARD' })],
+      [`${ownerB}:private-location-b`, JSON.stringify({ at: now().toISOString(), code: 'LOCATION_RETENTION_EXPIRED', kind: 'DISCARD' })],
+      [`${ownerA}:old-drop`, JSON.stringify({ at: '2026-08-01T00:00:00Z', code: 'QUEUE_CAPACITY_LOCATION', kind: 'DISCARD' })],
+      [`${ownerA}:unreadable`, '{'],
+    ]));
+    db.queueSequenceByRecordKey.set(`${ownerA}:private-location-a`, 1);
+    db.queueSequenceByRecordKey.set(`${ownerA}:same-transition-new-journal-index`, 1);
+    const result = await store.exportDiagnostics({ accountOwnerHash: ownerA });
+    const drops = (JSON.parse(result) as { locationDrops: { counts: Record<string, number> } }).locationDrops;
+    assert.equal(drops.counts.QUEUE_CAPACITY_LOCATION, 1);
+    assert.equal(drops.counts.LOCATION_RETENTION_EXPIRED, 0);
+    assert.equal((drops as typeof drops & { unreadableJournalCount: number }).unreadableJournalCount, 1);
+    assert.doesNotMatch(result, /private-location|a1a1|b2b2|latitude|longitude/u);
+    assert.equal((JSON.parse(await store.exportDiagnostics()) as { locationDrops?: unknown }).locationDrops, undefined);
+    await assert.rejects(store.exportDiagnostics({ accountOwnerHash: 'invalid' }), /account.*hash/iu);
   });
   it('atomically persists completion assistance per validated account hash', async () => {
     const db = createDatabase({ userVersion: 2 });
