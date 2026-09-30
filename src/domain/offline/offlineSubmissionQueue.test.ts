@@ -1776,7 +1776,7 @@ describe('offline submission queue', () => {
       routePlanId: 'route-1',
     });
 
-    assert.deepEqual(result, { deferred: true, discarded: 0, failed: 0, retried: 1, succeeded: 1 });
+    assert.deepEqual(result, { discarded: 0, failed: 0, retried: 1, succeeded: 1 });
     assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
       'driver-event:route-completed', 'proof-media:route-1:stop-1:proof.jpg',
     ]);

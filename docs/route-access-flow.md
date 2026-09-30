@@ -195,6 +195,8 @@ True HTTP batching is a separate server-owned contract: a bounded same-route req
 
 Route-end receipt reads remain available while GPS waits. A matching `APPLIED` receipt recovers an end that the server already accepted; the existing terminal-route reconciliation/cleanup journals apply to GPS that can no longer be uploaded to that closed route. An `UNKNOWN` receipt keeps both GPS and the new route-end POST pending. The normal ACK-before-route-end guarantee cannot retrospectively upload observations to a route already closed by an older client or another actor.
 
+Successful capped recovery chunks reset the foreground scheduler's failure delay and continue at its initial interval while pending rows remain. Failure/no-progress deferrals retain bounded backoff; merely reaching the 50-item budget is not a transport failure.
+
 ## Proof media upload boundary
 
 `src/domain/proof/proofMediaUpload.ts` exports `createProofMediaUploadApiClient({ baseUrl, accessToken, fetchImpl })`, which posts captured proof photos as multipart form data:

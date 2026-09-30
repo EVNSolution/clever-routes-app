@@ -1175,7 +1175,10 @@ async function retryOfflineSubmissionsUnlocked(
   await input.queue.whenPersisted();
   return {
     ...(blocked === 0 ? {} : { blocked }),
-    ...(deferred ? { deferred: true } : {}),
+    // Successful chunks should reset the foreground scheduler's failure delay;
+    // pending rows already request the next pass. Only no-progress deferrals
+    // (e.g. another drain/backoff) need its slower retry cadence.
+    ...(deferred && succeeded === 0 ? { deferred: true } : {}),
     ...(completionAcknowledgedRoutePlanIds.size === 0
       ? {}
       : { completionAcknowledgedRoutePlanIds: [...completionAcknowledgedRoutePlanIds] }),

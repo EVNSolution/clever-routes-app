@@ -10,6 +10,7 @@ import { createDriverAccessTokenStore } from '../driver/driverAccessTokenStore';
 import { createMockDriverAuthService } from '../driverAuth/driverAuth';
 import { createMockRouteAccessService, sampleInvitedRouteAccess } from '../routeAccess/routeAccess';
 import { processContinuousLocationTaskBatch } from './continuousLocationTask';
+import { createOfflineRetryScheduler } from '../offline/offlineRetryScheduler';
 
 const observedAt = new Date('2026-09-30T10:00:00Z');
 const now = () => new Date('2026-09-30T10:05:00Z');
@@ -132,6 +133,33 @@ it('keeps route completion behind the GPS suffix left by a bounded drain', async
   assert.equal(service.recordedEvents.length, 61);
   assert.equal(service.recordedEvents.at(-1)?.eventType, 'ROUTE_COMPLETED');
   assert.equal(queue.listPending().length, 0);
+});
+
+it('drains successful recovery chunks without exponential failure backoff', async () => {
+  const queue = createInMemoryOfflineSubmissionQueue({ now });
+  for (let index = 0; index < 110; index += 1) queue.enqueueDriverEvent({
+    clientEventId: `scheduler-${index}`, eventType: 'LOCATION_UPDATED', occurredAt: observedAt, routePlanId: 'route-1',
+  });
+  const service = createMockDriverEventService();
+  const scheduled: { delay: number; run: () => void }[] = [];
+  const scheduler = createOfflineRetryScheduler({
+    cancel: () => undefined, hasPendingSubmissions: () => queue.listPending().length > 0,
+    isForeground: () => true, isOnline: () => true, random: () => 0.5,
+    retry: async () => {
+      const result = await retryOfflineSubmissions({ driverEventService: service, now, proofMediaUploadService, queue });
+      return result.failed === 0 && result.deferred !== true;
+    },
+    schedule: (run, delay) => { scheduled.push({ delay, run }); return run; },
+  });
+  scheduler.start();
+  for (let chunk = 0; chunk < 3; chunk += 1) {
+    assert.equal(scheduled[chunk]?.delay, 1000, 'successful capped drains must not increase the failure delay');
+    scheduled[chunk]!.run();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(service.recordedEvents.length, 110);
+  assert.equal(queue.listPending().length, 0);
+  scheduler.stop();
 });
 
 for (const status of ['APPLIED', 'UNKNOWN'] as const) it(`checks completion receipts while GPS is pending (${status})`, async () => {
