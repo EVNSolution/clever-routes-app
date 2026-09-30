@@ -338,7 +338,7 @@ describe('delivery finish route cleanup', () => {
     }]);
   });
 
-  it('queues only the route release transition when returning to Ready fails live', async () => {
+  it('keeps unacknowledged GPS ahead of the queued route release', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueDriverEvent({
       clientEventId: 'stale-location',
@@ -370,8 +370,9 @@ describe('delivery finish route cleanup', () => {
     assert.equal(result.kind, 'queued');
     assert.match(result.message, /returning the route to Ready was queued/iu);
     const pendingItems = queue.listPending();
-    assert.equal(pendingItems.length, 1);
-    const pending = pendingItems[0];
+    assert.equal(pendingItems.length, 2);
+    assert.equal(pendingItems[0]?.kind === 'driver_event' && pendingItems[0].event.eventType, 'LOCATION_UPDATED');
+    const pending = pendingItems[1];
     assert.equal(pending?.kind === 'driver_event'
       ? pending.event.eventType
       : null, 'ROUTE_PAUSED');
@@ -561,7 +562,7 @@ describe('delivery finish route cleanup', () => {
     assert.match(result.message, /HTTP 401/iu);
   });
 
-  it('discards route-scoped queued submissions only after route completion is recorded', async () => {
+  it('defers live completion until GPS is acknowledged and leaves other routes untouched', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueDriverEvent({
       clientEventId: 'location-route-1',
@@ -577,6 +578,7 @@ describe('delivery finish route cleanup', () => {
     });
     const stream = createMockStreamService();
 
+    const live = createMockDriverEventService();
     const result = await finishDeliveryAfterActive({
       deliveryStart: {
         flowState: 'delivery_active',
@@ -584,15 +586,23 @@ describe('delivery finish route cleanup', () => {
         locationPermission: 'foreground',
         message: 'active',
       },
-      driverEventService: createMockDriverEventService(),
+      driverEventService: live,
       now: new Date('2026-05-12T08:40:00.000Z'),
       offlineQueue: queue,
       routePlanId: 'route-1',
       streamService: stream.service,
     });
 
-    assert.equal(result.kind, 'recorded');
-    assert.equal(result.kind === 'recorded' ? result.discardedQueuedItems : null, 1);
+    assert.equal(result.kind, 'queued');
+    assert.equal(live.recordedEvents.length, 0);
+    assert.equal(queue.listPending().length, 3);
+    await retryOfflineSubmissions({
+      driverEventService: live,
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('Unexpected proof'); } },
+      queue,
+      routePlanId: 'route-1',
+    });
+    assert.deepEqual(live.recordedEvents.map((event) => event.eventType), ['LOCATION_UPDATED', 'ROUTE_COMPLETED']);
     assert.deepEqual(queue.listPending().map((item) => item.queueItemId), ['driver-event:location-route-2']);
   });
 

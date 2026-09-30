@@ -119,6 +119,41 @@ function createDatabase(input?: {
 }
 
 describe('encrypted driver evidence store', () => {
+  for (const initiallyUnavailable of [false, true]) it(`persists every capacity-drop journal before pruning a large GPS batch (storage recovery: ${initiallyUnavailable})`, async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const now = () => new Date('2026-09-30T10:00:00Z');
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      now,
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    let rejectWrite = initiallyUnavailable;
+    const queue = await createPersistentOfflineSubmissionQueue({ accountOwnerHash: 'a1'.repeat(32), maxItems: 2, now, storage: {
+      ...store,
+      setItem: async (key, value) => {
+        if (rejectWrite) throw new Error('storage temporarily unavailable');
+        await store.setItem(key, value);
+      },
+    } });
+    queue.enqueueDriverEvents(Array.from({ length: 205 }, (_, index) => ({
+      clientEventId: `large-batch-${index}`, eventType: 'LOCATION_UPDATED' as const,
+      occurredAt: now(), routePlanId: 'route-1',
+    })));
+    if (initiallyUnavailable) {
+      await assert.rejects(queue.whenPersisted());
+      rejectWrite = false;
+      assert.equal(await queue.recoverStorage(), true);
+    } else {
+      await queue.whenPersisted();
+    }
+    const drops = [...(db.tables.get('evidence_journal')?.values() ?? [])]
+      .map((payload) => JSON.parse(payload) as { code?: string })
+      .filter((entry) => entry.code === 'QUEUE_CAPACITY_LOCATION');
+    assert.equal(drops.length, 203);
+    assert.equal(queue.listPending().length, 2);
+    assert.equal(db.tables.get('location_batches')?.size, 202);
+  });
   it('atomically persists completion assistance per validated account hash', async () => {
     const db = createDatabase({ userVersion: 2 });
     const store = await createEncryptedEvidenceStore({
@@ -688,6 +723,7 @@ describe('encrypted driver evidence store', () => {
   it('keeps workflow envelopes redacted while sensitive replay data remains separately encrypted', async () => {
     const db = createDatabase();
     const store = await createEncryptedEvidenceStore({
+      now: () => new Date('2026-08-24T01:00:00.000Z'),
       keyStore: { getItemAsync: async () => '77'.repeat(32), setItemAsync: async () => undefined },
       openDatabaseAsync: async () => db.database,
       randomBytes: async () => new Uint8Array(32),
@@ -895,6 +931,7 @@ describe('encrypted driver evidence store', () => {
   it('preserves quarantine and journal rows when replacing the active queue snapshot', async () => {
     const db = createDatabase();
     const store = await createEncryptedEvidenceStore({
+      now: () => new Date('2026-08-24T01:00:00.000Z'),
       keyStore: { getItemAsync: async () => '88'.repeat(32), setItemAsync: async () => undefined },
       openDatabaseAsync: async () => db.database,
       randomBytes: async () => new Uint8Array(32),

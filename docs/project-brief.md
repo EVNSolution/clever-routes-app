@@ -246,7 +246,7 @@ unidentified
 - OS 위치 권한 철회: active delivery 중이면 위치 송신을 중단하고 서버에 가능한 상태 이벤트를 보낸 뒤 복구 안내를 제공한다.
 - 당일 route 없음: "오늘 배정된 route 없음" 상태를 표시하고 자동으로 다른 driver/route를 노출하지 않는다.
 - 서버/API 장애: 현재 화면의 민감 데이터 확대 표시를 피하고 재시도 가능한 오류 상태로 둔다.
-- 네트워크 불안정: driver event와 proof media submission은 SQLCipher 기반 durable app-side offline evidence/retry 대상으로 관리하되, 중복 전송과 민감 payload logging을 피한다. 위치 표본은 5회 실패, 72시간 경과, route completion, account change 시 정리할 수 있지만 ordered workflow/proof는 retry 한도, route conflict, sign-out 시 삭제하지 않고 격리하여 명시적 reconciliation 대상으로 둔다.
+- 네트워크 불안정: GPS native 배치와 필요한 route-start를 HTTP 전에 SQLCipher queue에 저장한다. GPS와 route-start는 일시 실패 5회만으로 삭제하지 않는다. GPS는 queue 수용량 4,000개(다른 evidence와 공유), enqueue 후 72시간, account/assignment isolation 정책에 따라 명시적 journal을 남겨 정리한다. 복구 전송은 GPS 50개/30초 단위이며, 운행 완료·해제는 남은 GPS 뒤에서 대기한다. ordered workflow/proof는 retry 한도, route conflict, sign-out 시 격리하여 명시적 reconciliation 대상으로 둔다. 세부 정책은 `docs/route-access-flow.md`를 따른다.
 - proof media scanner rejection: 서버가 `422 PROOF_MEDIA_REJECTED`를 반환하면 앱은 durable proof reference를 만들지 않고 해당 사진을 retry queue에 남기지 않는다. 배송원에게는 scanner 내부 사유를 노출하지 않고 다른 proof photo를 다시 촬영하라고 안내한다.
 - live downstream route token 만료: account session을 refresh한 뒤 account bearer route lookup으로 새 route token을 받고 consent, assigned-route, driver-event, proof-media 요청을 한 번 재시도한다. account refresh까지 실패하면 계정 로그인을 지우고 전화번호 + PIN 로그인을 요구한다.
 

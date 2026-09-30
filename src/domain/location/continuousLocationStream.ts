@@ -2,6 +2,8 @@ import type { DeliveryStartResult } from '../delivery/deliveryStart';
 import type { DriverAccessTokenStore } from '../driver/driverAccessTokenStore';
 import type { DriverEventInput, DriverEventService } from '../events/driverEvents';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
+import { retryOfflineSubmissions } from '../offline/offlineSubmissionQueue';
+import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
 import { isDriverRouteNotInProgressError } from '../../api/deliveryServer/driverApiError';
 
 export const CONTINUOUS_LOCATION_TASK_NAME = 'clever-routes-continuous-location';
@@ -61,13 +63,21 @@ export type ContinuousLocationBatchItem = {
   latitude: number;
   longitude: number;
   occurredAt: Date;
+  metadata?: {
+    altitudeMeters?: number;
+    headingDegrees?: number;
+    mocked?: boolean;
+    speedMetersPerSecond?: number;
+  };
 };
 
 export type ContinuousLocationBatchRecordResult =
   | {
       kind: 'recorded';
+      droppedCount?: number;
       queuedCount?: number;
       recordedCount: number;
+      routeStartedAcknowledged?: true;
     }
   | {
       kind: 'route_not_in_progress';
@@ -171,60 +181,107 @@ export async function startContinuousLocationUpdatesAfterDeliveryStart(input: {
 }
 
 export async function recordContinuousLocationUpdateBatch(input: {
+  attemptTimeoutMs?: number;
   driverEventService: DriverEventService;
+  hashObservationIdentity?: (identity: string) => Promise<string>;
   isSessionCurrent?: () => Promise<boolean>;
   locations: ContinuousLocationBatchItem[];
+  nativeBatchDeliveredAt?: Date;
+  now?: () => Date;
   offlineQueue?: OfflineSubmissionQueue;
+  orderedEventAccessIdentity?: Parameters<typeof retryOfflineSubmissions>[0]['orderedEventAccessIdentity'];
+  precedingEvents?: DriverEventInput[];
+  provenance?: { appVersion?: string; platform?: string; versionCode?: number };
   routePlanId: string | null;
+  sessionContext?: { assignmentGeneration?: string; sessionGeneration: string };
 }): Promise<ContinuousLocationBatchRecordResult> {
-  let queuedCount = 0;
-  let recordedCount = 0;
-  const queuedEvents: DriverEventInput[] = [];
-
-  for (const [index, location] of input.locations.entries()) {
-    if (input.isSessionCurrent !== undefined && !(await input.isSessionCurrent())) {
-      break;
+  const isCurrent = async () => input.isSessionCurrent === undefined || await input.isSessionCurrent();
+  if (!(await isCurrent())) return { kind: 'recorded', recordedCount: 0 };
+  const events: DriverEventInput[] = [];
+  let droppedCount = 0;
+  for (const location of input.locations) {
+    if (!Number.isFinite(location.latitude) || Math.abs(location.latitude) > 90
+      || !Number.isFinite(location.longitude) || Math.abs(location.longitude) > 180
+      || !Number.isFinite(location.occurredAt.getTime())) {
+      droppedCount += 1;
+      continue;
     }
-    const event: DriverEventInput = {
+    const identity = JSON.stringify([
+      input.routePlanId, input.sessionContext ?? null, location.occurredAt.toISOString(),
+      location.latitude, location.longitude, location.accuracyMeters ?? null, location.metadata ?? null,
+    ]);
+    const clientEventId = input.hashObservationIdentity === undefined
+      ? `continuous-location-${location.occurredAt.getTime().toString(36)}-${Math.random().toString(36).slice(2)}`
+      : `continuous-location-v2-${await input.hashObservationIdentity(identity)}`;
+    events.push({
       ...(location.accuracyMeters === undefined ? {} : { accuracyMeters: location.accuracyMeters }),
-      clientEventId: createContinuousLocationClientEventId(location, index),
+      ...(input.provenance?.appVersion === undefined ? {} : { appVersion: input.provenance.appVersion }),
+      ...(input.provenance?.versionCode === undefined ? {} : { versionCode: input.provenance.versionCode }),
+      clientEventId,
       eventType: 'LOCATION_UPDATED',
       latitude: location.latitude,
       longitude: location.longitude,
       occurredAt: location.occurredAt,
-      payload: { source: 'continuous-location-stream' },
+      payload: {
+        source: 'continuous-location-stream',
+        ...(input.nativeBatchDeliveredAt === undefined ? {} : { nativeBatchDeliveredAt: input.nativeBatchDeliveredAt.toISOString() }),
+        ...(input.sessionContext === undefined ? {} : { locationContext: input.sessionContext }),
+        ...(location.metadata === undefined && input.provenance?.platform === undefined ? {} : {
+          locationEvidence: { ...location.metadata, ...(input.provenance?.platform === undefined ? {} : { platform: input.provenance.platform }) },
+        }),
+      },
       routePlanId: input.routePlanId,
-    };
-
-    try {
-      await input.driverEventService.recordDriverEvent(event);
+    });
+  }
+  if (!(await isCurrent())) return { kind: 'recorded', recordedCount: 0 };
+  const queue = input.offlineQueue;
+  if (queue === undefined) {
+    let recordedCount = 0;
+    for (const event of events) {
+      if (!(await isCurrent())) break;
+      await runBoundedAsyncOperation((signal) => input.driverEventService.recordDriverEvent(event, { signal }), {
+        timeoutMs: input.attemptTimeoutMs ?? 15_000,
+      });
       recordedCount += 1;
-    } catch (error) {
-      if (isDriverRouteNotInProgressError(error)) {
-        return { kind: 'route_not_in_progress', recordedCount };
-      }
-      if (input.offlineQueue === undefined) {
-        throw error;
-      }
-      if (input.isSessionCurrent !== undefined && !(await input.isSessionCurrent())) {
-        break;
-      }
-
-      queuedEvents.push(event);
     }
+    return { kind: 'recorded', recordedCount, ...(droppedCount === 0 ? {} : { droppedCount }) };
   }
-
-  if (
-    queuedEvents.length > 0
-    && (input.isSessionCurrent === undefined || await input.isSessionCurrent())
-  ) {
-    input.offlineQueue?.enqueueDriverEvents(queuedEvents);
-    queuedCount = queuedEvents.length;
-  }
-
+  // One capture mutation, verified in encrypted storage before any HTTP request.
+  // A concurrent foreground drain can proceed while later callbacks capture.
+  const items = queue.enqueueDriverEvents([...(input.precedingEvents ?? []), ...events]);
+  await queue.whenPersisted();
+  if (!(await isCurrent())) return { kind: 'recorded', recordedCount: 0 };
+  let routeNotInProgress = false;
+  await retryOfflineSubmissions({
+    attemptTimeoutMs: input.attemptTimeoutMs,
+    driverEventService: {
+      recordDriverEvent: async (event, options) => {
+        try { return await input.driverEventService.recordDriverEvent(event, options); }
+        catch (error) { routeNotInProgress ||= isDriverRouteNotInProgressError(error); throw error; }
+      },
+    },
+    driverEventTypes: ['ROUTE_STARTED', 'LOCATION_UPDATED'],
+    now: input.now,
+    orderedEventAccessIdentity: input.orderedEventAccessIdentity,
+    proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('GPS drain cannot upload proof.'); } },
+    queue,
+    ...(input.routePlanId === null ? {} : { routePlanId: input.routePlanId }),
+    ...(input.sessionContext?.assignmentGeneration === undefined || input.routePlanId === null ? {} : {
+      locationAssignmentGeneration: input.sessionContext.assignmentGeneration,
+    }),
+    validateCurrent: isCurrent,
+  });
+  const locationItems = items.filter((item) => item.event.eventType === 'LOCATION_UPDATED');
+  const recordedCount = locationItems.filter((item) => item.state === 'ACKNOWLEDGED').length;
+  if (routeNotInProgress) return { kind: 'route_not_in_progress', recordedCount };
+  const queuedCount = locationItems.filter((item) => item.state === 'PENDING').length;
+  const result = {
+    ...(droppedCount === 0 ? {} : { droppedCount }),
+    ...(items.some((item) => item.event.eventType === 'ROUTE_STARTED' && item.state === 'ACKNOWLEDGED') ? { routeStartedAcknowledged: true as const } : {}),
+  };
   return queuedCount > 0
-    ? { kind: 'recorded', queuedCount, recordedCount }
-    : { kind: 'recorded', recordedCount };
+    ? { kind: 'recorded', queuedCount, recordedCount, ...result }
+    : { kind: 'recorded', recordedCount, ...result };
 }
 
 export async function stopContinuousLocationUpdates(input: {
@@ -285,8 +342,4 @@ export async function clearAndStopContinuousLocationSession(input: {
     throw clearError;
   }
   return result;
-}
-
-function createContinuousLocationClientEventId(location: ContinuousLocationBatchItem, index: number): string {
-  return `continuous-location-${location.occurredAt.toISOString()}-${index}`;
 }

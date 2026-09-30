@@ -162,6 +162,12 @@ export async function finishDeliveryAfterActive(input: {
     })();
   }
   try {
+    if (input.offlineQueue?.listPending().some((item) => (
+      item.kind === 'driver_event' && item.event.eventType === 'LOCATION_UPDATED'
+      && item.event.routePlanId === input.routePlanId
+    ))) {
+      throw new Error('Earlier GPS observations are waiting to sync. Route completion will be queued in order.');
+    }
     const result = await runBoundedAsyncOperation(
       (signal) => input.driverEventService.recordDriverEvent(event, { signal }),
       {
@@ -236,9 +242,6 @@ export async function finishDeliveryAfterActive(input: {
     }
 
     const requiresRouteReconciliation = getDriverApiRequiresRouteReconciliation(error);
-    if (routeReleased && input.routePlanId !== null && requiresRouteReconciliation === undefined) {
-      input.offlineQueue.discardRouteSubmissions(input.routePlanId);
-    }
     const queued = input.offlineQueue.enqueueDriverEvent(event);
     if (input.routePlanId !== null && requiresRouteReconciliation === true) {
       input.offlineQueue.blockRouteSubmissionsForReconciliation(input.routePlanId);

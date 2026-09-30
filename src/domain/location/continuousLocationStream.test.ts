@@ -203,10 +203,8 @@ describe('continuous location streaming', () => {
       assert.deepEqual(result, { kind: 'recorded', queuedCount: 2, recordedCount: 0 });
       const pending = queue.listPending();
       assert.equal(pending.length, 2);
-      assert.deepEqual(pending.map((item) => item.queueItemId), [
-        'driver-event:continuous-location-2026-05-12T08:45:00.000Z-0',
-        'driver-event:continuous-location-2026-05-12T08:46:00.000Z-1',
-      ]);
+      assert.equal(new Set(pending.map((item) => item.queueItemId)).size, 2);
+      assert.ok(pending.every((item) => item.queueItemId.startsWith('driver-event:continuous-location-')));
       assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'LOCATION_UPDATED');
     } finally {
       Date.now = originalDateNow;

@@ -418,6 +418,7 @@ describe('offline submission queue', () => {
       queue,
       scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
     });
+    await new Promise((resolve) => setImmediate(resolve));
     expirations.shift()?.();
     const timedOut = await firstPass;
     assert.equal(timedOut.failed, 1);
@@ -465,6 +466,7 @@ describe('offline submission queue', () => {
       queue,
       scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
     });
+    await new Promise((resolve) => setImmediate(resolve));
     expirations.shift()?.();
     assert.equal((await retry).failed, 1);
     assert.equal(queue.listPending()[0]?.lastErrorCode, 'OPERATION_TIMEOUT');
@@ -556,6 +558,7 @@ describe('offline submission queue', () => {
         queue,
         scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
       });
+      await new Promise((resolve) => setImmediate(resolve));
       expirations.shift()?.();
 
       assert.equal((await retry).failed, 1);
@@ -606,6 +609,7 @@ describe('offline submission queue', () => {
       queue,
       scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
     });
+    await new Promise((resolve) => setImmediate(resolve));
     expirations.shift()?.();
 
     assert.equal((await retry).failed, 1);
@@ -727,6 +731,7 @@ describe('offline submission queue', () => {
       queue,
       scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
     });
+    await new Promise((resolve) => setImmediate(resolve));
     expirations.shift()?.();
 
     assert.equal((await firstRetry).failed, 1);
@@ -1740,7 +1745,7 @@ describe('offline submission queue', () => {
     })), [{ attempts: 0, queueItemId: 'driver-event:route-b' }]);
   });
 
-  it('applies route cleanup after a queued completion is recorded', async () => {
+  it('recovers late-captured GPS before queued completion and preserves post-completion proof', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueDriverEvent({
       clientEventId: 'route-completed',
@@ -1771,9 +1776,19 @@ describe('offline submission queue', () => {
       routePlanId: 'route-1',
     });
 
-    assert.deepEqual(result, {
+    assert.deepEqual(result, { deferred: true, discarded: 0, failed: 0, retried: 1, succeeded: 1 });
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+      'driver-event:route-completed', 'proof-media:route-1:stop-1:proof.jpg',
+    ]);
+    const completion = await retryOfflineSubmissions({
+      driverEventService: createMockDriverEventService(),
+      proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('Proof must remain pending'); } },
+      queue,
+      routePlanId: 'route-1',
+    });
+    assert.deepEqual(completion, {
       completionAcknowledgedRoutePlanIds: ['route-1'],
-      discarded: 1,
+      discarded: 0,
       failed: 0,
       retried: 1,
       succeeded: 1,
@@ -2241,6 +2256,7 @@ describe('offline submission queue', () => {
       routePlanId,
       scheduleAttemptTimeout: (expire) => { expirations.push(expire); return expire; },
     });
+    await new Promise((resolve) => setImmediate(resolve));
     expirations.shift()?.();
 
     assert.equal(await recovery, 'pending');

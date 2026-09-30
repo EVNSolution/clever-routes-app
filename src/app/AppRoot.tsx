@@ -1599,7 +1599,7 @@ function DriverApp() {
           routePlanId: session.route.id,
         });
         if (!isCurrent()) return false;
-        if (result.failed > 0) {
+        if (result.failed > 0 || result.deferred === true) {
           completedWithoutRetainedFailures = false;
         }
         const confirmedStopIds = result.serverConfirmedStopIds;

@@ -398,10 +398,14 @@ describe('continuous location background task', () => {
     assert.equal(refreshedToken, null);
     assert.deepEqual(result, {
       kind: 'processed',
+      queuedCount: 1,
       recordedCount: 0,
       routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
     });
-    assert.deepEqual(queue.listPending(), []);
+    // Already-captured evidence stays scoped to the old route for reconciliation.
+    assert.equal(queue.listPending().length, 1);
+    const captured = queue.listPending()[0];
+    assert.equal(captured?.kind === 'driver_event' && captured.event.routePlanId, sampleInvitedRouteAccess.routeAccess.routePlanId);
     const persisted = await store.loadActiveDriverAccess();
     assert.equal(persisted.kind, 'active');
     if (persisted.kind === 'active') {
@@ -472,7 +476,8 @@ describe('continuous location background task', () => {
     });
 
     assert.deepEqual(result, { kind: 'ignored', reason: 'completion_pending' });
-    assert.deepEqual(queue.listPending(), []);
+    // The pending completion owns cleanup; a stale 409 cannot delete its batch.
+    assert.equal(queue.listPending().length, 1);
     const persisted = await store.loadActiveDriverAccess();
     assert.equal(persisted.kind, 'active');
     if (persisted.kind === 'active') {

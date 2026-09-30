@@ -24,6 +24,8 @@ import {
 
 export const OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY = '@clever-routes/offline-submission-queue-v1';
 export const OFFLINE_SUBMISSION_QUEUE_MAX_ITEMS = 4_000;
+export const OFFLINE_LOCATION_DRAIN_MAX_ITEMS = 50;
+export const OFFLINE_LOCATION_TERMINAL_MAX_ITEMS = 200;
 export const OFFLINE_EVIDENCE_AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY = {
   maxAgeMs: 72 * 60 * 60 * 1000,
@@ -129,7 +131,7 @@ export type OfflineSubmissionQueue = {
   blockRouteSubmissionsForReconciliation(routePlanId: string): { blocked: number; discarded: number };
   clear(): number;
   completeAccountDeletionAfterServerAudit(): number;
-  discard(queueItemId: string): boolean;
+  discard(queueItemId: string, code?: 'LOCATION_RETENTION_EXPIRED' | 'LOCATION_ASSIGNMENT_CHANGED'): boolean;
   discardReconciliationRecords(): number;
   discardRouteSubmissions(routePlanId: string): number;
   enqueueDriverEvent(event: DriverEventInput): OfflineDriverEventQueueItem;
@@ -173,6 +175,7 @@ export type OfflineSubmissionQueueStorage = {
 
 export type OfflineSubmissionRetryResult = {
   blocked?: number;
+  deferred?: true;
   completionAcknowledgedRoutePlanIds?: string[];
   discarded: number;
   failed: number;
@@ -236,7 +239,9 @@ export function createRouteOrderedDriverEventService(input: {
           item.kind === 'driver_event'
           && item.event.routePlanId === input.routePlanId
           && item.event.clientEventId !== preparedEvent.clientEventId
-          && ROUTE_WORKFLOW_EVENT_TYPES.has(item.event.eventType)
+          && (ROUTE_WORKFLOW_EVENT_TYPES.has(item.event.eventType)
+            || ((preparedEvent.eventType === 'ROUTE_COMPLETED' || preparedEvent.eventType === 'ROUTE_PAUSED')
+              && item.event.eventType === 'LOCATION_UPDATED'))
         ))
       ) {
         throw new Error('Earlier route updates are waiting to sync. This update will be queued in order.');
@@ -329,6 +334,22 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
   }
 
   function emitChange() {
+    // Keep the in-memory/persisted snapshot bounded now that online GPS also
+    // passes through the outbox. The encrypted journal has its own 30-day TTL.
+    const terminalLocations = Array.from(items.values()).filter((item) => (
+      isLocationDriverEvent(item) && (item.state === 'ACKNOWLEDGED' || item.state === 'DISCARDED')
+    ));
+    const counts = new Map<string, number>();
+    const pruneKeys: string[] = [];
+    for (const item of terminalLocations.reverse()) {
+      const count = (counts.get(item.accountOwnerHash) ?? 0) + 1;
+      counts.set(item.accountOwnerHash, count);
+      if (count > OFFLINE_LOCATION_TERMINAL_MAX_ITEMS) pruneKeys.push(getInternalItemKey(item));
+    }
+    // Persist every new ACK/drop journal before removing its replay row. The
+    // SQLCipher adapter retains journals independently of snapshot membership.
+    if (pruneKeys.length > 0) input?.onChange?.(Array.from(items.values()));
+    for (const key of pruneKeys) items.delete(key);
     input?.onChange?.(Array.from(items.values()));
   }
 
@@ -462,11 +483,11 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       if (ownRows.length > 0) emitChange();
       return ownRows.length;
     },
-    discard: (queueItemId) => {
+    discard: (queueItemId, code) => {
       requireMutable();
       const item = findActiveItem(queueItemId);
       if (item === undefined || item.state === 'ACKNOWLEDGED' || item.state === 'DISCARDED') return false;
-      transition(item, 'DISCARDED', 'DISCARD', 'EXPLICIT_DISCARD');
+      transition(item, 'DISCARDED', 'DISCARD', code ?? 'EXPLICIT_DISCARD');
       emitChange();
       return true;
     },
@@ -721,9 +742,9 @@ export async function createPersistentOfflineSubmissionQueue(input: {
   let persistQueue: Promise<void> = Promise.resolve();
   let storageDegraded = false;
   let latestItems = initialItems;
+  const unwrittenSnapshots: string[] = [];
 
-  const persistLatest = async () => {
-    const rawPayload = JSON.stringify(toPersistedEnvelope(latestItems));
+  const persistSnapshot = async (rawPayload: string) => {
     const payload = normalizePersistedOfflineSubmissionQueue(rawPayload, input.now);
     if (payload === null) throw new Error('Offline evidence snapshot normalization failed.');
     await input.storage.setItem(storageKey, payload);
@@ -744,9 +765,17 @@ export async function createPersistentOfflineSubmissionQueue(input: {
     now: input.now,
     onChange: (items) => {
       latestItems = items;
+      // Freeze at mutation time: coalescing to latestItems would lose journals
+      // from an intermediate snapshot that was pruned before its write began.
+      const snapshot = JSON.stringify(toPersistedEnvelope(items));
+      unwrittenSnapshots.push(snapshot);
       persistQueue = persistQueue
         .catch(() => undefined)
-        .then(persistLatest)
+        .then(async () => {
+          if (storageDegraded) throw new Error('STORAGE_DEGRADED: evidence snapshots await recovery.');
+          await persistSnapshot(snapshot);
+          unwrittenSnapshots.shift();
+        })
         .catch((error: unknown) => {
           storageDegraded = true;
           throw error;
@@ -759,7 +788,12 @@ export async function createPersistentOfflineSubmissionQueue(input: {
     ...queue,
     recoverStorage: async () => {
       try {
-        await persistLatest();
+        await persistQueue.catch(() => undefined);
+        while (unwrittenSnapshots.length > 0) {
+          await persistSnapshot(unwrittenSnapshots[0]!);
+          unwrittenSnapshots.shift();
+        }
+        await persistSnapshot(JSON.stringify(toPersistedEnvelope(latestItems)));
         storageDegraded = false;
         persistQueue = Promise.resolve();
         return true;
@@ -815,7 +849,9 @@ export async function recoverPendingRouteEndReceipt(input: {
     timeoutMs: input.attemptTimeoutMs ?? 15_000,
   }).catch((error: unknown) => {
     if (!(error instanceof BoundedOperationTimeoutError)) throw error;
-    if (isCurrent()) input.queue.recordRetryFailure(item.queueItemId, OPERATION_TIMEOUT_CODE);
+    if (isCurrent() && !hasPendingRouteLocation(input.queue, input.routePlanId)) {
+      input.queue.recordRetryFailure(item.queueItemId, OPERATION_TIMEOUT_CODE);
+    }
     return null;
   });
   if (receipt === null || !isCurrent()) return 'pending';
@@ -834,13 +870,19 @@ export async function recoverPendingRouteEndReceipt(input: {
   return 'acknowledged';
 }
 
+const activeQueueDrains = new WeakSet<OfflineSubmissionQueue>();
+
 export async function retryOfflineSubmissions(input: {
   attemptTimeoutMs?: number;
   cancelAttemptTimeout?: (handle: unknown) => void;
   driverEventReceiptService?: DriverEventReceiptService;
   driverEventService: DriverEventService;
+  driverEventTypes?: readonly DriverEventType[];
+  drainTimeoutMs?: number;
   isCurrent?: () => boolean;
+  validateCurrent?: () => Promise<boolean>;
   lifecycleSignal?: AbortSignal;
+  locationAssignmentGeneration?: string;
   orderedEventAccessIdentity?: {
     assignmentGeneration: string;
     driverContractVersion: number;
@@ -848,15 +890,33 @@ export async function retryOfflineSubmissions(input: {
     routePlanId: string;
   };
   now?: () => Date;
+  maxLocationItems?: number;
   proofMediaUploadService: ProofMediaUploadService;
   queue: OfflineSubmissionQueue;
   routePlanId?: string;
   retryPolicy?: OfflineSubmissionQueueRetryPolicy;
   scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
 }): Promise<OfflineSubmissionRetryResult> {
+  if (activeQueueDrains.has(input.queue)) {
+    return { deferred: true, discarded: 0, failed: 0, retried: 0, succeeded: 0 };
+  }
+  activeQueueDrains.add(input.queue);
+  try {
+    await input.queue.whenPersisted();
+    if (input.queue.storageState() !== 'READY') throw new Error('STORAGE_DEGRADED: sync requires durable evidence.');
+    return await retryOfflineSubmissionsUnlocked(input);
+  } finally {
+    activeQueueDrains.delete(input.queue);
+  }
+}
+
+async function retryOfflineSubmissionsUnlocked(
+  input: Parameters<typeof retryOfflineSubmissions>[0],
+): Promise<OfflineSubmissionRetryResult> {
   let blocked = 0;
   let discarded = 0;
   let failed = 0;
+  let deferred = false;
   let requiresRouteLookup: true | undefined;
   let routeLookupReason: OfflineSubmissionRetryResult['routeLookupReason'];
   let retried = 0;
@@ -871,24 +931,65 @@ export async function retryOfflineSubmissions(input: {
   const pending = allActive.filter((item) => (
     item.reconciliation === undefined
     && (input.routePlanId === undefined || getQueueItemRoutePlanId(item) === input.routePlanId)
-  ));
+    && (input.driverEventTypes === undefined || (item.kind === 'driver_event' && input.driverEventTypes.includes(item.event.eventType)))
+  )).sort((left, right) => left.queueSequence - right.queueSequence);
   const retryPolicy = input.retryPolicy ?? OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY;
   const now = input.now ?? (() => new Date());
   const completedRoutePlanIds = new Set<string>();
   const completionAcknowledgedRoutePlanIds = new Set<string>();
   const reconciliationRoutePlanIds = new Set<string>();
   const serverConfirmedStopIds = new Set<string>();
-  const isCurrent = () => input.lifecycleSignal?.aborted !== true && input.isCurrent?.() !== false;
+  const locationBlockedRoutes = new Set<string | undefined>();
+  const deferredRouteEndRoutes = new Set<string | undefined>();
+  const accountOwnerHash = input.queue.getAccountOwnerHash();
+  const deadline = Date.now() + (input.drainTimeoutMs ?? 30_000);
+  let locationAttempts = 0;
+  const maxLocationItems = input.maxLocationItems ?? OFFLINE_LOCATION_DRAIN_MAX_ITEMS;
+  const isCurrent = () => input.lifecycleSignal?.aborted !== true
+    && input.isCurrent?.() !== false
+    && input.queue.getAccountOwnerHash() === accountOwnerHash;
+  const validateCurrent = async () => isCurrent() && (input.validateCurrent === undefined || await input.validateCurrent()) && isCurrent();
   const runAttempt = <T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> => runBoundedAsyncOperation(operation, {
     ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
     ...(input.lifecycleSignal === undefined ? {} : { signal: input.lifecycleSignal }),
     ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
-    timeoutMs: input.attemptTimeoutMs ?? 15_000,
+    timeoutMs: Math.max(1, Math.min(input.attemptTimeoutMs ?? 15_000, deadline - Date.now())),
   });
 
   for (const item of pending) {
-    if (!isCurrent()) break;
+    if (!(await validateCurrent()) || Date.now() >= deadline) { deferred = true; break; }
+    // A completion/logout may mutate items while an attempt is in flight.
+    if (item.state !== 'PENDING') continue;
     const routePlanId = getQueueItemRoutePlanId(item);
+    if (deferredRouteEndRoutes.has(routePlanId) && !isLocationDriverEvent(item)) continue;
+    if (isRouteEndDriverEvent(item) && input.driverEventReceiptService === undefined && hasPendingRouteLocation(input.queue, routePlanId)) {
+      // Ending the route would make its unacknowledged GPS unuploadable and
+      // completion cleanup would discard the suffix left by this bounded drain.
+      deferredRouteEndRoutes.add(routePlanId);
+      deferred = true;
+      continue;
+    }
+    if (item.kind === 'driver_event' && item.event.eventType === 'ROUTE_STARTED' && isLocationRetryCoolingDown(item, now())) {
+      if (routePlanId !== undefined) workflowBlockedRoutePlanIds.add(routePlanId);
+      deferred = true;
+      continue;
+    }
+    if (isLocationDriverEvent(item)) {
+      if (locationBlockedRoutes.has(routePlanId) || (routePlanId !== undefined && workflowBlockedRoutePlanIds.has(routePlanId))) continue;
+      if (locationAttempts >= maxLocationItems || isLocationRetryCoolingDown(item, now())) {
+        locationBlockedRoutes.add(routePlanId);
+        deferred = true;
+        continue;
+      }
+      const capturedAssignment = item.event.payload?.locationContext as { assignmentGeneration?: unknown } | undefined;
+      const currentAssignment = input.locationAssignmentGeneration ?? input.orderedEventAccessIdentity?.assignmentGeneration;
+      if (currentAssignment !== undefined && capturedAssignment?.assignmentGeneration !== undefined
+        && capturedAssignment.assignmentGeneration !== currentAssignment) {
+        if (input.queue.discard(item.queueItemId, 'LOCATION_ASSIGNMENT_CHANGED')) discarded += 1;
+        continue;
+      }
+      locationAttempts += 1;
+    }
     if (routePlanId !== undefined && workflowBlockedRoutePlanIds.has(routePlanId) && isOrderedWorkflowEvidence(item)) {
       continue;
     }
@@ -904,9 +1005,13 @@ export async function retryOfflineSubmissions(input: {
     }
     retried += 1;
 
-    if (shouldDiscardOfflineSubmission(item, retryPolicy, now())) {
+    const isCaptureHead = isLocationDriverEvent(item) || (item.kind === 'driver_event' && item.event.eventType === 'ROUTE_STARTED');
+    const itemRetryPolicy = isCaptureHead && input.retryPolicy === undefined
+      ? { ...retryPolicy, maxAttempts: Number.POSITIVE_INFINITY }
+      : retryPolicy;
+    if (shouldDiscardOfflineSubmission(item, itemRetryPolicy, now())) {
       if (isLocationDriverEvent(item)) {
-        if (input.queue.discard(item.queueItemId)) discarded += 1;
+        if (input.queue.discard(item.queueItemId, 'LOCATION_RETENTION_EXPIRED')) discarded += 1;
       } else {
         blocked += quarantineRetryPolicyEvidence(input.queue, item);
         if (routePlanId !== undefined && isOrderedWorkflowEvidence(item)) {
@@ -916,6 +1021,7 @@ export async function retryOfflineSubmissions(input: {
       continue;
     }
 
+    let checkingRouteEndReceipt = false;
     try {
       if (item.kind === 'driver_event') {
         if (
@@ -935,11 +1041,13 @@ export async function retryOfflineSubmissions(input: {
           && input.driverEventReceiptService !== undefined
         ) {
           const receiptRoutePlanId = item.event.routePlanId;
+          checkingRouteEndReceipt = true;
           const receipt = await runAttempt((signal) => input.driverEventReceiptService!.lookupReceipt({
             clientEventId: item.event.clientEventId,
             routePlanId: receiptRoutePlanId,
           }, { signal }));
-          if (!isCurrent()) break;
+          checkingRouteEndReceipt = false;
+          if (!(await validateCurrent())) break;
           const resolution = resolveCompletionReceipt(item.event, receipt);
           if (resolution.kind === 'reconcile') {
             const recovery = input.queue.blockRouteSubmissionsForReconciliation(item.event.routePlanId);
@@ -958,8 +1066,15 @@ export async function retryOfflineSubmissions(input: {
             continue;
           }
         }
+        if (isRouteEndDriverEvent(item) && hasPendingRouteLocation(input.queue, routePlanId)) {
+          // Receipt reads may recover an already-applied end. Only its new POST
+          // must wait for GPS; UNKNOWN receipts do not authorize discarding it.
+          deferredRouteEndRoutes.add(routePlanId);
+          deferred = true;
+          continue;
+        }
         await runAttempt((signal) => input.driverEventService.recordDriverEvent(item.event, { signal }));
-        if (!isCurrent()) break;
+        if (!(await validateCurrent())) break;
         if (item.event.eventType === 'PICKUP_COMPLETED') {
           requiresRouteLookup = true;
           routeLookupReason = 'pickup_eta_snapshot_synced';
@@ -976,7 +1091,7 @@ export async function retryOfflineSubmissions(input: {
           signal,
         }));
       }
-      if (!isCurrent()) break;
+      if (!(await validateCurrent())) break;
       input.queue.acknowledge(item.queueItemId);
       await input.queue.whenPersisted();
       succeeded += 1;
@@ -994,7 +1109,7 @@ export async function retryOfflineSubmissions(input: {
         discarded += input.queue.discardRouteSubmissions(item.event.routePlanId);
       }
     } catch (error) {
-      if (!isCurrent()) break;
+      if (!(await validateCurrent())) break;
       if (
         routePlanId !== undefined
         && getDriverApiRequiresRouteReconciliation(error) === true
@@ -1027,11 +1142,20 @@ export async function retryOfflineSubmissions(input: {
         requiresRouteLookup = true;
         routeLookupReason = 'driver_access_expired';
       }
+      if (checkingRouteEndReceipt && hasPendingRouteLocation(input.queue, routePlanId)) {
+        // This read failed before any end POST. Burning its five-attempt
+        // workflow budget here would quarantine the end and block GPS recovery.
+        failed += 1;
+        deferred = true;
+        deferredRouteEndRoutes.add(routePlanId);
+        if (getDriverApiRequiresRouteLookup(error) === true) break;
+        continue;
+      }
       input.queue.recordRetryFailure(item.queueItemId, error);
       const updatedItem = input.queue.listPending().find((pendingItem) => pendingItem.queueItemId === item.queueItemId);
-      if (updatedItem !== undefined && shouldDiscardOfflineSubmission(updatedItem, retryPolicy, now())) {
+      if (updatedItem !== undefined && shouldDiscardOfflineSubmission(updatedItem, itemRetryPolicy, now())) {
         if (isLocationDriverEvent(updatedItem)) {
-          input.queue.discard(updatedItem.queueItemId);
+          input.queue.discard(updatedItem.queueItemId, 'LOCATION_RETENTION_EXPIRED');
           discarded += 1;
         } else {
           blocked += quarantineRetryPolicyEvidence(input.queue, updatedItem);
@@ -1042,11 +1166,16 @@ export async function retryOfflineSubmissions(input: {
       if (routePlanId !== undefined && isOrderedWorkflowEvidence(item)) {
         workflowBlockedRoutePlanIds.add(routePlanId);
       }
+      if (isLocationDriverEvent(item)) locationBlockedRoutes.add(routePlanId);
+      await input.queue.whenPersisted();
+      if (getDriverApiRequiresRouteLookup(error) === true) break;
     }
   }
 
+  await input.queue.whenPersisted();
   return {
     ...(blocked === 0 ? {} : { blocked }),
+    ...(deferred ? { deferred: true } : {}),
     ...(completionAcknowledgedRoutePlanIds.size === 0
       ? {}
       : { completionAcknowledgedRoutePlanIds: [...completionAcknowledgedRoutePlanIds] }),
@@ -1061,6 +1190,17 @@ export async function retryOfflineSubmissions(input: {
     retried,
     succeeded,
   };
+}
+
+function isLocationRetryCoolingDown(item: OfflineSubmissionQueueItem, now: Date): boolean {
+  if (item.attempts === 0) return false;
+  const lastAttempt = [...item.journal].reverse().find((entry) => entry.kind === 'ATTEMPT');
+  const attemptedAt = Date.parse(lastAttempt?.at ?? '');
+  if (!Number.isFinite(attemptedAt)) return false; // Older queues have no attempt timeline.
+  const elapsed = now.getTime() - attemptedAt;
+  // A large backwards clock correction must not park an item indefinitely.
+  if (elapsed < -60_000) return false;
+  return elapsed < Math.min(60_000, 1_000 * (2 ** Math.min(16, item.attempts - 1)));
 }
 
 export function getOfflineSubmissionQueueSummary(queue: OfflineSubmissionQueue): OfflineSubmissionQueueSummary {
@@ -1174,7 +1314,15 @@ function hasSameImmutableDriverEventIdentity(left: DriverEventInput, right: Driv
     && (left.latitude ?? null) === (right.latitude ?? null)
     && (left.longitude ?? null) === (right.longitude ?? null)
     && (left.accuracyMeters ?? null) === (right.accuracyMeters ?? null)
-    && JSON.stringify(sortJsonValue(left.payload ?? null)) === JSON.stringify(sortJsonValue(right.payload ?? null));
+    && JSON.stringify(sortJsonValue(immutableDriverEventPayload(left))) === JSON.stringify(sortJsonValue(immutableDriverEventPayload(right)));
+}
+
+function immutableDriverEventPayload(event: DriverEventInput): unknown {
+  if (event.eventType !== 'LOCATION_UPDATED' || event.payload === undefined) return event.payload ?? null;
+  // Delivery is transport provenance, not observation identity. Keep the first
+  // capture's value when the OS redelivers the same point in a different batch.
+  const { nativeBatchDeliveredAt: _deliveredAt, ...observationPayload } = event.payload;
+  return observationPayload;
 }
 
 function sortJsonValue(value: unknown): unknown {
@@ -1217,7 +1365,13 @@ function isRouteEndDriverEvent(item: OfflineSubmissionQueueItem): boolean {
   );
 }
 
-function isLocationDriverEvent(item: OfflineSubmissionQueueItem): boolean {
+function hasPendingRouteLocation(queue: OfflineSubmissionQueue, routePlanId: string | undefined): boolean {
+  return queue.listPending().some((item) => isLocationDriverEvent(item) && item.event.routePlanId === routePlanId);
+}
+
+function isLocationDriverEvent(item: OfflineSubmissionQueueItem): item is OfflineDriverEventQueueItem & {
+  event: DriverEventInput & { eventType: 'LOCATION_UPDATED' };
+} {
   return item.kind === 'driver_event' && item.event.eventType === 'LOCATION_UPDATED';
 }
 

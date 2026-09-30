@@ -1,4 +1,5 @@
 import * as Location from 'expo-location';
+import * as Crypto from 'expo-crypto';
 import * as TaskManager from 'expo-task-manager';
 import { requireNativeModule } from 'expo-modules-core';
 import { Platform } from 'react-native';
@@ -129,11 +130,22 @@ async function executeContinuousLocationTask(input: {
     return;
   }
 
+  const nativeBatchDeliveredAt = new Date();
   const locations = (input.data.locations ?? []).map((location) => ({
-    ...(location.coords.accuracy === null ? {} : { accuracyMeters: location.coords.accuracy }),
+    ...(location.coords.accuracy === null || !Number.isFinite(location.coords.accuracy) || location.coords.accuracy < 0
+      ? {} : { accuracyMeters: location.coords.accuracy }),
     latitude: location.coords.latitude,
     longitude: location.coords.longitude,
     occurredAt: new Date(location.timestamp),
+    metadata: {
+      ...(typeof location.mocked === 'boolean' ? { mocked: location.mocked } : {}),
+      ...(location.coords.speed !== null && Number.isFinite(location.coords.speed) && location.coords.speed >= 0
+        ? { speedMetersPerSecond: location.coords.speed } : {}),
+      ...(location.coords.heading !== null && Number.isFinite(location.coords.heading) && location.coords.heading >= 0
+        ? { headingDegrees: location.coords.heading } : {}),
+      ...(location.coords.altitude !== null && Number.isFinite(location.coords.altitude)
+        ? { altitudeMeters: location.coords.altitude } : {}),
+    },
   }));
 
   if (locations.length > 0) {
@@ -203,8 +215,17 @@ async function executeContinuousLocationTask(input: {
           ),
           driverAccessTokenStore,
           driverAuthService: runtimeServices.driverAuthService,
+          hashObservationIdentity: (identity) => Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, identity),
           locations,
+          nativeBatchDeliveredAt,
           offlineQueue,
+          provenance: {
+            platform: Platform.OS,
+            ...(installedDriverAppVersion === null ? {} : {
+              appVersion: installedDriverAppVersion.versionName,
+              versionCode: installedDriverAppVersion.versionCode,
+            }),
+          },
           routeAccessService: runtimeServices.routeAccessService,
         });
         if (taskResult.kind === 'deactivated' || taskResult.kind === 'ignored') {

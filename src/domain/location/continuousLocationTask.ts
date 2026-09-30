@@ -6,6 +6,7 @@ import type { DriverAuthService } from '../driverAuth/driverAuth';
 import {
   createRouteStartedDriverEvent,
   prepareDriverEventForPersistence,
+  type DriverEventInput,
   type DriverEventService,
 } from '../events/driverEvents';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
@@ -35,6 +36,7 @@ export type ContinuousLocationTaskResult =
   | { kind: 'ignored'; reason: 'completion_pending' | 'inactive_route' }
   | {
       kind: 'processed';
+      droppedCount?: number;
       queuedCount?: number;
       recordedCount: number;
       routePlanId: string;
@@ -52,8 +54,11 @@ export async function processContinuousLocationTaskBatch(input: {
     | 'saveRefreshedAccountAccess'
   >;
   driverAuthService: Pick<DriverAuthService, 'refreshSession'>;
+  hashObservationIdentity?: (identity: string) => Promise<string>;
   locations: ContinuousLocationBatchItem[];
+  nativeBatchDeliveredAt?: Date;
   offlineQueue: OfflineSubmissionQueue;
+  provenance?: { appVersion?: string; platform?: string; versionCode?: number };
   routeAccessService: Pick<RouteAccessService, 'lookupRouteAccess'>;
 }): Promise<ContinuousLocationTaskResult> {
   const persistedAccess = await input.driverAccessTokenStore.loadActiveDriverAccess();
@@ -72,6 +77,12 @@ export async function processContinuousLocationTaskBatch(input: {
   }
   const sessionGeneration = persistedAccess.activeRouteSession.startedAt
     ?? persistedAccess.activeRouteSession.updatedAt;
+  const accountPhoneE164 = persistedAccess.driverProfile.phoneE164;
+  const assignmentGeneration = persistedAccess.routeAccess?.assignmentGeneration;
+  const isSessionCurrent = async () => !routeRevoked && await isPersistedActiveRouteSessionCurrent({
+    driverAccessTokenStore: input.driverAccessTokenStore, routePlanId, sessionGeneration,
+    accountPhoneE164, assignmentGeneration,
+  });
   let routeRevoked = false;
   const driverEventService = input.createDriverEventService({
     persistedAccess: {
@@ -88,13 +99,15 @@ export async function processContinuousLocationTaskBatch(input: {
         routeAccessService: input.routeAccessService,
         routePlanId,
         sessionGeneration,
+        accountPhoneE164,
+        assignmentGeneration,
       });
       routeRevoked ||= refreshResult.kind === 'revoked';
       return refreshResult.kind === 'refreshed' ? refreshResult.driverAccess : null;
     },
   });
-  let routeStartReady = persistedAccess.activeRouteSession.routeStartedRecordedAt !== undefined;
-  if (!routeStartReady) {
+  const precedingEvents: DriverEventInput[] = [];
+  if (persistedAccess.activeRouteSession.routeStartedRecordedAt === undefined) {
     const routeStartedEvent = prepareDriverEventForPersistence(
       driverEventService,
       createRouteStartedDriverEvent({
@@ -110,42 +123,28 @@ export async function processContinuousLocationTaskBatch(input: {
         routePlanId,
       }),
     );
-    try {
-      await driverEventService.recordDriverEvent(routeStartedEvent);
-      routeStartReady = await input.driverAccessTokenStore.markActiveRouteStarted(routePlanId, sessionGeneration);
-    } catch {
-      if (
-        !routeRevoked
-        && await isPersistedActiveRouteSessionCurrent({
-          driverAccessTokenStore: input.driverAccessTokenStore,
-          routePlanId,
-          sessionGeneration,
-        })
-      ) {
-        input.offlineQueue.enqueueDriverEvent(routeStartedEvent);
-      }
-    }
+    precedingEvents.push(routeStartedEvent);
   }
   const recorded = await recordContinuousLocationUpdateBatch({
-    driverEventService: routeStartReady
-      ? driverEventService
-      : {
-          recordDriverEvent: async () => {
-            throw new Error('Route start is pending durable retry.');
-          },
-        },
-    isSessionCurrent: async () => (
-      !routeRevoked
-      && await isPersistedActiveRouteSessionCurrent({
-        driverAccessTokenStore: input.driverAccessTokenStore,
-        routePlanId,
-        sessionGeneration,
-      })
-    ),
+    driverEventService,
+    hashObservationIdentity: input.hashObservationIdentity,
+    isSessionCurrent,
     locations: input.locations,
+    nativeBatchDeliveredAt: input.nativeBatchDeliveredAt,
     offlineQueue: input.offlineQueue,
+    // Live services prepare the ordered contract. Plain mock/legacy services
+    // have no preparer; keep their existing compatibility path.
+    ...(driverEventService.prepareDriverEvent === undefined ? {} : {
+      orderedEventAccessIdentity: persistedAccess.routeAccess,
+    }),
+    precedingEvents,
+    provenance: input.provenance,
     routePlanId,
+    sessionContext: { assignmentGeneration, sessionGeneration },
   });
+  if (recorded.kind === 'recorded' && recorded.routeStartedAcknowledged === true && await isSessionCurrent()) {
+    await input.driverAccessTokenStore.markActiveRouteStarted(routePlanId, sessionGeneration);
+  }
 
   if (recorded.kind === 'route_not_in_progress') {
     if (await isPersistedActiveRouteSessionCompletionPending({
@@ -185,6 +184,8 @@ export async function processContinuousLocationTaskBatch(input: {
   if (routeRevoked) {
     const cleared = await input.driverAccessTokenStore.clearActiveRouteSession(routePlanId, sessionGeneration);
     if (cleared) {
+      input.offlineQueue.blockRouteSubmissionsForReconciliation(routePlanId);
+      await input.offlineQueue.whenPersisted();
       await input.driverAccessTokenStore.clearCachedRouteAccess(routePlanId);
       return { kind: 'deactivated', reason: 'route_revoked', routePlanId, sessionGeneration };
     }
@@ -192,6 +193,7 @@ export async function processContinuousLocationTaskBatch(input: {
 
   return {
     kind: 'processed',
+    ...(recorded.kind !== 'recorded' || recorded.droppedCount === undefined ? {} : { droppedCount: recorded.droppedCount }),
     ...(recorded.queuedCount === undefined ? {} : { queuedCount: recorded.queuedCount }),
     recordedCount: recorded.recordedCount,
     routePlanId,
@@ -227,6 +229,8 @@ async function refreshPersistedDriverAccess(input: {
   routeAccessService: Pick<RouteAccessService, 'lookupRouteAccess'>;
   routePlanId: string;
   sessionGeneration: string;
+  accountPhoneE164: string;
+  assignmentGeneration?: string;
 }): Promise<
   | { kind: 'inactive' }
   | { kind: 'refreshed'; driverAccess: DriverAccessToken }
@@ -237,6 +241,8 @@ async function refreshPersistedDriverAccess(input: {
     (persistedAccess.kind !== 'active' && persistedAccess.kind !== 'refresh_required')
     || persistedAccess.activeRouteSession?.routePlanId !== input.routePlanId
     || (persistedAccess.activeRouteSession.startedAt ?? persistedAccess.activeRouteSession.updatedAt) !== input.sessionGeneration
+    || persistedAccess.driverProfile.phoneE164 !== input.accountPhoneE164
+    || persistedAccess.routeAccess?.assignmentGeneration !== input.assignmentGeneration
   ) {
     return { kind: 'inactive' };
   }
@@ -247,6 +253,7 @@ async function refreshPersistedDriverAccess(input: {
       refreshToken: persistedAccess.accountAccess.refreshToken,
     });
     accountAccess = refreshed.accountAccess;
+    if (!(await isPersistedActiveRouteSessionCurrent(input))) return { kind: 'inactive' };
     await input.driverAccessTokenStore.saveRefreshedAccountAccess(accountAccess);
   }
 
@@ -255,6 +262,7 @@ async function refreshPersistedDriverAccess(input: {
     routeContext: persistedAccess.routeAccess?.routeContext ?? null,
   });
   const route = findRouteAccessChoice(lookup, input.routePlanId);
+  if (!(await isPersistedActiveRouteSessionCurrent(input))) return { kind: 'inactive' };
   if (route === null) {
     return { kind: 'revoked' };
   }
@@ -274,6 +282,8 @@ async function isPersistedActiveRouteSessionCurrent(input: {
   driverAccessTokenStore: Pick<DriverAccessTokenStore, 'loadActiveDriverAccess'>;
   routePlanId: string;
   sessionGeneration: string;
+  accountPhoneE164?: string;
+  assignmentGeneration?: string;
 }): Promise<boolean> {
   const persistedAccess = await input.driverAccessTokenStore.loadActiveDriverAccess();
   return (
@@ -282,6 +292,8 @@ async function isPersistedActiveRouteSessionCurrent(input: {
     && persistedAccess.activeRouteSession.status === 'active'
     && (persistedAccess.activeRouteSession.startedAt ?? persistedAccess.activeRouteSession.updatedAt) === input.sessionGeneration
     && persistedAccess.routeAccess?.routePlanId === input.routePlanId
+    && (input.accountPhoneE164 === undefined || persistedAccess.driverProfile.phoneE164 === input.accountPhoneE164)
+    && (input.assignmentGeneration === undefined || persistedAccess.routeAccess.assignmentGeneration === input.assignmentGeneration)
   );
 }
 
