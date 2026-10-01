@@ -14,6 +14,10 @@ import { DriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createInMemoryOfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 import { sampleAssignedRoute } from '../route/assignedRoute';
 import routeCompletedRequest from '../../test/contractFixtures/routeOperations/v1/fixtures/route-completed.request.json';
+import {
+  installDriverDiagnosticObserver,
+  type DriverDiagnosticObservation,
+} from '../diagnostics/driverDiagnosticObservation';
 
 describe('driver event API boundary', () => {
   it('keeps route-start coordinates on the immutable start event while preserving the button time', () => {
@@ -143,6 +147,56 @@ describe('driver event API boundary', () => {
       occurredAt: '2026-05-12T07:00:00.000Z',
       routePlanId: '11111111-1111-4111-8111-111111111111',
     });
+  });
+
+  it('correlates the first event HTTP failure with the exact request header without exposing the bearer', async () => {
+    const observations: DriverDiagnosticObservation[] = [];
+    let requestHeaders: Record<string, string> = {};
+    installDriverDiagnosticObserver((observation) => { observations.push(observation); }, {
+      requestIdFactory: () => '44444444-4444-4444-8444-444444444444',
+      setTimeout: () => 1,
+      clearTimeout: () => undefined,
+    });
+    const service = createDriverEventsApiClient({
+      accessToken: 'sensitive-driver-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async (_url, init) => {
+        requestHeaders = init?.headers ?? {};
+        return {
+          json: async () => ({ data: null, error: { code: 'SERVER_ERROR' } }),
+          ok: false,
+          status: 503,
+        };
+      },
+    });
+
+    await assert.rejects(service.recordDriverEvent({
+      clientEventId: 'route-started-1',
+      eventType: 'ROUTE_STARTED',
+      occurredAt: new Date('2026-10-01T14:04:03.000Z'),
+      routePlanId: '11111111-1111-4111-8111-111111111111',
+    }));
+    installDriverDiagnosticObserver(null);
+
+    assert.equal(requestHeaders['X-Request-Id'], '44444444-4444-4444-8444-444444444444');
+    assert.deepEqual(observations.map((observation) => observation.kind === 'OPERATION' ? {
+      clientEventId: observation.clientEventId,
+      httpStatus: observation.httpStatus,
+      phase: observation.phase,
+      reasonCode: observation.reasonCode,
+      requestId: observation.requestId,
+      routePlanId: observation.routePlanId,
+    } : null), [
+      {
+        clientEventId: 'route-started-1', httpStatus: undefined, phase: 'STARTED', reasonCode: undefined,
+        requestId: '44444444-4444-4444-8444-444444444444', routePlanId: '11111111-1111-4111-8111-111111111111',
+      },
+      {
+        clientEventId: 'route-started-1', httpStatus: 503, phase: 'FAILED', reasonCode: 'HTTP_SERVER_ERROR',
+        requestId: '44444444-4444-4444-8444-444444444444', routePlanId: '11111111-1111-4111-8111-111111111111',
+      },
+    ]);
+    assert.equal(JSON.stringify(observations).includes('sensitive-driver-token'), false);
   });
 
   it('posts optional event payload metadata for stop proof events', async () => {

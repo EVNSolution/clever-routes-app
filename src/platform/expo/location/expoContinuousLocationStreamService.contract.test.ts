@@ -10,6 +10,7 @@ const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = join(currentDirectory, '..', '..', '..', '..');
 const locationServicePath = join(currentDirectory, 'expoContinuousLocationStreamService.ts');
 const foregroundLocationSnapshotServicePath = join(currentDirectory, 'expoForegroundLocationSnapshotService.ts');
+const foregroundPermissionServicePath = join(currentDirectory, 'expoLocationPermissionService.ts');
 const locationTypesPath = join(currentDirectory, '..', '..', '..', '..', 'node_modules', 'expo-location', 'src', 'Location.types.ts');
 const locationTaskServicePath = join(currentDirectory, '..', '..', '..', '..', 'node_modules', 'expo-location', 'android', 'src', 'main', 'java', 'expo', 'modules', 'location', 'services', 'LocationTaskService.kt');
 const locationArgumentsPath = join(currentDirectory, '..', '..', '..', '..', 'node_modules', 'expo-location', 'android', 'src', 'main', 'java', 'expo', 'modules', 'location', 'records', 'LocationArguments.kt');
@@ -33,17 +34,59 @@ describe('Expo continuous location wiring', () => {
     assert.match(source, /stopContinuousLocationTaskIfInactive/u);
     assert.match(source, /activeRouteSession\.status === 'active'/u);
     assert.match(source, /ensureLocationUpdatesStarted/u);
-    assert.match(source, /stopLocationUpdatesIfCurrent: \(taskName, isCurrent\) => runLocationTaskOperation\(async \(\) => \{[\s\S]*if \(!\(await isCurrent\(\)\)\) return false;[\s\S]*stopExpoLocationUpdates\(taskName\)/u);
+    assert.match(source, /stopLocationUpdatesIfCurrent: \(taskName, isCurrent\) => \{[\s\S]*return runLocationTaskOperation\(async \(\) => \{[\s\S]*if \(!\(await isCurrent\(\)\)\) return false;[\s\S]*stopExpoLocationUpdates\(taskName, observe\)/u);
     assert.doesNotMatch(source, /let continuousLocationTaskHandler/u);
     assert.doesNotMatch(source, /registerContinuousLocationTaskHandler/u);
+  });
+
+  it('emits coordinate-free location diagnostics before any business task dependency', () => {
+    const source = readFileSync(locationServicePath, 'utf8');
+    const runtimeStart = source.indexOf('startExpoDriverDiagnosticRuntime();');
+    const scopedEmitter = source.indexOf('const emitDiagnostic = captureDriverDiagnosticEmitter();', runtimeStart);
+    const callbackObservation = source.indexOf('observeLocationTaskCallback({');
+    const nativeErrorGuard = source.indexOf('if (input.error !== null)');
+    const accessRead = source.indexOf('driverAccessTokenStore.loadActiveDriverAccess()', callbackObservation);
+
+    assert.ok(runtimeStart >= 0);
+    assert.ok(scopedEmitter > runtimeStart);
+    assert.ok(callbackObservation > runtimeStart);
+    assert.ok(nativeErrorGuard > callbackObservation);
+    assert.ok(accessRead > callbackObservation);
+    assert.match(source, /locationTimestamps: validNativeLocations\.map\(\(location\) => location\.timestamp\)/u);
+    assert.doesNotMatch(
+      source.slice(callbackObservation, nativeErrorGuard),
+      /latitude|longitude|coords:/u,
+    );
+    assert.match(source, /reasonCode: 'LOCATION_TASK_ERROR'/u);
+    assert.match(source, /reasonCode: 'LOCATION_PIPELINE_TIMEOUT', stage: 'PROCESSING'/u);
+    assert.match(source, /updateExpoDriverDiagnosticQueue\(offlineQueue\)/u);
+    assert.match(source, /taskResult\.queuedCount[\s\S]*persistedAt: new Date\(\)\.toISOString\(\)/u);
+    assert.match(source, /runObservedLocationOperation/u);
+  });
+
+  it('reports foreground collection and permission outcomes without raw coordinates', () => {
+    const snapshotSource = readFileSync(foregroundLocationSnapshotServicePath, 'utf8');
+    const permissionSource = readFileSync(foregroundPermissionServicePath, 'utf8');
+
+    assert.match(snapshotSource, /collectedAt: new Date\(position\.timestamp\)\.toISOString\(\)/u);
+    assert.match(snapshotSource, /reasonCode: error === timeoutError \? 'OPERATION_TIMEOUT' : 'LOCATION_SNAPSHOT_FAILED'/u);
+    assert.match(permissionSource, /locationPermission: permission\.status === Location\.PermissionStatus\.GRANTED/u);
+    assert.match(permissionSource, /reasonCode: 'LOCATION_PERMISSION_DENIED'/u);
+    assert.match(snapshotSource, /const emitDiagnostic = captureDriverDiagnosticEmitter\(\);/u);
+    const collectionDiagnosticStart = snapshotSource.indexOf('emitDiagnostic({');
+    const collectionDiagnostic = snapshotSource.slice(
+      collectionDiagnosticStart,
+      snapshotSource.indexOf('\n        });', collectionDiagnosticStart),
+    );
+    assert.doesNotMatch(collectionDiagnostic, /latitude|longitude|accuracyMeters/u);
   });
 
   it('does not delay native tracking shutdown behind in-flight location submissions', () => {
     const source = readFileSync(locationServicePath, 'utf8');
 
     assert.doesNotMatch(source, /activeTaskExecutions|Promise\.allSettled/u);
-    assert.match(source, /stopLocationUpdates: \(taskName\) => runLocationTaskOperation\(\(\) => stopExpoLocationUpdates\(taskName\)\)/u);
-    assert.match(source, /stopLocationUpdatesIfCurrent: \(taskName, isCurrent\) => runLocationTaskOperation\(async \(\) => \{/u);
+    assert.match(source, /stopLocationUpdates: \(taskName\) => \{[\s\S]*return runLocationTaskOperation\(\(\) => stopExpoLocationUpdates\(taskName, observe\)\)/u);
+    assert.match(source, /stopLocationUpdatesIfCurrent: \(taskName, isCurrent\) => \{[\s\S]*return runLocationTaskOperation\(async \(\) => \{/u);
   });
 
   it('requests ten-second high-accuracy updates without a movement threshold', () => {

@@ -22,6 +22,7 @@ import {
   type ProofMediaUploadService,
 } from '../../domain/proof/proofMediaUpload';
 import type { DriverAccessToken, RouteAccessLookupResult } from '../../domain/routeAccess/routeAccess';
+import { observeDriverDiagnosticOperation } from '../../domain/diagnostics/driverDiagnosticObservation';
 
 export type DriverApiClients = {
   assignedRouteService: AssignedRouteService;
@@ -152,7 +153,10 @@ function withDriverAccessRefresh(input: {
         throw error;
       }
 
-      const refreshedAccess = await input.refreshDriverAccess(signal);
+      const refreshedAccess = await observeDriverDiagnosticOperation(
+        { operation: 'AUTH_REFRESH' },
+        () => input.refreshDriverAccess(signal),
+      );
       if (signal?.aborted === true || refreshedAccess === null) {
         throw error;
       }

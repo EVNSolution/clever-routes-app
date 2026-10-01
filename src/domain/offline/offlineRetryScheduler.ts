@@ -15,6 +15,8 @@ export function createOfflineRetryScheduler(input: {
   hasPendingSubmissions: () => boolean;
   isForeground: () => boolean;
   isOnline: () => boolean;
+  now?: () => Date;
+  onNextRetryAt?: (at: string | null) => void;
   policy?: OfflineRetrySchedulerPolicy;
   random?: () => number;
   retry: () => Promise<boolean>;
@@ -27,10 +29,15 @@ export function createOfflineRetryScheduler(input: {
   let running = false;
   let started = false;
 
+  function reportNextRetry(at: string | null) {
+    try { input.onNextRetryAt?.(at); } catch { /* diagnostics never change scheduling */ }
+  }
+
   function cancelScheduled() {
     if (handle !== undefined) {
       input.cancel(handle);
       handle = undefined;
+      reportNextRetry(null);
     }
   }
 
@@ -51,8 +58,11 @@ export function createOfflineRetryScheduler(input: {
     ) {
       return;
     }
+    const delayMs = delayOverrideMs ?? getDelayMs();
+    reportNextRetry(new Date((input.now?.() ?? new Date()).getTime() + delayMs).toISOString());
     handle = input.schedule(() => {
       handle = undefined;
+      reportNextRetry(null);
       running = true;
       void input.retry()
         .then((completedWithoutRetainedFailures) => {
@@ -63,7 +73,7 @@ export function createOfflineRetryScheduler(input: {
           running = false;
           scheduleNext();
         });
-    }, delayOverrideMs ?? getDelayMs());
+    }, delayMs);
   }
 
   return {

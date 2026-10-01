@@ -5,6 +5,10 @@ import {
   getDriverApiRecoveryReason,
 } from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
+import {
+  createDriverDiagnosticRequestId,
+  observeDriverDiagnosticOperation,
+} from '../diagnostics/driverDiagnosticObservation';
 
 export type ProofMediaKind = 'photo';
 
@@ -131,39 +135,48 @@ export function createProofMediaUploadApiClient(input: {
       const url = `${baseUrl}/driver/proof-media`;
       const body = toProofMediaFormData(request);
       const idempotencyKey = options?.idempotencyKey ?? getProofMediaUploadIdempotencyKey(request);
-      const response = input.fetchImpl === undefined
-        ? await postProofMediaFormDataWithXmlHttpRequest({
-          accessToken: input.accessToken,
-          body,
-          idempotencyKey,
-          signal: options?.signal,
-          url,
-          xmlHttpRequestFactory: input.xmlHttpRequestFactory,
-        })
-        : await input.fetchImpl(url, withNoStoreDriverApiRequest({
-          body,
-          headers: {
-            Authorization: `Bearer ${input.accessToken}`,
-            'Idempotency-Key': idempotencyKey,
-          },
-          method: 'POST',
-          signal: options?.signal,
-        }));
-      const payload = await readResponseJson(response);
-      if (!response.ok) {
-        const apiError = readDriverApiError(payload);
-        if (response.status === 422 && apiError.code === 'PROOF_MEDIA_REJECTED') {
-          throw createProofMediaRejectedError();
+      const requestId = createDriverDiagnosticRequestId();
+      return observeDriverDiagnosticOperation({
+        operation: 'PROOF_UPLOAD',
+        requestId,
+        routePlanId: request.routePlanId,
+      }, async () => {
+        const response = input.fetchImpl === undefined
+          ? await postProofMediaFormDataWithXmlHttpRequest({
+            accessToken: input.accessToken,
+            body,
+            idempotencyKey,
+            requestId,
+            signal: options?.signal,
+            url,
+            xmlHttpRequestFactory: input.xmlHttpRequestFactory,
+          })
+          : await input.fetchImpl(url, withNoStoreDriverApiRequest({
+            body,
+            headers: {
+              Authorization: `Bearer ${input.accessToken}`,
+              'Idempotency-Key': idempotencyKey,
+              'X-Request-Id': requestId,
+            },
+            method: 'POST',
+            signal: options?.signal,
+          }));
+        const payload = await readResponseJson(response);
+        if (!response.ok) {
+          const apiError = readDriverApiError(payload);
+          if (response.status === 422 && apiError.code === 'PROOF_MEDIA_REJECTED') {
+            throw createProofMediaRejectedError();
+          }
+
+          throw createDriverApiHttpError({
+            ...(apiError.code === undefined ? {} : { code: apiError.code }),
+            endpoint: 'Proof media upload',
+            status: response.status,
+          });
         }
 
-        throw createDriverApiHttpError({
-          ...(apiError.code === undefined ? {} : { code: apiError.code }),
-          endpoint: 'Proof media upload',
-          status: response.status,
-        });
-      }
-
-      return readProofMediaReferenceEnvelope(payload);
+        return readProofMediaReferenceEnvelope(payload);
+      });
     },
   };
 }
@@ -172,6 +185,7 @@ function postProofMediaFormDataWithXmlHttpRequest(input: {
   accessToken: string;
   body: FormData;
   idempotencyKey: string;
+  requestId: string;
   signal?: AbortSignal;
   url: string;
   xmlHttpRequestFactory?: () => XMLHttpRequest;
@@ -202,6 +216,7 @@ function postProofMediaFormDataWithXmlHttpRequest(input: {
     request.setRequestHeader('Cache-Control', 'no-store');
     request.setRequestHeader('Idempotency-Key', input.idempotencyKey);
     request.setRequestHeader('Pragma', 'no-cache');
+    request.setRequestHeader('X-Request-Id', input.requestId);
     request.onload = () => {
       finish(() => resolve({
         ok: request.status >= 200 && request.status < 300,

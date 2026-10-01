@@ -1,5 +1,24 @@
 # Release readiness checklist
 
+## Independent runtime diagnostics release gate
+
+The app-side contract in `docs/driver-runtime-diagnostics.md` adds an independent
+encrypted diagnostic outbox, write-only credential, and lifecycle/location/sync
+observations. This source change is not evidence of a deployed receiver or an
+installed binary. Before release, implement and verify the server registration,
+idempotent ingestion, attempt correlation, and conservative UNKNOWN classification.
+Then reproduce the documented faults on Android and iOS, including locked-device
+background callbacks, offline restart/replay, business-storage hangs, expired
+business auth, account changes, response loss, and absent signals. Preserve
+unsubmitted business events/photos throughout these checks.
+
+Review store privacy declarations for the added diagnostic collection. Records
+exclude tokens, PINs, customer information, free-form errors, and raw coordinates;
+they retain app/build/OS, stage timestamps, stable reasons, and restricted
+correlation identifiers. The separate SQLCipher history is bounded to seven days
+and 1,000 records per account; server retention and access control require their
+own implementation evidence. Operator-visible times use `America/Toronto`.
+
 ## Purpose
 
 This document tracks the non-code evidence needed before a production iOS/Android release of `clever-routes-app`. Product scope remains in `docs/project-brief.md`; app-side API/runtime behavior remains in `docs/route-access-flow.md`.

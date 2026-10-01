@@ -171,3 +171,17 @@ describe('offline retry scheduler', () => {
     scheduler.stop();
   });
 });
+
+it('reports the actual next scheduled attempt and clears it when suspended or running',async()=>{
+ const seen:(string|null)[]=[];
+ let run:(()=>void)|undefined;
+ const scheduler=createOfflineRetryScheduler({
+   now:()=>new Date('2026-10-01T14:00:00.000Z'),onNextRetryAt:at=>seen.push(at),
+   cancel:()=>undefined,hasPendingSubmissions:()=>true,isForeground:()=>true,isOnline:()=>true,
+   random:()=>0.5,retry:async()=>true,schedule:fn=>{run=fn;return 1;},
+ });
+ scheduler.start();assert.equal(seen.at(-1),'2026-10-01T14:00:01.000Z');
+ run?.();assert.equal(seen.at(-1),null);
+ await new Promise(resolve=>setImmediate(resolve));
+ scheduler.stop();assert.equal(seen.at(-1),null);
+});

@@ -11,10 +11,14 @@ import {
   uploadCapturedProofPhoto,
   type ProofMediaUploadRequest,
 } from './proofMediaUpload';
+import { installDriverDiagnosticObserver } from '../diagnostics/driverDiagnosticObservation';
 
 describe('proof media upload', () => {
   it('uses React Native XMLHttpRequest for live file uploads by default', async () => {
     const requests: { body?: unknown; headers: Record<string, string>; method?: string; timeout?: number; url?: string }[] = [];
+    installDriverDiagnosticObserver(null, {
+      requestIdFactory: () => '77777777-7777-4777-8777-777777777777',
+    });
     class MockXMLHttpRequest {
       onerror: (() => void) | null = null;
       onload: (() => void) | null = null;
@@ -74,7 +78,9 @@ describe('proof media upload', () => {
     assert.equal(requests[0]?.headers['Cache-Control'], 'no-store');
     assert.match(requests[0]?.headers['Idempotency-Key'] ?? '', /^proof-media-v1:[0-9a-f]{32}$/u);
     assert.equal(requests[0]?.headers.Pragma, 'no-cache');
+    assert.equal(requests[0]?.headers['X-Request-Id'], '77777777-7777-4777-8777-777777777777');
     assert.ok(requests[0]?.body instanceof FormData);
+    installDriverDiagnosticObserver(null);
   });
 
   it('aborts the live XMLHttpRequest when the caller deadline expires', async () => {

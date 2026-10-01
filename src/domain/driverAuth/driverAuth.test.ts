@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { createDriverAuthApiClient, createMockDriverAuthService } from './driverAuth';
+import {
+  installDriverDiagnosticObserver,
+  type DriverDiagnosticObservation,
+} from '../diagnostics/driverDiagnosticObservation';
 
 describe('DriverAuthService', () => {
   it('reads and updates the phone-account profile with the account bearer', async () => {
@@ -104,12 +108,20 @@ describe('DriverAuthService', () => {
 
   it('refreshes driver access with the stored refresh token', async () => {
     let requestBody: any;
+    let requestHeaders: Record<string, string> = {};
     let requestUrl = '';
+    const observations: DriverDiagnosticObservation[] = [];
+    installDriverDiagnosticObserver((observation) => { observations.push(observation); }, {
+      requestIdFactory: () => '66666666-6666-4666-8666-666666666666',
+      setTimeout: () => 1,
+      clearTimeout: () => undefined,
+    });
     const client = createDriverAuthApiClient({
       baseUrl: 'https://test-api.com/',
       fetchImpl: async (url: string, init?: any) => {
         requestUrl = url;
         requestBody = JSON.parse(init.body);
+        requestHeaders = init.headers ?? {};
         return {
           ok: true,
           status: 200,
@@ -132,9 +144,19 @@ describe('DriverAuthService', () => {
 
     assert.equal(requestUrl, 'https://test-api.com/driver/auth/refresh');
     assert.deepEqual(requestBody, { refreshToken: 'stored-rt' });
+    assert.equal(requestHeaders['X-Request-Id'], '66666666-6666-4666-8666-666666666666');
     assert.equal(result.accountAccess.accessToken, 'refreshed-at');
     assert.equal(result.accountAccess.refreshToken, 'stored-rt');
     assert.equal(result.accountAccess.use, 'driver_account');
+    assert.deepEqual(observations.filter((item) => item.kind === 'OPERATION').map((item) => ({
+      operation: item.operation,
+      phase: item.phase,
+      requestId: item.requestId,
+    })), [
+      { operation: 'AUTH_REFRESH', phase: 'STARTED', requestId: '66666666-6666-4666-8666-666666666666' },
+      { operation: 'AUTH_REFRESH', phase: 'SUCCEEDED', requestId: '66666666-6666-4666-8666-666666666666' },
+    ]);
+    installDriverDiagnosticObserver(null);
   });
 
   it('registers and revokes the current app installation with the account bearer', async () => {

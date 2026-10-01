@@ -3,6 +3,10 @@ import {
   readDriverApiErrorCode,
 } from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
+import {
+  createDriverDiagnosticRequestId,
+  observeDriverDiagnosticOperation,
+} from '../diagnostics/driverDiagnosticObservation';
 
 export type DriverAccountAccessToken = {
   accessToken: string;
@@ -89,18 +93,36 @@ export function createDriverAuthApiClient(input: {
   const baseUrl = input.baseUrl.replace(/\/$/u, '');
   const fetchImpl = input.fetchImpl ?? globalThis.fetch;
 
-  async function postAuth(endpoint: string, body: Record<string, string>, label: string) {
-    const response = await fetchImpl(`${baseUrl}${endpoint}`, withNoStoreDriverApiRequest({
-      body: JSON.stringify(body),
-      headers: { 'Content-Type': 'application/json' },
-      method: 'POST',
-    }));
-    const payload = await response.json();
-    if (!response.ok) {
-      throw createDriverApiHttpError({ endpoint: label, status: response.status });
-    }
+  async function postAuth(
+    endpoint: string,
+    body: Record<string, string>,
+    label: string,
+    diagnosticOperation?: 'AUTH_REFRESH',
+  ) {
+    const requestId = diagnosticOperation === undefined ? undefined : createDriverDiagnosticRequestId();
+    const send = async () => {
+      const response = await fetchImpl(`${baseUrl}${endpoint}`, withNoStoreDriverApiRequest({
+        body: JSON.stringify(body),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(requestId === undefined ? {} : { 'X-Request-Id': requestId }),
+        },
+        method: 'POST',
+      }));
+      const payload = await response.json();
+      if (!response.ok) {
+        throw createDriverApiHttpError({
+          code: readDriverApiErrorCode(payload),
+          endpoint: label,
+          status: response.status,
+        });
+      }
 
-    return { accountAccess: readDriverAuthEnvelope(payload) };
+      return { accountAccess: readDriverAuthEnvelope(payload) };
+    };
+    return diagnosticOperation === undefined
+      ? send()
+      : observeDriverDiagnosticOperation({ operation: diagnosticOperation, requestId }, send);
   }
 
   async function requestAccountProfile(input: {
@@ -181,7 +203,7 @@ export function createDriverAuthApiClient(input: {
     }, 'Driver PIN login'),
     refreshSession: (request) => postAuth('/driver/auth/refresh', {
       refreshToken: request.refreshToken.trim(),
-    }, 'Refresh Auth Session'),
+    }, 'Refresh Auth Session', 'AUTH_REFRESH'),
     register: (request) => postAuth('/driver/auth/verify-invite', {
       phone: request.phoneE164.trim(),
       inviteCode: request.inviteCode.trim().toUpperCase(),

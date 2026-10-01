@@ -256,6 +256,7 @@ import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
 import { requestActiveRouteSwitchConfirmation } from './activeRouteSwitchConfirmation';
 import { requestRouteReconciliationClearConfirmation } from './routeReconciliationClearConfirmation';
 import { persistOfflineQueueAndSyncState } from './offlineQueuePersistence';
+import { startExpoDriverDiagnosticRuntime, updateExpoDriverDiagnosticNetwork, updateExpoDriverDiagnosticNextRetry, updateExpoDriverDiagnosticQueue } from '../platform/expo/diagnostics/expoDriverDiagnosticRuntime';
 import { createDriverReleasedRoutePayload } from '../domain/route/routeDeletion';
 
 type AppScreen =
@@ -502,6 +503,7 @@ function DriverApp() {
   const isPushRegistrationRunningRef = useRef(false);
 
   const syncOfflineQueueState = useCallback((queue: OfflineSubmissionQueue | null) => {
+    updateExpoDriverDiagnosticQueue(queue);
     if (queue === null) {
       setOfflineQueueCount(0);
       setCompletionClearOutboxCount(0);
@@ -749,6 +751,10 @@ function DriverApp() {
 
   const runtimeServices = useMemo(() => createDriverRuntimeServices({ config: runtimeConfig }), [runtimeConfig]);
   const installedDriverAppVersion = useMemo(() => readInstalledDriverAppVersion(), []);
+  useEffect(() => {
+    startExpoDriverDiagnosticRuntime();
+    updateExpoDriverDiagnosticNetwork(networkReachability);
+  }, [networkReachability]);
   const driverAppReleaseService = useMemo(() => (
     runtimeConfig.mode === 'live' && Platform.OS === 'android'
       ? createDriverAppReleaseApiClient({ baseUrl: runtimeConfig.deliveryServerBaseUrl })
@@ -3408,6 +3414,7 @@ function DriverApp() {
       isForeground: () => AppState.currentState === 'active',
       isOnline: () => networkReachability === 'online',
       policy: { initialDelayMs: 15_000, jitterRatio: 0.2, maxDelayMs: 60_000 },
+      onNextRetryAt: updateExpoDriverDiagnosticNextRetry,
       retry: retryPendingSubmissionsAfterNetworkRecovery,
       schedule: (run, delayMs) => setTimeout(run, delayMs),
     });
