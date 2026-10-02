@@ -420,3 +420,14 @@ delivery server와 앱은 아래 driver-facing contract를 사용한다.
 24. Add local proof-media scanner rejection smoke mock mode. — completed as physical-device verification aid; real device evidence remains pending
 25. Add physical iOS/Android smoke matrix and production store/privacy disclosure evidence for background tracking.
 26. Add context-monorepo service document once production runtime/API boundaries are confirmed. — baseline pointer completed in `clever-context-monorepo#24`; future production boundary changes should open a new context issue only if durable service responsibility, public contract, deployment/runtime category, or cross-repo interpretation changes.
+
+## 모바일 장애 진단
+
+기존 route sync heartbeat를 유지하면서 독립적인 진단 heartbeat·오류 이력을 추가한다.
+진단은 업무 queue·인증 갱신을 기다리지 않고 별도 SQLCipher outbox와 쓰기 전용 credential을 사용한다.
+위치 수집, 저장, 전송, 인증·경로 차단과 신호 두절의 증거를 분리하며, 관측되지 않은 원인은 UNKNOWN으로 둔다.
+앱 계약·개인정보 제외 기준·서버 구현 및 배포 선행 조건은 [Driver runtime diagnostics](driver-runtime-diagnostics.md)를 따른다.
+서버 수신·판정과 실제 기기 장애 재현은 앱 단위 검사와 별도 완료 기준이다.
+세션 복구 화면은 중복 요청을 제한하고 실패 단계를 구분하며, 독립적인 오류 신고와
+기기 저장·전송 대기·서버 접수 결과를 제공한다. 복구와 신고는 미전송 배송 기록·사진을
+삭제하지 않는다. 완성된 Android 배포 파일의 실제 운영 서버 주소도 설치·제출 전에 검사한다.

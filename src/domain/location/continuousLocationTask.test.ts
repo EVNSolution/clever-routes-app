@@ -3,7 +3,10 @@ import { describe, it } from 'node:test';
 
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createDriverAccessTokenStore } from '../driver/driverAccessTokenStore';
-import { createMockDriverAuthService } from '../driverAuth/driverAuth';
+import {
+  createMockDriverAuthService,
+  type DriverAccountAccessToken,
+} from '../driverAuth/driverAuth';
 import { createMockDriverEventService } from '../events/driverEvents';
 import { createInMemoryOfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 import { createMockRouteAccessService, sampleInvitedRouteAccess } from '../routeAccess/routeAccess';
@@ -352,6 +355,76 @@ describe('continuous location background task', () => {
         persisted.activeRouteSession?.routePlanId,
         sampleInvitedRouteAccess.routeAccess.routePlanId,
       );
+    }
+  });
+
+  it('does not let a late headless refresh overwrite newer access with the same refresh token', async () => {
+    const store = createTokenStore();
+    const expiredAccountAccess = {
+      ...accountAccess,
+      expiresAt: '2026-07-16T09:59:00.000Z',
+    };
+    const newerAccountAccess = {
+      ...accountAccess,
+      accessToken: 'newer-foreground-access',
+      expiresAt: '2026-07-16T12:30:00.000Z',
+    };
+    let resolveHeadlessRefresh!: (value: { accountAccess: DriverAccountAccessToken }) => void;
+    const headlessRefresh = new Promise<{ accountAccess: DriverAccountAccessToken }>((resolve) => {
+      resolveHeadlessRefresh = resolve;
+    });
+    let markRefreshStarted!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => { markRefreshStarted = resolve; });
+    await store.saveAuthenticatedDriver({
+      accountAccess: expiredAccountAccess,
+      phoneE164: '+14165550123',
+    });
+    await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+    await store.saveActiveRouteSession({
+      navigationStepIndex: 0,
+      routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+    });
+
+    const task = processContinuousLocationTaskBatch({
+      createDriverEventService: ({ refreshDriverAccess }) => ({
+        recordDriverEvent: async () => {
+          await refreshDriverAccess();
+          throw new Error('stop after refresh');
+        },
+      }),
+      driverAccessTokenStore: store,
+      driverAuthService: {
+        refreshSession: async () => {
+          markRefreshStarted();
+          return headlessRefresh;
+        },
+      },
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-07-16T10:01:00.000Z') },
+      ],
+      offlineQueue: createInMemoryOfflineSubmissionQueue(),
+      routeAccessService: createMockRouteAccessService(),
+    });
+
+    await refreshStarted;
+    await store.saveAuthenticatedDriver({
+      accountAccess: newerAccountAccess,
+      phoneE164: '+14165550123',
+    });
+    resolveHeadlessRefresh({
+      accountAccess: {
+        ...accountAccess,
+        accessToken: 'late-headless-access',
+        expiresAt: '2026-07-16T12:15:00.000Z',
+      },
+    });
+    await task;
+
+    const persisted = await store.loadActiveDriverAccess();
+    assert.equal(persisted.kind, 'active');
+    if (persisted.kind === 'active') {
+      assert.equal(persisted.accountAccess.accessToken, 'newer-foreground-access');
+      assert.equal(persisted.accountAccess.refreshToken, 'account-refresh');
     }
   });
 

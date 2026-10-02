@@ -1,6 +1,10 @@
 import type { DriverFlowState } from '../driverFlow/driverFlow';
-import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
+import { createDriverApiHttpError, readDriverApiErrorCode } from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
+import {
+  createDriverDiagnosticRequestId,
+  observeDriverDiagnosticOperation,
+} from '../diagnostics/driverDiagnosticObservation';
 
 export type RouteAccessLookupInput = {
   accountAccessToken: string;
@@ -274,25 +278,30 @@ export function createRouteAccessApiClient(input: {
 
   return {
     lookupRouteAccess: async (request) => {
-      const response = await fetchImpl(`${baseUrl}/driver/route-access/lookup`, withNoStoreDriverApiRequest({
-        body: JSON.stringify({
-          routeContext: request.routeContext?.trim() || null,
-        }),
-        headers: {
-          Authorization: `Bearer ${request.accountAccessToken.trim()}`,
-          'Content-Type': 'application/json',
-        },
-        method: 'POST',
-      }));
-      const payload = await response.json();
-      if (!response.ok) {
-        throw createDriverApiHttpError({
-          endpoint: 'Route access lookup',
-          status: response.status,
-        });
-      }
+      const requestId = createDriverDiagnosticRequestId();
+      return observeDriverDiagnosticOperation({ operation: 'ROUTE_LOOKUP', requestId }, async () => {
+        const response = await fetchImpl(`${baseUrl}/driver/route-access/lookup`, withNoStoreDriverApiRequest({
+          body: JSON.stringify({
+            routeContext: request.routeContext?.trim() || null,
+          }),
+          headers: {
+            Authorization: `Bearer ${request.accountAccessToken.trim()}`,
+            'Content-Type': 'application/json',
+            'X-Request-Id': requestId,
+          },
+          method: 'POST',
+        }));
+        const payload = await response.json();
+        if (!response.ok) {
+          throw createDriverApiHttpError({
+            code: readDriverApiErrorCode(payload),
+            endpoint: 'Route access lookup',
+            status: response.status,
+          });
+        }
 
-      return readRouteAccessEnvelope(payload);
+        return readRouteAccessEnvelope(payload);
+      });
     },
   };
 }

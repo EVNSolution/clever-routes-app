@@ -8,6 +8,7 @@ import {
   sampleInvitedRouteAccess,
   submitRouteAccess,
 } from './routeAccess';
+import { installDriverDiagnosticObserver } from '../diagnostics/driverDiagnosticObservation';
 
 describe('driver route access UX flow', () => {
   it('uses account access and maps returned routes to selectable route choices', async () => {
@@ -162,6 +163,9 @@ describe('driver route access UX flow', () => {
 
   it('posts account-authenticated lookup requests to the delivery-server contract endpoint', async () => {
     const requests: { body: unknown; cache?: string; credentials?: string; headers: Record<string, string>; method: string; url: string }[] = [];
+    installDriverDiagnosticObserver(null, {
+      requestIdFactory: () => '55555555-5555-4555-8555-555555555555',
+    });
     const client = createRouteAccessApiClient({
       baseUrl: 'https://delivery.example.com',
       fetchImpl: async (url, init) => {
@@ -197,6 +201,7 @@ describe('driver route access UX flow', () => {
           Pragma: 'no-cache',
           Authorization: 'Bearer account-access-token',
           'Content-Type': 'application/json',
+          'X-Request-Id': '55555555-5555-4555-8555-555555555555',
         },
         method: 'POST',
         url: 'https://delivery.example.com/driver/route-access/lookup',

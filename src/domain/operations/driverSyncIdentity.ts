@@ -17,22 +17,52 @@ export function createDriverSyncIdentity(input: {
 }) {
   const now = input.now ?? (() => new Date());
   let operation = Promise.resolve();
+  let identity: PersistedIdentity | null = null;
+  let initialization: Promise<PersistedIdentity> | null = null;
+
+  function loadIdentity(): Promise<PersistedIdentity> {
+    if (identity !== null) return Promise.resolve(identity);
+    if (initialization !== null) return initialization;
+
+    const pending = (async () => {
+      const parsed = parseIdentity(await input.storage.getItemAsync(STORAGE_KEY));
+      if (parsed !== null) {
+        identity = parsed;
+        return parsed;
+      }
+
+      const created: PersistedIdentity = {
+        deviceInstanceHash: await input.createDeviceInstanceHash(),
+        sessions: {},
+      };
+      await input.storage.setItemAsync(STORAGE_KEY, JSON.stringify(created));
+      identity = created;
+      return created;
+    })();
+    initialization = pending;
+    void pending.catch(() => {
+      if (initialization === pending) initialization = null;
+    });
+    return pending;
+  }
 
   return {
+    getDeviceInstanceHash(): Promise<string> {
+      return loadIdentity().then((current) => current.deviceInstanceHash);
+    },
     next(sessionKey: string): Promise<{ deviceInstanceHash: string; heartbeatSequence: number; sessionGeneration: string }> {
       const result = operation.catch(() => undefined).then(async () => {
-        const raw = await input.storage.getItemAsync(STORAGE_KEY);
-        const parsed = parseIdentity(raw);
-        const identity: PersistedIdentity = parsed ?? {
-          deviceInstanceHash: await input.createDeviceInstanceHash(),
-          sessions: {},
-        };
-        const current = identity.sessions[sessionKey] ?? { sequence: 0, sessionGeneration: now().toISOString() };
+        const currentIdentity = await loadIdentity();
+        const current = currentIdentity.sessions[sessionKey] ?? { sequence: 0, sessionGeneration: now().toISOString() };
         const next = { sequence: current.sequence + 1, sessionGeneration: current.sessionGeneration };
-        identity.sessions[sessionKey] = next;
-        await input.storage.setItemAsync(STORAGE_KEY, JSON.stringify(identity));
+        const updatedIdentity: PersistedIdentity = {
+          deviceInstanceHash: currentIdentity.deviceInstanceHash,
+          sessions: { ...currentIdentity.sessions, [sessionKey]: next },
+        };
+        await input.storage.setItemAsync(STORAGE_KEY, JSON.stringify(updatedIdentity));
+        identity = updatedIdentity;
         return {
-          deviceInstanceHash: identity.deviceInstanceHash,
+          deviceInstanceHash: updatedIdentity.deviceInstanceHash,
           heartbeatSequence: next.sequence,
           sessionGeneration: next.sessionGeneration,
         };

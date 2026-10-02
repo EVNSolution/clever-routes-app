@@ -50,13 +50,26 @@ export type DriverAccessRestoreResult =
   | { driverProfile?: PersistedDriverProfile; kind: 'expired' }
   | { kind: 'invalid' | 'missing' };
 
+export type ExpectedDriverAccessIdentity = {
+  accessToken: string;
+  phoneE164: string;
+  refreshToken: string;
+};
+
+export class StaleDriverAccessError extends Error {
+  constructor() {
+    super('Stored driver access changed before the operation completed.');
+    this.name = 'StaleDriverAccessError';
+  }
+}
+
 type StoredDriverAccessPayload = PersistedDriverAccess & {
   schemaVersion: 4;
   savedAt: string;
 };
 
 export type DriverAccessTokenStore = {
-  clear(): Promise<void>;
+  clear(expected?: ExpectedDriverAccessIdentity): Promise<void>;
   clearActiveRouteSession(routePlanId?: string, startedAt?: string, assignmentGeneration?: string): Promise<boolean>;
   clearCachedRouteAccess(routePlanId?: string): Promise<boolean>;
   loadActiveDriverAccess(): Promise<DriverAccessRestoreResult>;
@@ -81,7 +94,10 @@ export type DriverAccessTokenStore = {
   saveFromInvitedRouteAccess(
     routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>,
   ): Promise<boolean>;
-  saveRefreshedAccountAccess(accountAccess: DriverAccountAccessToken): Promise<void>;
+  saveRefreshedAccountAccess(
+    accountAccess: DriverAccountAccessToken,
+    expected?: ExpectedDriverAccessIdentity,
+  ): Promise<void>;
 };
 
 export function createDriverAccessTokenStore(input: {
@@ -106,6 +122,20 @@ export function createDriverAccessTokenStore(input: {
     return rawPayload === null ? null : parseStoredDriverAccessPayload(rawPayload);
   }
 
+  function assertExpectedIdentity(
+    payload: StoredDriverAccessPayload | null,
+    expected: ExpectedDriverAccessIdentity,
+  ): asserts payload is StoredDriverAccessPayload {
+    if (
+      payload === null
+      || payload.accountAccess.accessToken !== expected.accessToken
+      || payload.driverProfile.phoneE164 !== expected.phoneE164
+      || payload.accountAccess.refreshToken !== expected.refreshToken
+    ) {
+      throw new StaleDriverAccessError();
+    }
+  }
+
   async function updateStoredPayload(
     updater: (payload: StoredDriverAccessPayload) => StoredDriverAccessPayload | null,
   ): Promise<boolean> {
@@ -126,7 +156,12 @@ export function createDriverAccessTokenStore(input: {
   }
 
   return {
-    clear: () => runSerialized(clearStoredPayload),
+    clear: (expected) => runSerialized(async () => {
+      if (expected !== undefined) {
+        assertExpectedIdentity(await loadStoredPayload(), expected);
+      }
+      await clearStoredPayload();
+    }),
     clearActiveRouteSession: (routePlanId, startedAt, assignmentGeneration) => runSerialized(() => updateStoredPayload((payload) => {
       const persistedStartedAt = payload.activeRouteSession?.startedAt ?? payload.activeRouteSession?.updatedAt;
       if (
@@ -296,12 +331,24 @@ export function createDriverAccessTokenStore(input: {
             savedAt: now().toISOString(),
           }
     ))),
-    saveRefreshedAccountAccess: async (accountAccess) => {
-      await runSerialized(() => updateStoredPayload((payload) => ({
-        ...payload,
-        accountAccess,
-        savedAt: now().toISOString(),
-      })));
+    saveRefreshedAccountAccess: async (accountAccess, expected) => {
+      await runSerialized(async () => {
+        const payload = await loadStoredPayload();
+        if (expected !== undefined) {
+          assertExpectedIdentity(payload, expected);
+        }
+        if (payload === null) {
+          return;
+        }
+        await input.storage.setItemAsync(
+          DRIVER_ACCESS_TOKEN_STORAGE_KEY,
+          JSON.stringify({
+            ...payload,
+            accountAccess,
+            savedAt: now().toISOString(),
+          }),
+        );
+      });
     },
   };
 }

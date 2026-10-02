@@ -6,6 +6,10 @@ import {
   createDriverApiClientsFromRouteAccess,
 } from './driverApiClients';
 import { sampleInvitedRouteAccess } from '../../domain/routeAccess/routeAccess';
+import {
+  installDriverDiagnosticObserver,
+  type DriverDiagnosticObservation,
+} from '../../domain/diagnostics/driverDiagnosticObservation';
 
 describe('driver API client token handoff', () => {
   it('builds consent and assigned-route clients from route access token evidence', async () => {
@@ -98,7 +102,12 @@ describe('driver API client token handoff', () => {
 
   it('retries a driver API call once with refreshed access after an expired driver token', async () => {
     const requests: { headers: Record<string, string>; url: string }[] = [];
+    const observations: DriverDiagnosticObservation[] = [];
     let refreshCount = 0;
+    installDriverDiagnosticObserver((observation) => { observations.push(observation); }, {
+      setTimeout: () => 1,
+      clearTimeout: () => undefined,
+    });
     const clients = createDriverApiClientsFromRouteAccess({
       baseUrl: 'https://delivery.example.com/',
       fetchImpl: async (url, init) => {
@@ -136,6 +145,13 @@ describe('driver API client token handoff', () => {
       requests.map((request) => request.headers.Authorization),
       ['Bearer fixture-driver-access-token', 'Bearer fresh-driver-token'],
     );
+    assert.deepEqual(
+      observations.filter((item): item is Extract<DriverDiagnosticObservation, { kind: 'OPERATION' }> => (
+        item.kind === 'OPERATION' && item.operation === 'AUTH_REFRESH'
+      )).map((item) => item.phase),
+      ['STARTED', 'SUCCEEDED'],
+    );
+    installDriverDiagnosticObserver(null);
   });
 
   it('does not replay an account-A event after its refresh signal is aborted by account-B login', async () => {

@@ -37,6 +37,7 @@ import {
   type OperationalDialogState,
 } from './OperationalDialog';
 import { createRouteProgressRefreshGuard } from './routeProgressRefreshGuard';
+import { clearInvoluntaryDriverSession } from './involuntaryDriverSessionClear';
 import { useCompletionAssistance } from './useCompletionAssistance';
 import { CompletionAssistancePanel, LocationInferenceNotice } from './CompletionAssistancePanel';
 import { getLocationInferredStopIds } from './completionAssistanceDisplay';
@@ -184,7 +185,11 @@ import {
 import { createDriverRuntimeServices, readDriverRuntimeConfig } from './config/driverRuntimeConfig';
 import { createMockDriverConsentService, submitDriverConsent, type DriverConsentService, type DriverConsentSubmissionResult } from '../domain/consent/driverConsent';
 import { resetDriverSession } from '../domain/driver/driverSessionReset';
-import type { PersistedActiveRouteSession, PersistedDriverAccess } from '../domain/driver/driverAccessTokenStore';
+import { StaleDriverAccessError, type PersistedActiveRouteSession, type PersistedDriverAccess } from '../domain/driver/driverAccessTokenStore';
+import { createDriverRestoreAttemptCoordinator } from './driverRestoreAttempt';
+import { getDriverReportFeedback, getDriverRestoreFeedback } from './driverRestoreFeedback';
+import { createDriverDiagnosticRequestId, emitDriverDiagnosticObservation, observeDriverDiagnosticOperation } from '../domain/diagnostics/driverDiagnosticObservation';
+import type { DriverDiagnosticReportStatus } from '../domain/diagnostics/driverDiagnosticOutbox';
 import type { DriverAccountAccessToken } from '../domain/driverAuth/driverAuth';
 import {
   DEFAULT_DRIVER_PHONE_COUNTRY,
@@ -256,6 +261,14 @@ import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
 import { requestActiveRouteSwitchConfirmation } from './activeRouteSwitchConfirmation';
 import { requestRouteReconciliationClearConfirmation } from './routeReconciliationClearConfirmation';
 import { persistOfflineQueueAndSyncState } from './offlineQueuePersistence';
+import {
+  revokeExpoDriverDiagnosticRegistrationOnLogout,
+  reportExpoDriverDiagnosticIssue,
+  startExpoDriverDiagnosticRuntime,
+  updateExpoDriverDiagnosticNetwork,
+  updateExpoDriverDiagnosticNextRetry,
+  updateExpoDriverDiagnosticQueue,
+} from '../platform/expo/diagnostics/expoDriverDiagnosticRuntime';
 import { createDriverReleasedRoutePayload } from '../domain/route/routeDeletion';
 
 type AppScreen =
@@ -502,6 +515,7 @@ function DriverApp() {
   const isPushRegistrationRunningRef = useRef(false);
 
   const syncOfflineQueueState = useCallback((queue: OfflineSubmissionQueue | null) => {
+    updateExpoDriverDiagnosticQueue(queue);
     if (queue === null) {
       setOfflineQueueCount(0);
       setCompletionClearOutboxCount(0);
@@ -749,6 +763,10 @@ function DriverApp() {
 
   const runtimeServices = useMemo(() => createDriverRuntimeServices({ config: runtimeConfig }), [runtimeConfig]);
   const installedDriverAppVersion = useMemo(() => readInstalledDriverAppVersion(), []);
+  useEffect(() => {
+    startExpoDriverDiagnosticRuntime();
+    updateExpoDriverDiagnosticNetwork(networkReachability);
+  }, [networkReachability]);
   const driverAppReleaseService = useMemo(() => (
     runtimeConfig.mode === 'live' && Platform.OS === 'android'
       ? createDriverAppReleaseApiClient({ baseUrl: runtimeConfig.deliveryServerBaseUrl })
@@ -813,6 +831,14 @@ function DriverApp() {
       : createMockRouteAccessService(sampleInvitedRouteAccess)
   ), [runtimeConfig.mode, runtimeServices.routeAccessService]);
   const driverAuthService = runtimeServices.driverAuthService;
+  const restoreDiagnosticId = useMemo(() => createDriverDiagnosticRequestId(), []);
+  const driverRestoreCoordinator = useMemo(() => createDriverRestoreAttemptCoordinator({
+    load: () => observeDriverDiagnosticOperation({ operation: 'STORAGE_READ', clientEventId: restoreDiagnosticId }, () => driverAccessTokenStore.loadActiveDriverAccess()),
+    operationTimeoutMs: DRIVER_RESTORE_LOADING_TIMEOUT_MS,
+    refresh: (refreshToken, signal) => driverAuthService.refreshSession({ refreshToken }, { signal }),
+    save: (access, expected) => observeDriverDiagnosticOperation({ operation: 'STORAGE_WRITE', clientEventId: restoreDiagnosticId }, () => driverAccessTokenStore.saveRefreshedAccountAccess(access, expected)),
+  }), [driverAccessTokenStore, driverAuthService, restoreDiagnosticId]);
+  useEffect(() => () => driverRestoreCoordinator.invalidate(), [driverRestoreCoordinator]);
 
   const getActiveAccountAccess = useCallback(async (
     options?: { isCurrent?: () => boolean; persistRefreshedAccess?: boolean },
@@ -831,7 +857,11 @@ function DriverApp() {
     });
     if (options?.isCurrent?.() === false) return null;
     if (options?.persistRefreshedAccess !== false) {
-      await driverAccessTokenStore.saveRefreshedAccountAccess(refreshResult.accountAccess);
+      await driverAccessTokenStore.saveRefreshedAccountAccess(refreshResult.accountAccess, {
+        accessToken: restoredAccess.accountAccess.accessToken,
+        phoneE164: restoredAccess.driverProfile.phoneE164,
+        refreshToken: restoredAccess.accountAccess.refreshToken,
+      });
     }
     if (options?.isCurrent?.() === false) return null;
     return refreshResult.accountAccess;
@@ -858,10 +888,20 @@ function DriverApp() {
         throw error;
       }
 
+      const expectedAccess = await driverAccessTokenStore.loadActiveDriverAccess();
+      if (
+        (expectedAccess.kind !== 'active' && expectedAccess.kind !== 'refresh_required')
+        || expectedAccess.accountAccess.accessToken !== accountAccess.accessToken
+        || expectedAccess.accountAccess.refreshToken !== accountAccess.refreshToken
+      ) throw new StaleDriverAccessError();
       const refreshed = await driverAuthService.refreshSession({
         refreshToken: accountAccess.refreshToken,
       });
-      await driverAccessTokenStore.saveRefreshedAccountAccess(refreshed.accountAccess);
+      await driverAccessTokenStore.saveRefreshedAccountAccess(refreshed.accountAccess, {
+        accessToken: expectedAccess.accountAccess.accessToken,
+        phoneE164: expectedAccess.driverProfile.phoneE164,
+        refreshToken: expectedAccess.accountAccess.refreshToken,
+      });
       return submitRouteAccess({
         accountAccessToken: refreshed.accountAccess.accessToken,
       }, routeAccessService);
@@ -3032,8 +3072,12 @@ function DriverApp() {
           setMessage('Sign in again to confirm the pending route completion. GPS tracking stays stopped until the receipt is resolved.');
           return;
         }
-        await clearAndStopActiveLocationSession();
-        await driverAccessTokenStore.clear();
+        await clearInvoluntaryDriverSession({
+          clearAccess: () => driverAccessTokenStore.clear(),
+          clearLocation: async () => {
+            await clearAndStopActiveLocationSession();
+          },
+        });
         resetRouteProgress();
         setVerifiedDriverPhoneE164(null);
         setScreen('loginPhone');
@@ -3123,8 +3167,12 @@ function DriverApp() {
       );
     } catch (error) {
       if (shouldDiscardSavedLoginAfterRefreshFailure(error)) {
-        await clearAndStopActiveLocationSession();
-        await driverAccessTokenStore.clear();
+        await clearInvoluntaryDriverSession({
+          clearAccess: () => driverAccessTokenStore.clear(),
+          clearLocation: async () => {
+            await clearAndStopActiveLocationSession();
+          },
+        });
         resetRouteProgress();
         setVerifiedDriverPhoneE164(null);
         setRouteSyncState('idle');
@@ -3408,6 +3456,7 @@ function DriverApp() {
       isForeground: () => AppState.currentState === 'active',
       isOnline: () => networkReachability === 'online',
       policy: { initialDelayMs: 15_000, jitterRatio: 0.2, maxDelayMs: 60_000 },
+      onNextRetryAt: updateExpoDriverDiagnosticNextRetry,
       retry: retryPendingSubmissionsAfterNetworkRecovery,
       schedule: (run, delayMs) => setTimeout(run, delayMs),
     });
@@ -3806,104 +3855,86 @@ function DriverApp() {
     }
 
     let isMounted = true;
-    const restoreWatchdog = setTimeout(() => {
-      if (isMounted) {
-        setDriverRestoreProblem('Session check is taking longer than expected. Try again.');
-      }
-    }, DRIVER_RESTORE_LOADING_TIMEOUT_MS);
+    const reportFailure = (phase: 'LOAD' | 'REFRESH' | 'SAVE', error: unknown, stillPending = false) => {
+      if (!isMounted) return;
+      const feedback = getDriverRestoreFeedback(phase, error, stillPending);
+      setDriverRestoreProblem(feedback.message);
+      emitDriverDiagnosticObservation({
+        kind: 'OPERATION', phase: 'FAILED', clientEventId: restoreDiagnosticId,
+        operation: phase === 'LOAD' ? 'STORAGE_READ' : phase === 'SAVE' ? 'STORAGE_WRITE' : 'AUTH_REFRESH',
+        reasonCode: feedback.blocker.reasonCode,
+        ...(feedback.blocker.httpStatus === undefined ? {} : { httpStatus: feedback.blocker.httpStatus }),
+      });
+    };
 
     void (async () => {
-      try {
-        const result = await driverAccessTokenStore.loadActiveDriverAccess();
-        if (!isMounted) {
+      const outcome = await driverRestoreCoordinator.attempt();
+      if (!isMounted || outcome.kind === 'stale') return;
+      if (outcome.kind === 'retryable_failure') {
+        if (outcome.error instanceof StaleDriverAccessError) {
+          setDriverRestoreProblem('Your session changed while it was being checked. Try again to load the current session.');
           return;
         }
-        if (result.kind === 'expired') {
-          clearTimeout(restoreWatchdog);
-          if (result.driverProfile !== undefined) {
-            setNationalPhoneInput(result.driverProfile.phoneE164);
-            setMessage('Your saved login expired. Enter your PIN to continue.');
-          }
-          setScreen('loginPhone');
-          setIsDriverRestoreComplete(true);
-          void clearAndStopActiveLocationSession();
-          return;
-        }
-        if (result.kind !== 'active' && result.kind !== 'refresh_required') {
-          clearTimeout(restoreWatchdog);
-          setScreen('loginPhone');
-          setIsDriverRestoreComplete(true);
-          void clearAndStopActiveLocationSession();
-          return;
-        }
-
-        let accountAccess = result.accountAccess;
-        if (result.kind === 'refresh_required') {
+        if (outcome.phase === 'REFRESH' && outcome.expectedIdentity !== undefined && shouldDiscardSavedLoginAfterRefreshFailure(outcome.error)) {
           try {
-            accountAccess = (await driverAuthService.refreshSession({
-              refreshToken: result.accountAccess.refreshToken,
-            })).accountAccess;
-            await driverAccessTokenStore.saveRefreshedAccountAccess(accountAccess);
+            await runBoundedAsyncOperation(() => driverAccessTokenStore.clear(outcome.expectedIdentity), { timeoutMs: DRIVER_RESTORE_LOADING_TIMEOUT_MS });
           } catch (error) {
-            clearTimeout(restoreWatchdog);
-            if (shouldDiscardSavedLoginAfterRefreshFailure(error)) {
-              void driverAccessTokenStore.clear().catch(() => undefined);
-              if (isMounted) {
-                setNationalPhoneInput(result.driverProfile.phoneE164);
-                setMessage('Your saved login expired. Enter your PIN to continue.');
-                setScreen('loginPhone');
-                setIsDriverRestoreComplete(true);
-              }
-              void clearAndStopActiveLocationSession();
-              return;
-            }
-
-            if (isMounted) {
-              setNationalPhoneInput(result.driverProfile.phoneE164);
-              setDriverRestoreProblem('Your saved login is safe. Check your connection and try again.');
-            }
+            if (error instanceof StaleDriverAccessError) {
+              if (isMounted) setDriverRestoreProblem('Your session changed while it was being checked. Try again to load the current session.');
+            } else reportFailure('SAVE', error);
             return;
           }
-        }
-
-        if (!isMounted) {
+          if (!isMounted) return;
+          setNationalPhoneInput(outcome.expectedIdentity.phoneE164);
+          setMessage('Your saved login expired. Enter your PIN to continue.');
+          setScreen('loginPhone');
+          setIsDriverRestoreComplete(true);
+          void clearAndStopActiveLocationSession();
           return;
         }
-        clearTimeout(restoreWatchdog);
-        setNationalPhoneInput(result.driverProfile.phoneE164);
-        setVerifiedDriverPhoneE164(result.driverProfile.phoneE164);
-        setAcceptedPrivacy(true);
-        setAcceptedLocation(true);
-        setScreen('mainTabs');
-        setIsDriverRestoreComplete(true);
-        await handleLoginAndLoadRoutes(
-          accountAccess,
-          result.driverProfile.phoneE164,
-          {
-            activeRouteSession: result.activeRouteSession ?? null,
-            allowVerifiedDriverNoRoute: true,
-            persistedAccess: result,
-          },
-        );
-      } catch {
-        clearTimeout(restoreWatchdog);
-        if (isMounted) {
-          setDriverRestoreProblem('Your saved login is safe. Check your connection and try again.');
-        }
+        reportFailure(outcome.phase, outcome.error, outcome.stillPending);
+        return;
       }
-    })();
+      const result = outcome.access;
+      if (outcome.kind === 'login_required') {
+        if (result.kind === 'expired' && result.driverProfile !== undefined) {
+          setNationalPhoneInput(result.driverProfile.phoneE164);
+          setMessage('Your saved login expired. Enter your PIN to continue.');
+        }
+        setScreen('loginPhone');
+        setIsDriverRestoreComplete(true);
+        void clearAndStopActiveLocationSession();
+        return;
+      }
 
-    return () => {
-      isMounted = false;
-      clearTimeout(restoreWatchdog);
-    };
+      const restored = outcome.access;
+      emitDriverDiagnosticObservation({ kind: 'OPERATION', operation: 'AUTH_REFRESH', phase: 'SUCCEEDED', clientEventId: restoreDiagnosticId });
+      setNationalPhoneInput(restored.driverProfile.phoneE164);
+      setVerifiedDriverPhoneE164(restored.driverProfile.phoneE164);
+      setAcceptedPrivacy(true);
+      setAcceptedLocation(true);
+      setScreen('mainTabs');
+      setIsDriverRestoreComplete(true);
+      void handleLoginAndLoadRoutes(
+        restored.accountAccess,
+        restored.driverProfile.phoneE164,
+        {
+          activeRouteSession: restored.activeRouteSession ?? null,
+          allowVerifiedDriverNoRoute: true,
+          persistedAccess: restored,
+        },
+      ).catch(() => setRouteSyncState('error'));
+    })().catch(error => reportFailure('LOAD', error));
+
+    return () => { isMounted = false; };
   }, [
     clearAndStopActiveLocationSession,
     driverAccessTokenStore,
-    driverAuthService,
     driverRestoreAttempt,
+    driverRestoreCoordinator,
     handleLoginAndLoadRoutes,
     isDriverRestoreComplete,
+    restoreDiagnosticId,
     setScreen,
   ]);
 
@@ -5391,15 +5422,30 @@ function DriverApp() {
     pendingImmediateDriverSyncHeartbeatRef.current = false;
     setDriverSyncHealth(null);
     setMessage(null);
+    const restoredLogoutAccess = runtimeConfig.mode === 'live'
+      ? await runBoundedAsyncOperation(
+        () => driverAccessTokenStore.loadActiveDriverAccess(),
+        { timeoutMs: 5000 },
+      ).catch(() => null)
+      : null;
+    const logoutAccountAccess = restoredLogoutAccess?.kind === 'active'
+      ? restoredLogoutAccess.accountAccess
+      : null;
+    await revokeExpoDriverDiagnosticRegistrationOnLogout(logoutAccountAccess?.accessToken ?? null);
     const registeredDevicePushToken = registeredDevicePushTokenRef.current
-      ?? await stopArrivalNotificationService.getDevicePushToken().catch(() => null);
+      ?? await runBoundedAsyncOperation(
+        () => stopArrivalNotificationService.getDevicePushToken(),
+        { timeoutMs: 5000 },
+      ).catch(() => null);
     if (registeredDevicePushToken !== null && runtimeConfig.mode === 'live') {
-      const accountAccess = await getActiveAccountAccess().catch(() => null);
-      if (accountAccess !== null) {
-        await driverAuthService.revokePushInstallation({
-          accountAccessToken: accountAccess.accessToken,
-          devicePushToken: registeredDevicePushToken,
-        }).catch(() => undefined);
+      if (logoutAccountAccess !== null) {
+        await runBoundedAsyncOperation(
+          () => driverAuthService.revokePushInstallation({
+            accountAccessToken: logoutAccountAccess.accessToken,
+            devicePushToken: registeredDevicePushToken,
+          }),
+          { timeoutMs: 5000 },
+        ).catch(() => undefined);
       }
     }
     registeredDevicePushTokenRef.current = null;
@@ -5967,12 +6013,45 @@ function DriverRestoreScreen({
   onRetry(): void;
   problem: string | null;
 }) {
+  const [report, setReport] = useState<{ id: string | null; status: DriverDiagnosticReportStatus | null } | null>(null);
+  const [isPreparingReport, setIsPreparingReport] = useState(false);
+  const reportPendingRef = useRef(false);
+  const reportMountedRef = useRef(true);
+  const unsubscribeReportRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    reportMountedRef.current = true;
+    return () => {
+      reportMountedRef.current = false;
+      unsubscribeReportRef.current?.();
+    };
+  }, []);
+  const canReport = report === null || report.status === null || report.status.state === 'FAILED';
+  const handleReport = async () => {
+    if (reportPendingRef.current || !canReport) return;
+    reportPendingRef.current = true;
+    setIsPreparingReport(true);
+    try {
+      const handle = await reportExpoDriverDiagnosticIssue();
+      if (!reportMountedRef.current) return;
+      unsubscribeReportRef.current?.();
+      if (handle === null) { setReport({ id: null, status: null }); return; }
+      setReport({ id: handle.diagnosticId, status: handle.getStatus() });
+      unsubscribeReportRef.current = handle.subscribe(status => {
+        if (reportMountedRef.current) setReport({ id: handle.diagnosticId, status });
+      });
+    } catch {
+      if (reportMountedRef.current) setReport({ id: null, status: null });
+    } finally {
+      reportPendingRef.current = false;
+      if (reportMountedRef.current) setIsPreparingReport(false);
+    }
+  };
   return (
-    <View style={styles.driverRestoreScreen}>
+    <ScrollView contentContainerStyle={styles.driverRestoreScreen}>
       <Text style={styles.driverRestoreBrand}><Text style={styles.brandBlue}>Clever</Text> <Text style={styles.brandGreen}>Routes</Text></Text>
       {problem === null ? <ActivityIndicator color="#0b57d0" size="large" /> : null}
       <Text style={styles.driverRestoreTitle}>
-        {problem === null ? 'Restoring your session' : 'Connection needed'}
+        {problem === null ? 'Restoring your session' : 'Session recovery needed'}
       </Text>
       <Text style={styles.driverRestoreBody}>
         {problem ?? 'Checking your saved login and preparing My Routes.'}
@@ -5980,9 +6059,17 @@ function DriverRestoreScreen({
       {problem !== null ? (
         <View style={styles.driverRestoreRetry}>
           <PrimaryButton label="Try Again" onPress={onRetry} />
+          <Text style={styles.driverRestoreBody}>Retrying does not delete saved deliveries or photos.</Text>
+          <SecondaryButton disabled={!canReport || isPreparingReport} label="Report issue" loading={isPreparingReport} onPress={() => { void handleReport(); }} />
         </View>
       ) : null}
-    </View>
+      {report !== null ? (
+        <View style={styles.driverRestoreReport} accessibilityLiveRegion="polite">
+          <Text style={styles.driverRestoreBody}>{getDriverReportFeedback(report.status)}</Text>
+          {report.id !== null ? <Text selectable style={styles.driverRestoreReportId}>Report number: {report.id}</Text> : null}
+        </View>
+      ) : null}
+    </ScrollView>
   );
 }
 
@@ -8355,10 +8442,11 @@ const styles = StyleSheet.create({
   },
   driverRestoreScreen: {
     alignItems: 'center',
-    flex: 1,
+    flexGrow: 1,
     gap: 14,
     justifyContent: 'center',
     paddingHorizontal: 32,
+    paddingVertical: 48,
   },
   driverRestoreBrand: {
     fontSize: 28,
@@ -8382,9 +8470,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   driverRestoreRetry: {
+    alignItems: 'center',
+    gap: 14,
     marginTop: 8,
     width: '100%',
   },
+  driverRestoreReport: { alignItems: 'center', gap: 8, width: '100%' },
+  driverRestoreReportId: { color: '#344054', fontSize: 12, lineHeight: 18, textAlign: 'center' },
   keyboardArea: {
     flex: 1,
   },

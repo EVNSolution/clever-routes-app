@@ -1,5 +1,29 @@
 # Release readiness checklist
 
+## Independent runtime diagnostics release gate
+
+The app contract in `docs/driver-runtime-diagnostics.md` adds an independent
+SQLCipher outbox, ingestion-only credential, and lifecycle/location/sync observations.
+Server PR #472 is deployed at `675f8d24514bcafbac2e105269de86658c6b512e`;
+read-only runtime revision/image checks match the deployment evidence. It implements
+registration/revocation, idempotent ingestion, route/account isolation, attempt
+correlation, conservative UNKNOWN classification, admin query, and 30-day retention.
+The app's local pending history remains bounded to seven days and 1,000 records.
+
+Permanent-rejection quarantine and bounded explicit-logout revocation pass source
+and native-storage tests. The Android release still requires physical-device fault
+tests. Test locked
+background callbacks, offline replay, business-storage failure, expired business
+auth, response loss, and absent signals. Preserve unsubmitted business events/photos.
+Do not report source tests or server deployment as installed-device acceptance.
+The current release request is Android/Google Play; iOS physical acceptance remains
+separate and is required before an iOS release.
+
+Review store privacy declarations for the added diagnostic collection. Records
+exclude tokens, PINs, customer information, free-form errors, and raw coordinates;
+they retain app/build/OS, stage timestamps, stable reasons, and restricted
+correlation identifiers. Operational display uses `America/Toronto`.
+
 ## Purpose
 
 This document tracks the non-code evidence needed before a production iOS/Android release of `clever-routes-app`. Product scope remains in `docs/project-brief.md`; app-side API/runtime behavior remains in `docs/route-access-flow.md`.
@@ -157,7 +181,7 @@ mock work still requires `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock` with no server U
 
 `cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied
 to committed source. `cli.appVersionSource` is `remote`; the reviewed native
-source version is `1.3.3` (`versionCode` `39`, iOS build `1`). Android
+source version is `1.3.4` (`versionCode` `40`, iOS build `1`). Android
 `versionCode` `38` was reserved for the rejected diagnostic candidate and must
 not be submitted or promoted. Publication is
 proved separately by the public release manifest and downloadable artifact,
@@ -175,6 +199,55 @@ Firebase configuration through `CLEVER_ROUTES_GOOGLE_SERVICES_FILE`; never commi
 it. This recovery profile reuses the reserved version and is not a new-release
 version allocator. Validate package, version, signature and checksum before any
 upload; a local build does not create a cloud EAS build record.
+
+### Isolate Metro and verify the embedded Android endpoint
+
+Each local production build must use a new, empty `TMPDIR`. Expo stores Metro
+transforms under the process temporary directory, separately from
+`EAS_LOCAL_BUILD_WORKINGDIR`. In CI mode, cached transforms can retain an inlined
+QA endpoint even when the next build supplies production environment values.
+Changing the EAS working directory alone does not isolate this cache. Preserve
+shared caches used by other builds; allocate a private temporary directory instead.
+
+After verifying the reserved version and EAS `production` environment as above,
+the local recovery build can be invoked with:
+
+```bash
+release_tmp="$(mktemp -d "${TMPDIR:-/tmp}/clever-routes-release.XXXXXX")"
+TMPDIR="$release_tmp" \
+  EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live \
+  EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://clever-route.cleversystem.ai \
+  npx eas-cli build --local -p android --profile production-local
+```
+
+Use the same per-build `TMPDIR` isolation for direct Gradle release commands.
+The EAS production environment must also contain those canonical public values.
+Keep the source SHA, build command, private temporary directory, artifact checksum,
+and following verifier output together in the external release evidence.
+
+Before deriving a device APK, installing a release candidate, or uploading to
+Google Play, inspect the completed AAB itself. Also inspect any APK derived from it:
+
+```bash
+python3 scripts/verify-android-artifact-runtime.py --artifact /path/to/release.aab
+python3 scripts/verify-android-artifact-runtime.py --artifact /path/to/release.apk
+```
+
+Both commands must exit `0`. The verifier reads the packaged
+`index.android.bundle`, requires the fixed production URL, and rejects known
+local QA endpoint bytes, including artifacts containing both endpoints. An
+unexpected endpoint or unreadable bundle blocks promotion even if the build,
+manifest, signature, and AAB-to-APK payload comparison passed. Preserve a rejected
+artifact as evidence and rebuild from the committed source with a fresh temporary
+directory. Do not modify the signed artifact in place.
+
+This byte-level check addresses endpoint contamination; it does not establish
+all runtime settings, signing correctness, or successful device connectivity.
+Record those checks separately. Run the standard-library regression tests with:
+
+```bash
+python3 -m unittest discover -s scripts -p 'test_verify_android_artifact_runtime.py'
+```
 
 Before running any preview/production EAS build for evidence, run:
 

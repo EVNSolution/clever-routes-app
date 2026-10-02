@@ -16,6 +16,10 @@ import type {
   AssignedRouteEtaSnapshotStop,
 } from '../route/assignedRoute';
 import type { RouteEventLocationEvidence } from '../route/routeEndPolicy';
+import {
+  createDriverDiagnosticRequestId,
+  observeDriverDiagnosticOperation,
+} from '../diagnostics/driverDiagnosticObservation';
 
 export type DriverEventType =
   | 'LOCATION_UPDATED'
@@ -182,25 +186,39 @@ export function createDriverEventsApiClient(input: {
     prepareDriverEvent,
     recordDriverEvent: async (event, options) => {
       const preparedEvent = prepareDriverEvent(event);
-      const response = await fetchImpl(`${baseUrl}/driver/events`, withNoStoreDriverApiRequest({
-        body: JSON.stringify(toDriverEventRequestBody(preparedEvent)),
-        headers: {
-          Authorization: `Bearer ${input.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        method: 'POST',
-        signal: options?.signal,
-      }));
-      const payload = await response.json();
-      if (!response.ok) {
-        throw createDriverApiHttpError({
-          code: readDriverApiErrorCode(payload),
-          endpoint: 'Driver event record',
-          status: response.status,
-        });
-      }
+      const requestId = createDriverDiagnosticRequestId();
+      return observeDriverDiagnosticOperation({
+        clientEventId: preparedEvent.clientEventId,
+        operation: preparedEvent.eventType === 'LOCATION_UPDATED' ? 'GPS_SEND' : 'EVENT_SEND',
+        requestId,
+        ...(preparedEvent.routePlanId === null || preparedEvent.routePlanId === undefined
+          ? {}
+          : { routePlanId: preparedEvent.routePlanId }),
+        ...(preparedEvent.assignmentGeneration === undefined
+          ? {}
+          : { sessionGeneration: preparedEvent.assignmentGeneration }),
+      }, async () => {
+        const response = await fetchImpl(`${baseUrl}/driver/events`, withNoStoreDriverApiRequest({
+          body: JSON.stringify(toDriverEventRequestBody(preparedEvent)),
+          headers: {
+            Authorization: `Bearer ${input.accessToken}`,
+            'Content-Type': 'application/json',
+            'X-Request-Id': requestId,
+          },
+          method: 'POST',
+          signal: options?.signal,
+        }));
+        const payload = await response.json();
+        if (!response.ok) {
+          throw createDriverApiHttpError({
+            code: readDriverApiErrorCode(payload),
+            endpoint: 'Driver event record',
+            status: response.status,
+          });
+        }
 
-      return readDriverEventRecordEnvelope(payload);
+        return readDriverEventRecordEnvelope(payload);
+      });
     },
   };
 }
