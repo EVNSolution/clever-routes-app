@@ -7,6 +7,7 @@ import {
   createDriverAccessTokenStore,
   DRIVER_ACCESS_TOKEN_STORAGE_KEY,
   type SecureTokenStorage,
+  StaleDriverAccessError,
 } from './driverAccessTokenStore';
 
 function createMemoryStorage(seed: Record<string, string | null> = {}): SecureTokenStorage & {
@@ -242,6 +243,121 @@ test('refreshes only account access and preserves route and active session', asy
   assert.equal(restored.accountAccess.accessToken, 'refreshed-account-access');
   assert.equal(restored.driverAccess?.accessToken, 'fixture-driver-access-token');
   assert.equal(restored.activeRouteSession?.navigationStepIndex, 2);
+});
+
+test('rejects a stale account refresh and clear after another account signs in', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+  const previousIdentity = {
+    accessToken: 'account-access-token',
+    phoneE164: '+821089216198',
+    refreshToken: 'previous-refresh-token',
+  };
+  await saveAccount(store, accountAccess({ refreshToken: previousIdentity.refreshToken }));
+  await store.saveAuthenticatedDriver({
+    accountAccess: accountAccess({
+      accessToken: 'replacement-access-token',
+      refreshToken: 'replacement-refresh-token',
+    }),
+    phoneE164: '+14165550100',
+  });
+
+  await assert.rejects(
+    store.saveRefreshedAccountAccess(accountAccess({
+      accessToken: 'late-previous-access-token',
+      refreshToken: 'late-previous-refresh-token',
+    }), previousIdentity),
+    (error: unknown) => error instanceof StaleDriverAccessError
+      && error.message === 'Stored driver access changed before the operation completed.',
+  );
+  await assert.rejects(
+    store.clear(previousIdentity),
+    StaleDriverAccessError,
+  );
+
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.driverProfile.phoneE164, '+14165550100');
+  assert.equal(restored.accountAccess.accessToken, 'replacement-access-token');
+  assert.equal(restored.accountAccess.refreshToken, 'replacement-refresh-token');
+});
+
+test('rejects stale save and clear when the server reuses the same-account refresh token', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+  const phoneE164 = '+821089216198';
+  const reusedRefreshToken = 'server-reused-refresh-token';
+  await saveAccount(store, accountAccess({
+    accessToken: 'access-generation-1',
+    refreshToken: reusedRefreshToken,
+  }));
+  await store.saveRefreshedAccountAccess(accountAccess({
+    accessToken: 'access-generation-2',
+    refreshToken: reusedRefreshToken,
+  }), {
+    accessToken: 'access-generation-1',
+    phoneE164,
+    refreshToken: reusedRefreshToken,
+  });
+
+  await assert.rejects(
+    store.saveRefreshedAccountAccess(accountAccess({
+      accessToken: 'late-access-generation-1',
+      refreshToken: reusedRefreshToken,
+    }), {
+      accessToken: 'access-generation-1',
+      phoneE164,
+      refreshToken: reusedRefreshToken,
+    }),
+    StaleDriverAccessError,
+  );
+  await assert.rejects(store.clear({
+    accessToken: 'access-generation-1',
+    phoneE164,
+    refreshToken: reusedRefreshToken,
+  }), StaleDriverAccessError);
+
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.accountAccess.accessToken, 'access-generation-2');
+  assert.equal(restored.accountAccess.refreshToken, reusedRefreshToken);
+});
+
+test('conditionally refreshes and clears only the matching account identity', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+  const expected = {
+    accessToken: 'account-access-token',
+    phoneE164: '+821089216198',
+    refreshToken: 'matching-refresh-token',
+  };
+  await saveAccount(store, accountAccess({ refreshToken: expected.refreshToken }));
+  await store.saveRefreshedAccountAccess(accountAccess({
+    accessToken: 'matched-refreshed-access',
+    refreshToken: 'matched-refreshed-token',
+  }), expected);
+  await store.clear({
+    accessToken: 'matched-refreshed-access',
+    phoneE164: expected.phoneE164,
+    refreshToken: 'matched-refreshed-token',
+  });
+
+  assert.deepEqual(await store.loadActiveDriverAccess(), { kind: 'missing' });
+  await assert.rejects(
+    store.saveRefreshedAccountAccess(accountAccess(), expected),
+    StaleDriverAccessError,
+  );
 });
 
 test('keeps a stable route-session generation and route-start acknowledgement', async () => {

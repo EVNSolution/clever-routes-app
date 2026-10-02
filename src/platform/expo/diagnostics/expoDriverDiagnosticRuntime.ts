@@ -21,7 +21,7 @@ import {
   type DriverDiagnosticOperationObserver,
 } from '../../../domain/diagnostics/driverDiagnosticObservation';
 import { createDriverDiagnosticOutbox } from '../../../domain/diagnostics/driverDiagnosticOutbox';
-import { createDriverDiagnosticRecorder } from '../../../domain/diagnostics/driverDiagnosticRecorder';
+import { createDriverDiagnosticRecorder, type DriverDiagnosticReportHandle } from '../../../domain/diagnostics/driverDiagnosticRecorder';
 import { createDriverDiagnosticTransport } from '../../../domain/diagnostics/driverDiagnosticTransport';
 import type { OfflineSubmissionQueue } from '../../../domain/offline/offlineSubmissionQueue';
 import { getNetworkReachability } from '../../../domain/offline/offlineRetryTrigger';
@@ -61,6 +61,7 @@ let probing = false;
 let baseUrl: string | null = null;
 let bootId: string | null = null;
 let diagnosticSequence = 0;
+let bindingReady: Promise<void> = Promise.resolve();
 let suppressAccessUntilBusinessClear = false;
 let revocationBarrier: Promise<void> | null = null;
 const diagnosticNetworkState = createExpoDriverDiagnosticNetworkState();
@@ -186,7 +187,7 @@ export function startExpoDriverDiagnosticRuntime(): void {
   installDriverDiagnosticObserver(observe, { requestIdFactory: () => Crypto.randomUUID() });
   observerEnabled = true;
   const revision = accessRevision;
-  void bounded(async () => {
+  bindingReady = bounded(async () => {
     const [rawBinding, rawAccount] = await Promise.all([SecureStore.getItemAsync(BINDING_KEY, secureOptions), SecureStore.getItemAsync(DRIVER_ACCESS_TOKEN_STORAGE_KEY)]);
     return restoreDiagnosticBinding(rawBinding, rawAccount, phone => Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, `clever-driver-account:${phone}`));
   }).then(restored => {
@@ -225,7 +226,7 @@ export function observeExpoDriverDiagnosticAccess(access: DriverAccessRestoreRes
     installDriverDiagnosticObserver(observe, { requestIdFactory: () => Crypto.randomUUID() }); observerEnabled = true;
   }
   currentPhone = phone;
-  void Promise.all([
+  bindingReady = Promise.all([
     bounded(() => Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, `clever-driver-account:${access.driverProfile.phoneE164.trim()}`)),
     bounded(() => getExpoDriverSyncIdentity().getDeviceInstanceHash()),
   ]).then(([owner, deviceInstanceHash]) => {
@@ -367,6 +368,20 @@ export function captureExpoDriverDiagnosticOperationObserver(
     active?.binding.accountOwnerHash ?? null,
   );
 }
+
+/** Reports only under a proven account binding; an unknown identity is never queued for a later login. */
+export async function reportExpoDriverDiagnosticIssue(): Promise<DriverDiagnosticReportHandle | null> {
+  startExpoDriverDiagnosticRuntime();
+  const revision = accessRevision;
+  if (active === null) {
+    await bounded(() => bindingReady).catch(() => undefined);
+  }
+  const current = active;
+  if (current === null || revision !== accessRevision) return null;
+  refreshQueueProjection();
+  return current.recorder.reportUserIssue();
+}
+
 async function probeLocation() {
   if (probing || !active) return;
   probing = true;

@@ -139,7 +139,7 @@ describe('Settings page behavior', () => {
     assert.match(source, /Linking\.openURL\(ROUTES_APP_ACCOUNT_DELETION_URL\)/u);
     assert.match(
       source,
-      /setAcceptedPrivacy\(true\);\s+setAcceptedLocation\(true\);\s+setScreen\('mainTabs'\);\s+setIsDriverRestoreComplete\(true\);\s+await handleLoginAndLoadRoutes/u,
+      /setAcceptedPrivacy\(true\);\s+setAcceptedLocation\(true\);\s+setScreen\('mainTabs'\);\s+setIsDriverRestoreComplete\(true\);\s+void handleLoginAndLoadRoutes/u,
     );
   });
 

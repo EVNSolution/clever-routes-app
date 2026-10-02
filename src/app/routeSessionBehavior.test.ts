@@ -924,7 +924,7 @@ describe('stop completion proof copy', () => {
     assert.match(appSource, /const buildDriverAccessRefresh = useCallback/u);
     assert.match(appSource, /const getActiveAccountAccess = useCallback/u);
     assert.match(appSource, /driverAuthService\.refreshSession/u);
-    assert.match(appSource, /driverAccessTokenStore\.saveRefreshedAccountAccess\(refreshResult\.accountAccess\)/u);
+    assert.match(appSource, /driverAccessTokenStore\.saveRefreshedAccountAccess\(refreshResult\.accountAccess, \{\s+accessToken: restoredAccess\.accountAccess\.accessToken,\s+phoneE164: restoredAccess\.driverProfile\.phoneE164,\s+refreshToken: restoredAccess\.accountAccess\.refreshToken,/u);
     assert.match(appSource, /accountAccessToken: accountAccess\.accessToken/u);
     assert.match(appSource, /refreshDriverAccess: buildDriverAccessRefresh\(submission\)/u);
     assert.match(appSource, /refreshDriverAccess: buildDriverAccessRefresh\(choiceSubmission\)/u);

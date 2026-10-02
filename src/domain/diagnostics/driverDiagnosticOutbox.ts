@@ -25,6 +25,17 @@ export type DiagnosticStorageState =
   | { kind: 'FAILED'; reason: 'DIAGNOSTIC_STORAGE_FAILED'; since: string }
   | { kind: 'RECOVERED'; observedAt: string };
 
+export type DriverDiagnosticReportStatus =
+  | { state: 'SAVING'; updatedAt: string }
+  | { state: 'QUEUED'; updatedAt: string }
+  | { serverReceivedAt: string; state: 'ACKNOWLEDGED'; updatedAt: string }
+  | {
+    failure: 'ACCOUNT_CHANGED' | 'LOCAL_RETENTION' | 'LOCAL_STORAGE' | 'PERMANENT_REJECTION';
+    rejectionCode?: DriverDiagnosticQuarantineEntry['code'];
+    state: 'FAILED';
+    updatedAt: string;
+  };
+
 const defaultRetentionMs = 7 * 24 * 60 * 60 * 1_000;
 const defaultMaxRecords = 1_000;
 const defaultOperationTimeoutMs = 5_000;
@@ -36,6 +47,7 @@ export function createDriverDiagnosticOutbox(input: {
   now?: () => Date;
   operationTimeoutMs?: number;
   onStorageStateChange?: (state: DiagnosticStorageState) => void;
+  reportStatusCapacity?: number;
   retentionMs?: number;
   scheduleTimeout?: (expire: () => void, timeoutMs: number) => unknown;
   storage: DiagnosticStorage;
@@ -43,6 +55,7 @@ export function createDriverDiagnosticOutbox(input: {
   const now = input.now ?? (() => new Date());
   const maxRecords = Math.max(1, input.maxRecords ?? defaultMaxRecords);
   const retentionMs = input.retentionMs ?? defaultRetentionMs;
+  const reportStatusCapacity = Math.max(1, input.reportStatusCapacity ?? 256);
   const timeoutOptions = {
     ...(input.cancelTimeout === undefined ? {} : { cancel: input.cancelTimeout }),
     ...(input.scheduleTimeout === undefined ? {} : { schedule: input.scheduleTimeout }),
@@ -55,8 +68,64 @@ export function createDriverDiagnosticOutbox(input: {
   const acknowledged = new Set<string>();
   const acknowledgedOrder: string[] = [];
   const storageMutationChains = new Map<string, Promise<void>>();
+  const reportStatuses = new Map<string, DriverDiagnosticReportStatus>();
+  const reportStatusSubscribers = new Map<string, Set<(status: DriverDiagnosticReportStatus) => void>>();
   type StorageOperation = 'APPEND' | 'QUARANTINE' | 'READ' | 'REMOVE';
   const storageFailures = new Map<StorageOperation, string>();
+
+  function reportStatusKey(owner: string, ownerGeneration: number, diagnosticId: string) {
+    return `${ownerGeneration}:${owner}:${diagnosticId}`;
+  }
+
+  function setReportStatus(
+    owner: string,
+    ownerGeneration: number,
+    diagnosticId: string,
+    status: DriverDiagnosticReportStatus,
+  ) {
+    const key = reportStatusKey(owner, ownerGeneration, diagnosticId);
+    const existing = reportStatuses.get(key);
+    if (
+      existing?.state === 'ACKNOWLEDGED'
+      || (existing?.state === 'FAILED' && existing.failure !== 'LOCAL_STORAGE')
+    ) return;
+    if (
+      existing?.state === status.state
+      && (existing.state !== 'FAILED' || status.state !== 'FAILED'
+        || (existing.failure === status.failure && existing.rejectionCode === status.rejectionCode))
+    ) return;
+    reportStatuses.delete(key);
+    reportStatuses.set(key, status);
+    const subscribers = reportStatusSubscribers.get(key);
+    if (subscribers !== undefined) {
+      for (const subscriber of subscribers) {
+        try {
+          subscriber(status);
+        } catch {
+          // Report-status observers must not break diagnostic persistence or delivery.
+        }
+      }
+    }
+    while (reportStatuses.size > reportStatusCapacity) {
+      const oldestKey = reportStatuses.keys().next().value as string | undefined;
+      if (oldestKey === undefined) break;
+      reportStatuses.delete(oldestKey);
+      reportStatusSubscribers.delete(oldestKey);
+    }
+  }
+
+  function setReportStatusForRecords(
+    owner: string,
+    ownerGeneration: number,
+    additions: readonly DriverDiagnosticRecord[],
+    status: DriverDiagnosticReportStatus,
+  ) {
+    additions.forEach((record) => {
+      if (record.kind === 'USER_REPORT') {
+        setReportStatus(owner, ownerGeneration, record.diagnosticId, status);
+      }
+    });
+  }
 
   function getStorageFailure() {
     if (storageFailures.size === 0) return null;
@@ -91,6 +160,7 @@ export function createDriverDiagnosticOutbox(input: {
 
   function prune() {
     const cutoff = now().getTime() - retentionMs;
+    const beforePrune = records;
     const removedIds: string[] = [];
     const retained = records.filter((record) => {
       const keep = Date.parse(record.observedAt) >= cutoff && !acknowledged.has(record.diagnosticId);
@@ -110,6 +180,14 @@ export function createDriverDiagnosticOutbox(input: {
       removedIds.push(...overflowIds);
       discardedRecordCount += overflowIds.length;
     }
+    const removed = new Set(removedIds);
+    beforePrune.forEach((record) => {
+      if (removed.has(record.diagnosticId) && record.kind === 'USER_REPORT') {
+        setReportStatus(accountOwnerHash, generation, record.diagnosticId, {
+          failure: 'LOCAL_RETENTION', state: 'FAILED', updatedAt: now().toISOString(),
+        });
+      }
+    });
     if (removedIds.length > 0) persistRemove(accountOwnerHash, removedIds);
   }
 
@@ -135,6 +213,7 @@ export function createDriverDiagnosticOutbox(input: {
     ownerGeneration: number,
     operationKind: Exclude<StorageOperation, 'READ'>,
     operation: () => Promise<void>,
+    callbacks?: { onFailure?: () => void; onSuccess?: () => void },
   ) {
     const previous = storageMutationChains.get(owner) ?? Promise.resolve();
     const mutation = previous.catch(() => undefined).then(operation);
@@ -143,17 +222,29 @@ export function createDriverDiagnosticOutbox(input: {
       () => {
         if (storageMutationChains.get(owner) === mutation) storageMutationChains.delete(owner);
         clearStorageFailure(owner, ownerGeneration, operationKind);
+        callbacks?.onSuccess?.();
       },
       () => {
         if (storageMutationChains.get(owner) === mutation) storageMutationChains.delete(owner);
+        callbacks?.onFailure?.();
       },
     );
     void runBoundedAsyncOperation(() => mutation, timeoutOptions)
-      .catch(() => noteStorageFailure(owner, ownerGeneration, operationKind));
+      .catch(() => {
+        noteStorageFailure(owner, ownerGeneration, operationKind);
+        callbacks?.onFailure?.();
+      });
   }
 
   function persistAppend(owner: string, ownerGeneration: number, additions: readonly DriverDiagnosticRecord[]) {
-    enqueueStorageMutation(owner, ownerGeneration, 'APPEND', () => input.storage.append(owner, additions));
+    enqueueStorageMutation(owner, ownerGeneration, 'APPEND', () => input.storage.append(owner, additions), {
+      onFailure: () => setReportStatusForRecords(owner, ownerGeneration, additions, {
+        failure: 'LOCAL_STORAGE', state: 'FAILED', updatedAt: now().toISOString(),
+      }),
+      onSuccess: () => setReportStatusForRecords(owner, ownerGeneration, additions, {
+        state: 'QUEUED', updatedAt: now().toISOString(),
+      }),
+    });
   }
 
   function persistRemove(owner: string, ids: readonly string[]) {
@@ -174,11 +265,26 @@ export function createDriverDiagnosticOutbox(input: {
   }
 
   return {
-    acknowledge: (diagnosticIds: readonly string[], expectedAccountOwnerHash: string) => {
+    acknowledge: (
+      diagnosticIds: readonly string[],
+      expectedAccountOwnerHash: string,
+      serverReceivedAt = now().toISOString(),
+    ) => {
       if (expectedAccountOwnerHash !== accountOwnerHash) return false;
       const accepted = new Set(diagnosticIds);
       const removable = records.filter((record) => accepted.has(record.diagnosticId)).map((record) => record.diagnosticId);
       if (removable.length === 0) return true;
+      const receivedAtValue = Date.parse(serverReceivedAt);
+      const acknowledgedAt = Number.isFinite(receivedAtValue)
+        ? new Date(receivedAtValue).toISOString()
+        : now().toISOString();
+      records.forEach((record) => {
+        if (accepted.has(record.diagnosticId) && record.kind === 'USER_REPORT') {
+          setReportStatus(accountOwnerHash, generation, record.diagnosticId, {
+            serverReceivedAt: acknowledgedAt, state: 'ACKNOWLEDGED', updatedAt: acknowledgedAt,
+          });
+        }
+      });
       rememberRemoved(removable);
       records = records.filter((record) => !accepted.has(record.diagnosticId));
       persistRemove(accountOwnerHash, removable);
@@ -231,7 +337,14 @@ export function createDriverDiagnosticOutbox(input: {
         const hydrated = stored.map(sanitizeDriverDiagnosticRecord).filter((record): record is DriverDiagnosticRecord => record !== null);
         const byId = new Map(records.map((record) => [record.diagnosticId, record]));
         hydrated.forEach((record) => {
-          if (!acknowledged.has(record.diagnosticId)) byId.set(record.diagnosticId, record);
+          if (!acknowledged.has(record.diagnosticId)) {
+            byId.set(record.diagnosticId, record);
+            if (record.kind === 'USER_REPORT') {
+              setReportStatus(owner, ownerGeneration, record.diagnosticId, {
+                state: 'QUEUED', updatedAt: now().toISOString(),
+              });
+            }
+          }
         });
         records = [...byId.values()].sort((left, right) => left.observedAt.localeCompare(right.observedAt) || left.sequence - right.sequence);
         clearStorageFailure(owner, ownerGeneration, 'READ');
@@ -253,6 +366,14 @@ export function createDriverDiagnosticOutbox(input: {
         return code === undefined ? [] : [{ code, quarantinedAt, record }];
       });
       if (entries.length === 0) return true;
+      entries.forEach(({ code, record }) => {
+        if (record.kind === 'USER_REPORT') {
+          setReportStatus(accountOwnerHash, generation, record.diagnosticId, {
+            failure: 'PERMANENT_REJECTION', rejectionCode: code,
+            state: 'FAILED', updatedAt: quarantinedAt,
+          });
+        }
+      });
       const quarantinedIds = entries.map(({ record }) => record.diagnosticId);
       rememberRemoved(quarantinedIds);
       const quarantined = new Set(quarantinedIds);
@@ -273,12 +394,24 @@ export function createDriverDiagnosticOutbox(input: {
         }
       }
       records.push(record);
+      if (record.kind === 'USER_REPORT') {
+        setReportStatus(accountOwnerHash, generation, record.diagnosticId, {
+          state: 'SAVING', updatedAt: now().toISOString(),
+        });
+      }
       persistAppend(accountOwnerHash, generation, [record]);
       prune();
       return record;
     },
     switchAccount: (nextAccountOwnerHash: string) => {
       if (nextAccountOwnerHash === accountOwnerHash) return;
+      records.forEach((record) => {
+        if (record.kind === 'USER_REPORT') {
+          setReportStatus(accountOwnerHash, generation, record.diagnosticId, {
+            failure: 'ACCOUNT_CHANGED', state: 'FAILED', updatedAt: now().toISOString(),
+          });
+        }
+      });
       accountOwnerHash = nextAccountOwnerHash;
       generation += 1;
       records = [];
@@ -286,6 +419,30 @@ export function createDriverDiagnosticOutbox(input: {
       acknowledgedOrder.length = 0;
       discardedRecordCount = 0;
       storageFailures.clear();
+    },
+    getReportStatus: (
+      diagnosticId: string,
+      expectedAccountOwnerHash = accountOwnerHash,
+      expectedGeneration = generation,
+    ) => reportStatuses.get(reportStatusKey(
+      expectedAccountOwnerHash,
+      expectedGeneration,
+      diagnosticId,
+    )) ?? null,
+    subscribeReportStatus: (
+      diagnosticId: string,
+      expectedAccountOwnerHash: string,
+      expectedGeneration: number,
+      listener: (status: DriverDiagnosticReportStatus) => void,
+    ) => {
+      const key = reportStatusKey(expectedAccountOwnerHash, expectedGeneration, diagnosticId);
+      const subscribers = reportStatusSubscribers.get(key) ?? new Set();
+      subscribers.add(listener);
+      reportStatusSubscribers.set(key, subscribers);
+      return () => {
+        subscribers.delete(listener);
+        if (subscribers.size === 0) reportStatusSubscribers.delete(key);
+      };
     },
   };
 }

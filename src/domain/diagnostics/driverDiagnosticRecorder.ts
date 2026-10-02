@@ -6,10 +6,15 @@ import {
   type DriverDiagnosticKind,
   type DriverDiagnosticSnapshot,
 } from './driverDiagnosticContract';
-import type { DriverDiagnosticOutbox } from './driverDiagnosticOutbox';
+import type { DriverDiagnosticOutbox, DriverDiagnosticReportStatus } from './driverDiagnosticOutbox';
 import type { DriverDiagnosticTransport } from './driverDiagnosticTransport';
 
 export type DriverDiagnosticRecorder = ReturnType<typeof createDriverDiagnosticRecorder>;
+export type DriverDiagnosticReportHandle = {
+  diagnosticId: string;
+  getStatus(): DriverDiagnosticReportStatus | null;
+  subscribe(listener: (status: DriverDiagnosticReportStatus) => void): () => void;
+};
 
 export function createDriverDiagnosticRecorder(input: {
   bootId: string;
@@ -70,6 +75,32 @@ export function createDriverDiagnosticRecorder(input: {
     return record;
   }
 
+  function reportUserIssue(options?: {
+    blockers?: readonly DriverDiagnosticBlocker[];
+    identifiers?: DriverDiagnosticIdentifiers;
+  }): DriverDiagnosticReportHandle | null {
+    const accountOwnerHash = input.outbox.getAccountOwnerHash();
+    const generation = input.outbox.getGeneration();
+    const record = emit('USER_REPORT', options);
+    if (record === null) return null;
+    return {
+      diagnosticId: record.diagnosticId,
+      getStatus: () => input.outbox.getReportStatus(
+        record.diagnosticId,
+        accountOwnerHash,
+        generation,
+      ),
+      subscribe: (listener: (status: DriverDiagnosticReportStatus) => void) => (
+        input.outbox.subscribeReportStatus(
+          record.diagnosticId,
+          accountOwnerHash,
+          generation,
+          listener,
+        )
+      ),
+    };
+  }
+
   return {
     emitError: (options: { blockers: readonly DriverDiagnosticBlocker[]; identifiers?: DriverDiagnosticIdentifiers }) => emit('ERROR', options),
     emitHeartbeat: () => emit('HEARTBEAT'),
@@ -87,5 +118,7 @@ export function createDriverDiagnosticRecorder(input: {
     notifyOnline: () => {
       input.transport.requestImmediate(liveState, { overrideBackoff: true });
     },
+    getUserReportStatus: (diagnosticId: string) => input.outbox.getReportStatus(diagnosticId),
+    reportUserIssue,
   };
 }

@@ -13,12 +13,16 @@ export function observeDriverAccessStore(store: DriverAccessTokenStore, observer
   }
   return {
     ...store,
-    clear:()=>{
+    clear:(expectedIdentity)=>{
       const expected=++generation;
-      try{observer.cleared('store_clear');}catch{/* diagnostic sink is isolated */}
-      return store.clear().catch((error:unknown)=>{
-        void store.loadActiveDriverAccess().then(access=>{if(expected===generation) notify(access);}).catch(()=>undefined);
-        throw error;
+      if(expectedIdentity===undefined) {
+        try{observer.cleared('store_clear');}catch{/* diagnostic sink is isolated */}
+        return store.clear();
+      }
+      return store.clear(expectedIdentity).then(()=>{
+        if(expected===generation) {
+          try{observer.cleared('store_clear');}catch{/* diagnostic sink is isolated */}
+        }
       });
     },
     loadActiveDriverAccess:()=>{const expected=generation;return store.loadActiveDriverAccess().then(access=>{if(expected===generation) notify(access);return access;});},
@@ -29,9 +33,11 @@ export function observeDriverAccessStore(store: DriverAccessTokenStore, observer
     saveActiveRouteSession:(...args)=>after(store.saveActiveRouteSession(...args)),
     saveAuthenticatedDriver:(input)=>{
       const expected=++generation;
-      try{observer.cleared('account_replacement');}catch{/* detach previous account before new login is persisted */}
       return store.saveAuthenticatedDriver(input).then(()=>{
-        if(expected===generation) notify({kind:'active',accountAccess:input.accountAccess,driverProfile:{phoneE164:input.phoneE164}});
+        if(expected===generation) {
+          try{observer.cleared('account_replacement');}catch{/* diagnostic sink is isolated */}
+          notify({kind:'active',accountAccess:input.accountAccess,driverProfile:{phoneE164:input.phoneE164}});
+        }
       });
     },
     saveFromInvitedRouteAccess:(...args)=>after(store.saveFromInvitedRouteAccess(...args)),

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { DriverApiHttpError } from '../../api/deliveryServer/driverApiError';
+import { BoundedOperationTimeoutError } from '../async/boundedAsyncOperation';
 import {
   captureDriverDiagnosticEmitter,
   captureDriverDiagnosticOperationObserver,
@@ -12,6 +13,16 @@ import {
 } from './driverDiagnosticObservation';
 
 describe('driver diagnostic observation boundary', () => {
+  it('classifies an enforced authentication deadline as a timeout rather than a network failure', async () => {
+    const observations: DriverDiagnosticObservation[] = [];
+    installDriverDiagnosticObserver((observation) => { observations.push(observation); });
+    await assert.rejects(observeDriverDiagnosticOperation({ operation: 'AUTH_REFRESH' }, async () => {
+      throw new BoundedOperationTimeoutError();
+    }));
+    const failure = observations.find((event) => event.kind === 'OPERATION' && event.phase === 'FAILED');
+    assert.equal(failure?.kind === 'OPERATION' ? failure.reasonCode : null, 'AUTH_REFRESH_TIMEOUT');
+  });
+
   it('reports a watchdog timeout without settling or aborting the business operation', async () => {
     const observations: DriverDiagnosticObservation[] = [];
     let fireWatchdog: (() => void) | undefined;

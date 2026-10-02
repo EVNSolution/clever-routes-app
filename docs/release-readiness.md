@@ -200,6 +200,55 @@ it. This recovery profile reuses the reserved version and is not a new-release
 version allocator. Validate package, version, signature and checksum before any
 upload; a local build does not create a cloud EAS build record.
 
+### Isolate Metro and verify the embedded Android endpoint
+
+Each local production build must use a new, empty `TMPDIR`. Expo stores Metro
+transforms under the process temporary directory, separately from
+`EAS_LOCAL_BUILD_WORKINGDIR`. In CI mode, cached transforms can retain an inlined
+QA endpoint even when the next build supplies production environment values.
+Changing the EAS working directory alone does not isolate this cache. Preserve
+shared caches used by other builds; allocate a private temporary directory instead.
+
+After verifying the reserved version and EAS `production` environment as above,
+the local recovery build can be invoked with:
+
+```bash
+release_tmp="$(mktemp -d "${TMPDIR:-/tmp}/clever-routes-release.XXXXXX")"
+TMPDIR="$release_tmp" \
+  EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live \
+  EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://clever-route.cleversystem.ai \
+  npx eas-cli build --local -p android --profile production-local
+```
+
+Use the same per-build `TMPDIR` isolation for direct Gradle release commands.
+The EAS production environment must also contain those canonical public values.
+Keep the source SHA, build command, private temporary directory, artifact checksum,
+and following verifier output together in the external release evidence.
+
+Before deriving a device APK, installing a release candidate, or uploading to
+Google Play, inspect the completed AAB itself. Also inspect any APK derived from it:
+
+```bash
+python3 scripts/verify-android-artifact-runtime.py --artifact /path/to/release.aab
+python3 scripts/verify-android-artifact-runtime.py --artifact /path/to/release.apk
+```
+
+Both commands must exit `0`. The verifier reads the packaged
+`index.android.bundle`, requires the fixed production URL, and rejects known
+local QA endpoint bytes, including artifacts containing both endpoints. An
+unexpected endpoint or unreadable bundle blocks promotion even if the build,
+manifest, signature, and AAB-to-APK payload comparison passed. Preserve a rejected
+artifact as evidence and rebuild from the committed source with a fresh temporary
+directory. Do not modify the signed artifact in place.
+
+This byte-level check addresses endpoint contamination; it does not establish
+all runtime settings, signing correctness, or successful device connectivity.
+Record those checks separately. Run the standard-library regression tests with:
+
+```bash
+python3 -m unittest discover -s scripts -p 'test_verify_android_artifact_runtime.py'
+```
+
 Before running any preview/production EAS build for evidence, run:
 
 ```bash

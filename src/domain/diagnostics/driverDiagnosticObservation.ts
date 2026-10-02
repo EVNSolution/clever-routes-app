@@ -1,4 +1,5 @@
 import { DriverApiHttpError } from '../../api/deliveryServer/driverApiError';
+import { BoundedOperationTimeoutError } from '../async/boundedAsyncOperation';
 import type {
   DriverDiagnosticReasonCode,
   DriverDiagnosticSnapshot,
@@ -234,7 +235,9 @@ async function observeDriverDiagnosticOperationWithRuntime<T>(
           ? { reasonCode: 'STORAGE_WRITE_FAILED' as const }
           : safeMetadata.operation === 'STORAGE_READ'
             ? { reasonCode: 'STORAGE_READ_FAILED' as const }
-            : classifyDriverDiagnosticError(error)),
+            : safeMetadata.operation === 'AUTH_REFRESH' && isKnownTimeoutError(error)
+              ? { reasonCode: 'AUTH_REFRESH_TIMEOUT' as const }
+              : classifyDriverDiagnosticError(error)),
         kind: 'OPERATION',
         phase: 'FAILED',
       });
@@ -360,7 +363,7 @@ function safeHttpStatus(value: number | undefined): number | undefined {
   return Number.isInteger(value) && (value ?? 0) >= 100 && (value ?? 0) <= 599 ? value : undefined;
 }
 
-function classifyDriverDiagnosticError(error: unknown): {
+export function classifyDriverDiagnosticError(error: unknown): {
   httpStatus?: number;
   reasonCode: DriverDiagnosticObservationReasonCode;
 } {
@@ -400,7 +403,8 @@ function isKnownAbortError(error: unknown): boolean {
 }
 
 function isKnownTimeoutError(error: unknown): boolean {
-  return error instanceof Error && error.message === 'Network request timed out';
+  return error instanceof BoundedOperationTimeoutError
+    || (error instanceof Error && error.message === 'Network request timed out');
 }
 
 function isKnownInvalidResponseError(error: unknown): boolean {

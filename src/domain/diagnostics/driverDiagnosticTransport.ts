@@ -59,7 +59,7 @@ function parseBatchOutcome(response: unknown, sentIds: ReadonlySet<string>) {
     rejectedIds.add(rejection.diagnosticId);
     rejected.push({ code: rejection.code, diagnosticId: rejection.diagnosticId });
   }
-  return { acceptedIds: [...accepted], rejected };
+  return { acceptedIds: [...accepted], rejected, serverReceivedAt: candidate.serverReceivedAt };
 }
 
 export function createDriverDiagnosticTransport(input: {
@@ -209,7 +209,7 @@ export function createDriverDiagnosticTransport(input: {
       if (outcome === null || (envelope.records.length > 0 && outcome.acceptedIds.length + outcome.rejected.length === 0)) {
         return { shouldDrain: false, succeeded: false };
       }
-      input.outbox.acknowledge(outcome.acceptedIds, owner);
+      input.outbox.acknowledge(outcome.acceptedIds, owner, outcome.serverReceivedAt);
       input.outbox.quarantine(outcome.rejected, owner, now().toISOString());
       return { shouldDrain: input.outbox.listPending().length > 0, succeeded: true };
     } catch (error) {

@@ -7,6 +7,7 @@ import {
   createDriverDiagnosticRequestId,
   observeDriverDiagnosticOperation,
 } from '../diagnostics/driverDiagnosticObservation';
+import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
 
 export type DriverAccountAccessToken = {
   accessToken: string;
@@ -31,6 +32,17 @@ export type RefreshDriverAuthSessionInput = {
   refreshToken: string;
 };
 
+export type RefreshDriverAuthSessionOptions = {
+  signal?: AbortSignal;
+};
+
+export class DriverAuthRefreshPendingError extends Error {
+  constructor() {
+    super('DRIVER_AUTH_REFRESH_STILL_PENDING');
+    this.name = 'DriverAuthRefreshPendingError';
+  }
+}
+
 export type DriverAccountProfile = {
   name: string | null;
   phone: string;
@@ -45,7 +57,10 @@ export type DriverAccountDeletionRequest = {
 export type DriverAuthService = {
   getAccountProfile(input: { accountAccessToken: string }): Promise<{ account: DriverAccountProfile }>;
   login(input: LoginDriverAccountInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
-  refreshSession(input: RefreshDriverAuthSessionInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
+  refreshSession(
+    input: RefreshDriverAuthSessionInput,
+    options?: RefreshDriverAuthSessionOptions,
+  ): Promise<{ accountAccess: DriverAccountAccessToken }>;
   register(input: RegisterDriverAccountInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
   registerPushInstallation(input: {
     accountAccessToken: string;
@@ -79,6 +94,7 @@ export type FetchLike = (
     credentials?: 'omit';
     headers?: Record<string, string>;
     method?: string;
+    signal?: AbortSignal;
   },
 ) => Promise<{
   json(): Promise<unknown>;
@@ -88,16 +104,26 @@ export type FetchLike = (
 
 export function createDriverAuthApiClient(input: {
   baseUrl: string;
+  cancelRefreshTimeout?: (handle: unknown) => void;
   fetchImpl?: FetchLike;
+  refreshTimeoutMs?: number;
+  scheduleRefreshTimeout?: (expire: () => void, timeoutMs: number) => unknown;
 }): DriverAuthService {
+  type RefreshFlight = {
+    bounded: Promise<{ accountAccess: DriverAccountAccessToken }>;
+    boundedSettled: boolean;
+    rawSettled: boolean;
+  };
   const baseUrl = input.baseUrl.replace(/\/$/u, '');
   const fetchImpl = input.fetchImpl ?? globalThis.fetch;
+  const refreshFlights = new Map<string, RefreshFlight>();
 
   async function postAuth(
     endpoint: string,
     body: Record<string, string>,
     label: string,
     diagnosticOperation?: 'AUTH_REFRESH',
+    signal?: AbortSignal,
   ) {
     const requestId = diagnosticOperation === undefined ? undefined : createDriverDiagnosticRequestId();
     const send = async () => {
@@ -108,9 +134,21 @@ export function createDriverAuthApiClient(input: {
           ...(requestId === undefined ? {} : { 'X-Request-Id': requestId }),
         },
         method: 'POST',
+        ...(signal === undefined ? {} : { signal }),
       }));
-      const payload = await response.json();
-      if (!response.ok) {
+      const successfulStatus = response.status === undefined
+        ? response.ok
+        : response.ok && response.status >= 200 && response.status < 300;
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch (error) {
+        if (!successfulStatus) {
+          throw createDriverApiHttpError({ endpoint: label, status: response.status });
+        }
+        throw error;
+      }
+      if (!successfulStatus) {
         throw createDriverApiHttpError({
           code: readDriverApiErrorCode(payload),
           endpoint: label,
@@ -123,6 +161,50 @@ export function createDriverAuthApiClient(input: {
     return diagnosticOperation === undefined
       ? send()
       : observeDriverDiagnosticOperation({ operation: diagnosticOperation, requestId }, send);
+  }
+
+  function refreshSession(
+    request: RefreshDriverAuthSessionInput,
+    options?: RefreshDriverAuthSessionOptions,
+  ): Promise<{ accountAccess: DriverAccountAccessToken }> {
+    const refreshToken = request.refreshToken.trim();
+    const existing = refreshFlights.get(refreshToken);
+    if (existing !== undefined) {
+      if (!existing.boundedSettled) return existing.bounded;
+      if (!existing.rawSettled) return Promise.reject(new DriverAuthRefreshPendingError());
+      refreshFlights.delete(refreshToken);
+    }
+    let rawStarted = false;
+    let refreshFlight!: RefreshFlight;
+    const bounded = runBoundedAsyncOperation((timeoutSignal) => {
+      rawStarted = true;
+      const raw = postAuth('/driver/auth/refresh', {
+        refreshToken,
+      }, 'Refresh Auth Session', 'AUTH_REFRESH', combineAbortSignals([timeoutSignal, options?.signal]));
+      void raw.finally(() => {
+        refreshFlight.rawSettled = true;
+        if (refreshFlights.get(refreshToken) === refreshFlight) refreshFlights.delete(refreshToken);
+      }).catch(() => undefined);
+      return raw;
+    }, {
+      ...(input.cancelRefreshTimeout === undefined ? {} : { cancel: input.cancelRefreshTimeout }),
+      ...(input.scheduleRefreshTimeout === undefined ? {} : { schedule: input.scheduleRefreshTimeout }),
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+      timeoutMs: input.refreshTimeoutMs ?? 15_000,
+    });
+    refreshFlight = { bounded, boundedSettled: false, rawSettled: false };
+    refreshFlights.set(refreshToken, refreshFlight);
+    void bounded.then(
+      () => { refreshFlight.boundedSettled = true; },
+      () => {
+        refreshFlight.boundedSettled = true;
+        if (!rawStarted) {
+          refreshFlight.rawSettled = true;
+          if (refreshFlights.get(refreshToken) === refreshFlight) refreshFlights.delete(refreshToken);
+        }
+      },
+    );
+    return bounded;
   }
 
   async function requestAccountProfile(input: {
@@ -201,9 +283,7 @@ export function createDriverAuthApiClient(input: {
       phone: request.phoneE164.trim(),
       pin: request.pin.trim(),
     }, 'Driver PIN login'),
-    refreshSession: (request) => postAuth('/driver/auth/refresh', {
-      refreshToken: request.refreshToken.trim(),
-    }, 'Refresh Auth Session', 'AUTH_REFRESH'),
+    refreshSession,
     register: (request) => postAuth('/driver/auth/verify-invite', {
       phone: request.phoneE164.trim(),
       inviteCode: request.inviteCode.trim().toUpperCase(),
@@ -234,6 +314,18 @@ export function createDriverAuthApiClient(input: {
       name: request.name,
     }),
   };
+}
+
+function combineAbortSignals(signals: readonly (AbortSignal | undefined)[]): AbortSignal {
+  const controller = new AbortController();
+  for (const signal of signals) {
+    if (signal?.aborted === true) {
+      controller.abort();
+      break;
+    }
+    signal?.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  return controller.signal;
 }
 
 export function createMockDriverAuthService(accountAccess: DriverAccountAccessToken = {

@@ -37,13 +37,21 @@ test('new login is observable before caller continues even when post-save reads 
  await observed.saveAuthenticatedDriver({accountAccess:{} as never,phoneE164:'+10000000000'});
  assert.equal(kind,'active');
 });
-test('failed clear re-observes the retained account without hiding the business failure',async()=>{
+test('failed account replacement does not clear or change diagnostics',async()=>{
+ const base=createDriverAccessTokenStore({storage:{getItemAsync:async()=>null,setItemAsync:async()=>undefined,deleteItemAsync:async()=>undefined}});
+ base.saveAuthenticatedDriver=async()=>{throw new Error('save failed');};
+ const events:string[]=[];
+ const observed=observeDriverAccessStore(base,{changed:()=>{events.push('changed');},cleared:()=>{events.push('cleared');}});
+ await assert.rejects(observed.saveAuthenticatedDriver({accountAccess:{} as never,phoneE164:'+10000000000'}),/save failed/);
+ assert.deepEqual(events,[]);
+});
+test('unguarded clear marks diagnostics blocked before a durable clear failure settles',async()=>{
  const base=createDriverAccessTokenStore({storage:{getItemAsync:async()=>null,setItemAsync:async()=>undefined,deleteItemAsync:async()=>{throw new Error('clear failed');}}});
- let notified=0;
- const observed=observeDriverAccessStore(base,{changed:()=>{notified++;},cleared:()=>undefined});
+ const events:string[]=[];
+ const observed=observeDriverAccessStore(base,{changed:()=>{events.push('changed');},cleared:()=>{events.push('cleared');}});
  await assert.rejects(observed.clear(),/clear failed/);
  await new Promise(resolve=>setImmediate(resolve));
- assert.equal(notified,1);
+ assert.deepEqual(events,['cleared']);
 });
 test('distinguishes automatic token clear from account replacement',async()=>{
  const base=createDriverAccessTokenStore({storage:{getItemAsync:async()=>null,setItemAsync:async()=>undefined,deleteItemAsync:async()=>undefined}});
@@ -52,4 +60,40 @@ test('distinguishes automatic token clear from account replacement',async()=>{
  await observed.clear();
  await observed.saveAuthenticatedDriver({accountAccess:{} as never,phoneE164:'+10000000000'});
  assert.deepEqual(causes,['store_clear','account_replacement']);
+});
+
+test('forwards conditional mutation identities and does not notify on rejected stale mutations',async()=>{
+ const base=createDriverAccessTokenStore({storage:{getItemAsync:async()=>null,setItemAsync:async()=>undefined,deleteItemAsync:async()=>undefined}});
+ const expected={accessToken:'expected-access',phoneE164:'+14165550100',refreshToken:'expected-refresh'};
+ const forwarded:{clear?:unknown;refresh?:unknown}={};
+ base.clear=async input=>{forwarded.clear=input;throw new Error('stale clear');};
+ base.saveRefreshedAccountAccess=async(_access,input)=>{forwarded.refresh=input;throw new Error('stale refresh');};
+ let changed=0;
+ let cleared=0;
+ const observed=observeDriverAccessStore(base,{changed:()=>{changed++;},cleared:()=>{cleared++;}});
+
+ await assert.rejects(observed.saveRefreshedAccountAccess({} as never,expected),/stale refresh/);
+ await assert.rejects(observed.clear(expected),/stale clear/);
+ assert.deepEqual(forwarded,{clear:expected,refresh:expected});
+ assert.equal(changed,0);
+ assert.equal(cleared,0);
+});
+
+test('notifies only after matched conditional save and clear complete',async()=>{
+ const base=createDriverAccessTokenStore({storage:{getItemAsync:async()=>null,setItemAsync:async()=>undefined,deleteItemAsync:async()=>undefined}});
+ const expected={accessToken:'expected-access',phoneE164:'+14165550100',refreshToken:'expected-refresh'};
+ base.saveRefreshedAccountAccess=async()=>undefined;
+ let resolveClear!:()=>void;
+ base.clear=()=>new Promise(resolve=>{resolveClear=resolve;});
+ const events:string[]=[];
+ const observed=observeDriverAccessStore(base,{changed:()=>{events.push('changed');},cleared:()=>{events.push('cleared');}});
+
+ await observed.saveRefreshedAccountAccess({} as never,expected);
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(events,['changed']);
+ const clearing=observed.clear(expected);
+ assert.deepEqual(events,['changed']);
+ resolveClear();
+ await clearing;
+ assert.deepEqual(events,['changed','cleared']);
 });

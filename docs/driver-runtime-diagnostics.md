@@ -20,7 +20,38 @@
 
 프로토콜 시각은 ISO 8601 UTC 값으로 교환·저장한다. 운영 화면과 장애 보고서에서는 이 시각을 `America/Toronto`로 변환해 표시하며, 화면에 시간대 이름 또는 offset을 함께 표시한다.
 
-## 기존 heartbeat와의 관계
+## 세션 복구와 배송원 오류 신고
+
+세션 복구 화면의 `Try Again`은 저장된 로그인 읽기, 인증 갱신, 갱신 결과 저장을
+단계별 제한 시간과 단일 진행 작업으로 처리한다. 네트워크 복구와 foreground 복귀도
+같은 진입점을 사용한다. timeout 뒤 native 저장 작업이 아직 끝나지 않았다면 새
+작업을 계속 쌓지 않고 대기 중임을 표시한다. 늦은 갱신 결과의 저장과 확인된 401의
+삭제는 원래 계정·refresh token이 현재 저장값과 일치할 때만 허용한다.
+일시적인 실패는 업무 이벤트·사진을 삭제하지 않는다.
+
+`Report issue`는 복구 요청과 별도로 현재 허용 목록 기반 snapshot을 `USER_REPORT`
+record로 만든다. `diagnosticId`가 보고 번호이며 임의 오류 문자열이나 자유 입력을
+포함하지 않는다. 앱은 같은 복구 화면의 진행 중·접수된 보고를 다시 생성하지 않는다.
+
+- `SAVING`: 암호화 저장 완료를 아직 확인하지 못했다.
+- `QUEUED`: 해당 record의 기기 저장을 확인했으며 서버 접수는 미확인이다. 기존
+  bounded retry와 복구 후 replay를 사용한다.
+- `ACKNOWLEDGED`: 해당 ID가 검증된 서버 응답의 `acceptedDiagnosticIds`에 있다.
+  전송 함수의 boolean이나 queue에서 사라졌다는 사실만으로 접수를 주장하지 않는다.
+- `FAILED`: 기기 저장·보관 한도·계정 변경 또는 해당 ID의 영구 거부를 구분한다.
+
+계정 binding을 증명하지 못하면 보고 불가로 표시한다. 다음 로그인 계정에 신고를
+붙이지 않는다. 인증 갱신이 막혀도 기존 유효 진단 credential을 이용할 수 있으며,
+진단 credential까지 만료됐다면 저장된 신고의 서버 전달은 인증 복구를 기다린다.
+
+서버는 `USER_REPORT`를 먼저 지원해야 한다. 기존 endpoint와 DB를 재사용하며,
+관리자는 `routePlanId`와 `diagnosticId`를 함께 지정해 최근 25건 밖의 보고도 찾는다.
+활성 경로가 없는 보고는 서버의 계정 전용 기록이다. tenant 관리자 API에 노출하지
+않고 권한 있는 서버 운영 담당자만 통제된 직접 조회 절차로 보고 번호를 찾을 수 있다.
+`서버 접수 완료`는 배차 담당자 알림이나 사람의 확인을 의미하지 않는다. 이 기능은
+알림 발송이나 배송 상태 변경을 수행하지 않는다.
+
+## 기존 heartbeat와 독립 진단 채널
 
 기존 `PUT /driver/sync-health` heartbeat는 route bearer, 업무 queue, route session과 연결된 기존 계약으로 유지한다. 신규 진단 채널은 같은 `sync-health` 영역에 속하지만 다음 이유로 별도 endpoint, credential, SQLCipher DB를 사용한다.
 

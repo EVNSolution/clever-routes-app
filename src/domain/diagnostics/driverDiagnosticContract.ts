@@ -39,7 +39,7 @@ export const DRIVER_DIAGNOSTIC_REASON_CODES = [
 ] as const;
 
 export type DriverDiagnosticReasonCode = typeof DRIVER_DIAGNOSTIC_REASON_CODES[number];
-export type DriverDiagnosticKind = 'ERROR' | 'HEARTBEAT' | 'STATE_CHANGE';
+export type DriverDiagnosticKind = 'ERROR' | 'HEARTBEAT' | 'STATE_CHANGE' | 'USER_REPORT';
 export type DriverDiagnosticStage = 'AUTH' | 'LOCATION' | 'PROCESSING' | 'ROUTE' | 'STORAGE' | 'TRANSPORT';
 
 export type DriverDiagnosticContext = {
@@ -152,7 +152,7 @@ const generatedClientEventIdPattern = /^(?:(?:route-started|route-completed|rout
 const versionPattern = /^[A-Za-z0-9._+()-]{1,64}$/u;
 const hashPattern = /^[a-fA-F0-9]{32,128}$/u;
 const reasonCodes = new Set<string>(DRIVER_DIAGNOSTIC_REASON_CODES);
-const kinds = new Set<string>(['ERROR', 'HEARTBEAT', 'STATE_CHANGE']);
+const kinds = new Set<string>(['ERROR', 'HEARTBEAT', 'STATE_CHANGE', 'USER_REPORT']);
 const stages = new Set<string>(['AUTH', 'LOCATION', 'PROCESSING', 'ROUTE', 'STORAGE', 'TRANSPORT']);
 const lifecycles = new Set<string>(['BACKGROUND', 'FOREGROUND', 'INACTIVE', 'UNKNOWN']);
 const networks = new Set<string>(['OFFLINE', 'ONLINE', 'UNKNOWN']);

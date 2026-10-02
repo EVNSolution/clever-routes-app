@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createDriverAuthApiClient, createMockDriverAuthService } from './driverAuth';
+import {
+  createDriverAuthApiClient,
+  createMockDriverAuthService,
+  DriverAuthRefreshPendingError,
+} from './driverAuth';
+import { DriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import {
   installDriverDiagnosticObserver,
   type DriverDiagnosticObservation,
 } from '../diagnostics/driverDiagnosticObservation';
 
 describe('DriverAuthService', () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => { resolve = done; });
+    return { promise, resolve };
+  }
   it('reads and updates the phone-account profile with the account bearer', async () => {
     const requests: { body?: string; headers?: Record<string, string>; method?: string; url: string }[] = [];
     const client = createDriverAuthApiClient({
@@ -157,6 +167,135 @@ describe('DriverAuthService', () => {
       { operation: 'AUTH_REFRESH', phase: 'SUCCEEDED', requestId: '66666666-6666-4666-8666-666666666666' },
     ]);
     installDriverDiagnosticObserver(null);
+  });
+
+  it('reports a stuck timed-out refresh as pending until its raw request settles', async () => {
+    let expire!: () => void;
+    let requestSignal: AbortSignal | undefined;
+    let requests = 0;
+    const firstResponse = deferred<{
+      json(): Promise<unknown>;
+      ok: boolean;
+      status: number;
+    }>();
+    const client = createDriverAuthApiClient({
+      baseUrl: 'https://test-api.com',
+      refreshTimeoutMs: 5_000,
+      scheduleRefreshTimeout: (run) => { expire = run; return 'refresh-timeout'; },
+      cancelRefreshTimeout: () => undefined,
+      fetchImpl: async (_url, init) => {
+        requests += 1;
+        requestSignal = init?.signal;
+        if (requests === 1) return firstResponse.promise;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              accessToken: 'retry-access',
+              expiresAt: '2026-05-15T00:15:00.000Z',
+              refreshToken: 'stored-rt',
+              refreshTokenExpiresAt: '2026-06-15T00:00:00.000Z',
+              tokenType: 'Bearer',
+              ttlSeconds: 900,
+              use: 'driver_account',
+            },
+          }),
+        };
+      },
+    });
+
+    const first = client.refreshSession({ refreshToken: 'stored-rt' });
+    await new Promise((resolve) => setImmediate(resolve));
+    expire();
+
+    await assert.rejects(first, { name: 'BoundedOperationTimeoutError' });
+    assert.equal(requestSignal?.aborted, true);
+    await assert.rejects(
+      client.refreshSession({ refreshToken: 'stored-rt' }),
+      (error) => error instanceof DriverAuthRefreshPendingError
+        && error.message === 'DRIVER_AUTH_REFRESH_STILL_PENDING',
+    );
+    assert.equal(requests, 1);
+
+    firstResponse.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: {
+          accessToken: 'late-access',
+          expiresAt: '2026-05-15T00:15:00.000Z',
+          refreshToken: 'stored-rt',
+          refreshTokenExpiresAt: '2026-06-15T00:00:00.000Z',
+          tokenType: 'Bearer',
+          ttlSeconds: 900,
+          use: 'driver_account',
+        },
+      }),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const retry = await client.refreshSession({ refreshToken: 'stored-rt' });
+    assert.equal(retry.accountAccess.accessToken, 'retry-access');
+    assert.equal(requests, 2);
+  });
+
+  it('shares one refresh request between concurrent callers', async () => {
+    const response = deferred<{
+      json(): Promise<unknown>;
+      ok: boolean;
+      status: number;
+    }>();
+    let requests = 0;
+    const client = createDriverAuthApiClient({
+      baseUrl: 'https://test-api.com',
+      fetchImpl: async () => {
+        requests += 1;
+        return response.promise;
+      },
+    });
+
+    const first = client.refreshSession({ refreshToken: 'stored-rt' });
+    const second = client.refreshSession({ refreshToken: ' stored-rt ' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(requests, 1);
+    response.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: {
+          accessToken: 'refreshed-at',
+          expiresAt: '2026-05-15T00:15:00.000Z',
+          refreshToken: 'stored-rt',
+          refreshTokenExpiresAt: '2026-06-15T00:00:00.000Z',
+          tokenType: 'Bearer',
+          ttlSeconds: 900,
+          use: 'driver_account',
+        },
+      }),
+    });
+
+    const [left, right] = await Promise.all([first, second]);
+    assert.deepEqual(left, right);
+    assert.equal(requests, 1);
+  });
+
+  it('preserves a non-2xx status when the error response body is empty or malformed', async () => {
+    for (const bodyError of [new SyntaxError('empty'), new Error('body unavailable')]) {
+      const client = createDriverAuthApiClient({
+        baseUrl: 'https://test-api.com',
+        fetchImpl: async () => ({
+          ok: false,
+          status: 503,
+          json: async () => { throw bodyError; },
+        }),
+      });
+
+      await assert.rejects(
+        client.refreshSession({ refreshToken: 'stored-rt' }),
+        (error) => error instanceof DriverApiHttpError && error.status === 503,
+      );
+    }
   });
 
   it('registers and revokes the current app installation with the account bearer', async () => {

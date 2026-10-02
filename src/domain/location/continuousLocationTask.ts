@@ -247,7 +247,11 @@ async function refreshPersistedDriverAccess(input: {
       refreshToken: persistedAccess.accountAccess.refreshToken,
     });
     accountAccess = refreshed.accountAccess;
-    await input.driverAccessTokenStore.saveRefreshedAccountAccess(accountAccess);
+    await input.driverAccessTokenStore.saveRefreshedAccountAccess(accountAccess, {
+      accessToken: persistedAccess.accountAccess.accessToken,
+      phoneE164: persistedAccess.driverProfile.phoneE164,
+      refreshToken: persistedAccess.accountAccess.refreshToken,
+    });
   }
 
   const lookup = await input.routeAccessService.lookupRouteAccess({
