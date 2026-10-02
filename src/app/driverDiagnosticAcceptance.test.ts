@@ -5,6 +5,7 @@ import { DriverApiHttpError } from '../api/deliveryServer/driverApiError';
 import type {
   DriverDiagnosticContext,
   DriverDiagnosticEnvelope,
+  DriverDiagnosticQuarantineEntry,
   DriverDiagnosticSnapshot,
 } from '../domain/diagnostics/driverDiagnosticContract';
 import {
@@ -43,11 +44,25 @@ function uuid(sequence: number, prefix = '2') {
   return `${prefix}0000000-0000-4000-8000-${sequence.toString().padStart(12, '0')}`;
 }
 
-function createMemoryStorage(initial: unknown[] = []): DiagnosticStorage & { records: unknown[] } {
+function createMemoryStorage(initial: unknown[] = []): DiagnosticStorage & {
+  quarantined: DriverDiagnosticQuarantineEntry[];
+  records: unknown[];
+} {
   const records = [...initial];
+  const quarantined: DriverDiagnosticQuarantineEntry[] = [];
   return {
+    quarantined,
     records,
     append: async (_owner, additions) => { records.push(...additions); },
+    quarantine: async (_owner, entries) => {
+      const quarantinedIds = new Set(entries.map(({ record }) => record.diagnosticId));
+      const retained = records.filter((candidate) => {
+        const diagnosticId = (candidate as { diagnosticId?: string }).diagnosticId;
+        return diagnosticId === undefined || !quarantinedIds.has(diagnosticId);
+      });
+      records.splice(0, records.length, ...retained);
+      quarantined.push(...entries);
+    },
     read: async () => [...records],
     remove: async (_owner, diagnosticIds) => {
       const accepted = new Set(diagnosticIds);
@@ -93,7 +108,11 @@ function snapshotAt(observedAt: string): DriverDiagnosticSnapshot {
 
 function createAcceptanceHarness(
   startAt = '2026-10-01T14:05:00.000Z',
-  options?: { collectionWarmupMs?: number; initializeLocationState?: boolean },
+  options?: {
+    collectionWarmupMs?: number;
+    initializeLocationState?: boolean;
+    storage?: ReturnType<typeof createMemoryStorage>;
+  },
 ) {
   let nowMs = Date.parse(startAt);
   let recordSequence = 0;
@@ -103,7 +122,7 @@ function createAcceptanceHarness(
   const diagnosticTokens: string[] = [];
   const scheduled = new Map<number, () => void>();
   const watchdogs = new Map<number, () => void>();
-  const storage = createMemoryStorage();
+  const storage = options?.storage ?? createMemoryStorage();
   const now = () => new Date(nowMs);
   const receiver = createContractMockDiagnosticReceiver({
     ...(options?.collectionWarmupMs === undefined ? {} : { collectionWarmupMs: options.collectionWarmupMs }),
@@ -400,6 +419,47 @@ describe('contract mock server acceptance for driver diagnostics', () => {
     assert.deepEqual(harness.diagnosticTokens, ['cached-diagnostic-token']);
     assert.equal(harness.getRegisterCalls(), 0);
     assert.equal(harness.receiver.classify().status, 'AUTH_OR_ROUTE_BLOCKED');
+  });
+
+  it('atomically quarantines a permanent rejection from a mixed response without blocking transport', async () => {
+    const storage = createMemoryStorage();
+    const atomicQuarantine = storage.quarantine;
+    let quarantineStarted = false;
+    let releaseQuarantine!: () => void;
+    const quarantineGate = new Promise<void>((resolve) => { releaseQuarantine = resolve; });
+    storage.quarantine = async (owner, entries) => {
+      quarantineStarted = true;
+      await quarantineGate;
+      await atomicQuarantine(owner, entries);
+    };
+    const harness = createAcceptanceHarness('2026-10-01T14:05:00.000Z', { storage });
+    harness.recorder.emitStateChange();
+    const sentRecords = harness.outbox.listPending();
+    assert.ok(sentRecords.length >= 2);
+    const rejectedId = sentRecords[0]!.diagnosticId;
+    harness.receiver.rejectDiagnostic(rejectedId, 'INVALID_RECORD');
+
+    assert.equal(await harness.recorder.flush(), true);
+    assert.deepEqual(harness.outbox.listPending(), []);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(quarantineStarted, true);
+    assert.deepEqual(storage.quarantined, []);
+    assert.equal(storage.records.some((candidate) => (
+      (candidate as { diagnosticId?: string }).diagnosticId === rejectedId
+    )), true);
+
+    releaseQuarantine();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual((storage.quarantined as DriverDiagnosticQuarantineEntry[]).map(({ code, record }) => ({
+      code,
+      diagnosticId: record.diagnosticId,
+    })), [{ code: 'INVALID_RECORD', diagnosticId: rejectedId }]);
+    assert.deepEqual(storage.records, []);
+
+    const restarted = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    await restarted.hydrate();
+    assert.deepEqual(restarted.listPending(), []);
   });
 
   it('classifies an authoritative failed server attempt as received but not applied', async () => {

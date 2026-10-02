@@ -4,7 +4,7 @@
 
 변경 추적: `EVNSolution/clever-change-control#307`
 
-이 문서는 CLEVER Routes 앱이 구현한 진단 계약과 서버가 구현해야 할 수신·판정 규칙을 정의한다. 앱 저장·전송 코드는 이 저장소에 구현되어 있지만, 아래 서버 endpoint와 운영 판정 화면이 현재 운영 서버에 배포됐다는 뜻은 아니다. `src/app/driverDiagnosticReceiverFixture.ts`는 계약 검증용 mock이며 운영 서버 구현이 아니다.
+이 문서는 CLEVER Routes 앱과 서버의 진단 수신·판정 계약을 정의한다. 서버 PR #472의 운영 커밋 `675f8d24514bcafbac2e105269de86658c6b512e`는 수신·관리자 조회 API, 권한 검사, 멱등 저장과 30일 보관을 구현했다. 운영 인스턴스 revision과 이미지 digest를 읽기 전용으로 대조했다. 이 서버 증거는 앱 실기기 검증이나 스토어 제출을 대신하지 않는다. `src/app/driverDiagnosticReceiverFixture.ts`는 앱 계약 검증용 mock이다.
 
 ## 목적과 증거 경계
 
@@ -55,13 +55,19 @@
 
 서버 요구사항:
 
-- token은 driver account, tenant, driver, `deviceInstanceHash`에 묶는다.
-- 권한은 진단 등록 갱신과 `sync-health:write`로 제한한다. 배송 조회·변경, 경로 takeover, 고객정보 조회 권한을 주지 않는다.
+- token은 driver account와 `deviceInstanceHash`에 묶는다. tenant·driver는 각 record/live context의 실제 route 소유 관계를 검증하여 서버가 도출한다. route가 없는 기록은 계정 범위에만 보존하고 tenant 관리자 조회에 노출하지 않는다.
+- 진단 token은 diagnostics 수신 전용이다. 등록·갱신·철회에는 유효한 account bearer가 필요하다. 배송 조회·변경, 경로 takeover, 고객정보 조회 권한을 주지 않는다.
 - 최대 수명은 24시간이다. 앱은 만료까지 30초 이하이거나 수명이 24시간을 넘는 credential을 사용하지 않는다.
 - 로그아웃·계정 폐기·기기 credential 폐기 시 서버에서 철회할 수 있는 식별자와 감사 기록을 둔다.
 - account bearer 또는 진단 token을 진단 payload, 일반 로그, 오류 문자열에 복사하지 않는다.
 
 앱은 진단 credential을 계정 hash별 SecureStore key에 저장한다. 계정 hash는 기기 내부 partition key이며 registration/diagnostics body에 보내지 않는다.
+
+### `DELETE /driver/sync-health/registrations`
+
+유효한 account bearer와 등록 요청과 같은 body로 해당 계정·기기의 진단 credential을 철회한다. 명시적인 로그아웃에서는 마지막 진단 flush 후 제한 시간 내 철회를 시도하고 로컬 진단 자격을 정리한다. 철회 실패가 로그아웃을 무기한 막지 않는다. 오프라인에서는 서버 철회 완료를 주장하지 않으며 서버의 최대 24시간 만료 제한이 남는다. 일시적인 인증 만료·업무 인증 clear·새 로그인 분리는 서버 DELETE를 호출하지 않는다. 배송 이벤트·사진은 진단 정리 대상이 아니다.
+
+철회 요청의 즉시 실행·5초 timeout·AbortSignal과 새 로그인 세대 보호는 앱 테스트로 검증한다. 실제 기기 철회 결과는 별도의 릴리스 증거로 확인한다.
 
 ### `POST /driver/sync-health/diagnostics`
 
@@ -71,13 +77,15 @@
 
 ```json
 {
-  "acceptedDiagnosticIds": ["record UUID"],
+  "acceptedDiagnosticIds": ["accepted record UUID"],
+  "rejectedDiagnostics": [{"diagnosticId": "rejected record UUID", "code": "ROUTE_ACCESS_REVOKED"}],
   "serverReceivedAt": "2026-10-02T14:00:05.000Z"
 }
 ```
 
 - `diagnosticId`는 계정·기기 범위에서 멱등 처리한다. 같은 ID와 같은 payload 재전송은 중복 적용하지 않고 같은 acceptance를 반환한다.
-- 같은 ID의 다른 payload는 거부하고 보안·계약 오류로 기록한다.
+- 같은 ID의 다른 payload는 `DIAGNOSTIC_ID_CONFLICT`로 거부한다. 영구 거부 코드는 `INVALID_RECORD`, `DEVICE_MISMATCH`, `ROUTE_ACCESS_REVOKED`, `DIAGNOSTIC_ID_CONFLICT` 네 가지다. 앱은 해당 진단 row를 제한된 암호화 격리 저장소로 이동하여 재전송 batch를 막지 않게 한다. 업무 queue는 변경하지 않는다.
+- 응답의 ID는 보낸 batch에 속하고 중복·accepted/rejected 중첩이 없어야 한다. 알 수 없는 코드·잘못된 응답은 protocol 실패로 취급하여 pending 기록을 보존한다. 격리와 재시작 검증은 앱 릴리스 증거로 별도 확인한다.
 - `batchId`도 요청 추적과 응답 유실 대조에 보존한다.
 - `acceptedDiagnosticIds`에는 실제로 영속 수락한 ID만 넣는다. 앱은 요청 batch에 없던 ID를 ACK로 소비하지 않는다.
 - 인증은 됐지만 JSON/schema/영속화/판정 적용에 실패한 요청도 `lastContactAt`과 ingestion failure를 구분해 남긴다. 이를 정상 수락으로 표시하지 않는다.
@@ -257,6 +265,6 @@ route ID, session/assignment generation, client event ID, request ID는 서버 a
 
 ## 서버 구현 인계
 
-대상: `clever-route-server/apps/delivery-api`. 현재 앱 변경에는 서버 저장소 수정이나 운영 배포가 없다.
+대상: `clever-route-server/apps/delivery-api`. 서버 PR #472는 별도 작업에서 배포됐다. 이 앱 릴리스 작업에서 서버 구현·운영 설정은 변경하지 않는다.
 
-서버 작업에서는 이 계약의 credential 발급·계정/기기 권한 제한, batch 수신·멱등 영속화, 서버 수신 시각과 단계 관측 시각 분리, request/event join, GPS 수신/적용 증거, UNKNOWN을 포함한 운영 조회를 구현한다. 업무 bearer 실패를 진단 bearer 실패와 혼동하지 않으며, tenant/driver 범위는 account 인증 및 실제 route 소유 관계로 검증한다. 실제 수신기에서 위 fault matrix를 통과하기 전까지 운영 완료로 표시하지 않는다. 배포와 운영 데이터 수정은 별도 작업이다.
+배포된 서버는 credential 발급·계정/기기 권한 제한, batch 수신·멱등 영속화, 서버 수신 시각과 단계 관측 시각 분리, request/event join, GPS 수신/적용 증거, UNKNOWN을 포함한 운영 조회를 구현한다. 업무 bearer 실패를 진단 bearer 실패와 혼동하지 않으며, tenant/driver 범위는 account 인증 및 실제 route 소유 관계로 검증한다. 실제 수신기에서 위 fault matrix를 통과하기 전까지 운영 완료로 표시하지 않는다. 배포와 운영 데이터 수정은 별도 작업이다.

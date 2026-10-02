@@ -1,14 +1,17 @@
 import {
+  isDriverDiagnosticPermanentRejectionCode,
   sanitizeDriverDiagnosticRecord,
   type DriverDiagnosticRecord,
+  type DriverDiagnosticQuarantineEntry,
 } from '../../../domain/diagnostics/driverDiagnosticContract';
 import type { DiagnosticStorage } from '../../../domain/diagnostics/driverDiagnosticOutbox';
 
 export const DRIVER_DIAGNOSTIC_DATABASE_NAME = 'clever_driver_diagnostics_v1.db';
 export const DRIVER_DIAGNOSTIC_DATABASE_KEY_STORAGE_KEY = 'clever.driverDiagnostics.sqlcipherKey.v1';
-export const DRIVER_DIAGNOSTIC_DATABASE_SCHEMA_VERSION = 1;
+export const DRIVER_DIAGNOSTIC_DATABASE_SCHEMA_VERSION = 2;
 export const DRIVER_DIAGNOSTIC_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 export const DRIVER_DIAGNOSTIC_MAX_RECORDS = 1_000;
+const isoTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u;
 
 export type DiagnosticDatabase = {
   execAsync(sql: string): Promise<void>;
@@ -78,6 +81,16 @@ export async function createDiagnosticStorage(input: {
     );
     CREATE INDEX IF NOT EXISTS diagnostic_records_owner_observed
       ON diagnostic_records (account_owner_hash, observed_at, diagnostic_id);
+    CREATE TABLE IF NOT EXISTS diagnostic_quarantine (
+      account_owner_hash TEXT NOT NULL,
+      diagnostic_id TEXT NOT NULL,
+      quarantined_at TEXT NOT NULL,
+      rejection_code TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      PRIMARY KEY (account_owner_hash, diagnostic_id)
+    );
+    CREATE INDEX IF NOT EXISTS diagnostic_quarantine_owner_quarantined
+      ON diagnostic_quarantine (account_owner_hash, quarantined_at, diagnostic_id);
     PRAGMA user_version = ${DRIVER_DIAGNOSTIC_DATABASE_SCHEMA_VERSION};
   `);
 
@@ -141,6 +154,54 @@ export async function createDiagnosticStorage(input: {
         );
       });
     },
+    quarantine: async (accountOwnerHash, entries) => {
+      assertAccountOwnerHash(accountOwnerHash);
+      const sanitized = entries.map((entry): DriverDiagnosticQuarantineEntry => {
+        const record = sanitizeDriverDiagnosticRecord(entry.record);
+        if (
+          record === null || !isDriverDiagnosticPermanentRejectionCode(entry.code)
+          || !isTimestamp(entry.quarantinedAt)
+        ) throw new Error('Cannot quarantine invalid diagnostic rejection.');
+        return { code: entry.code, quarantinedAt: new Date(entry.quarantinedAt).toISOString(), record };
+      });
+      if (sanitized.length === 0) return;
+      await inEncryptedTransaction(async (transaction) => {
+        for (const entry of sanitized) {
+          await transaction.runAsync(
+            `INSERT OR IGNORE INTO diagnostic_quarantine
+              (account_owner_hash, diagnostic_id, quarantined_at, rejection_code, payload)
+             VALUES (?, ?, ?, ?, ?);`,
+            accountOwnerHash,
+            entry.record.diagnosticId,
+            entry.quarantinedAt,
+            entry.code,
+            JSON.stringify(entry.record),
+          );
+          await transaction.runAsync(
+            'DELETE FROM diagnostic_records WHERE account_owner_hash = ? AND diagnostic_id = ?;',
+            accountOwnerHash,
+            entry.record.diagnosticId,
+          );
+        }
+        const cutoff = new Date(now().getTime() - retentionMs).toISOString();
+        await transaction.runAsync(
+          'DELETE FROM diagnostic_quarantine WHERE account_owner_hash = ? AND quarantined_at < ?;',
+          accountOwnerHash,
+          cutoff,
+        );
+        await transaction.runAsync(
+          `DELETE FROM diagnostic_quarantine
+             WHERE rowid IN (
+               SELECT rowid FROM diagnostic_quarantine
+                WHERE account_owner_hash = ?
+                ORDER BY quarantined_at DESC, diagnostic_id DESC
+                LIMIT -1 OFFSET ?
+             );`,
+          accountOwnerHash,
+          maxRecords,
+        );
+      });
+    },
     read: async (accountOwnerHash) => {
       assertAccountOwnerHash(accountOwnerHash);
       const rows = await database.getAllAsync<StoredDiagnosticRow>(
@@ -180,6 +241,11 @@ function assertDiagnosticId(value: string) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)) {
     throw new Error('Diagnostic acknowledgement contains an invalid identifier.');
   }
+}
+
+function isTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 40
+    && isoTimestampPattern.test(value) && Number.isFinite(Date.parse(value));
 }
 
 function bytesToHex(value: Uint8Array) {

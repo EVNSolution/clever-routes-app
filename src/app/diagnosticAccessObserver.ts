@@ -3,7 +3,7 @@ import type { DriverAccessRestoreResult, DriverAccessTokenStore } from '../domai
 /** Observe completed account-store operations without adding awaits to authentication. */
 export function observeDriverAccessStore(store: DriverAccessTokenStore, observer: {
   changed(access:DriverAccessRestoreResult):void;
-  cleared():void;
+  cleared(cause: 'account_replacement' | 'store_clear'):void;
 }):DriverAccessTokenStore {
   let generation=0;
   const notify=(access:DriverAccessRestoreResult)=>{try{observer.changed(access);}catch{/* diagnostic sink is isolated */}};
@@ -15,7 +15,7 @@ export function observeDriverAccessStore(store: DriverAccessTokenStore, observer
     ...store,
     clear:()=>{
       const expected=++generation;
-      try{observer.cleared();}catch{/* diagnostic sink is isolated */}
+      try{observer.cleared('store_clear');}catch{/* diagnostic sink is isolated */}
       return store.clear().catch((error:unknown)=>{
         void store.loadActiveDriverAccess().then(access=>{if(expected===generation) notify(access);}).catch(()=>undefined);
         throw error;
@@ -29,7 +29,7 @@ export function observeDriverAccessStore(store: DriverAccessTokenStore, observer
     saveActiveRouteSession:(...args)=>after(store.saveActiveRouteSession(...args)),
     saveAuthenticatedDriver:(input)=>{
       const expected=++generation;
-      try{observer.cleared();}catch{/* detach previous account before new login is persisted */}
+      try{observer.cleared('account_replacement');}catch{/* detach previous account before new login is persisted */}
       return store.saveAuthenticatedDriver(input).then(()=>{
         if(expected===generation) notify({kind:'active',accountAccess:input.accountAccess,driverProfile:{phoneE164:input.phoneE164}});
       });

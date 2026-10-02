@@ -687,8 +687,10 @@ describe('encrypted driver evidence store', () => {
 
   it('keeps workflow envelopes redacted while sensitive replay data remains separately encrypted', async () => {
     const db = createDatabase();
+    const now = () => new Date('2026-08-24T00:00:02.000Z');
     const store = await createEncryptedEvidenceStore({
       keyStore: { getItemAsync: async () => '77'.repeat(32), setItemAsync: async () => undefined },
+      now,
       openDatabaseAsync: async () => db.database,
       randomBytes: async () => new Uint8Array(32),
       sha256: async () => new Uint8Array(32),
@@ -894,8 +896,10 @@ describe('encrypted driver evidence store', () => {
 
   it('preserves quarantine and journal rows when replacing the active queue snapshot', async () => {
     const db = createDatabase();
+    const now = () => new Date('2026-08-24T00:00:02.000Z');
     const store = await createEncryptedEvidenceStore({
       keyStore: { getItemAsync: async () => '88'.repeat(32), setItemAsync: async () => undefined },
+      now,
       openDatabaseAsync: async () => db.database,
       randomBytes: async () => new Uint8Array(32),
       sha256: async () => new Uint8Array(32),
@@ -921,8 +925,10 @@ describe('encrypted driver evidence store', () => {
 
   it('persists only changed queue rows instead of rewriting retained audit history', async () => {
     const db = createDatabase({ userVersion: 2 });
+    const now = () => new Date('2026-09-03T00:00:02.000Z');
     const store = await createEncryptedEvidenceStore({
       keyStore: { getItemAsync: async () => '89'.repeat(32), setItemAsync: async () => undefined },
+      now,
       openDatabaseAsync: async () => db.database,
       randomBytes: async () => new Uint8Array(32),
     });

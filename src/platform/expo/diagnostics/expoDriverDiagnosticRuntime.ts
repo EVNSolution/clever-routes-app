@@ -5,7 +5,9 @@ import * as SecureStore from 'expo-secure-store';
 import { AppState, Platform } from 'react-native';
 import { CONTINUOUS_LOCATION_TASK_NAME } from '../../../domain/location/continuousLocationStream';
 import { createDiagnosticBindingPersistence } from '../../../app/diagnosticBindingPersistence';
+import { finalizeDiagnosticLogoutCleanup, runBoundedDiagnosticRevocation } from '../../../app/diagnosticLogoutRevocation';
 import { createDriverDiagnosticProjection } from '../../../app/driverDiagnosticProjection';
+import { parseDriverDiagnosticResponse } from '../../../app/driverDiagnosticResponse';
 import { runBoundedAsyncOperation } from '../../../domain/async/boundedAsyncOperation';
 import type { DriverAccessRestoreResult } from '../../../domain/driver/driverAccessTokenStore';
 import { equalDiagnosticContext, restoreDiagnosticBinding, type DiagnosticBinding as Binding } from '../../../app/diagnosticBindingRestore';
@@ -46,6 +48,8 @@ let probing = false;
 let baseUrl: string | null = null;
 let bootId: string | null = null;
 let diagnosticSequence = 0;
+let suppressAccessUntilBusinessClear = false;
+let revocationBarrier: Promise<void> | null = null;
 
 
 function bounded<T>(operation: () => Promise<T>) { return runBoundedAsyncOperation(operation, { timeoutMs: 5000 }); }
@@ -75,8 +79,8 @@ function heartbeatIfDue(force = false) {
   refreshQueueProjection();
   active.recorder.emitHeartbeat();
 }
-async function post(path: string, token: string, body: unknown, signal: AbortSignal): Promise<unknown> {
-  const response = await fetch(`${baseUrl}${path}`, withNoStoreDriverApiRequest({ method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal }));
+async function request(path: string, method: 'DELETE' | 'POST', token: string, body: unknown, signal?: AbortSignal): Promise<unknown> {
+  const response = await fetch(`${baseUrl}${path}`, withNoStoreDriverApiRequest({ method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal }));
   if (!response.ok) throw Object.assign(new Error('DIAGNOSTIC_HTTP_ERROR'), { status: response.status });
   return response.json();
 }
@@ -97,6 +101,7 @@ function bind(binding: Binding, preserveEarly: boolean) {
     storage: {
       read: async (owner) => (await getExpoDiagnosticStorage()).read(owner),
       append: async (owner, records) => (await getExpoDiagnosticStorage()).append(owner, records),
+      quarantine: async (owner, entries) => (await getExpoDiagnosticStorage()).quarantine(owner, entries),
       remove: async (owner, ids) => (await getExpoDiagnosticStorage()).remove(owner, ids),
     },
   });
@@ -104,16 +109,19 @@ function bind(binding: Binding, preserveEarly: boolean) {
     outbox, batchIdFactory: () => Crypto.randomUUID(), deviceInstanceHash: binding.context.deviceInstanceHash,
     credentialStore: getExpoDiagnosticCredentialStore(),
     register: async ({ accountOwnerHash, deviceInstanceHash, signal }) => {
+      if (revocationBarrier !== null) await revocationBarrier.catch(() => undefined);
       const bearer = accountBearer;
       if (!bearer || bearer.owner !== accountOwnerHash || Date.parse(bearer.expiresAt) <= Date.now()) throw new Error('AUTH_CREDENTIAL_MISSING');
-      const result = await post('/driver/sync-health/registrations', bearer.token, { schemaVersion: 1, deviceInstanceHash }, signal) as { token?: unknown; expiresAt?: unknown };
+      const result = await request('/driver/sync-health/registrations', 'POST', bearer.token, { schemaVersion: 1, deviceInstanceHash }, signal) as { token?: unknown; expiresAt?: unknown };
       if (typeof result?.token !== 'string' || typeof result.expiresAt !== 'string' || !Number.isFinite(Date.parse(result.expiresAt))) throw new Error('INVALID_DIAGNOSTIC_CREDENTIAL');
       return { token: result.token, expiresAt: result.expiresAt };
     },
     send: async ({ credentialToken, envelope, signal }) => {
-      const result = await post('/driver/sync-health/diagnostics', credentialToken, envelope, signal) as { acceptedDiagnosticIds?: unknown; serverReceivedAt?: unknown };
-      if (!Array.isArray(result?.acceptedDiagnosticIds) || !result.acceptedDiagnosticIds.every(id => typeof id === 'string') || typeof result.serverReceivedAt !== 'string' || !Number.isFinite(Date.parse(result.serverReceivedAt))) throw new Error('INVALID_DIAGNOSTIC_ACK');
-      return { acceptedDiagnosticIds: result.acceptedDiagnosticIds as string[], serverReceivedAt: result.serverReceivedAt };
+      const result = parseDriverDiagnosticResponse(
+        await request('/driver/sync-health/diagnostics', 'POST', credentialToken, envelope, signal),
+      );
+      if (result === null) throw new Error('INVALID_DIAGNOSTIC_ACK');
+      return result;
     },
   });
   const recorder = createDriverDiagnosticRecorder({ bootId, context: binding.context, outbox, transport, snapshot: projection.snapshot, idFactory: () => Crypto.randomUUID(), nextSequence: () => ++diagnosticSequence });
@@ -155,7 +163,7 @@ export function startExpoDriverDiagnosticRuntime(): void {
 /** Tokens stay in memory/SecureStore adapters; they are never diagnostic event fields. */
 export function observeExpoDriverDiagnosticAccess(access: DriverAccessRestoreResult): void {
   startExpoDriverDiagnosticRuntime();
-  if (!started) return;
+  if (!started || suppressAccessUntilBusinessClear) return;
   const revision = ++accessRevision;
   if (access.kind !== 'active' && access.kind !== 'refresh_required') {
     accountBearer = null;
@@ -197,7 +205,76 @@ export function observeExpoDriverDiagnosticAccess(access: DriverAccessRestoreRes
     }
   }).catch(() => undefined);
 }
+export function observeExpoDriverDiagnosticBusinessAccessCleared(): void {
+  suppressAccessUntilBusinessClear = false;
+  accessRevision += 1;
+  accountBearer = null;
+  if (active) {
+    emitDriverDiagnosticObservation({ kind: 'STATE', blocker: { stage: 'AUTH', reasonCode: 'AUTH_CREDENTIAL_MISSING' } });
+  }
+}
+
+export async function revokeExpoDriverDiagnosticRegistrationOnLogout(
+  accountAccessToken: string | null,
+): Promise<void> {
+  suppressAccessUntilBusinessClear = true;
+  const logoutRevision = ++accessRevision;
+  early = [];
+  currentPhone = null;
+  observerEnabled = false;
+  const detached = active;
+  const owner = detached?.binding.accountOwnerHash ?? accountBearer?.owner ?? null;
+  const credentialStore = getExpoDiagnosticCredentialStore();
+  active = null;
+  installDriverDiagnosticObserver(null, { requestIdFactory: () => Crypto.randomUUID() });
+  const [deviceInstanceHash, credentialAtLogout] = await Promise.all([
+    detached?.binding.context.deviceInstanceHash
+      ? Promise.resolve(detached.binding.context.deviceInstanceHash)
+      : bounded(() => getExpoDriverSyncIdentity().getDeviceInstanceHash()).catch(() => null),
+    owner === null ? Promise.resolve(null) : bounded(() => credentialStore.get(owner)).catch(() => null),
+  ]);
+  if (detached !== null) {
+    await runBoundedAsyncOperation(() => detached.recorder.flushBeforeDetach(), { timeoutMs: 5000 }).catch(() => undefined);
+    detached.transport.stop();
+    detached.outbox.switchAccount('detached');
+  }
+  accountBearer = null;
+
+  if (baseUrl !== null && deviceInstanceHash !== null && accountAccessToken !== null && accountAccessToken.trim() !== '') {
+    const previousRevocation = revocationBarrier;
+    // Abort is best effort: the server may already have processed DELETE. Release
+    // the barrier on timeout; a later registration recovers if that late DELETE won.
+    const boundedRevocation = runBoundedDiagnosticRevocation({
+      previous: previousRevocation,
+      timeoutMs: 5000,
+      revoke: async (signal) => {
+        const result = await request(
+          '/driver/sync-health/registrations',
+          'DELETE',
+          accountAccessToken.trim(),
+          { schemaVersion: 1, deviceInstanceHash },
+          signal,
+        );
+        const revokedCount = (result as { revokedCount?: unknown })?.revokedCount;
+        if (!Number.isSafeInteger(revokedCount) || (revokedCount as number) < 0) throw new Error('INVALID_DIAGNOSTIC_REVOCATION');
+      },
+    });
+    revocationBarrier = boundedRevocation;
+    await boundedRevocation;
+    if (revocationBarrier === boundedRevocation) revocationBarrier = null;
+  }
+
+  await finalizeDiagnosticLogoutCleanup({
+    isCurrent: () => accessRevision === logoutRevision && active === null,
+    removeCredential: () => owner !== null && credentialAtLogout !== null
+      ? bounded(() => credentialStore.remove(owner, credentialAtLogout.token))
+      : Promise.resolve(),
+    clearBinding: () => persistBinding(null),
+  });
+}
+
 export function clearExpoDriverDiagnosticAccount(): void {
+  suppressAccessUntilBusinessClear = false;
   accessRevision++; accountBearer = null; early = []; currentPhone = null; observerEnabled = false;
   if (active) {
     const detached = active;

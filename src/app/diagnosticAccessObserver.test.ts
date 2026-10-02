@@ -45,3 +45,11 @@ test('failed clear re-observes the retained account without hiding the business 
  await new Promise(resolve=>setImmediate(resolve));
  assert.equal(notified,1);
 });
+test('distinguishes automatic token clear from account replacement',async()=>{
+ const base=createDriverAccessTokenStore({storage:{getItemAsync:async()=>null,setItemAsync:async()=>undefined,deleteItemAsync:async()=>undefined}});
+ const causes:string[]=[];
+ const observed=observeDriverAccessStore(base,{changed:()=>undefined,cleared:cause=>{causes.push(cause);}});
+ await observed.clear();
+ await observed.saveAuthenticatedDriver({accountAccess:{} as never,phoneE164:'+10000000000'});
+ assert.deepEqual(causes,['store_clear','account_replacement']);
+});

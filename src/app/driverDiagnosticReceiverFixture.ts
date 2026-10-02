@@ -1,5 +1,6 @@
 import type {
   DriverDiagnosticEnvelope,
+  DriverDiagnosticPermanentRejectionCode,
   DriverDiagnosticResponse,
 } from '../domain/diagnostics/driverDiagnosticContract';
 
@@ -39,6 +40,7 @@ export function createContractMockDiagnosticReceiver(input: {
   const signalAbsentAfterMs = input.signalAbsentAfterMs ?? 2 * 60_000;
   const snapshotFreshForMs = input.snapshotFreshForMs ?? 2 * 60_000;
   const attempts = new Map<string, Attempt>();
+  const permanentRejections = new Map<string, DriverDiagnosticPermanentRejectionCode>();
   let lastContactAt: string | null = null;
   let latestEnvelope: DriverDiagnosticEnvelope | null = null;
   let locationExpectationIdentity: string | null = null;
@@ -183,9 +185,18 @@ export function createContractMockDiagnosticReceiver(input: {
         locationExpectedSince = lastContactAt;
       }
       return {
-        acceptedDiagnosticIds: envelope.records.map(({ diagnosticId }) => diagnosticId),
+        acceptedDiagnosticIds: envelope.records
+          .map(({ diagnosticId }) => diagnosticId)
+          .filter((diagnosticId) => !permanentRejections.has(diagnosticId)),
+        rejectedDiagnostics: envelope.records.flatMap(({ diagnosticId }) => {
+          const code = permanentRejections.get(diagnosticId);
+          return code === undefined ? [] : [{ code, diagnosticId }];
+        }),
         serverReceivedAt: lastContactAt,
       };
+    },
+    rejectDiagnostic: (diagnosticId: string, code: DriverDiagnosticPermanentRejectionCode) => {
+      permanentRejections.set(diagnosticId, code);
     },
     recordAttempt: (attempt: Attempt) => {
       attempts.set(attempt.clientEventId, attempt);

@@ -77,11 +77,21 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function memoryStorage(initial: unknown[] = []): DiagnosticStorage & { records: unknown[] } {
+function memoryStorage(initial: unknown[] = []): DiagnosticStorage & { quarantined: unknown[]; records: unknown[] } {
   const records = [...initial];
+  const quarantined: unknown[] = [];
   return {
+    quarantined,
     records,
     append: async (_accountOwnerHash, additions) => { records.push(...additions); },
+    quarantine: async (_accountOwnerHash, entries) => {
+      quarantined.push(...entries);
+      const rejected = new Set(entries.map(({ record }) => record.diagnosticId));
+      for (let index = records.length - 1; index >= 0; index -= 1) {
+        const candidate = records[index] as { diagnosticId?: string };
+        if (candidate.diagnosticId !== undefined && rejected.has(candidate.diagnosticId)) records.splice(index, 1);
+      }
+    },
     read: async () => [...records],
     remove: async (_accountOwnerHash, ids) => {
       const accepted = new Set(ids);
@@ -93,12 +103,17 @@ function memoryStorage(initial: unknown[] = []): DiagnosticStorage & { records: 
   };
 }
 
+function rejection(code: string, diagnosticId: string = ids.diag1) {
+  return { code, diagnosticId };
+}
+
 describe('driver diagnostics', () => {
   it('delivers a live error even while durable append is stalled', async () => {
     const append = deferred<void>();
     const sent: unknown[] = [];
     const storage: DiagnosticStorage = {
       append: async () => append.promise,
+      quarantine: async () => undefined,
       read: async () => [],
       remove: async () => undefined,
     };
@@ -113,7 +128,7 @@ describe('driver diagnostics', () => {
       send: async ({ credentialToken, envelope }) => {
         assert.equal(credentialToken, 'diagnostic-secret');
         sent.push(envelope);
-        return { acceptedDiagnosticIds: envelope.records.map((record) => record.diagnosticId), serverReceivedAt: '2026-10-01T14:05:01.000Z' };
+        return { acceptedDiagnosticIds: envelope.records.map((record) => record.diagnosticId), rejectedDiagnostics: [], serverReceivedAt: '2026-10-01T14:05:01.000Z' };
       },
     });
     const recorder = createDriverDiagnosticRecorder({
@@ -153,6 +168,12 @@ describe('driver diagnostics', () => {
         await appendGate.promise;
         persisted.push(...records);
       },
+      quarantine: async (_owner, entries) => {
+        const removed = new Set(entries.map(({ record }) => record.diagnosticId));
+        for (let index = persisted.length - 1; index >= 0; index -= 1) {
+          if (removed.has(persisted[index]!.diagnosticId)) persisted.splice(index, 1);
+        }
+      },
       read: async () => [...persisted],
       remove: async (_owner, ids) => {
         const removed = new Set(ids);
@@ -188,7 +209,7 @@ describe('driver diagnostics', () => {
   });
 
   it('does not let a late send completion ACK a newly selected account', async () => {
-    const sendResult = deferred<{ acceptedDiagnosticIds: string[]; serverReceivedAt: string }>();
+    const sendResult = deferred<{ acceptedDiagnosticIds: string[]; rejectedDiagnostics: never[]; serverReceivedAt: string }>();
     const storage = memoryStorage();
     const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
@@ -205,7 +226,7 @@ describe('driver diagnostics', () => {
     const pending = transport.flush(() => ({ bootId: ids.boot1, context, snapshot }));
     outbox.switchAccount('account-b');
     outbox.record({ bootId: ids.boot2, context: { ...context, routePlanId: ids.route2 }, diagnosticId: ids.diag2, kind: 'ERROR', observedAt: '2026-10-01T14:05:01.000Z', sequence: 1, snapshot });
-    sendResult.resolve({ acceptedDiagnosticIds: [ids.diag1, ids.diag2], serverReceivedAt: '2026-10-01T14:05:02.000Z' });
+    sendResult.resolve({ acceptedDiagnosticIds: [ids.diag1, ids.diag2], rejectedDiagnostics: [], serverReceivedAt: '2026-10-01T14:05:02.000Z' });
     await pending;
     assert.deepEqual(outbox.listPending().map(({ diagnosticId }) => diagnosticId), [ids.diag2]);
     transport.stop();
@@ -345,7 +366,7 @@ describe('driver diagnostics', () => {
 
   it('rebuilds live evidence at retry time and does not schedule after stop', async () => {
     const schedules: { delayMs: number; run: () => void }[] = [];
-    const firstSend = deferred<{ acceptedDiagnosticIds: string[]; serverReceivedAt: string }>();
+    const firstSend = deferred<{ acceptedDiagnosticIds: string[]; rejectedDiagnostics: never[]; serverReceivedAt: string }>();
     const sentNetworks: string[] = [];
     let currentSnapshot: DriverDiagnosticSnapshot = { ...snapshot, network: 'OFFLINE' };
     let clock = new Date('2026-10-01T14:05:00.000Z');
@@ -379,7 +400,7 @@ describe('driver diagnostics', () => {
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(sentNetworks, ['OFFLINE', 'ONLINE']);
     transport.stop();
-    firstSend.resolve({ acceptedDiagnosticIds: [ids.diag1], serverReceivedAt: '2026-10-01T14:05:05.000Z' });
+    firstSend.resolve({ acceptedDiagnosticIds: [ids.diag1], rejectedDiagnostics: [], serverReceivedAt: '2026-10-01T14:05:05.000Z' });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(outbox.listPending().length, 1);
     assert.deepEqual(schedules, []);
@@ -388,7 +409,7 @@ describe('driver diagnostics', () => {
   it('retries the same diagnostic id after a hung response without accepting the late response', async () => {
     const schedules: { delayMs: number; run: () => void }[] = [];
     const timeouts: { active: boolean; expire: () => void }[] = [];
-    const lateResponse = deferred<{ acceptedDiagnosticIds: string[]; serverReceivedAt: string }>();
+    const lateResponse = deferred<{ acceptedDiagnosticIds: string[]; rejectedDiagnostics: never[]; serverReceivedAt: string }>();
     let clock = new Date('2026-10-01T14:05:00.000Z');
     const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => clock, storage: memoryStorage() });
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: clock.toISOString(), sequence: 1, snapshot });
@@ -416,7 +437,7 @@ describe('driver diagnostics', () => {
         sentIds.push(envelope.records.map(({ diagnosticId }) => diagnosticId));
         return sends === 1
           ? lateResponse.promise
-          : { acceptedDiagnosticIds: [ids.diag1], serverReceivedAt: clock.toISOString() };
+          : { acceptedDiagnosticIds: [ids.diag1], rejectedDiagnostics: [], serverReceivedAt: clock.toISOString() };
       },
     });
 
@@ -430,7 +451,7 @@ describe('driver diagnostics', () => {
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(sentIds, [[ids.diag1], [ids.diag1]]);
     assert.equal(outbox.listPending().length, 0);
-    lateResponse.resolve({ acceptedDiagnosticIds: [ids.diag1], serverReceivedAt: clock.toISOString() });
+    lateResponse.resolve({ acceptedDiagnosticIds: [ids.diag1], rejectedDiagnostics: [], serverReceivedAt: clock.toISOString() });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(outbox.listPending().length, 0);
     transport.stop();
@@ -438,7 +459,7 @@ describe('driver diagnostics', () => {
 
   it('sends a coalesced follow-up when state changes during an in-flight diagnostic request', async () => {
     const schedules: { delayMs: number; run: () => void }[] = [];
-    const firstResponse = deferred<{ acceptedDiagnosticIds: string[]; serverReceivedAt: string }>();
+    const firstResponse = deferred<{ acceptedDiagnosticIds: string[]; rejectedDiagnostics: never[]; serverReceivedAt: string }>();
     let clock = new Date('2026-10-01T14:05:00.000Z');
     let currentSnapshot: DriverDiagnosticSnapshot = { ...snapshot, network: 'OFFLINE' };
     const sentNetworks: string[] = [];
@@ -458,7 +479,7 @@ describe('driver diagnostics', () => {
         sentNetworks.push(envelope.liveSnapshot.network);
         return sends === 1
           ? firstResponse.promise
-          : { acceptedDiagnosticIds: [], serverReceivedAt: clock.toISOString() };
+          : { acceptedDiagnosticIds: [], rejectedDiagnostics: [], serverReceivedAt: clock.toISOString() };
       },
     });
     const live = () => ({ bootId: ids.boot1, context, snapshot: currentSnapshot });
@@ -468,7 +489,7 @@ describe('driver diagnostics', () => {
     await new Promise((resolve) => setImmediate(resolve));
     currentSnapshot = { ...snapshot, network: 'ONLINE' };
     transport.requestImmediate(live);
-    firstResponse.resolve({ acceptedDiagnosticIds: [], serverReceivedAt: clock.toISOString() });
+    firstResponse.resolve({ acceptedDiagnosticIds: [], rejectedDiagnostics: [], serverReceivedAt: clock.toISOString() });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(schedules[0]?.delayMs, 5_000);
     clock = new Date('2026-10-01T14:05:05.000Z');
@@ -506,7 +527,7 @@ describe('driver diagnostics', () => {
       schedule: (run, delayMs) => { schedules.push({ delayMs, run }); return run; },
       send: async ({ envelope }) => {
         batchSizes.push(envelope.records.length);
-        return { acceptedDiagnosticIds: envelope.records.map(({ diagnosticId }) => diagnosticId), serverReceivedAt: clock.toISOString() };
+        return { acceptedDiagnosticIds: envelope.records.map(({ diagnosticId }) => diagnosticId), rejectedDiagnostics: [], serverReceivedAt: clock.toISOString() };
       },
     });
     const live = () => ({ bootId: ids.boot1, context, snapshot });
@@ -538,13 +559,140 @@ describe('driver diagnostics', () => {
       random: () => 0.5,
       register: async () => { throw new Error('unused'); },
       schedule: (run, delayMs) => { schedules.push({ delayMs, run }); return run; },
-      send: async () => ({ acceptedDiagnosticIds: [], serverReceivedAt: '2026-10-01T14:05:00.000Z' }),
+      send: async () => ({ acceptedDiagnosticIds: [], rejectedDiagnostics: [], serverReceivedAt: '2026-10-01T14:05:00.000Z' }),
     });
 
     assert.equal(await transport.flush(() => ({ bootId: ids.boot1, context, snapshot })), false);
     assert.equal(outbox.listPending().length, 1);
     assert.deepEqual(schedules.map(({ delayMs }) => delayMs), [5_000]);
     transport.stop();
+  });
+
+  it('quarantines only permanent rejections from the sent batch and keeps replay moving', async (test) => {
+    const storage = memoryStorage();
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
+    outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag2, kind: 'STATE_CHANGE', observedAt: '2026-10-01T14:05:01.000Z', sequence: 2, snapshot });
+    const transport = createDriverDiagnosticTransport({
+      batchIdFactory: () => ids.batch1,
+      credentialStore: { get: async () => ({ expiresAt: '2026-10-02T14:00:00.000Z', token: 'token' }), remove: async () => undefined, set: async () => undefined },
+      deviceInstanceHash: context.deviceInstanceHash,
+      now: () => new Date('2026-10-01T14:05:02.000Z'),
+      outbox,
+      register: async () => { throw new Error('unused'); },
+      send: async () => ({
+        acceptedDiagnosticIds: [ids.diag2],
+        rejectedDiagnostics: [rejection('INVALID_RECORD')],
+        serverReceivedAt: '2026-10-01T14:05:02.000Z',
+      }),
+    });
+    test.after(() => transport.stop());
+
+    assert.equal(await transport.flush(() => ({ bootId: ids.boot1, context, snapshot })), true);
+    assert.deepEqual(outbox.listPending(), []);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(storage.quarantined.map((entry) => {
+      const value = entry as { code: string; quarantinedAt: string; record: DriverDiagnosticRecord };
+      return { code: value.code, diagnosticId: value.record.diagnosticId, quarantinedAt: value.quarantinedAt };
+    }), [{ code: 'INVALID_RECORD', diagnosticId: ids.diag1, quarantinedAt: '2026-10-01T14:05:02.000Z' }]);
+  });
+
+  it('applies none of a response containing unknown, foreign, duplicate, or overlapping outcomes', async (test) => {
+    const invalidResponses = [
+      { acceptedDiagnosticIds: [], rejectedDiagnostics: [rejection('FUTURE_REJECTION')] },
+      { acceptedDiagnosticIds: [ids.diag1], rejectedDiagnostics: [rejection('INVALID_RECORD')] },
+      { acceptedDiagnosticIds: [ids.diag1, ids.diag1], rejectedDiagnostics: [] },
+      { acceptedDiagnosticIds: [], rejectedDiagnostics: [rejection('INVALID_RECORD', ids.diag3)] },
+      { acceptedDiagnosticIds: [], rejectedDiagnostics: [null as never] },
+    ];
+    for (const response of invalidResponses) {
+      const storage = memoryStorage();
+      const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+      outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
+      const transport = createDriverDiagnosticTransport({
+        batchIdFactory: () => ids.batch1,
+        credentialStore: { get: async () => ({ expiresAt: '2026-10-02T14:00:00.000Z', token: 'token' }), remove: async () => undefined, set: async () => undefined },
+        deviceInstanceHash: context.deviceInstanceHash,
+        outbox,
+        register: async () => { throw new Error('unused'); },
+        send: async () => ({ ...response, serverReceivedAt: '2026-10-01T14:05:02.000Z' }),
+      });
+      test.after(() => transport.stop());
+      assert.equal(await transport.flush(() => ({ bootId: ids.boot1, context, snapshot })), false);
+      assert.deepEqual(outbox.listPending().map(({ diagnosticId }) => diagnosticId), [ids.diag1]);
+      assert.deepEqual(storage.quarantined, []);
+    }
+  });
+
+  it('durably quarantines a rejected record so restart does not replay it', async () => {
+    const storage = memoryStorage();
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
+    outbox.quarantine([{ code: 'DIAGNOSTIC_ID_CONFLICT', diagnosticId: ids.diag1 }], 'account-a', '2026-10-01T14:05:02.000Z');
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const restarted = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    await restarted.hydrate();
+    assert.deepEqual(restarted.listPending(), []);
+    assert.equal(storage.quarantined.length, 1);
+  });
+
+  it('drains after a full bounded permanent-rejection batch without head-of-line blocking', async (test) => {
+    const schedules: { delayMs: number; run: () => void }[] = [];
+    let clock = new Date('2026-10-01T14:05:00.000Z');
+    const storage = memoryStorage();
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => clock, storage });
+    for (let index = 1; index <= 52; index += 1) {
+      outbox.record({
+        bootId: ids.boot1,
+        context,
+        diagnosticId: `90000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`,
+        kind: 'ERROR',
+        observedAt: clock.toISOString(),
+        sequence: index,
+        snapshot,
+      });
+    }
+    let batchSequence = 0;
+    let sends = 0;
+    const transport = createDriverDiagnosticTransport({
+      batchIdFactory: () => `91000000-0000-4000-8000-${(++batchSequence).toString(16).padStart(12, '0')}`,
+      cancel: () => undefined,
+      credentialStore: { get: async () => ({ expiresAt: '2026-10-02T14:00:00.000Z', token: 'token' }), remove: async () => undefined, set: async () => undefined },
+      deviceInstanceHash: context.deviceInstanceHash,
+      now: () => clock,
+      outbox,
+      register: async () => { throw new Error('unused'); },
+      schedule: (run, delayMs) => { schedules.push({ delayMs, run }); return run; },
+      send: async ({ envelope }) => {
+        sends += 1;
+        return sends === 1
+          ? {
+              acceptedDiagnosticIds: [],
+              rejectedDiagnostics: envelope.records.map(({ diagnosticId }) => rejection('ROUTE_ACCESS_REVOKED', diagnosticId)),
+              serverReceivedAt: clock.toISOString(),
+            }
+          : {
+              acceptedDiagnosticIds: envelope.records.map(({ diagnosticId }) => diagnosticId),
+              rejectedDiagnostics: [],
+              serverReceivedAt: clock.toISOString(),
+            };
+      },
+    });
+    test.after(() => transport.stop());
+
+    assert.equal(await transport.flush(() => ({ bootId: ids.boot1, context, snapshot })), true);
+    const firstBatchSize = 52 - outbox.listPending().length;
+    assert.ok(firstBatchSize > 0 && firstBatchSize <= 50);
+    assert.equal(outbox.listPending().length, 52 - firstBatchSize);
+    assert.equal(schedules[0]?.delayMs, 5_000);
+    clock = new Date('2026-10-01T14:05:05.000Z');
+    schedules.shift()?.run();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(outbox.listPending().length, 0);
+    assert.equal(storage.quarantined.length, firstBatchSize);
   });
 
   it('conditionally removes a diagnostic credential that finishes persisting after stop', async () => {
@@ -562,7 +710,7 @@ describe('driver diagnostics', () => {
       now: () => new Date('2026-10-01T14:05:00.000Z'),
       outbox,
       register: async () => ({ expiresAt: '2026-10-02T14:00:00.000Z', token: 'stale-token' }),
-      send: async () => ({ acceptedDiagnosticIds: [], serverReceivedAt: '2026-10-01T14:05:00.000Z' }),
+      send: async () => ({ acceptedDiagnosticIds: [], rejectedDiagnostics: [], serverReceivedAt: '2026-10-01T14:05:00.000Z' }),
     });
 
     assert.equal(await transport.flush(() => ({ bootId: ids.boot1, context, snapshot })), true);
@@ -572,8 +720,73 @@ describe('driver diagnostics', () => {
     assert.deepEqual(removals, [{ owner: 'account-a', token: 'stale-token' }]);
   });
 
+  it('recovers from a cached diagnostic credential 401 by conditionally removing it and registering a fresh credential', async (test) => {
+    const schedules: { active: boolean; delayMs: number; run: () => void }[] = [];
+    let clock = new Date('2026-10-01T14:05:00.000Z');
+    let storedCredential: { expiresAt: string; token: string } | null = {
+      expiresAt: '2026-10-02T14:00:00.000Z',
+      token: 'stale-token',
+    };
+    const removals: { owner: string; token?: string }[] = [];
+    const sentTokens: string[] = [];
+    let registrations = 0;
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => clock, storage: memoryStorage() });
+    outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: clock.toISOString(), sequence: 1, snapshot });
+    let batchSequence = 0;
+    const transport = createDriverDiagnosticTransport({
+      batchIdFactory: () => `72000000-0000-4000-8000-${(++batchSequence).toString(16).padStart(12, '0')}`,
+      cancel: (handle) => { (handle as { active: boolean }).active = false; },
+      credentialStore: {
+        get: async () => storedCredential,
+        remove: async (owner, token) => {
+          removals.push({ owner, ...(token === undefined ? {} : { token }) });
+          if (token === undefined || storedCredential?.token === token) storedCredential = null;
+        },
+        set: async (_owner, credential) => { storedCredential = credential; },
+      },
+      deviceInstanceHash: context.deviceInstanceHash,
+      now: () => clock,
+      outbox,
+      random: () => 0.5,
+      register: async () => {
+        registrations += 1;
+        return { expiresAt: '2026-10-02T14:05:00.000Z', token: 'fresh-token' };
+      },
+      schedule: (run, delayMs) => {
+        const handle = { active: true, delayMs, run };
+        schedules.push(handle);
+        return handle;
+      },
+      send: async ({ credentialToken, envelope }) => {
+        sentTokens.push(credentialToken);
+        if (credentialToken === 'stale-token') throw Object.assign(new Error('unauthorized'), { status: 401 });
+        return {
+          acceptedDiagnosticIds: envelope.records.map(({ diagnosticId }) => diagnosticId),
+          rejectedDiagnostics: [],
+          serverReceivedAt: clock.toISOString(),
+        };
+      },
+    });
+    test.after(() => transport.stop());
+
+    assert.equal(await transport.flush(() => ({ bootId: ids.boot1, context, snapshot })), false);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(removals, [{ owner: 'account-a', token: 'stale-token' }]);
+    assert.equal(storedCredential, null);
+    assert.deepEqual(schedules.filter(({ active }) => active).map(({ delayMs }) => delayMs), [5_000]);
+
+    clock = new Date('2026-10-01T14:05:05.000Z');
+    schedules.find(({ active }) => active)?.run();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(registrations, 1);
+    assert.deepEqual(sentTokens, ['stale-token', 'fresh-token']);
+    assert.equal((storedCredential as { token: string } | null)?.token, 'fresh-token');
+    assert.deepEqual(outbox.listPending(), []);
+  });
+
   it('waits for an older in-flight envelope then sends one fresh final envelope without the rate delay', async () => {
-    const firstResponse = deferred<{ acceptedDiagnosticIds: string[]; serverReceivedAt: string }>();
+    const firstResponse = deferred<{ acceptedDiagnosticIds: string[]; rejectedDiagnostics: never[]; serverReceivedAt: string }>();
     const sentIds: string[][] = [];
     const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage: memoryStorage() });
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
@@ -591,7 +804,7 @@ describe('driver diagnostics', () => {
         sentIds.push(envelope.records.map(({ diagnosticId }) => diagnosticId));
         return sends === 1
           ? firstResponse.promise
-          : { acceptedDiagnosticIds: envelope.records.map(({ diagnosticId }) => diagnosticId), serverReceivedAt: '2026-10-01T14:05:00.000Z' };
+          : { acceptedDiagnosticIds: envelope.records.map(({ diagnosticId }) => diagnosticId), rejectedDiagnostics: [], serverReceivedAt: '2026-10-01T14:05:00.000Z' };
       },
     });
     const live = () => ({ bootId: ids.boot1, context, snapshot });
@@ -600,7 +813,7 @@ describe('driver diagnostics', () => {
     await new Promise((resolve) => setImmediate(resolve));
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag2, kind: 'ERROR', observedAt: '2026-10-01T14:05:01.000Z', sequence: 2, snapshot });
     const final = transport.flushBeforeDetach(live);
-    firstResponse.resolve({ acceptedDiagnosticIds: [ids.diag1], serverReceivedAt: '2026-10-01T14:05:01.000Z' });
+    firstResponse.resolve({ acceptedDiagnosticIds: [ids.diag1], rejectedDiagnostics: [], serverReceivedAt: '2026-10-01T14:05:01.000Z' });
     assert.equal(await first, true);
     assert.equal(await final, true);
     assert.deepEqual(sentIds, [[ids.diag1], [ids.diag2]]);
@@ -634,7 +847,7 @@ describe('driver diagnostics', () => {
       },
       send: async () => {
         sends += 1;
-        return { acceptedDiagnosticIds: [], serverReceivedAt: clock.toISOString() };
+        return { acceptedDiagnosticIds: [], rejectedDiagnostics: [], serverReceivedAt: clock.toISOString() };
       },
     });
     const recorder = createDriverDiagnosticRecorder({
@@ -698,6 +911,7 @@ describe('driver diagnostics', () => {
     const transitions: string[] = [];
     const storage: DiagnosticStorage = {
       append: async () => { if (appendFails) throw new Error('append failed'); },
+      quarantine: async () => undefined,
       read: async () => [],
       remove: async () => undefined,
     };
@@ -730,6 +944,7 @@ describe('driver diagnostics', () => {
       onStorageStateChange: (state) => { transitions.push(state.kind); },
       storage: {
         append: async () => { if (appendFails) throw new Error('append failed'); },
+        quarantine: async () => undefined,
         read: async () => [],
         remove: async () => { if (removeFails) throw new Error('remove failed'); },
       },
@@ -777,6 +992,7 @@ describe('driver diagnostics', () => {
       },
       storage: {
         append: async () => appendGate.promise,
+        quarantine: async () => undefined,
         read: async () => [],
         remove: async () => undefined,
       },
@@ -797,7 +1013,7 @@ describe('driver diagnostics', () => {
       },
       send: async ({ envelope }) => {
         envelopes.push(envelope);
-        return { acceptedDiagnosticIds: envelope.records.map(({ diagnosticId }) => diagnosticId), serverReceivedAt: clock.toISOString() };
+        return { acceptedDiagnosticIds: envelope.records.map(({ diagnosticId }) => diagnosticId), rejectedDiagnostics: [], serverReceivedAt: clock.toISOString() };
       },
     });
     const generatedIds = [ids.diag1, ids.diag2, ids.diag3];

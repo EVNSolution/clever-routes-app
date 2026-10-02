@@ -2,9 +2,11 @@ import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
 import type {
   DriverDiagnosticContext,
   DriverDiagnosticEnvelope,
+  DriverDiagnosticPermanentRejectionCode,
   DriverDiagnosticResponse,
   DriverDiagnosticSnapshot,
 } from './driverDiagnosticContract';
+import { isDriverDiagnosticPermanentRejectionCode, isSafeDiagnosticUuid } from './driverDiagnosticContract';
 import type { DriverDiagnosticOutbox } from './driverDiagnosticOutbox';
 
 export type DiagnosticCredential = { expiresAt: string; token: string };
@@ -31,6 +33,33 @@ function isCredentialCurrent(credential: DiagnosticCredential, now: Date) {
 
 function hasHttpStatus(error: unknown, status: number) {
   return typeof error === 'object' && error !== null && 'status' in error && error.status === status;
+}
+
+function parseBatchOutcome(response: unknown, sentIds: ReadonlySet<string>) {
+  if (typeof response !== 'object' || response === null) return null;
+  const candidate = response as Partial<DriverDiagnosticResponse>;
+  if (
+    !Array.isArray(candidate.acceptedDiagnosticIds) || !Array.isArray(candidate.rejectedDiagnostics)
+    || typeof candidate.serverReceivedAt !== 'string' || !Number.isFinite(Date.parse(candidate.serverReceivedAt))
+  ) return null;
+  const accepted = new Set<string>();
+  for (const id of candidate.acceptedDiagnosticIds) {
+    if (!isSafeDiagnosticUuid(id) || !sentIds.has(id) || accepted.has(id)) return null;
+    accepted.add(id);
+  }
+  const rejectedIds = new Set<string>();
+  const rejected: { code: DriverDiagnosticPermanentRejectionCode; diagnosticId: string }[] = [];
+  for (const rejection of candidate.rejectedDiagnostics) {
+    if (
+      typeof rejection !== 'object' || rejection === null
+      || !isSafeDiagnosticUuid(rejection.diagnosticId) || !sentIds.has(rejection.diagnosticId)
+      || rejectedIds.has(rejection.diagnosticId) || accepted.has(rejection.diagnosticId)
+      || !isDriverDiagnosticPermanentRejectionCode(rejection.code)
+    ) return null;
+    rejectedIds.add(rejection.diagnosticId);
+    rejected.push({ code: rejection.code, diagnosticId: rejection.diagnosticId });
+  }
+  return { acceptedIds: [...accepted], rejected };
 }
 
 export function createDriverDiagnosticTransport(input: {
@@ -176,11 +205,12 @@ export function createDriverDiagnosticTransport(input: {
         || input.outbox.getGeneration() !== ownerGeneration || input.outbox.getAccountOwnerHash() !== owner
       ) return { shouldDrain: false, succeeded: false };
       const sentIds = new Set(envelope.records.map(({ diagnosticId }) => diagnosticId));
-      const acceptedIds = response.acceptedDiagnosticIds.filter((id) => sentIds.has(id));
-      if (envelope.records.length > 0 && acceptedIds.length === 0) {
+      const outcome = parseBatchOutcome(response, sentIds);
+      if (outcome === null || (envelope.records.length > 0 && outcome.acceptedIds.length + outcome.rejected.length === 0)) {
         return { shouldDrain: false, succeeded: false };
       }
-      input.outbox.acknowledge(acceptedIds, owner);
+      input.outbox.acknowledge(outcome.acceptedIds, owner);
+      input.outbox.quarantine(outcome.rejected, owner, now().toISOString());
       return { shouldDrain: input.outbox.listPending().length > 0, succeeded: true };
     } catch (error) {
       if (hasHttpStatus(error, 401)) {

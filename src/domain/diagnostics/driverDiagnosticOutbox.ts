@@ -8,11 +8,13 @@ import {
   type DriverDiagnosticEnvelope,
   type DriverDiagnosticContext,
   type DriverDiagnosticRecord,
+  type DriverDiagnosticQuarantineEntry,
   type DriverDiagnosticSnapshot,
 } from './driverDiagnosticContract';
 
 export type DiagnosticStorage = {
   append(accountOwnerHash: string, records: readonly DriverDiagnosticRecord[]): Promise<void>;
+  quarantine(accountOwnerHash: string, entries: readonly DriverDiagnosticQuarantineEntry[]): Promise<void>;
   read(accountOwnerHash: string): Promise<unknown[]>;
   remove(accountOwnerHash: string, diagnosticIds: readonly string[]): Promise<void>;
 };
@@ -53,7 +55,8 @@ export function createDriverDiagnosticOutbox(input: {
   const acknowledged = new Set<string>();
   const acknowledgedOrder: string[] = [];
   const storageMutationChains = new Map<string, Promise<void>>();
-  const storageFailures = new Map<'APPEND' | 'READ' | 'REMOVE', string>();
+  type StorageOperation = 'APPEND' | 'QUARANTINE' | 'READ' | 'REMOVE';
+  const storageFailures = new Map<StorageOperation, string>();
 
   function getStorageFailure() {
     if (storageFailures.size === 0) return null;
@@ -74,7 +77,7 @@ export function createDriverDiagnosticOutbox(input: {
   function clearStorageFailure(
     owner: string,
     ownerGeneration: number,
-    operation: 'APPEND' | 'READ' | 'REMOVE',
+    operation: StorageOperation,
   ) {
     if (
       generation !== ownerGeneration || accountOwnerHash !== owner
@@ -113,7 +116,7 @@ export function createDriverDiagnosticOutbox(input: {
   function noteStorageFailure(
     owner: string,
     ownerGeneration: number,
-    operation: 'APPEND' | 'READ' | 'REMOVE',
+    operation: StorageOperation,
   ) {
     if (generation !== ownerGeneration || accountOwnerHash !== owner) return;
     const wasHealthy = storageFailures.size === 0;
@@ -130,7 +133,7 @@ export function createDriverDiagnosticOutbox(input: {
   function enqueueStorageMutation(
     owner: string,
     ownerGeneration: number,
-    operationKind: 'APPEND' | 'REMOVE',
+    operationKind: Exclude<StorageOperation, 'READ'>,
     operation: () => Promise<void>,
   ) {
     const previous = storageMutationChains.get(owner) ?? Promise.resolve();
@@ -157,18 +160,26 @@ export function createDriverDiagnosticOutbox(input: {
     enqueueStorageMutation(owner, generation, 'REMOVE', () => input.storage.remove(owner, ids));
   }
 
+  function persistQuarantine(owner: string, entries: readonly DriverDiagnosticQuarantineEntry[]) {
+    enqueueStorageMutation(owner, generation, 'QUARANTINE', () => input.storage.quarantine(owner, entries));
+  }
+
+  function rememberRemoved(ids: readonly string[]) {
+    ids.forEach((id) => acknowledged.add(id));
+    acknowledgedOrder.push(...ids);
+    while (acknowledgedOrder.length > 2_000) {
+      const expired = acknowledgedOrder.shift();
+      if (expired !== undefined) acknowledged.delete(expired);
+    }
+  }
+
   return {
     acknowledge: (diagnosticIds: readonly string[], expectedAccountOwnerHash: string) => {
       if (expectedAccountOwnerHash !== accountOwnerHash) return false;
       const accepted = new Set(diagnosticIds);
       const removable = records.filter((record) => accepted.has(record.diagnosticId)).map((record) => record.diagnosticId);
       if (removable.length === 0) return true;
-      removable.forEach((id) => acknowledged.add(id));
-      acknowledgedOrder.push(...removable);
-      while (acknowledgedOrder.length > 2_000) {
-        const expired = acknowledgedOrder.shift();
-        if (expired !== undefined) acknowledged.delete(expired);
-      }
+      rememberRemoved(removable);
       records = records.filter((record) => !accepted.has(record.diagnosticId));
       persistRemove(accountOwnerHash, removable);
       return true;
@@ -230,6 +241,25 @@ export function createDriverDiagnosticOutbox(input: {
       }
     },
     listPending: () => [...records],
+    quarantine: (
+      rejections: readonly { code: DriverDiagnosticQuarantineEntry['code']; diagnosticId: string }[],
+      expectedAccountOwnerHash: string,
+      quarantinedAt = now().toISOString(),
+    ) => {
+      if (expectedAccountOwnerHash !== accountOwnerHash) return false;
+      const byId = new Map(rejections.map((rejection) => [rejection.diagnosticId, rejection.code]));
+      const entries = records.flatMap((record): DriverDiagnosticQuarantineEntry[] => {
+        const code = byId.get(record.diagnosticId);
+        return code === undefined ? [] : [{ code, quarantinedAt, record }];
+      });
+      if (entries.length === 0) return true;
+      const quarantinedIds = entries.map(({ record }) => record.diagnosticId);
+      rememberRemoved(quarantinedIds);
+      const quarantined = new Set(quarantinedIds);
+      records = records.filter((record) => !quarantined.has(record.diagnosticId));
+      persistQuarantine(accountOwnerHash, entries);
+      return true;
+    },
     record: (value: unknown) => {
       const record = sanitizeDriverDiagnosticRecord(value);
       if (record === null) return null;

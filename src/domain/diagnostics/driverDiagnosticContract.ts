@@ -118,8 +118,29 @@ export type DriverDiagnosticEnvelope = {
   sentAt: string;
 };
 
+export const DRIVER_DIAGNOSTIC_PERMANENT_REJECTION_CODES = [
+  'DEVICE_MISMATCH',
+  'DIAGNOSTIC_ID_CONFLICT',
+  'INVALID_RECORD',
+  'ROUTE_ACCESS_REVOKED',
+] as const;
+
+export type DriverDiagnosticPermanentRejectionCode = typeof DRIVER_DIAGNOSTIC_PERMANENT_REJECTION_CODES[number];
+
+export type DriverDiagnosticRejection = {
+  code: string;
+  diagnosticId: string;
+};
+
+export type DriverDiagnosticQuarantineEntry = {
+  code: DriverDiagnosticPermanentRejectionCode;
+  quarantinedAt: string;
+  record: DriverDiagnosticRecord;
+};
+
 export type DriverDiagnosticResponse = {
   acceptedDiagnosticIds: readonly string[];
+  rejectedDiagnostics: readonly DriverDiagnosticRejection[];
   serverReceivedAt: string;
 };
 
@@ -137,9 +158,14 @@ const networks = new Set<string>(['OFFLINE', 'ONLINE', 'UNKNOWN']);
 const permissions = new Set<string>(['DENIED', 'GRANTED_ALWAYS', 'GRANTED_FOREGROUND', 'UNKNOWN']);
 const services = new Set<string>(['DISABLED', 'ENABLED', 'UNKNOWN']);
 const tasks = new Set<string>(['ERROR', 'EXPECTED', 'STARTED', 'STOPPED', 'UNKNOWN']);
+const permanentRejectionCodes = new Set<string>(DRIVER_DIAGNOSTIC_PERMANENT_REJECTION_CODES);
 
 export function isSafeDiagnosticUuid(value: unknown): value is string {
   return typeof value === 'string' && uuidPattern.test(value);
+}
+
+export function isDriverDiagnosticPermanentRejectionCode(value: unknown): value is DriverDiagnosticPermanentRejectionCode {
+  return typeof value === 'string' && permanentRejectionCodes.has(value);
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

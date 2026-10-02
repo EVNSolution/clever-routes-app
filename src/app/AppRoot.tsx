@@ -256,7 +256,13 @@ import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
 import { requestActiveRouteSwitchConfirmation } from './activeRouteSwitchConfirmation';
 import { requestRouteReconciliationClearConfirmation } from './routeReconciliationClearConfirmation';
 import { persistOfflineQueueAndSyncState } from './offlineQueuePersistence';
-import { startExpoDriverDiagnosticRuntime, updateExpoDriverDiagnosticNetwork, updateExpoDriverDiagnosticNextRetry, updateExpoDriverDiagnosticQueue } from '../platform/expo/diagnostics/expoDriverDiagnosticRuntime';
+import {
+  revokeExpoDriverDiagnosticRegistrationOnLogout,
+  startExpoDriverDiagnosticRuntime,
+  updateExpoDriverDiagnosticNetwork,
+  updateExpoDriverDiagnosticNextRetry,
+  updateExpoDriverDiagnosticQueue,
+} from '../platform/expo/diagnostics/expoDriverDiagnosticRuntime';
 import { createDriverReleasedRoutePayload } from '../domain/route/routeDeletion';
 
 type AppScreen =
@@ -5398,15 +5404,30 @@ function DriverApp() {
     pendingImmediateDriverSyncHeartbeatRef.current = false;
     setDriverSyncHealth(null);
     setMessage(null);
+    const restoredLogoutAccess = runtimeConfig.mode === 'live'
+      ? await runBoundedAsyncOperation(
+        () => driverAccessTokenStore.loadActiveDriverAccess(),
+        { timeoutMs: 5000 },
+      ).catch(() => null)
+      : null;
+    const logoutAccountAccess = restoredLogoutAccess?.kind === 'active'
+      ? restoredLogoutAccess.accountAccess
+      : null;
+    await revokeExpoDriverDiagnosticRegistrationOnLogout(logoutAccountAccess?.accessToken ?? null);
     const registeredDevicePushToken = registeredDevicePushTokenRef.current
-      ?? await stopArrivalNotificationService.getDevicePushToken().catch(() => null);
+      ?? await runBoundedAsyncOperation(
+        () => stopArrivalNotificationService.getDevicePushToken(),
+        { timeoutMs: 5000 },
+      ).catch(() => null);
     if (registeredDevicePushToken !== null && runtimeConfig.mode === 'live') {
-      const accountAccess = await getActiveAccountAccess().catch(() => null);
-      if (accountAccess !== null) {
-        await driverAuthService.revokePushInstallation({
-          accountAccessToken: accountAccess.accessToken,
-          devicePushToken: registeredDevicePushToken,
-        }).catch(() => undefined);
+      if (logoutAccountAccess !== null) {
+        await runBoundedAsyncOperation(
+          () => driverAuthService.revokePushInstallation({
+            accountAccessToken: logoutAccountAccess.accessToken,
+            devicePushToken: registeredDevicePushToken,
+          }),
+          { timeoutMs: 5000 },
+        ).catch(() => undefined);
       }
     }
     registeredDevicePushTokenRef.current = null;

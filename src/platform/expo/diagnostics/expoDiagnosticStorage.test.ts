@@ -16,6 +16,8 @@ type Row = {
   payload: string;
 };
 
+type QuarantineRow = Row & { quarantinedAt: string; rejectionCode: string };
+
 function sampleRecord(input: { diagnosticId: string; observedAt?: string; sequence?: number }): DriverDiagnosticRecord {
   const observedAt = input.observedAt ?? '2026-10-01T14:04:03.000Z';
   return {
@@ -68,6 +70,7 @@ function sampleRecord(input: { diagnosticId: string; observedAt?: string; sequen
 function createDatabase() {
   const commands: string[] = [];
   const rows: Row[] = [];
+  const quarantineRows: QuarantineRow[] = [];
   const transactionCommands: string[] = [];
   const database: DiagnosticDatabase = {
     execAsync: async (sql) => {
@@ -97,11 +100,32 @@ function createDatabase() {
         if (!rows.some((row) => row.accountOwnerHash === accountOwnerHash && row.diagnosticId === diagnosticId)) {
           rows.push({ accountOwnerHash, diagnosticId, observedAt, payload });
         }
+      } else if (sql.includes('INSERT OR IGNORE INTO diagnostic_quarantine')) {
+        const [accountOwnerHash, diagnosticId, quarantinedAt, rejectionCode, payload] = params.map(String);
+        if (!quarantineRows.some((row) => row.accountOwnerHash === accountOwnerHash && row.diagnosticId === diagnosticId)) {
+          quarantineRows.push({ accountOwnerHash, diagnosticId, observedAt: quarantinedAt, payload, quarantinedAt, rejectionCode });
+        }
       } else if (sql.includes('DELETE FROM diagnostic_records') && sql.includes('diagnostic_id = ?')) {
         const owner = String(params[0]);
         const id = String(params[1]);
         const index = rows.findIndex((row) => row.accountOwnerHash === owner && row.diagnosticId === id);
         if (index >= 0) rows.splice(index, 1);
+      } else if (sql.includes('DELETE FROM diagnostic_quarantine') && sql.includes('quarantined_at < ?')) {
+        const owner = String(params[0]);
+        const cutoff = String(params[1]);
+        for (let index = quarantineRows.length - 1; index >= 0; index -= 1) {
+          if (quarantineRows[index]?.accountOwnerHash === owner && (quarantineRows[index]?.quarantinedAt ?? '') < cutoff) quarantineRows.splice(index, 1);
+        }
+      } else if (sql.includes('DELETE FROM diagnostic_quarantine') && sql.includes('OFFSET ?')) {
+        const owner = String(params[0]);
+        const keep = Number(params[1]);
+        const owned = quarantineRows
+          .filter((row) => row.accountOwnerHash === owner)
+          .sort((left, right) => right.quarantinedAt.localeCompare(left.quarantinedAt));
+        const removals = new Set(owned.slice(keep).map((row) => row.diagnosticId));
+        for (let index = quarantineRows.length - 1; index >= 0; index -= 1) {
+          if (quarantineRows[index]?.accountOwnerHash === owner && removals.has(quarantineRows[index]?.diagnosticId ?? '')) quarantineRows.splice(index, 1);
+        }
       } else if (sql.includes('observed_at < ?')) {
         const owner = String(params[0]);
         const cutoff = String(params[1]);
@@ -130,7 +154,7 @@ function createDatabase() {
       await operation(transaction);
     },
   };
-  return { commands, database, rows, transactionCommands };
+  return { commands, database, quarantineRows, rows, transactionCommands };
 }
 
 describe('Expo diagnostic storage', () => {
@@ -189,6 +213,62 @@ describe('Expo diagnostic storage', () => {
     await storage.remove(firstOwner, [record.diagnosticId]);
     assert.deepEqual(await storage.read(firstOwner), []);
     assert.equal((await storage.read(secondOwner)).length, 1);
+  });
+
+  it('atomically moves permanent diagnostic rejections into bounded encrypted quarantine', async () => {
+    const db = createDatabase();
+    const storage = await createDiagnosticStorage({
+      keyStore: { getItemAsync: async () => '66'.repeat(32), setItemAsync: async () => undefined },
+      maxRecords: 1,
+      now: () => new Date('2026-10-01T14:05:03.000Z'),
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const owner = 'aa'.repeat(32);
+    const first = sampleRecord({ diagnosticId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' });
+    const second = sampleRecord({ diagnosticId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', sequence: 2 });
+    await storage.append(owner, [first, second]);
+
+    await assert.rejects(storage.quarantine(owner, [
+      { code: 'FUTURE_REJECTION' as never, quarantinedAt: '2026-10-01T14:05:00.000Z', record: first },
+    ]), /invalid diagnostic rejection/iu);
+    assert.equal((await storage.read(owner)).length, 1);
+    assert.equal(db.quarantineRows.length, 0);
+
+    await storage.quarantine(owner, [
+      { code: 'INVALID_RECORD', quarantinedAt: '2026-10-01T14:05:01.000Z', record: { ...first, token: 'must-not-persist' } as never },
+      { code: 'ROUTE_ACCESS_REVOKED', quarantinedAt: '2026-10-01T14:05:02.000Z', record: { ...second, token: 'must-not-persist' } as never },
+    ]);
+
+    assert.deepEqual(await storage.read(owner), []);
+    assert.deepEqual(db.quarantineRows.map(({ diagnosticId, rejectionCode }) => ({ diagnosticId, rejectionCode })), [
+      { diagnosticId: second.diagnosticId, rejectionCode: 'ROUTE_ACCESS_REVOKED' },
+    ]);
+    assert.equal(db.quarantineRows.some(({ payload }) => payload.includes('must-not-persist')), false);
+    assert.equal(db.commands.some((command) => command.includes('diagnostic_quarantine')), true);
+  });
+
+  it('quarantines fifty permanent rejections without leaving active poison records', async () => {
+    const db = createDatabase();
+    const storage = await createDiagnosticStorage({
+      keyStore: { getItemAsync: async () => '77'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const owner = 'aa'.repeat(32);
+    const records = Array.from({ length: 50 }, (_, index) => sampleRecord({
+      diagnosticId: `e0000000-0000-4000-8000-${(index + 1).toString(16).padStart(12, '0')}`,
+      sequence: index + 1,
+    }));
+    await storage.append(owner, records);
+    await storage.quarantine(owner, records.map((record) => ({
+      code: 'ROUTE_ACCESS_REVOKED',
+      quarantinedAt: '2026-10-01T14:05:02.000Z',
+      record,
+    })));
+
+    assert.deepEqual(await storage.read(owner), []);
+    assert.equal(db.quarantineRows.length, 50);
   });
 
   it('rejects malformed writes and drops malformed persisted rows on read', async () => {

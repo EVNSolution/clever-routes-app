@@ -2,22 +2,27 @@
 
 ## Independent runtime diagnostics release gate
 
-The app-side contract in `docs/driver-runtime-diagnostics.md` adds an independent
-encrypted diagnostic outbox, write-only credential, and lifecycle/location/sync
-observations. This source change is not evidence of a deployed receiver or an
-installed binary. Before release, implement and verify the server registration,
-idempotent ingestion, attempt correlation, and conservative UNKNOWN classification.
-Then reproduce the documented faults on Android and iOS, including locked-device
-background callbacks, offline restart/replay, business-storage hangs, expired
-business auth, account changes, response loss, and absent signals. Preserve
-unsubmitted business events/photos throughout these checks.
+The app contract in `docs/driver-runtime-diagnostics.md` adds an independent
+SQLCipher outbox, ingestion-only credential, and lifecycle/location/sync observations.
+Server PR #472 is deployed at `675f8d24514bcafbac2e105269de86658c6b512e`;
+read-only runtime revision/image checks match the deployment evidence. It implements
+registration/revocation, idempotent ingestion, route/account isolation, attempt
+correlation, conservative UNKNOWN classification, admin query, and 30-day retention.
+The app's local pending history remains bounded to seven days and 1,000 records.
+
+Permanent-rejection quarantine and bounded explicit-logout revocation pass source
+and native-storage tests. The Android release still requires physical-device fault
+tests. Test locked
+background callbacks, offline replay, business-storage failure, expired business
+auth, response loss, and absent signals. Preserve unsubmitted business events/photos.
+Do not report source tests or server deployment as installed-device acceptance.
+The current release request is Android/Google Play; iOS physical acceptance remains
+separate and is required before an iOS release.
 
 Review store privacy declarations for the added diagnostic collection. Records
 exclude tokens, PINs, customer information, free-form errors, and raw coordinates;
 they retain app/build/OS, stage timestamps, stable reasons, and restricted
-correlation identifiers. The separate SQLCipher history is bounded to seven days
-and 1,000 records per account; server retention and access control require their
-own implementation evidence. Operator-visible times use `America/Toronto`.
+correlation identifiers. Operational display uses `America/Toronto`.
 
 ## Purpose
 
@@ -176,7 +181,7 @@ mock work still requires `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock` with no server U
 
 `cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied
 to committed source. `cli.appVersionSource` is `remote`; the reviewed native
-source version is `1.3.3` (`versionCode` `39`, iOS build `1`). Android
+source version is `1.3.4` (`versionCode` `40`, iOS build `1`). Android
 `versionCode` `38` was reserved for the rejected diagnostic candidate and must
 not be submitted or promoted. Publication is
 proved separately by the public release manifest and downloadable artifact,
