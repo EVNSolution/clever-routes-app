@@ -1,17 +1,89 @@
-import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
+import {
+  createDriverApiHttpError,
+  readDriverApiErrorCode,
+} from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
-import { type DriverAccessToken } from '../routeAccess/routeAccess';
+import {
+  createDriverDiagnosticRequestId,
+  observeDriverDiagnosticOperation,
+} from '../diagnostics/driverDiagnosticObservation';
+import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
 
-export type VerifyDriverAuthCodeInput = {
-  displayName: string;
+export type DriverAccountAccessToken = {
+  accessToken: string;
+  expiresAt: string;
+  refreshToken: string;
+  refreshTokenExpiresAt: string;
+  tokenType: 'Bearer';
+  ttlSeconds: number;
+  use: 'driver_account';
+};
+
+export type LoginDriverAccountInput = {
   phoneE164: string;
+  pin: string;
+};
+
+export type RegisterDriverAccountInput = LoginDriverAccountInput & {
   inviteCode: string;
 };
 
+export type RefreshDriverAuthSessionInput = {
+  refreshToken: string;
+};
+
+export type RefreshDriverAuthSessionOptions = {
+  signal?: AbortSignal;
+};
+
+export class DriverAuthRefreshPendingError extends Error {
+  constructor() {
+    super('DRIVER_AUTH_REFRESH_STILL_PENDING');
+    this.name = 'DriverAuthRefreshPendingError';
+  }
+}
+
+export type DriverAccountProfile = {
+  name: string | null;
+  phone: string;
+};
+
+export type DriverAccountDeletionRequest = {
+  duplicate: boolean;
+  requestId: string;
+  status: 'REQUESTED';
+};
+
 export type DriverAuthService = {
-  verifyCode(input: VerifyDriverAuthCodeInput): Promise<{
-    driverAccess: DriverAccessToken;
-  }>;
+  getAccountProfile(input: { accountAccessToken: string }): Promise<{ account: DriverAccountProfile }>;
+  login(input: LoginDriverAccountInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
+  refreshSession(
+    input: RefreshDriverAuthSessionInput,
+    options?: RefreshDriverAuthSessionOptions,
+  ): Promise<{ accountAccess: DriverAccountAccessToken }>;
+  register(input: RegisterDriverAccountInput): Promise<{ accountAccess: DriverAccountAccessToken }>;
+  registerPushInstallation(input: {
+    accountAccessToken: string;
+    appId: string;
+    appVersion?: string;
+    deviceId?: string;
+    devicePushToken: string;
+    locale?: string;
+    platform: string;
+    timezone?: string;
+  }): Promise<void>;
+  revokePushInstallation(input: {
+    accountAccessToken: string;
+    devicePushToken: string;
+  }): Promise<void>;
+  requestAccountDeletion(input: {
+    accountAccessToken: string;
+    reason?: string;
+  }): Promise<{ request: DriverAccountDeletionRequest }>;
+  updateAccountProfile(input: {
+    accountAccessToken: string;
+    name: string;
+  }): Promise<{ account: DriverAccountProfile }>;
 };
 
 export type FetchLike = (
@@ -22,6 +94,7 @@ export type FetchLike = (
     credentials?: 'omit';
     headers?: Record<string, string>;
     method?: string;
+    signal?: AbortSignal;
   },
 ) => Promise<{
   json(): Promise<unknown>;
@@ -31,59 +104,314 @@ export type FetchLike = (
 
 export function createDriverAuthApiClient(input: {
   baseUrl: string;
+  cancelRefreshTimeout?: (handle: unknown) => void;
   fetchImpl?: FetchLike;
+  refreshTimeoutMs?: number;
+  scheduleRefreshTimeout?: (expire: () => void, timeoutMs: number) => unknown;
 }): DriverAuthService {
+  type RefreshFlight = {
+    bounded: Promise<{ accountAccess: DriverAccountAccessToken }>;
+    boundedSettled: boolean;
+    rawSettled: boolean;
+  };
   const baseUrl = input.baseUrl.replace(/\/$/u, '');
   const fetchImpl = input.fetchImpl ?? globalThis.fetch;
+  const refreshFlights = new Map<string, RefreshFlight>();
 
-  return {
-    verifyCode: async (request) => {
-      const response = await fetchImpl(`${baseUrl}/driver/auth/verify-invite`, withNoStoreDriverApiRequest({
-        body: JSON.stringify({
-          phone: request.phoneE164,
-          inviteCode: request.inviteCode,
-          displayName: request.displayName.trim(),
-        }),
-        headers: { 'Content-Type': 'application/json' },
+  async function postAuth(
+    endpoint: string,
+    body: Record<string, string>,
+    label: string,
+    diagnosticOperation?: 'AUTH_REFRESH',
+    signal?: AbortSignal,
+  ) {
+    const requestId = diagnosticOperation === undefined ? undefined : createDriverDiagnosticRequestId();
+    const send = async () => {
+      const response = await fetchImpl(`${baseUrl}${endpoint}`, withNoStoreDriverApiRequest({
+        body: JSON.stringify(body),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(requestId === undefined ? {} : { 'X-Request-Id': requestId }),
+        },
         method: 'POST',
+        ...(signal === undefined ? {} : { signal }),
       }));
-      const payload = await response.json();
-      if (!response.ok) {
-        throw createDriverApiHttpError({ endpoint: 'Verify Auth Code', status: response.status });
+      const successfulStatus = response.status === undefined
+        ? response.ok
+        : response.ok && response.status >= 200 && response.status < 300;
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch (error) {
+        if (!successfulStatus) {
+          throw createDriverApiHttpError({ endpoint: label, status: response.status });
+        }
+        throw error;
+      }
+      if (!successfulStatus) {
+        throw createDriverApiHttpError({
+          code: readDriverApiErrorCode(payload),
+          endpoint: label,
+          status: response.status,
+        });
       }
 
-      const data = readDriverAuthEnvelope(payload);
-      return {
-        driverAccess: {
-          accessToken: data.accessToken,
-          expiresAt: data.expiresAt,
-          tokenType: 'Bearer',
-          ttlSeconds: 900,
-          use: 'consent_and_assigned_route',
-          refreshToken: data.refreshToken,
-          refreshTokenExpiresAt: data.refreshTokenExpiresAt,
-        }
-      };
+      return { accountAccess: readDriverAuthEnvelope(payload) };
+    };
+    return diagnosticOperation === undefined
+      ? send()
+      : observeDriverDiagnosticOperation({ operation: diagnosticOperation, requestId }, send);
+  }
+
+  function refreshSession(
+    request: RefreshDriverAuthSessionInput,
+    options?: RefreshDriverAuthSessionOptions,
+  ): Promise<{ accountAccess: DriverAccountAccessToken }> {
+    const refreshToken = request.refreshToken.trim();
+    const existing = refreshFlights.get(refreshToken);
+    if (existing !== undefined) {
+      if (!existing.boundedSettled) return existing.bounded;
+      if (!existing.rawSettled) return Promise.reject(new DriverAuthRefreshPendingError());
+      refreshFlights.delete(refreshToken);
     }
+    let rawStarted = false;
+    let refreshFlight!: RefreshFlight;
+    const bounded = runBoundedAsyncOperation((timeoutSignal) => {
+      rawStarted = true;
+      const raw = postAuth('/driver/auth/refresh', {
+        refreshToken,
+      }, 'Refresh Auth Session', 'AUTH_REFRESH', combineAbortSignals([timeoutSignal, options?.signal]));
+      void raw.finally(() => {
+        refreshFlight.rawSettled = true;
+        if (refreshFlights.get(refreshToken) === refreshFlight) refreshFlights.delete(refreshToken);
+      }).catch(() => undefined);
+      return raw;
+    }, {
+      ...(input.cancelRefreshTimeout === undefined ? {} : { cancel: input.cancelRefreshTimeout }),
+      ...(input.scheduleRefreshTimeout === undefined ? {} : { schedule: input.scheduleRefreshTimeout }),
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+      timeoutMs: input.refreshTimeoutMs ?? 15_000,
+    });
+    refreshFlight = { bounded, boundedSettled: false, rawSettled: false };
+    refreshFlights.set(refreshToken, refreshFlight);
+    void bounded.then(
+      () => { refreshFlight.boundedSettled = true; },
+      () => {
+        refreshFlight.boundedSettled = true;
+        if (!rawStarted) {
+          refreshFlight.rawSettled = true;
+          if (refreshFlights.get(refreshToken) === refreshFlight) refreshFlights.delete(refreshToken);
+        }
+      },
+    );
+    return bounded;
+  }
+
+  async function requestAccountProfile(input: {
+    accountAccessToken: string;
+    method: 'GET' | 'PATCH';
+    name?: string;
+  }): Promise<{ account: DriverAccountProfile }> {
+    const response = await fetchImpl(`${baseUrl}/driver/account/profile`, withNoStoreDriverApiRequest({
+      ...(input.name === undefined ? {} : { body: JSON.stringify({ name: input.name.trim() }) }),
+      headers: {
+        Authorization: `Bearer ${input.accountAccessToken.trim()}`,
+        ...(input.name === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      method: input.method,
+    }));
+    const payload = await response.json();
+    if (!response.ok) {
+      throw createDriverApiHttpError({ endpoint: 'Driver account profile', status: response.status });
+    }
+
+    return { account: readDriverAccountProfileEnvelope(payload) };
+  }
+
+  async function requestAccountDeletion(input: {
+    accountAccessToken: string;
+    reason?: string;
+  }): Promise<{ request: DriverAccountDeletionRequest }> {
+    const response = await fetchImpl(`${baseUrl}/driver/account-deletion-requests`, withNoStoreDriverApiRequest({
+      body: JSON.stringify({
+        confirmation: 'DELETE',
+        ...(input.reason?.trim() ? { reason: input.reason.trim() } : {}),
+      }),
+      headers: {
+        Authorization: `Bearer ${input.accountAccessToken.trim()}`,
+        'Content-Type': 'application/json',
+      },
+      method: 'POST',
+    }));
+    const payload = await response.json();
+    if (!response.ok) {
+      throw createDriverApiHttpError({
+        code: readDriverApiErrorCode(payload),
+        endpoint: 'Driver account deletion request',
+        status: response.status,
+      });
+    }
+
+    return { request: readDriverAccountDeletionEnvelope(payload) };
+  }
+
+  async function requestPushInstallation(input: {
+    accountAccessToken: string;
+    body: Record<string, string>;
+    method: 'DELETE' | 'PUT';
+  }): Promise<void> {
+    const response = await fetchImpl(`${baseUrl}/api/driver/mobile/push-token`, withNoStoreDriverApiRequest({
+      body: JSON.stringify(input.body),
+      headers: {
+        Authorization: `Bearer ${input.accountAccessToken.trim()}`,
+        'Content-Type': 'application/json',
+      },
+      method: input.method,
+    }));
+    await response.json();
+    if (!response.ok) {
+      throw createDriverApiHttpError({ endpoint: 'Driver Push installation', status: response.status });
+    }
+  }
+
+  return {
+    getAccountProfile: (request) => requestAccountProfile({
+      accountAccessToken: request.accountAccessToken,
+      method: 'GET',
+    }),
+    login: (request) => postAuth('/driver/auth/login', {
+      phone: request.phoneE164.trim(),
+      pin: request.pin.trim(),
+    }, 'Driver PIN login'),
+    refreshSession,
+    register: (request) => postAuth('/driver/auth/verify-invite', {
+      phone: request.phoneE164.trim(),
+      inviteCode: request.inviteCode.trim().toUpperCase(),
+      pin: request.pin.trim(),
+    }, 'Register Driver Account'),
+    registerPushInstallation: (request) => requestPushInstallation({
+      accountAccessToken: request.accountAccessToken,
+      body: {
+        appId: request.appId.trim(),
+        ...(request.appVersion?.trim() ? { appVersion: request.appVersion.trim() } : {}),
+        ...(request.deviceId?.trim() ? { deviceId: request.deviceId.trim() } : {}),
+        devicePushToken: request.devicePushToken.trim(),
+        ...(request.locale?.trim() ? { locale: request.locale.trim() } : {}),
+        platform: request.platform.trim(),
+        ...(request.timezone?.trim() ? { timezone: request.timezone.trim() } : {}),
+      },
+      method: 'PUT',
+    }),
+    requestAccountDeletion,
+    revokePushInstallation: (request) => requestPushInstallation({
+      accountAccessToken: request.accountAccessToken,
+      body: { devicePushToken: request.devicePushToken.trim() },
+      method: 'DELETE',
+    }),
+    updateAccountProfile: (request) => requestAccountProfile({
+      accountAccessToken: request.accountAccessToken,
+      method: 'PATCH',
+      name: request.name,
+    }),
   };
 }
 
-export function createMockDriverAuthService(driverAccess: DriverAccessToken = {
-  accessToken: 'fixture-driver-access-token',
-  expiresAt: '2026-05-12T06:55:00.000Z',
+function combineAbortSignals(signals: readonly (AbortSignal | undefined)[]): AbortSignal {
+  const controller = new AbortController();
+  for (const signal of signals) {
+    if (signal?.aborted === true) {
+      controller.abort();
+      break;
+    }
+    signal?.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  return controller.signal;
+}
+
+export function createMockDriverAuthService(accountAccess: DriverAccountAccessToken = {
+  accessToken: 'fixture-driver-account-access-token',
+  expiresAt: '2100-05-12T06:55:00.000Z',
+  refreshToken: 'fixture-driver-account-refresh-token',
+  refreshTokenExpiresAt: '2100-06-11T06:55:00.000Z',
   tokenType: 'Bearer',
   ttlSeconds: 900,
-  use: 'consent_and_assigned_route',
+  use: 'driver_account',
+}, accountProfile: DriverAccountProfile = {
+  name: null,
+  phone: '+14165550123',
 }): DriverAuthService {
+  let currentProfile = accountProfile;
   return {
-    verifyCode: async () => ({ driverAccess }),
+    getAccountProfile: async () => ({ account: currentProfile }),
+    login: async () => ({ accountAccess }),
+    refreshSession: async () => ({ accountAccess }),
+    register: async () => ({ accountAccess }),
+    registerPushInstallation: async () => undefined,
+    requestAccountDeletion: async () => ({
+      request: {
+        duplicate: false,
+        requestId: 'fixture-driver-account-deletion-request-id',
+        status: 'REQUESTED',
+      },
+    }),
+    revokePushInstallation: async () => undefined,
+    updateAccountProfile: async (request) => {
+      currentProfile = { ...currentProfile, name: request.name.trim() };
+      return { account: currentProfile };
+    },
   };
 }
 
-function readDriverAuthEnvelope(payload: unknown): DriverAccessToken & {
-  refreshToken?: string;
-  refreshTokenExpiresAt?: string;
-} {
+function readDriverAccountDeletionEnvelope(payload: unknown): DriverAccountDeletionRequest {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new Error('Invalid driver account deletion response');
+  }
+  const data = (payload as { data?: unknown }).data;
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    throw new Error('Invalid driver account deletion response');
+  }
+  const record = data as Record<string, unknown>;
+  if (
+    typeof record.duplicate !== 'boolean'
+    || typeof record.requestId !== 'string'
+    || record.requestId.trim() === ''
+    || record.status !== 'REQUESTED'
+  ) {
+    throw new Error('Invalid driver account deletion response');
+  }
+
+  return {
+    duplicate: record.duplicate,
+    requestId: record.requestId,
+    status: 'REQUESTED',
+  };
+}
+
+function readDriverAccountProfileEnvelope(payload: unknown): DriverAccountProfile {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new Error('Invalid driver account profile response');
+  }
+  const data = (payload as { data?: unknown }).data;
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    throw new Error('Invalid driver account profile response');
+  }
+  const account = (data as { account?: unknown }).account;
+  if (typeof account !== 'object' || account === null || Array.isArray(account)) {
+    throw new Error('Invalid driver account profile response');
+  }
+  const record = account as Record<string, unknown>;
+  const name = record.name;
+  if (
+    typeof record.phone !== 'string' || !/^\+[1-9]\d{7,14}$/u.test(record.phone) ||
+    (name !== null && (typeof name !== 'string' || name.trim().length === 0 || name.trim().length > 80))
+  ) {
+    throw new Error('Invalid driver account profile response');
+  }
+
+  return { name: typeof name === 'string' ? name.trim() : null, phone: record.phone };
+}
+
+function readDriverAuthEnvelope(payload: unknown): DriverAccountAccessToken {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
     throw new Error('Invalid driver auth response');
   }
@@ -95,10 +423,13 @@ function readDriverAuthEnvelope(payload: unknown): DriverAccessToken & {
 
   const record = data as Record<string, unknown>;
   if (
-    typeof record.accessToken !== 'string' ||
-    record.accessToken.trim() === '' ||
-    typeof record.expiresAt !== 'string' ||
-    record.expiresAt.trim() === ''
+    typeof record.accessToken !== 'string' || record.accessToken.trim() === '' ||
+    typeof record.expiresAt !== 'string' || !Number.isFinite(Date.parse(record.expiresAt)) ||
+    typeof record.refreshToken !== 'string' || record.refreshToken.trim() === '' ||
+    typeof record.refreshTokenExpiresAt !== 'string' || !Number.isFinite(Date.parse(record.refreshTokenExpiresAt)) ||
+    record.tokenType !== 'Bearer' ||
+    typeof record.ttlSeconds !== 'number' || !Number.isInteger(record.ttlSeconds) || record.ttlSeconds <= 0 ||
+    record.use !== 'driver_account'
   ) {
     throw new Error('Invalid driver auth response');
   }
@@ -106,10 +437,10 @@ function readDriverAuthEnvelope(payload: unknown): DriverAccessToken & {
   return {
     accessToken: record.accessToken,
     expiresAt: record.expiresAt,
+    refreshToken: record.refreshToken,
+    refreshTokenExpiresAt: record.refreshTokenExpiresAt,
     tokenType: 'Bearer',
-    ttlSeconds: 900,
-    use: 'consent_and_assigned_route',
-    ...(typeof record.refreshToken === 'string' ? { refreshToken: record.refreshToken } : {}),
-    ...(typeof record.refreshTokenExpiresAt === 'string' ? { refreshTokenExpiresAt: record.refreshTokenExpiresAt } : {}),
+    ttlSeconds: record.ttlSeconds,
+    use: 'driver_account',
   };
 }

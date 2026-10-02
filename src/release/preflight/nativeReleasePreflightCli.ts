@@ -19,18 +19,19 @@ function readOptional(relativePath: string): string | undefined {
 }
 
 function readInput(): NativeReleasePreflightInput {
-  const iosProjectPbxproj = readOptional('ios/CleverDriver.xcodeproj/project.pbxproj');
+  const iosProjectPbxproj = readOptional('ios/CleverRoutes.xcodeproj/project.pbxproj');
 
   return {
     appConfig: readJson('app.json'),
     easConfig: readJson('eas.json'),
     envExample: readFileSync(resolve(repoRoot, '.env.example'), 'utf8'),
+    packageScripts: readJson<{ scripts?: Record<string, string> }>('package.json').scripts ?? {},
     ...(iosProjectPbxproj === undefined
       ? {}
       : {
           iosNativeProject: {
-            infoPlist: readOptional('ios/CleverDriver/Info.plist'),
-            privacyManifest: readOptional('ios/CleverDriver/PrivacyInfo.xcprivacy'),
+            infoPlist: readOptional('ios/CleverRoutes/Info.plist'),
+            privacyManifest: readOptional('ios/CleverRoutes/PrivacyInfo.xcprivacy'),
             projectPbxproj: iosProjectPbxproj,
           },
         }),

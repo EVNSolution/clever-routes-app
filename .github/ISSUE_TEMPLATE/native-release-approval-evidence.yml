@@ -22,7 +22,7 @@ body:
     attributes:
       label: External release evidence manifest reference
       description: Sanitized reference to the external copy of docs/release-evidence-manifest.template.md.
-      placeholder: external-evidence://clever-driver/release-candidate/<date>-<sha>
+      placeholder: external-evidence://clever-routes/release-candidate/<date>-<sha>
     validations:
       required: true
   - type: checkboxes

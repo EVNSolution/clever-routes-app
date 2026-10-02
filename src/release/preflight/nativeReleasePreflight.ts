@@ -1,4 +1,5 @@
 export type NativeReleasePreflightCheckId =
+  | 'android.direct.runtime'
   | 'eas.preview'
   | 'eas.production'
   | 'expo.identity'
@@ -23,7 +24,7 @@ export type NativeReleasePreflightInput = {
   appConfig: {
     expo?: {
       android?: {
-        edgeToEdgeEnabled?: boolean;
+        allowBackup?: boolean;
         package?: string;
         permissions?: string[];
         versionCode?: number;
@@ -45,6 +46,8 @@ export type NativeReleasePreflightInput = {
     build?: Record<string, {
       android?: Record<string, unknown>;
       autoIncrement?: boolean;
+      credentialsSource?: string;
+      developmentClient?: boolean;
       distribution?: string;
       environment?: string;
     }>;
@@ -55,6 +58,7 @@ export type NativeReleasePreflightInput = {
     submit?: Record<string, unknown>;
   };
   envExample: string;
+  packageScripts: Record<string, string>;
   iosNativeProject?: {
     infoPlist?: string;
     privacyManifest?: string;
@@ -77,6 +81,7 @@ export function runNativeReleasePreflight(input: NativeReleasePreflightInput): N
     checkExpoPermissions(input.appConfig),
     checkEasPreview(input.easConfig),
     checkEasProduction(input.easConfig),
+    checkDirectAndroidRuntime(input.packageScripts),
     checkRuntimeEnvExample(input.envExample),
     checkIosNativeProject(input.iosNativeProject, input.appConfig)
   ];
@@ -96,22 +101,45 @@ export function runNativeReleasePreflight(input: NativeReleasePreflightInput): N
   };
 }
 
+const DIRECT_ANDROID_RELEASE_SCRIPTS = [
+  'build:android:device-smoke',
+  'build:android:distribution',
+  'build:android:distribution:clean',
+] as const;
+const CANONICAL_DIRECT_ANDROID_RUNTIME = /&&\s+NODE_ENV=production\s+EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live\s+EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https:\/\/clever-route\.cleversystem\.ai\s+\.\/gradlew\b/u;
+
+function checkDirectAndroidRuntime(packageScripts: Record<string, string>): NativeReleasePreflightCheck {
+  for (const scriptName of DIRECT_ANDROID_RELEASE_SCRIPTS) {
+    if (!CANONICAL_DIRECT_ANDROID_RUNTIME.test(packageScripts[scriptName] ?? '')) {
+      return fail(
+        'android.direct.runtime',
+        `${scriptName} must inject the canonical live runtime on the Gradle command itself.`,
+      );
+    }
+  }
+
+  return pass(
+    'android.direct.runtime',
+    'Direct Android release commands inject the canonical live runtime before Gradle starts.',
+  );
+}
+
 function checkExpoIdentity(appConfig: NativeReleasePreflightInput['appConfig']): NativeReleasePreflightCheck {
   const expo = appConfig.expo;
   if (expo === undefined) {
     return fail('expo.identity', 'Expo app config is required.');
   }
-  if (expo.slug !== 'clever-driver-app') {
-    return fail('expo.identity', 'Expo slug must be clever-driver-app.');
+  if (expo.slug !== 'clever-routes-app') {
+    return fail('expo.identity', 'Expo slug must be clever-routes-app.');
   }
-  if (expo.scheme !== 'clever-driver') {
-    return fail('expo.identity', 'Expo URL scheme must be clever-driver.');
+  if (expo.scheme !== 'clever-routes') {
+    return fail('expo.identity', 'Expo URL scheme must be clever-routes.');
   }
-  if (expo.version !== '0.1.0') {
-    return fail('expo.identity', 'Expo app version must be 0.1.0 until owner-approved release versioning changes.');
+  if (typeof expo.version !== 'string' || !/^\d+\.\d+\.\d+$/u.test(expo.version)) {
+    return fail('expo.identity', 'Expo app version must be a three-part numeric release version.');
   }
-  if (expo.ios?.bundleIdentifier !== 'com.evns.cleverdriverapp') {
-    return fail('expo.identity', 'iOS bundleIdentifier must be com.evns.cleverdriverapp.');
+  if (expo.ios?.bundleIdentifier !== 'com.evnsolution.clever.routes') {
+    return fail('expo.identity', 'iOS bundleIdentifier must be com.evnsolution.clever.routes.');
   }
   if (expo.ios?.buildNumber !== '1') {
     return fail('expo.identity', 'iOS buildNumber must remain 1 before the first EAS remote version sync.');
@@ -119,20 +147,17 @@ function checkExpoIdentity(appConfig: NativeReleasePreflightInput['appConfig']):
   if (expo.ios?.supportsTablet !== false) {
     return fail('expo.identity', 'iOS supportsTablet must remain false for the phone-first driver MVP.');
   }
-  if (expo.android?.package !== 'com.evns.cleverdriverapp') {
-    return fail('expo.identity', 'Android package must be com.evns.cleverdriverapp.');
+  if (expo.android?.package !== 'com.evnsolution.clever.routes') {
+    return fail('expo.identity', 'Android package must be com.evnsolution.clever.routes.');
   }
-  if (expo.android?.versionCode !== 1) {
-    return fail('expo.identity', 'Android versionCode must remain 1 before the first EAS remote version sync.');
-  }
-  if (expo.android?.edgeToEdgeEnabled !== true) {
-    return fail('expo.identity', 'Android edgeToEdgeEnabled must stay enabled for the current Expo baseline.');
+  if (!Number.isInteger(expo.android?.versionCode) || (expo.android?.versionCode ?? 0) <= 0) {
+    return fail('expo.identity', 'Android versionCode must be a positive integer.');
   }
   if (expo.extra?.projectStartIssue !== 'EVNSolution/clever-change-control#145') {
     return fail('expo.identity', 'Expo extra.projectStartIssue must reference EVNSolution/clever-change-control#145.');
   }
 
-  return pass('expo.identity', 'Expo app identity and native version pins match the release baseline.');
+  return pass('expo.identity', 'Expo app identity and native version values are valid.');
 }
 
 function checkExpoPermissions(appConfig: NativeReleasePreflightInput['appConfig']): NativeReleasePreflightCheck {
@@ -171,13 +196,15 @@ function checkExpoPermissions(appConfig: NativeReleasePreflightInput['appConfig'
     return fail('expo.permissions', 'expo-image-picker camera/photos permission copy is required.');
   }
 
-  const cameraPlugin = tuplePluginConfig(plugins, 'expo-camera');
-  if (cameraPlugin === null || typeof cameraPlugin.cameraPermission !== 'string' || cameraPlugin.cameraPermission.trim() === '') {
-    return fail('expo.permissions', 'expo-camera barcode scanner permission copy is required.');
-  }
-
-  if (!plugins.includes('expo-secure-store')) {
+  if (!hasPlugin(plugins, 'expo-secure-store')) {
     return fail('expo.permissions', 'expo-secure-store plugin is required for native driver token storage.');
+  }
+  const sqlitePlugin = tuplePluginConfig(plugins, 'expo-sqlite');
+  if (sqlitePlugin?.useSQLCipher !== true) {
+    return fail('expo.permissions', 'expo-sqlite must enable SQLCipher for offline driver evidence.');
+  }
+  if (appConfig.expo?.android?.allowBackup !== false) {
+    return fail('expo.permissions', 'Android backup must stay disabled for encrypted driver evidence and device-only keys.');
   }
   if (hasForbiddenContactsAndroidPermission(appConfig.expo?.android?.permissions)) {
     return fail('expo.permissions', 'Contacts/address-book permissions must stay absent from the driver app native config.');
@@ -186,7 +213,13 @@ function checkExpoPermissions(appConfig: NativeReleasePreflightInput['appConfig'
     return fail('expo.permissions', 'Contacts/address-book permissions must stay absent from the driver app native config.');
   }
 
-  return pass('expo.permissions', 'Native location, camera, photo, scanner, and secure storage permissions are declared.');
+  return pass('expo.permissions', 'Native location, proof photo, and secure storage permissions are declared.');
+}
+
+function hasPlugin(plugins: unknown[], pluginName: string): boolean {
+  return plugins.some((plugin) => plugin === pluginName || (
+    Array.isArray(plugin) && plugin[0] === pluginName
+  ));
 }
 
 
@@ -284,6 +317,18 @@ function checkEasProduction(easConfig: NativeReleasePreflightInput['easConfig'])
   if (production?.autoIncrement !== true) {
     return fail('eas.production', 'EAS production profile must autoIncrement native build numbers.');
   }
+  if (production?.credentialsSource !== 'remote') {
+    return fail('eas.production', 'EAS production profile must explicitly use remote store-signing credentials.');
+  }
+  if (production.developmentClient === true) {
+    return fail('eas.production', 'EAS production profile must not enable the development client.');
+  }
+  if (
+    production.android?.buildType !== 'app-bundle'
+    || production.android?.withoutCredentials === true
+  ) {
+    return fail('eas.production', 'EAS production Android must build a credentialed app-bundle for Google Play.');
+  }
   if (!isPlainRecord(easConfig.submit?.production)) {
     return fail('eas.production', 'EAS submit.production must exist as an object, even if owner-controlled submit details stay external.');
   }
@@ -292,11 +337,14 @@ function checkEasProduction(easConfig: NativeReleasePreflightInput['easConfig'])
 }
 
 function checkRuntimeEnvExample(envExample: string): NativeReleasePreflightCheck {
-  if (!envExample.includes('EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL')) {
-    return fail('runtime.env.example', '.env.example must document EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL for live API mode.');
+  if (
+    !envExample.includes('EXPO_PUBLIC_DRIVER_RUNTIME_MODE')
+    || !envExample.includes('EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL')
+  ) {
+    return fail('runtime.env.example', '.env.example must document explicit live/mock runtime selection and the live delivery server origin.');
   }
 
-  return pass('runtime.env.example', '.env.example documents the only bundled public runtime API origin key.');
+  return pass('runtime.env.example', '.env.example documents explicit runtime selection and the bundled public API origin key.');
 }
 
 function tuplePluginConfig(plugins: unknown[], pluginName: string): Record<string, unknown> | null {

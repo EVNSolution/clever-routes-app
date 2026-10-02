@@ -1,17 +1,164 @@
 # Release readiness checklist
 
+## Independent runtime diagnostics release gate
+
+The app contract in `docs/driver-runtime-diagnostics.md` adds an independent
+SQLCipher outbox, ingestion-only credential, and lifecycle/location/sync observations.
+Server PR #472 is deployed at `675f8d24514bcafbac2e105269de86658c6b512e`;
+read-only runtime revision/image checks match the deployment evidence. It implements
+registration/revocation, idempotent ingestion, route/account isolation, attempt
+correlation, conservative UNKNOWN classification, admin query, and 30-day retention.
+The app's local pending history remains bounded to seven days and 1,000 records.
+
+Permanent-rejection quarantine and bounded explicit-logout revocation pass source
+and native-storage tests. The Android release still requires physical-device fault
+tests. Test locked
+background callbacks, offline replay, business-storage failure, expired business
+auth, response loss, and absent signals. Preserve unsubmitted business events/photos.
+Do not report source tests or server deployment as installed-device acceptance.
+The current release request is Android/Google Play; iOS physical acceptance remains
+separate and is required before an iOS release.
+
+Review store privacy declarations for the added diagnostic collection. Records
+exclude tokens, PINs, customer information, free-form errors, and raw coordinates;
+they retain app/build/OS, stage timestamps, stable reasons, and restricted
+correlation identifiers. Operational display uses `America/Toronto`.
+
 ## Purpose
 
-This document tracks the non-code evidence needed before a production iOS/Android release of `clever-driver-app`. Product scope remains in `docs/project-brief.md`; app-side API/runtime behavior remains in `docs/route-access-flow.md`.
+This document tracks the non-code evidence needed before a production iOS/Android release of `clever-routes-app`. Product scope remains in `docs/project-brief.md`; app-side API/runtime behavior remains in `docs/route-access-flow.md`.
 
 ## Distribution decision
 
-The app targets native iPhone and Android phone runtime. `eas.json` now defines build-profile scaffolding, but the final release channel is still pending owner decision:
+The app targets native iPhone and Android phone runtime. The existing direct APK
+channel remains the fallback until the Google Play production release is live.
+The current Android candidate is promoted as one immutable AAB through Play
+internal testing and production review; it is not rebuilt between tracks.
+`eas.json` defines the store build profile used for that candidate:
 
-- App Store/TestFlight and Google Play testing or production tracks
+- Android fallback channel: stable `/routes-app` browser handoff to the managed
+  `clever-routes-latest.apk` file
+- Android store channel: Google Play internal testing, then production review
+- iOS channel: App Store/TestFlight or an approved private distribution path
 - Apple Business Manager Custom Apps and managed Google Play/private app for restricted driver distribution
 
 Do not add final store listing copy, screenshots, signing ownership, or public license terms without an explicit owner decision. `docs/store-privacy-disclosure-draft.md` is a non-final worksheet for owner/legal review only.
+
+### CLEVER Routes public release URLs
+
+- Privacy: `https://clever-route-api.cleversystem.ai/routes-app/privacy`
+- Support: `https://clever-route-api.cleversystem.ai/routes-app/support`
+- Account deletion: `https://clever-route-api.cleversystem.ai/routes-app/account-deletion`
+
+All three pages are server-owned public documents. The app opens them from
+Settings. The authenticated in-app deletion action remains a separate server
+request flow and signs the driver out after the server accepts the request.
+
+### Direct Android update contract
+
+- Every directly distributed APK increments Android `versionCode`; display
+  version changes with it.
+- Direct Android publishing uses one reviewed local command:
+  `npm run release:android:publish`. Without `-- --execute` it is a dry-run
+  gate and prints the validated upload/SSM plan. For a new release, both dry-run
+  and execute mode clean and build the fixed release output directly from the
+  verified `dev` or `main` commit; arbitrary `--apk` inputs are rejected. Dry-run
+  still checks the approved Drive folder for immutable filename conflicts and
+  resolves the tagged SSM target, but it does not upload to Drive, mutate server
+  state, run SSM, or deploy anything.
+- On startup and when returning to the foreground after the recheck interval,
+  the app reads `GET /routes-app/release/android`.
+- The release manifest declares the target Android package ID and the legacy
+  package IDs it replaces. A package mismatch is a required reinstall, not a
+  normal in-place update.
+- Update lookup runs independently from saved-session restore. Lookup failure
+  must not delay login, route restore, or route work.
+- An available update is shown only after restore finishes and no active route
+  is in progress. Optional updates allow `Later` for the current app process;
+  required updates do not.
+- `Update` opens the server-owned stable `/routes-app` URL. A package migration
+  instead opens the server-provided `/driver-app` guide, which explains that
+  the new app must be installed, signed into again, and verified before the
+  previous app is removed. The app never receives or stores the backing Google
+  Drive URL. The SSM server publisher receives the Drive backing URL through
+  `--download-url`; the public manifest `installUrl` remains the server-owned
+  stable `/routes-app` URL.
+- Legacy builds continue to discover the release through
+  `GET /driver-app/release/android`; the server returns the same canonical
+  manifest and install guide.
+- The server publishes `latestVersionCode`, `latestVersionName`, and
+  `minimumSupportedVersionCode` from deployment environment values. Advance the
+  published latest version only after the replacement APK has been uploaded and
+  verified.
+- The publisher blocks versionCode rollback and Drive filename conflicts. New
+  APKs are uploaded as immutable versioned files under the approved Drive folder
+  `15Am4CFvcp2szOuuKpGnWgJEB22H96rwZ`, using the approved active gcloud account
+  `dlajiin@gmail.com`. The publisher validates the clean source before and after
+  its fixed release build, streams the APK checksum, and records the verified
+  Git commit as `sourceSha`. Uploaded files include Drive `appProperties` for
+  package, versionCode, versionName, sha256, and sourceSha.
+- Drive publication uses a resumable upload session and streams the APK instead
+  of constructing an in-memory multipart body. Anonymous post-publish checksum
+  verification also hashes the response stream without buffering the full APK.
+- If Drive upload succeeds but SSM/server publish fails, the versioned Drive
+  APK can be left as an orphan. A retry with the same APK reuses the existing
+  Drive file only when every same-name entry has the matching Drive-computed
+  byte checksum, recorded sha256, and sourceSha. Any same-name file with missing
+  or different checksum or provenance is treated as a conflicting retry and
+  must be resolved manually outside the publisher before execution continues.
+  In execute mode, before SSM publish, the publisher inspects the selected Drive
+  file permissions and creates `anyone:reader` only when absent, including for a
+  reused same-checksum orphan. Dry-run does not mutate permissions.
+  Drive listing requests page through the whole approved folder so duplicate
+  immutable filenames are not missed after the first page.
+- Source validation resolves the live `origin/dev` or `origin/main` head with
+  `git ls-remote` before and after the build, so a stale local remote-tracking
+  ref cannot authorize a release.
+- If an earlier SSM command succeeded but the publisher lost its result, a
+  retry recognizes the same public version, install URL, and streamed APK
+  checksum as already published and exits successfully without another server
+  mutation.
+- The publisher treats `aws ssm send-command` as asynchronous. It captures the
+  command id, waits for `command-executed`, checks the command invocation status,
+  then verifies the public `/routes-app/release/android` manifest and anonymous
+  `/routes-app/download` checksum. The remote SSM command runs from
+  `/srv/clever-route-server` with
+  `docker compose --env-file .deploy/current-image.env -f infra/compose/docker-compose.prod.yml exec -T clever-route-api node dist/scripts/publish-routes-app-release.js`.
+  AWS parameters are sent as JSON rather than hand-interpolated shell text.
+- The publisher defaults to `ap-northeast-2` and discovers the target through
+  the `Service=clever-delivery-server` SSM tag. Publication fails closed unless
+  exactly one tagged managed instance exists and reports `Online`; callers do
+  not supply an instance ID. The public delivery origin defaults to
+  `https://clever-route.cleversystem.ai`.
+- When discovering the current public release before publication, only HTTP 404
+  is treated as absent/unbootstrapped state. Network, 5xx, and malformed
+  response failures abort publication instead of silently bypassing rollback
+  checks.
+- The current legacy fixed Drive file
+  `1sqfU_D40iMenCGWQ6F3dZYb875i1jbe2` may only be reused with
+  `--mode bootstrap-legacy --apk-sha256 <sha256>`. That mode bootstraps
+  `1.1.1` (`versionCode` `8`) into the server database and does not replace
+  Drive file content.
+- Release `1.0.5` (`versionCode` `6`) starts the
+  `com.evnsolution.clever.routes` identity. It cannot overwrite the legacy
+  `com.evns.cleverdriverapp` package, so users must sign in again and remove the
+  previous app after verifying the new installation.
+
+Dry-run example for a new APK:
+
+```bash
+npm run release:android:publish
+```
+
+Execution is intentionally explicit and owner-controlled:
+
+```bash
+npm run release:android:publish -- \
+  --execute
+```
+
+`--ssm-region` and `--delivery-server-base-url` remain explicit environment
+overrides; the instance itself is always selected by the reviewed service tag.
 
 ## Native build profile matrix
 
@@ -23,7 +170,84 @@ The native binary build path uses Expo EAS profiles:
 | `preview` iOS | `npx eas-cli build --platform ios --profile preview` | Internal iPhone smoke build through EAS internal distribution | Expo account/project access, Apple team/signing authority, registered devices or approved internal distribution path, EAS `preview` environment values |
 | `production` all | `npx eas-cli build --platform all --profile production` | Store/TestFlight/Play candidate archives | Expo account/project access, Apple/Google store authority, production signing, EAS `production` environment values, approved privacy/store copy |
 
-`cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied to committed source. `cli.appVersionSource` is `remote`; initial local `ios.buildNumber` and `android.versionCode` are set to `1` before the first EAS remote version sync, while production builds use `autoIncrement` to avoid duplicate store build numbers.
+Do not use `expo run:android` or a Development Build as Android QA evidence. Those binaries require Metro and include developer tooling. Use `npm run android:qa:build` for the self-contained EAS preview APK. `npm run build:android:device-smoke` is limited to local release-mode diagnostics and does not establish signing or distribution evidence.
+
+The direct `build:android:device-smoke`, `build:android:distribution`, and
+`build:android:distribution:clean` commands set the canonical live runtime values
+directly on the Gradle process. They do not read `.env.local` as release
+configuration, even when a developer keeps that ignored file for local work.
+`.env.example` remains the documented live/mock development template; deliberate
+mock work still requires `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock` with no server URL.
+
+`cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied
+to committed source. `cli.appVersionSource` is `remote`; the reviewed native
+source version is `1.3.4` (`versionCode` `40`, iOS build `1`). Android
+`versionCode` `38` was reserved for the rejected diagnostic candidate and must
+not be submitted or promoted. Publication is
+proved separately by the public release manifest and downloadable artifact,
+not by this source document. A local self-contained smoke APK is verification
+input, not publication evidence. Future production store builds use
+`autoIncrement` to avoid duplicate build numbers.
+
+If a cloud build reserves a version but fails before producing an artifact,
+`production-local` inherits the same production environment and remote signing
+credentials while setting `autoIncrement=false`. Verify the reserved EAS version
+with `eas build:version:get -p android --profile production-local` and confirm no
+artifact with that version has been submitted before running
+`eas build --local -p android --profile production-local`. Supply protected local
+Firebase configuration through `CLEVER_ROUTES_GOOGLE_SERVICES_FILE`; never commit
+it. This recovery profile reuses the reserved version and is not a new-release
+version allocator. Validate package, version, signature and checksum before any
+upload; a local build does not create a cloud EAS build record.
+
+### Isolate Metro and verify the embedded Android endpoint
+
+Each local production build must use a new, empty `TMPDIR`. Expo stores Metro
+transforms under the process temporary directory, separately from
+`EAS_LOCAL_BUILD_WORKINGDIR`. In CI mode, cached transforms can retain an inlined
+QA endpoint even when the next build supplies production environment values.
+Changing the EAS working directory alone does not isolate this cache. Preserve
+shared caches used by other builds; allocate a private temporary directory instead.
+
+After verifying the reserved version and EAS `production` environment as above,
+the local recovery build can be invoked with:
+
+```bash
+release_tmp="$(mktemp -d "${TMPDIR:-/tmp}/clever-routes-release.XXXXXX")"
+TMPDIR="$release_tmp" \
+  EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live \
+  EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://clever-route.cleversystem.ai \
+  npx eas-cli build --local -p android --profile production-local
+```
+
+Use the same per-build `TMPDIR` isolation for direct Gradle release commands.
+The EAS production environment must also contain those canonical public values.
+Keep the source SHA, build command, private temporary directory, artifact checksum,
+and following verifier output together in the external release evidence.
+
+Before deriving a device APK, installing a release candidate, or uploading to
+Google Play, inspect the completed AAB itself. Also inspect any APK derived from it:
+
+```bash
+python3 scripts/verify-android-artifact-runtime.py --artifact /path/to/release.aab
+python3 scripts/verify-android-artifact-runtime.py --artifact /path/to/release.apk
+```
+
+Both commands must exit `0`. The verifier reads the packaged
+`index.android.bundle`, requires the fixed production URL, and rejects known
+local QA endpoint bytes, including artifacts containing both endpoints. An
+unexpected endpoint or unreadable bundle blocks promotion even if the build,
+manifest, signature, and AAB-to-APK payload comparison passed. Preserve a rejected
+artifact as evidence and rebuild from the committed source with a fresh temporary
+directory. Do not modify the signed artifact in place.
+
+This byte-level check addresses endpoint contamination; it does not establish
+all runtime settings, signing correctness, or successful device connectivity.
+Record those checks separately. Run the standard-library regression tests with:
+
+```bash
+python3 -m unittest discover -s scripts -p 'test_verify_android_artifact_runtime.py'
+```
 
 Before running any preview/production EAS build for evidence, run:
 
@@ -68,7 +292,8 @@ Before production release, capture evidence on at least one real iPhone and one 
 | Area | iPhone evidence | Android evidence | Notes |
 | --- | --- | --- | --- |
 | Fresh install and app launch | pending | pending | Include app version/build identifier. |
-| E.164 phone lookup | pending | pending | Verify tenant/company context before route data. |
+| E.164 phone + six-digit PIN login | pending | pending | Verify no company/route data appears before account authentication. |
+| First invitation registration | pending | pending | Use an administrator-created test invitation; confirm the app does not request or create a Shopify invitation and does not collect a driver name. |
 | Company guidance and support contact display | pending | pending | Confirm multi-company wording. |
 | Consent gate and retry/error handling | pending | pending | Verify consent versions/copy source. |
 | Assigned route and stop list | pending | pending | Use shop/route timezone `deliveryDate`. |
@@ -77,10 +302,11 @@ Before production release, capture evidence on at least one real iPhone and one 
 | Continuous/background-capable location task | pending | pending | Confirm native background configuration and OS prompts. |
 | Proof photo capture from camera/library | pending | pending | Use synthetic proof media. |
 | Proof media scan rejection UX | pending | pending | Local mock mode now exposes `scan_rejected`; live mode can use server `PROOF_MEDIA_REJECTED`. Confirm rejected photos show recapture guidance and are not queued as retryable proof. |
-| Signature and barcode proof capture | pending | pending | Confirm unavailable/denied states. |
-| Offline queue retry/discard UI after network loss | pending | pending | Confirm app restart hydration. |
-| Token expiry, invalid persisted token, or live downstream `401` recovery | pending | pending | App clears expired/malformed SecureStore payloads before reuse and live downstream `401` driver access plus active route UI state before requiring phone lookup re-lookup; confirm on devices. |
-| Driver session reset/sign-out cleanup | pending | pending | Confirm reset stops tracking, clears SecureStore driver access, clears queued retry state, blanks lookup inputs, and returns to safe lookup state. |
+| Signature proof capture | pending | pending | Barcode proof capture is outside the current app scope. |
+| Encrypted offline retry/quarantine after network loss | pending | pending | Confirm SQLCipher restart hydration, ordered retry, retry backoff, and reconciliation state. |
+| Token expiry, invalid persisted token, or live downstream `401` recovery | pending | pending | App keeps account and route tokens separate, refreshes account access before reacquiring route access, and returns to phone + PIN only when account refresh/authentication fails. |
+| Deleted/unassigned route refresh | pending | pending | An authoritative empty/deleted assignment removes the route from the app without deleting the signed-in account; transient network failure keeps the last safe cache. |
+| Driver session reset/sign-out isolation | pending | pending | Confirm reset stops tracking, clears SecureStore driver access, removes location samples, seals ordered workflow/proof evidence, blanks lookup inputs, and prevents cross-account replay. |
 | Delivery finish or route completion cleanup | pending | pending | App-side finish now stops tracking, records/queues `ROUTE_COMPLETED`, and cleans route queue after recorded completion; confirm on devices. |
 
 ## Store and privacy disclosure checklist
@@ -89,13 +315,13 @@ Store/privacy metadata must match actual runtime behavior and server retention p
 
 - Foreground location use: active delivery route tracking and location updates.
 - Background location use: only after delivery start and only when native background tracking is enabled.
-- Camera/photos: proof-of-delivery photo capture/upload.
-- Camera barcode scanning: proof barcode capture when available.
+- Camera/photos: proof-of-delivery photo capture/upload. Android library selection uses the system photo picker and the final bundle must not carry `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`, `READ_EXTERNAL_STORAGE`, or `WRITE_EXTERNAL_STORAGE`.
 - Contacts/address book: current app uses manual E.164 phone entry and should not request Contacts permissions unless a future owner-approved feature changes that. `npm run check:native-release` rejects source-controlled Android Contacts permissions or iOS Contacts usage descriptions before EAS evidence builds.
-- Driver identifiers: phone lookup, server-issued driver access token, route assignment identifiers.
-- Proof media: photo file, signature metadata, barcode metadata, and related stop/route identifiers.
-- Offline queue: non-secret retry metadata and file URI references retained locally until retry/discard policy runs.
-- Offline queue app-side policy: pending driver event/proof-media retry items are discarded after five retained attempts, after 72 hours, when the completed route is explicitly purged, when driver sign-out/session reset clears local retry state, or when proof-media upload is rejected by the server scan hook.
+- Driver identifiers: E.164 phone account, server-issued account/refresh and route-scoped access tokens, route assignment identifiers.
+- Proof media: photo file, signature metadata, and related stop/route identifiers.
+- Offline evidence: SQLCipher-encrypted retry payloads and file URI references are separated into workflow, sensitive, quarantine, and location tables; its key is separate in SecureStore and local backups are excluded.
+- Offline evidence policy: location samples can be discarded after five retained attempts, after 72 hours, route completion, or account change. Ordered workflow/proof items are quarantined at retry limits, route conflicts, or sign-out and require explicit reconciliation. Server-rejected proof media remains non-retryable.
+- Account deletion: the authenticated app request is queued by the server, revokes account sessions during processing, removes push-token access, tombstones deletable personal fields, and preserves only legally/operationally retained records. The public deletion page contains no anonymous destructive form; support verifies the requester before an operator processes the server request ID.
 - Server proof-media rejection/retention support: `clever-delivery-server` now has a proof-media scan rejection hook, `DRIVER_PROOF_MEDIA_RETENTION_DAYS`, and `npm run driver:proof-media:cleanup` for local/manual or cron-style cleanup; production object storage, scanner backend, and scheduler deployment evidence are still pending.
 - Support contact: company/operator support contact must be available in route guidance or store support metadata.
 
@@ -116,8 +342,9 @@ stable work items instead of unowned notes:
 
 | Blocker | Tracking issue | Scope |
 | --- | --- | --- |
-| Physical iOS/Android device smoke evidence for background tracking, proof capture, offline retry/discard, token recovery, and route completion cleanup | EVNSolution/clever-driver-app#72 | Driver app evidence collection |
-| Owner-controlled Expo/EAS project, Apple/Google signing credentials, EAS preview/production environment values, store/private distribution policy, owner/legal-approved privacy disclosure copy, and public license/reuse decision | EVNSolution/clever-driver-app#73 | Native build/distribution approval |
+| Physical iOS/Android device smoke evidence for background tracking, proof capture, offline retry/discard, token recovery, and route completion cleanup | EVNSolution/clever-routes-app#72 | Driver app evidence collection |
+| Android 1.2.8 production AAB, Play metadata/policy forms, review access, background-location video, exact-artifact device smoke, and pre-launch report | EVNSolution/clever-routes-app#231 | Current Google Play production-readiness work |
+| Android 1.2.10 background-location review disclosure and evidence refresh | EVNSolution/clever-routes-app#237 | Replaces the 1.2.9 Play candidate with compliant reviewer copy and a continuous device demonstration |
 | Production proof-media object storage ownership, signed retrieval/access-control, scanner backend/private evidence storage, and deployed cleanup/scheduler evidence | EVNSolution/clever-delivery-server#71 | Delivery-server proof media hardening |
 
 The baseline context-monorepo service pointer is complete:

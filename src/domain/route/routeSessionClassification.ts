@@ -1,4 +1,4 @@
-export type RouteSessionStatus = 'active' | 'completed' | 'unfinished' | 'upcoming';
+export type RouteSessionStatus = 'active' | 'completed' | 'ready';
 
 export type RouteSessionClassificationRoute = {
   deliveryDate: string;
@@ -28,10 +28,10 @@ export function classifyAssignedRouteSession(input: RouteSessionClassificationIn
     now: input.now,
     timezone: input.route.timezone,
   })) {
-    return 'unfinished';
+    return 'ready';
   }
 
-  return 'upcoming';
+  return 'ready';
 }
 
 export function filterVisibleAssignedRouteSessions<T extends { route: RouteSessionClassificationRoute }>(
@@ -54,7 +54,7 @@ export function getInitialAssignedRouteTab(input: {
     now: input.now,
     route: input.route,
     selectedRouteId: null,
-    selectedRouteStatus: 'upcoming',
+    selectedRouteStatus: 'ready',
   });
 }
 

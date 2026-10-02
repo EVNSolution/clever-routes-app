@@ -12,18 +12,6 @@ export const DRIVER_FLOW_STATES = [
 
 export type DriverFlowState = (typeof DRIVER_FLOW_STATES)[number];
 
-export type InitialAccessValidationInput = {
-  routeContext?: string | null;
-  phoneE164: string;
-};
-
-export type InitialAccessValidationResult =
-  | { ok: true }
-  | {
-      ok: false;
-      reason: 'phone_required' | 'phone_invalid';
-    };
-
 export type DeliveryActiveGuardInput = {
   state: DriverFlowState;
   hasLocationPermission: boolean;
@@ -32,11 +20,9 @@ export type DeliveryActiveGuardInput = {
 export type MvpScenarioScreenId =
   | 'login'
   | 'routeList'
-  | 'routeDetail'
-  | 'liveTracking'
+  | 'routeSession'
   | 'stopDetails'
   | 'arrivalCheck'
-  | 'stopCompleted'
   | 'completedDeliveries';
 
 export type MvpScenarioScreen = {
@@ -47,8 +33,8 @@ export type MvpScenarioScreen = {
 };
 
 export type MvpRouteTab = {
-  id: 'active' | 'completed' | 'unfinished' | 'upcoming';
-  label: 'Completed' | 'In Progress' | 'Pending' | 'Unfinished';
+  id: 'active' | 'completed' | 'ready';
+  label: 'Completed' | 'In progress' | 'Ready';
 };
 
 export type StopCompletionProofField = {
@@ -63,22 +49,6 @@ const ROUTE_REVEAL_STATES = new Set<DriverFlowState>([
   'delivery_active',
   'delivery_finished',
 ]);
-
-const E164_PHONE_PATTERN = /^\+[1-9]\d{7,14}$/;
-
-export function getInitialAccessValidation({
-  phoneE164,
-}: InitialAccessValidationInput): InitialAccessValidationResult {
-  if (phoneE164.trim().length === 0) {
-    return { ok: false, reason: 'phone_required' };
-  }
-
-  if (!E164_PHONE_PATTERN.test(phoneE164.trim())) {
-    return { ok: false, reason: 'phone_invalid' };
-  }
-
-  return { ok: true };
-}
 
 export function canRevealRouteDetails(state: DriverFlowState): boolean {
   return ROUTE_REVEAL_STATES.has(state);
@@ -96,49 +66,43 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
     {
       id: 'login',
       title: 'Login / Driver Verification',
-      purpose: 'Confirm the driver by phone, then collect name and required consent.',
+      purpose:
+        'Authenticate by phone and PIN, then collect required consent.',
       primaryAction: 'Continue',
     },
     {
       id: 'routeList',
-      title: 'Upcoming Routes',
-      purpose: 'Show current, unfinished, and future assigned routes from nearest date to farthest, grouped into Pending, In Progress, Unfinished, and Completed tabs.',
-      primaryAction: 'Start Route',
+      title: 'My Routes',
+      purpose:
+        'Show assigned routes from nearest date to farthest, grouped into Ready, In progress, and Completed tabs.',
+      primaryAction: 'Start Session',
     },
     {
-      id: 'routeDetail',
-      title: 'Route Details',
-      purpose: 'Show company information, route date, region, and ordered stops before delivery starts.',
-      primaryAction: 'Begin Tracking',
-    },
-    {
-      id: 'liveTracking',
-      title: 'Live Tracking',
-      purpose: 'Show GPS tracking status and route overview without turn-by-turn navigation.',
-      primaryAction: 'Arrived',
+      id: 'routeSession',
+      title: 'Route Session',
+      purpose:
+        'Run the operational pickup, navigation, stop, proof, and completion workflow after Start or Continue Session.',
+      primaryAction: 'Continue Session',
     },
     {
       id: 'stopDetails',
       title: 'Stop Details',
-      purpose: 'Show address, delivery instructions, location tips, and contact actions for the current stop.',
+      purpose:
+        'Show address, delivery instructions, location tips, and contact actions for the current stop.',
       primaryAction: 'Arrived',
     },
     {
       id: 'arrivalCheck',
       title: 'Arrival Check',
-      purpose: 'Collect required photo proof, delivery notes, location tips, and optional notes at the stop.',
+      purpose:
+        'Optionally add a delivery photo, result, location tip, or note before completing the stop.',
       primaryAction: 'Complete Stop',
-    },
-    {
-      id: 'stopCompleted',
-      title: 'Stop Completed',
-      purpose: 'Confirm stop completion and guide the driver to the next stop or route summary.',
-      primaryAction: 'Continue to Next Stop',
     },
     {
       id: 'completedDeliveries',
       title: 'Completed Deliveries',
-      purpose: 'Show completed stops and proof status for the selected route or day.',
+      purpose:
+        'Show completed stops and proof status for the selected route or day.',
       primaryAction: 'Back to Route',
     },
   ];
@@ -146,18 +110,17 @@ export function getMvpScenarioScreens(): MvpScenarioScreen[] {
 
 export function getMvpRouteTabs(): MvpRouteTab[] {
   return [
-    { id: 'upcoming', label: 'Pending' },
-    { id: 'active', label: 'In Progress' },
-    { id: 'unfinished', label: 'Unfinished' },
+    { id: 'ready', label: 'Ready' },
+    { id: 'active', label: 'In progress' },
     { id: 'completed', label: 'Completed' },
   ];
 }
 
 export function getStopCompletionProofFields(): StopCompletionProofField[] {
   return [
-    { id: 'photo', label: 'Photo Proof', required: true },
-    { id: 'todayNote', label: 'Delivery Notes', required: false },
+    { id: 'photo', label: 'Photo Proof', required: false },
+    { id: 'todayNote', label: 'Delivery Result', required: false },
     { id: 'locationTip', label: 'Location Tip', required: false },
-    { id: 'additionalNotes', label: 'Additional Notes', required: false },
+    { id: 'additionalNotes', label: 'Other Notes', required: false },
   ];
 }

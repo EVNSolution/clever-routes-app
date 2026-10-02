@@ -5,7 +5,6 @@ import {
   canEnterDeliveryActive,
   canRevealRouteDetails,
   DRIVER_FLOW_STATES,
-  getInitialAccessValidation,
   getMvpRouteTabs,
   getMvpScenarioScreens,
   getStopCompletionProofFields,
@@ -26,24 +25,6 @@ describe('driver app MVP flow', () => {
     ]);
   });
 
-  it('accepts phone-only access as the lookup starting point', () => {
-    assert.deepEqual(
-      getInitialAccessValidation({ phoneE164: '+14165550123' }),
-      {
-        ok: true,
-      },
-    );
-  });
-
-  it('still accepts route context plus E.164 phone as an optional narrowed lookup', () => {
-    assert.deepEqual(
-      getInitialAccessValidation({ routeContext: 'route-tomato-2026-05-12', phoneE164: '+14165550123' }),
-      {
-        ok: true,
-      },
-    );
-  });
-
   it('does not reveal route details before consent is recorded', () => {
     assert.equal(canRevealRouteDetails('company_context_confirmed'), false);
     assert.equal(canRevealRouteDetails('consent_required'), false);
@@ -62,11 +43,9 @@ describe('driver app MVP flow', () => {
       [
         'login',
         'routeList',
-        'routeDetail',
-        'liveTracking',
+        'routeSession',
         'stopDetails',
         'arrivalCheck',
-        'stopCompleted',
         'completedDeliveries',
       ],
     );
@@ -75,32 +54,29 @@ describe('driver app MVP flow', () => {
       getMvpScenarioScreens().map((screen) => screen.title),
       [
         'Login / Driver Verification',
-        'Upcoming Routes',
-        'Route Details',
-        'Live Tracking',
+        'My Routes',
+        'Route Session',
         'Stop Details',
         'Arrival Check',
-        'Stop Completed',
         'Completed Deliveries',
       ],
     );
   });
 
-  it('shows route lists by English delivery status tabs', () => {
+  it('shows route lists by lifecycle status tabs', () => {
     assert.deepEqual(getMvpRouteTabs(), [
-      { id: 'upcoming', label: 'Pending' },
-      { id: 'active', label: 'In Progress' },
-      { id: 'unfinished', label: 'Unfinished' },
+      { id: 'ready', label: 'Ready' },
+      { id: 'active', label: 'In progress' },
       { id: 'completed', label: 'Completed' },
     ]);
   });
 
-  it('keeps proof and optional stop inputs aligned to the English arrival check design', () => {
+  it('keeps all stop completion proof inputs optional', () => {
     assert.deepEqual(getStopCompletionProofFields(), [
-      { id: 'photo', label: 'Photo Proof', required: true },
-      { id: 'todayNote', label: 'Delivery Notes', required: false },
+      { id: 'photo', label: 'Photo Proof', required: false },
+      { id: 'todayNote', label: 'Delivery Result', required: false },
       { id: 'locationTip', label: 'Location Tip', required: false },
-      { id: 'additionalNotes', label: 'Additional Notes', required: false },
+      { id: 'additionalNotes', label: 'Other Notes', required: false },
     ]);
   });
 });

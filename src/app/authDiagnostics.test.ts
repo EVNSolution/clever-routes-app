@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildAuthFailureMessage, buildAuthSuccessMessage } from './authDiagnostics';
+import { buildAuthFailureMessage, shouldDiscardSavedLoginAfterRefreshFailure } from './authDiagnostics';
 import { createDriverApiHttpError } from '../api/deliveryServer/driverApiError';
 import type { AuthPhase } from './authDiagnostics';
 import type { DriverRuntimeConfig } from './config/driverRuntimeConfig';
@@ -75,19 +75,48 @@ describe('authDiagnostics', () => {
     assert.equal(result.message.includes('401'), true);
   });
 
-  it('builds success message with live endpoint context', () => {
-    const message = buildAuthSuccessMessage({ runtimeConfig: liveConfig, phase: 'invite_verify' });
-
-    assert.equal(message.includes('live server https://clever-route.example'), true);
-    assert.equal(message.includes('Invite verification'), true);
+  it('discards saved login only when refresh is explicitly unauthorized', () => {
+    assert.equal(shouldDiscardSavedLoginAfterRefreshFailure(
+      createDriverApiHttpError({ endpoint: 'Refresh Auth Session', status: 401 }),
+    ), true);
+    assert.equal(shouldDiscardSavedLoginAfterRefreshFailure(
+      createDriverApiHttpError({ endpoint: 'Refresh Auth Session', status: 500 }),
+    ), false);
+    assert.equal(shouldDiscardSavedLoginAfterRefreshFailure(new TypeError('fetch failed')), false);
+    assert.equal(shouldDiscardSavedLoginAfterRefreshFailure(new Error('Invalid driver auth response')), false);
   });
 
-  const phaseKinds: AuthPhase[] = ['invite_verify', 'route_access'];
-  it('emits non-empty messages for both phases', () => {
+  it('explains invalid phone or PIN without exposing which credential failed', () => {
+    const result = buildAuthFailureMessage({
+      runtimeConfig: liveConfig,
+      phase: 'pin_login',
+      error: createDriverApiHttpError({ endpoint: 'PIN Login', status: 401 }),
+    });
+
+    assert.equal(result.kind, 'server_401');
+    assert.equal(result.message, 'PIN login: phone number or PIN is incorrect.');
+  });
+
+  it('explains invalid or expired invite codes during registration', () => {
+    const result = buildAuthFailureMessage({
+      runtimeConfig: liveConfig,
+      phase: 'invite_verify',
+      error: createDriverApiHttpError({ endpoint: 'Verify Invite Code', status: 401 }),
+    });
+
+    assert.equal(result.kind, 'server_401');
+    assert.equal(result.message, 'Account registration: invite code is invalid or expired.');
+  });
+
+  const phaseKinds: AuthPhase[] = ['invite_verify', 'pin_login', 'route_access'];
+  it('keeps the live API address out of user-facing failure messages', () => {
     phaseKinds.forEach((phase) => {
-      const message = buildAuthSuccessMessage({ runtimeConfig: liveConfig, phase });
-      assert.equal(typeof message, 'string');
-      assert.ok(message.length > 0);
+      const result = buildAuthFailureMessage({
+        runtimeConfig: liveConfig,
+        phase,
+        error: new Error('network request failed'),
+      });
+      assert.doesNotMatch(result.message, /clever-route\.example|https?:\/\//u);
     });
   });
 });

@@ -1,4 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
+import { Platform } from 'react-native';
 
 import type {
   ProofPhotoCaptureLaunchResult,
@@ -15,6 +16,10 @@ export function createExpoProofPhotoCaptureService(): ProofPhotoCaptureService {
 }
 
 async function requestImagePickerPermission(source: ProofPhotoCaptureSource): Promise<ProofPhotoCapturePermissionResult> {
+  if (source === 'library' && Platform.OS === 'android') {
+    return 'granted';
+  }
+
   const permission = source === 'camera'
     ? await ImagePicker.requestCameraPermissionsAsync()
     : await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -24,7 +29,7 @@ async function requestImagePickerPermission(source: ProofPhotoCaptureSource): Pr
 
 async function launchImagePicker(source: ProofPhotoCaptureSource): Promise<ProofPhotoCaptureLaunchResult> {
   const result = source === 'camera'
-    ? await ImagePicker.launchCameraAsync(getImagePickerOptions())
+    ? await ImagePicker.launchCameraAsync({ ...getImagePickerOptions(), cameraType: ImagePicker.CameraType.back })
     : await ImagePicker.launchImageLibraryAsync(getImagePickerOptions());
 
   if (result.canceled || result.assets.length === 0) {

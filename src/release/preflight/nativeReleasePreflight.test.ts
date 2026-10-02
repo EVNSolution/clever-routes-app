@@ -1,5 +1,16 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +30,8 @@ function currentInput(): NativeReleasePreflightInput {
   return {
     appConfig: readJson('app.json'),
     easConfig: readJson('eas.json'),
-    envExample: readFileSync(resolve(repoRoot, '.env.example'), 'utf8')
+    envExample: readFileSync(resolve(repoRoot, '.env.example'), 'utf8'),
+    packageScripts: readJson<{ scripts?: Record<string, string> }>('package.json').scripts ?? {},
   };
 }
 
@@ -35,10 +47,86 @@ test('native release preflight passes for the committed Expo and EAS config', ()
       'expo.permissions',
       'eas.preview',
       'eas.production',
+      'android.direct.runtime',
       'runtime.env.example',
       'ios.native'
     ]
   );
+});
+
+test('direct Android release commands inject the canonical live runtime without .env.local', () => {
+  const input = currentInput();
+  const result = runNativeReleasePreflight(input);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    result.checks.find((check) => check.id === 'android.direct.runtime'),
+    {
+      id: 'android.direct.runtime',
+      message: 'Direct Android release commands inject the canonical live runtime before Gradle starts.',
+      ok: true,
+    },
+  );
+
+  const fixtureRoot = mkdtempSync(resolve(tmpdir(), 'clever-routes-release-env-'));
+  const androidRoot = resolve(fixtureRoot, 'android');
+  mkdirSync(androidRoot);
+  writeFileSync(
+    resolve(androidRoot, 'gradlew'),
+    '#!/bin/sh\nprintf "%s\\n%s\\n" "$EXPO_PUBLIC_DRIVER_RUNTIME_MODE" "$EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL"\n',
+  );
+  chmodSync(resolve(androidRoot, 'gradlew'), 0o755);
+
+  try {
+    assert.equal(existsSync(resolve(fixtureRoot, '.env.local')), false);
+    for (const scriptName of [
+      'build:android:device-smoke',
+      'build:android:distribution',
+      'build:android:distribution:clean',
+    ]) {
+      const output = execFileSync('/bin/sh', ['-c', input.packageScripts[scriptName] ?? ''], {
+        cwd: fixtureRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: 'https://wrong.example.com',
+          EXPO_PUBLIC_DRIVER_RUNTIME_MODE: 'mock',
+        },
+      });
+      assert.equal(output, 'live\nhttps://clever-route.cleversystem.ai\n');
+    }
+  } finally {
+    rmSync(fixtureRoot, { force: true, recursive: true });
+  }
+});
+
+test('native release preflight rejects direct Android commands that can inherit mock or missing runtime config', () => {
+  const input = currentInput();
+
+  for (const scriptName of [
+    'build:android:device-smoke',
+    'build:android:distribution',
+    'build:android:distribution:clean',
+  ]) {
+    const result = runNativeReleasePreflight({
+      ...input,
+      packageScripts: {
+        ...input.packageScripts,
+        [scriptName]: 'cd android && NODE_ENV=production ./gradlew app:assembleRelease',
+      },
+    });
+
+    assert.deepEqual(result.failures, [{
+      id: 'android.direct.runtime',
+      message: `${scriptName} must inject the canonical live runtime on the Gradle command itself.`,
+    }]);
+  }
+});
+
+test('prepares the ignored Firebase config during EAS builds', () => {
+  const packageJson = readJson<{ scripts?: Record<string, string> }>('package.json');
+
+  assert.equal(packageJson.scripts?.['eas-build-post-install'], 'npm run prepare:android:firebase');
 });
 
 test('native release preflight reports release-blocking config gaps without secrets', () => {
@@ -64,11 +152,11 @@ test('native release preflight reports release-blocking config gaps without secr
   assert.deepEqual(result.failures, [
     {
       id: 'expo.identity',
-      message: 'iOS bundleIdentifier must be com.evns.cleverdriverapp.'
+      message: 'iOS bundleIdentifier must be com.evnsolution.clever.routes.'
     },
     {
       id: 'runtime.env.example',
-      message: '.env.example must document EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL for live API mode.'
+      message: '.env.example must document explicit live/mock runtime selection and the live delivery server origin.'
     }
   ]);
 });
@@ -97,7 +185,7 @@ test('native release preflight rejects accidental iOS Contacts usage description
   assert.ok(expo);
   assert.ok(expo.ios);
   (expo.ios as Record<string, unknown>).infoPlist = {
-    NSContactsUsageDescription: 'Allow Clever Driver to read contacts.'
+    NSContactsUsageDescription: 'Allow CLEVER Routes to read contacts.'
   };
 
   const result = runNativeReleasePreflight(input);
@@ -109,6 +197,72 @@ test('native release preflight rejects accidental iOS Contacts usage description
       message: 'Contacts/address-book permissions must stay absent from the driver app native config.'
     }
   ]);
+});
+
+test('native release preflight rejects unencrypted SQLite or Android backup drift', () => {
+  for (const mutate of [
+    (input: NativeReleasePreflightInput) => {
+      const expo = input.appConfig.expo as Record<string, unknown>;
+      expo.plugins = (expo.plugins as unknown[]).filter((plugin) => !(
+        Array.isArray(plugin) && plugin[0] === 'expo-sqlite'
+      ));
+    },
+    (input: NativeReleasePreflightInput) => {
+      const expo = input.appConfig.expo;
+      assert.ok(expo?.android);
+      expo.android.allowBackup = true;
+    },
+  ]) {
+    const input = currentInput();
+    mutate(input);
+    const result = runNativeReleasePreflight(input);
+    assert.equal(result.ok, false);
+    assert.equal(result.failures[0]?.id, 'expo.permissions');
+  }
+});
+
+test('native release preflight rejects production signing, bundle, and dev-client drift', () => {
+  const input = currentInput();
+  const cases = [
+    {
+      expected: 'EAS production profile must explicitly use remote store-signing credentials.',
+      patch: { credentialsSource: 'local' },
+    },
+    {
+      expected: 'EAS production profile must not enable the development client.',
+      patch: { developmentClient: true },
+    },
+    {
+      expected: 'EAS production Android must build a credentialed app-bundle for Google Play.',
+      patch: { android: { buildType: 'apk' } },
+    },
+    {
+      expected: 'EAS production Android must build a credentialed app-bundle for Google Play.',
+      patch: { android: { buildType: 'app-bundle', withoutCredentials: true } },
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    const result = runNativeReleasePreflight({
+      ...input,
+      easConfig: {
+        ...input.easConfig,
+        build: {
+          ...input.easConfig.build,
+          production: {
+            ...input.easConfig.build?.production,
+            ...testCase.patch,
+          },
+        },
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.failures, [{
+      id: 'eas.production',
+      message: testCase.expected,
+    }]);
+  }
 });
 
 
@@ -125,9 +279,9 @@ test('native release preflight validates a source-controlled iOS project when pr
       ].join('\n'),
       privacyManifest: '<key>NSPrivacyTracking</key>\n<false/>',
       projectPbxproj: [
-        'MARKETING_VERSION = 0.1.0;',
+        `MARKETING_VERSION = ${input.appConfig.expo?.version};`,
         'CURRENT_PROJECT_VERSION = 1;',
-        'PRODUCT_BUNDLE_IDENTIFIER = com.evns.cleverdriverapp;',
+        'PRODUCT_BUNDLE_IDENTIFIER = com.evnsolution.clever.routes;',
       ].join('\n'),
     },
   });
@@ -135,6 +289,59 @@ test('native release preflight validates a source-controlled iOS project when pr
   assert.equal(result.ok, true);
   assert.equal(result.failures.length, 0);
   assert.equal(result.checks.at(-1)?.id, 'ios.native');
+});
+
+test('keeps the Expo 57 iOS native settings aligned at 16.4', () => {
+  const podfileProperties = readJson<Record<string, unknown>>('ios/Podfile.properties.json');
+  const podfile = readFileSync(resolve(repoRoot, 'ios/Podfile'), 'utf8');
+  const projectPbxproj = readFileSync(
+    resolve(repoRoot, 'ios/CleverRoutes.xcodeproj/project.pbxproj'),
+    'utf8',
+  );
+  const projectTargets = [...projectPbxproj.matchAll(/IPHONEOS_DEPLOYMENT_TARGET = ([^;]+);/gu)]
+    .map((match) => match[1]);
+
+  assert.equal(podfileProperties['ios.deploymentTarget'], '16.4');
+  assert.equal(podfileProperties['expo.inlineModules.watchedDirectories'], '[]');
+  assert.equal(
+    podfileProperties['expo.inlineModules.xcodeProjectTargets'],
+    '{"mainTarget":"CleverRoutes","targets":[]}',
+  );
+  assert.equal(podfileProperties['expo.camera.barcode-scanner-enabled'], 'false');
+  assert.equal(podfileProperties.newArchEnabled, undefined);
+  assert.equal(podfileProperties['expo.sqlite.useSQLCipher'], 'true');
+  assert.match(podfile, /podfile_properties\['ios\.deploymentTarget'\] \|\| '16\.4'/u);
+  assert.match(podfile, /ENV\['RCT_HERMES_V1_ENABLED'\]/u);
+  assert.match(podfile, /ENV\['EXPO_USE_PRECOMPILED_MODULES'\] \|\|= '1'/u);
+  assert.ok(projectTargets.length > 0);
+  assert.deepEqual([...new Set(projectTargets)], ['16.4']);
+});
+
+test('keeps the MapLibre Swift package attached during CocoaPods installation', () => {
+  const podfile = readFileSync(resolve(repoRoot, 'ios/Podfile'), 'utf8');
+
+  assert.match(podfile, /\$MLRN\.post_install\(installer\)/u);
+});
+
+test('keeps the AppDelegate aligned with the Expo 57 Xcode 26 template', () => {
+  const appDelegate = readFileSync(resolve(repoRoot, 'ios/CleverRoutes/AppDelegate.swift'), 'utf8');
+
+  assert.match(appDelegate, /^internal import Expo$/mu);
+  assert.match(appDelegate, /^@main\nclass AppDelegate: ExpoAppDelegate \{$/mu);
+  assert.doesNotMatch(appDelegate, /bindReactNativeFactory/u);
+  assert.match(appDelegate, /appendingPathComponent\("SQLite", isDirectory: true\)/u);
+  assert.match(appDelegate, /isExcludedFromBackup = true/u);
+});
+
+test('keeps the native iOS app icon synchronized and opaque', () => {
+  const configuredIcon = readFileSync(resolve(repoRoot, 'assets/icon.png'));
+  const nativeIcon = readFileSync(
+    resolve(repoRoot, 'ios/CleverRoutes/Images.xcassets/AppIcon.appiconset/App-Icon-1024x1024@1x.png'),
+  );
+  const digest = (contents: Buffer) => createHash('sha256').update(contents).digest('hex');
+
+  assert.equal(digest(nativeIcon), digest(configuredIcon));
+  assert.equal(nativeIcon.readUInt8(25), 2);
 });
 
 test('native release preflight rejects local Apple team pins in source-controlled iOS project', () => {
@@ -151,9 +358,9 @@ test('native release preflight rejects local Apple team pins in source-controlle
       privacyManifest: '<key>NSPrivacyTracking</key>\n<false/>',
       projectPbxproj: [
         'DEVELOPMENT_TEAM = Y4RMZPJAA7;',
-        'MARKETING_VERSION = 0.1.0;',
+        `MARKETING_VERSION = ${input.appConfig.expo?.version};`,
         'CURRENT_PROJECT_VERSION = 1;',
-        'PRODUCT_BUNDLE_IDENTIFIER = com.evns.cleverdriverapp;',
+        'PRODUCT_BUNDLE_IDENTIFIER = com.evnsolution.clever.routes;',
       ].join('\n'),
     },
   });
@@ -181,9 +388,9 @@ test('native release preflight rejects unapproved generated iOS permission copy'
       ].join('\n'),
       privacyManifest: '<key>NSPrivacyTracking</key>\n<false/>',
       projectPbxproj: [
-        'MARKETING_VERSION = 0.1.0;',
+        `MARKETING_VERSION = ${input.appConfig.expo?.version};`,
         'CURRENT_PROJECT_VERSION = 1;',
-        'PRODUCT_BUNDLE_IDENTIFIER = com.evns.cleverdriverapp;',
+        'PRODUCT_BUNDLE_IDENTIFIER = com.evnsolution.clever.routes;',
       ].join('\n'),
     },
   });

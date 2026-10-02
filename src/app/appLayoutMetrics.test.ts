@@ -1,16 +1,25 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import {
-  ANDROID_SYSTEM_BOTTOM_CLEARANCE,
-  APP_CONTENT_BOTTOM_CLEARANCE,
-  BOTTOM_NAV_MIN_HEIGHT,
+  getBottomChromeOffset,
+  getBottomChromePadding,
 } from './appLayoutMetrics';
 
 describe('app layout metrics', () => {
-  it('keeps scroll content clear of the bottom navigation on Android', () => {
-    assert.equal(BOTTOM_NAV_MIN_HEIGHT, 62);
-    assert.equal(ANDROID_SYSTEM_BOTTOM_CLEARANCE, 24);
-    assert.ok(APP_CONTENT_BOTTOM_CLEARANCE > BOTTOM_NAV_MIN_HEIGHT + ANDROID_SYSTEM_BOTTOM_CLEARANCE);
+  it('uses the real native bottom inset with a small fallback', () => {
+    assert.equal(getBottomChromePadding(0), 8);
+    assert.equal(getBottomChromePadding(47.2), 48);
+    assert.equal(getBottomChromeOffset(47.2, 58), 106);
+  });
+
+  it('uses native insets only where full-screen chrome needs them', () => {
+    const appSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx'), 'utf8');
+
+    assert.match(appSource, /useSafeAreaInsets\(\)/u);
+    assert.doesNotMatch(appSource, /BottomNavigation|getBottomTabPadding|getScrollContentBottomPadding/u);
   });
 });

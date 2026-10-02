@@ -1,7 +1,7 @@
-import { DriverApiHttpError } from '../api/deliveryServer/driverApiError';
+import { DriverApiHttpError, isDriverApiUnauthorizedError } from '../api/deliveryServer/driverApiError';
 import type { DriverRuntimeConfig } from './config/driverRuntimeConfig';
 
-export type AuthPhase = 'route_access' | 'invite_verify';
+export type AuthPhase = 'route_access' | 'invite_verify' | 'pin_login';
 
 export type AuthFailureKind =
   | 'mock_mode'
@@ -24,6 +24,10 @@ export function isStaleClientContractError(error: unknown): boolean {
   );
 }
 
+export function shouldDiscardSavedLoginAfterRefreshFailure(error: unknown): boolean {
+  return isDriverApiUnauthorizedError(error);
+}
+
 function isRequestNotSentError(error: unknown): boolean {
   return (
     error instanceof TypeError &&
@@ -44,18 +48,12 @@ function isNetworkError(error: unknown): boolean {
   );
 }
 
-export function getRuntimeHostLabel(runtimeConfig: DriverRuntimeConfig): string {
-  return runtimeConfig.mode === 'mock'
-    ? 'mock mode (local services)'
-    : `live server ${runtimeConfig.deliveryServerBaseUrl}`;
-}
-
 export function buildAuthFailureMessage(input: {
   runtimeConfig: DriverRuntimeConfig;
   phase: AuthPhase;
   error: unknown;
 }): AuthFailure {
-  const phaseLabel = input.phase === 'invite_verify' ? 'Invite verification' : 'Route access lookup';
+  const phaseLabel = getAuthPhaseLabel(input.phase);
 
   if (input.runtimeConfig.mode === 'mock') {
     return {
@@ -86,6 +84,12 @@ export function buildAuthFailureMessage(input: {
   }
 
   if (input.error instanceof DriverApiHttpError) {
+    if (input.error.status === 401 && input.phase === 'pin_login') {
+      return { kind: 'server_401', message: 'PIN login: phone number or PIN is incorrect.' };
+    }
+    if (input.error.status === 401 && input.phase === 'invite_verify') {
+      return { kind: 'server_401', message: 'Account registration: invite code is invalid or expired.' };
+    }
     return {
       kind: input.error.status === 401 ? 'server_401' : input.error.status === 400 ? 'server_400' : 'server_other_error',
       message: `${phaseLabel}: ${formatDriverApiStatusMessage(input.error.status)}.`,
@@ -98,12 +102,14 @@ export function buildAuthFailureMessage(input: {
   };
 }
 
-export function buildAuthSuccessMessage(input: {
-  runtimeConfig: DriverRuntimeConfig;
-  phase: AuthPhase;
-}): string {
-  const phaseLabel = input.phase === 'invite_verify' ? 'Invite verification' : 'Route access lookup';
-  return `${phaseLabel} succeeded via ${getRuntimeHostLabel(input.runtimeConfig)}.`;
+function getAuthPhaseLabel(phase: AuthPhase): string {
+  if (phase === 'invite_verify') {
+    return 'Account registration';
+  }
+  if (phase === 'pin_login') {
+    return 'PIN login';
+  }
+  return 'Route access lookup';
 }
 
 function formatDriverApiStatusMessage(status: DriverApiHttpError['status']): string {

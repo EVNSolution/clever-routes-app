@@ -1,8 +1,107 @@
-# Clever Driver App UI Design Prompt
+# Design
+
+## Source of truth
+
+- Status: Active
+- Last refreshed: 2026-08-14
+- Primary product surfaces: authentication, My Routes, route session, stop details, completed deliveries, settings
+- Evidence reviewed: `src/app/AppRoot.tsx`, `src/app/routeVisualState.ts`, existing screen contracts in this file
+
+## Brand
+
+- Personality: operational, calm, direct, trustworthy
+- Trust signals: explicit server state, preserved delivery evidence, clear recovery actions
+- Avoid: decorative noise, unexplained disappearance of data, alarmist copy, ambiguous state changes
+
+## Product goals
+
+- Goals: fast route scanning, confident stop and payment-collection actions, durable offline operation, visible recovery from server conflicts
+- Non-goals: exposing internal API terminology or asking drivers to diagnose synchronization internals
+- Success signals: a driver can distinguish expired access from a server-ended route and understand whether evidence is preserved
+
+## Personas and jobs
+
+- Primary personas: delivery drivers working one-handed in time-sensitive conditions
+- User jobs: start or continue a route, navigate, record arrival and outcome, understand sync state
+- Key contexts of use: unreliable networks, background operation, route reassignment while the app is active
+
+## Information architecture
+
+- Primary navigation: My Routes, Completed Deliveries, Settings
+- Core routes/screens: route list, route session, stop details, proof capture
+- Content hierarchy: current route and action first, route status second, recovery and permission blockers before optional detail
+
+## Design principles
+
+- Make server truth explicit without discarding local evidence.
+- Keep recovery actions singular and concrete.
+- Tradeoffs: persistent operational warnings take priority over compactness until reconciliation is resolved.
+
+## Visual language
+
+- Color: blue for primary action, green for current/success, warm amber for recoverable operational blockers
+- Typography: concise high-contrast titles with short supporting copy
+- Spacing/layout rhythm: compact mobile rows and touch-safe controls
+- Shape/radius/elevation: 24px dialog cards, 14px action radii, restrained shadow; no device-owned alert styling
+- Motion: existing restrained interaction feedback only
+- Imagery/iconography: text-first operational UI; use existing icon conventions only
+
+## Components
+
+- Existing components to reuse: route cards, warning banners, primary and secondary buttons, status chips
+- New/changed components: one app-owned operational dialog for confirmations and disclosures; persistent route reconciliation warning on My Routes; shared stop payment summary for Stop Detail and foreground notifications
+- Variants and states: primary action, destructive action, cancel action, 401 access refresh, 409 route reconciliation, offline retryable, blocked evidence
+- Token/component ownership: `OperationalDialog.tsx`, `AppRoot.tsx`, and existing route visual-state constants
+
+## Accessibility
+
+- Target standard: touch-safe mobile controls with readable contrast
+- Keyboard/focus behavior: dialog focus stays inside the modal; Android Back and backdrop taps dismiss only cancelable dialogs
+- Contrast/readability: warning text and action must remain legible without relying on color alone
+- Screen-reader semantics: terminal recovery warning uses alert semantics and a named refresh action
+- Reduced motion and sensory considerations: no animated urgency for reconciliation
+
+## Responsive behavior
+
+- Supported breakpoints/devices: Android and iOS phone layouts
+- Layout adaptations: recovery copy may wrap while the action remains touchable
+- Touch/hover differences: touch-only primary interaction
+
+## Interaction states
+
+- Loading: show route retrieval without implying logout
+- Empty: distinguish no assignments from failed retrieval
+- Error: keep 401 access recovery separate from 409 route reconciliation
+- Success: remove recovery state only when its preserved evidence is explicitly reconciled
+- Disabled: prevent route-start actions when required permissions or active-route constraints fail
+- Offline/slow network: retry normal queue entries; never auto-retry or silently age-delete 409-blocked stop outcomes and proof
+- Confirmation: primary action first, destructive action second, cancel action last; every action remains at least 54px tall
+
+## Content voice
+
+- Tone: factual, concise, non-accusatory
+- Terminology: “Driver access expired” for 401; “Route ended or released on server” and “preserved for reconciliation” for 409
+- Microcopy rules: state what happened, what was preserved, and the single next action
+
+## Implementation constraints
+
+- Framework/styling system: React Native and the existing `StyleSheet` patterns
+- Design-token constraints: reuse existing palette and surface conventions
+- Performance constraints: no polling or animation for reconciliation status
+- Compatibility constraints: background GPS must stop immediately on terminal route state; operational dialogs must not depend on iOS/Android manufacturer alert layouts
+- Test/screenshot expectations: source behavior tests plus queue and lifecycle tests; connected-device checks cover dialog layout, action order, Back dismissal, and destructive flow
+
+## Open questions
+
+- [ ] Define the later administrator reconciliation workflow and the explicit condition that clears preserved blocked evidence.
+
+---
+
+# CLEVER Routes App UI Design Prompt
 
 ## 0. Global Design Direction
 
-Create a modern, premium mobile UI design system for a Canadian delivery-driver route management app named **Clever Driver**.
+Create a modern, premium mobile UI design system for a Canadian delivery-driver route management app named **CLEVER Routes**.
 
 The app should feel operational, reliable, clean, and driver-friendly.
 The interface must prioritize clarity, fast scanning, and confident action-taking while driving or handling deliveries.
@@ -181,6 +280,12 @@ Gap between grouped sections:
 
 The design should feel airy but not sparse.
 Every screen should be optimized for one-handed mobile use.
+
+Android system navigation clearance:
+
+- App-owned bottom chrome, bottom sheets, and floating bottom panels must not be hidden behind Android 3-button/system navigation.
+- Bottom-attached surfaces should reserve explicit Android bottom clearance in addition to their visual padding.
+- This applies to custom sheets and app navigation; native camera/library pickers remain OS-owned.
 
 ---
 
@@ -1961,3 +2066,172 @@ Both images must:
 - Avoid captions outside the devices
 - Feel like one unified production app
 ```
+
+---
+
+# Current Product Override — My Routes Shell (2026-07-15)
+
+This section supersedes older navigation, icon, and route-list guidance where they conflict.
+
+## Information Architecture
+
+- Remove the persistent bottom navigation and the Home, Routes, Earnings, and Profile tab shell.
+- Use `My Routes` as the first signed-in screen.
+- Keep Settings reachable from one gear-only button in the upper-right corner.
+- The Settings gear and native pull-to-refresh activity indicator are the explicit user-approved exceptions to the older no-icon direction; the gear must expose the accessibility label `Settings`.
+
+## My Routes Layout
+
+- Keep the page title and route content visually close; do not place the title inside a separate dashboard card.
+- Remove current-status summaries and status-filter tabs from the page header.
+- Render every authoritative active route assignment as its own card in one vertical scroll list.
+- Never hide additional route assignments behind selected-only rendering, a carousel, horizontal paging, or `Previous Route` / `Next Route` controls.
+- Place an in-progress route first. Keep the remaining ready routes in nearest delivery-date order, preserving server order when dates are equal.
+- Do not remove an operational route from My Routes only because its delivery date has passed; the server assignment and execution status remain authoritative.
+- Start each assigned-route card collapsed.
+- Remove the circular route-initial badge so the route title begins at the card content edge.
+- Keep the company/shop identity visible in the collapsed card so routes with repeated names remain distinguishable. Place the compact company and route title, date, status pill, and explicit expand/collapse control together in one horizontal card-header row.
+- Keep the primary route actions outside the collapsible details so they remain visible while the card is collapsed.
+- For a ready route, place two equal-width actions in one horizontal row and label them `Start` and `Detail`.
+- For an in-progress route, keep `Continue` and `Delete` visible in the same equal-width horizontal action structure.
+- Treat `Delete` as deleting only the driver's active session. It stops tracking, releases the session, and returns the still-assigned route to `Ready`; it must not complete the route or remove its Store assignment.
+- When another route is in progress, keep every ready route visible and its `Detail` action available, but disable `Start` until the active route is finished or deleted.
+- Expansion affects only that card and reveals Region, Stops, Estimated Distance, and Estimated Time without repeating the delivery date.
+- At most one route card may be expanded at a time; expanding another card collapses the previous card without removing either card from the list.
+- When no route is assigned, show:
+  - Title: `No routes assigned yet`
+  - Body: `When dispatch assigns you a route, it’ll appear here.`
+
+## Refresh Behavior
+
+- Pulling from the top translates the entire My Routes surface downward and reveals a refresh area behind it.
+- Position the revealed refresh content below the device top safe-area inset, then center it visually in the whitespace between the system status area and the translated My Routes content.
+- Keep `Last updated YYYY.MM.DD HH:mm:ss` horizontally centered and never render it as persistent footer content.
+- Place a native loading indicator immediately to the right of the centered timestamp. Do not use a Unicode refresh glyph or a hand-authored rotation loop.
+- Release after the threshold to refresh; do not add a separate refresh button.
+- After authoritative route data is processed, update the revealed area with the latest local time.
+- If the server removes an assignment, remove it from My Routes while keeping the driver account signed in.
+
+## Background Location Readiness (2026-07-22)
+
+- Show a compact warning directly below the `My Routes` header when background location is not granted.
+- Use `Allow all the time required` as the warning title, explain that background location is needed before route start, and provide one `Open Settings` action.
+- Do not dim, cover, or disable the route list. Drivers must still be able to expand cards and open `Detail` while permission is missing.
+- A server-authoritative `IN_PROGRESS` route must remain visually `In Progress` and keep the `Continue` label even when local GPS restoration is blocked by missing permission. Never regress it to `Ready` or `Start`.
+- Disable `Start` for ready routes until background location is granted. Disable `Continue` until background permission is granted and that route's local tracking session is restored.
+- Keep route details available while permission is missing. Do not let permission state rewrite the server route lifecycle.
+- Recheck permission when My Routes opens and whenever the app returns to the foreground so the warning disappears immediately after the setting changes.
+- Keep denial non-fatal. Returning without granting permission must leave the driver signed in on My Routes.
+
+## Route Session Flat Layout (2026-07-20)
+
+- Use the server-provided route name as the page title; do not show the generic `Route Session` title.
+- Place one centered metadata row immediately below the title with separate `<n> Stops` and `Duration <n> hr <n> min` text elements. Use spacing instead of a visible divider character, and use a darker neutral color than secondary description text.
+- Place the interactive route map immediately below that metadata line without a `Route Preview` title, helper text, card, or tap-only wrapper.
+- Let the native map renderer use its adaptive device frame rate; do not impose a fixed low frame-rate cap.
+- Keep custom route overlays lean: one primary route line, one optional progress line, one marker circle layer, and one marker label layer. Do not add separate route-shadow or marker-halo layers.
+- Emphasize the current stop with the largest orange marker, keep the depot strongly identifiable in green, render upcoming stops as smaller blue markers, and mute completed stops with lower opacity. Use white marker outlines and centered numeric labels for legibility instead of complex pin assets.
+- Remove page-level horizontal padding from Route Session so the map and section boundaries reach the screen edges.
+- Do not wrap the Route Session header, map, current task, route sequence, guidance, notes, or actions in rounded cards or elevated containers.
+- Render those components as a direct vertical sequence. Text-heavy sections may retain internal reading padding and thin separators, but not outer margins, rounded shells, or shadows.
+- Keep `View Live` as the dedicated live GPS surface while the inline Route Session map remains directly gesture-operable.
+
+## Route Session Stops and Inventory (2026-08-06)
+
+- Use one equal-width `Stops | Inventory` tab control inside the existing flat Route Session section. `Stops` is selected by default.
+- Keep each tab at least 48 px high so the control remains touch-safe without adding a tall card or extra section heading.
+- Preserve the existing Stops row positions and full-width Current background when switching back from Inventory.
+- Show Inventory as a read-only loading manifest grouped in route/stop order. Keep the order name and stop number together so duplicate products at different deliveries do not lose their destination context.
+- Show the total assigned item quantity above the manifest. Use singular `Item` only when the total is one.
+- Keep inventory item rows at a 48 px minimum height with a fixed quantity column and wrapping product content. Long names and options may grow the row instead of clipping.
+- When the route has no items, keep the tab control visible and show a compact truthful empty state instead of collapsing the section.
+
+## Current Task Actions
+
+- Before a route starts, let one full-width `Start Session` primary button occupy the task area without a separate pickup task card. Starting the session transitions directly to Stop 1.
+- After the session starts, replace the generic `Current Task` heading with the active work name, such as `Stop 1`.
+- Place the stop address and its Payment status pill together directly below the work name. Keep every normalized payment state visible, including paid states.
+- Keep the displayed task address search-ready and compact: show the primary street address plus city only when the city is not already part of the street text. Omit unit/detail, province, postal code, and country from this task summary.
+- Place exactly two compact, equal-width actions in one horizontal row below the stop metadata.
+- Use `Arrive` as the left primary action for the current delivery stop.
+- Use `Navigate` as the right secondary action for opening route directions from the driver's current location.
+- Do not show `View Stop Details` in Current Task or duplicate the navigation action as `Open in Map` below an active session.
+- Treat Route Sequence rows as navigation into stop information only. Opening a non-current stop must not change the current task, show an order warning, update ETA, or notify the administrator.
+- Let an incomplete non-current stop expose `Arrive` inside Stop Details while the route is active. If arriving there would skip an incomplete planned stop, show the order-change confirmation only after `Arrive` is pressed.
+- After the driver confirms an out-of-order arrival, make that stop current, submit its `STOP_ARRIVED` event to the server, and let the server update ETA and administrator notification state. Cancelling the confirmation must leave the current task unchanged.
+
+## Stop Payment Context (2026-07-27)
+
+- Treat the server-provided normalized payment status as authoritative for whether payment is confirmed, collectible, pending, or exceptional.
+- Show payment method, exact order total with ISO currency, status, and short operational guidance together in Stop Detail.
+- Keep the Payment section flat and divided like the rest of Stop Detail. Do not introduce a payment card or decorative icon.
+- For cash collection, display the exact server total prominently. If amount or currency is unavailable, show `Amount unavailable` and explicitly tell the driver not to request cash until dispatch supplies the exact total.
+- For eTransfer and other transfer methods, show whether payment is confirmed or pending. A pending transfer must not be presented as paid.
+- Add the same method, status, and total to both compact and expanded foreground next-stop notifications.
+- Use comma-separated compact notification copy. Do not use middle-dot separators.
+- Never calculate an order total from item rows in the Driver app and never let the Driver app mutate payment status.
+
+## Stop Detail Customer Contact Shortcuts (2026-08-05)
+
+- Keep recipient name and phone number together in a dedicated `Customer` section in Stop Detail.
+- Place compact Call and Message icon actions beside that customer information. They are contact shortcuts, not primary delivery workflow buttons.
+- Keep `Arrive` and `Navigate` as the separate delivery action row; do not add Call or Message to that row.
+- Use the authoritative stop phone number for both system handoffs. Call opens the phone app and Message opens the system SMS composer; the app must not send a message automatically.
+- Show contact icons only when the stop has a non-empty phone number. Keep the informational `Phone unavailable` state when it does not.
+- Give each icon an explicit customer-specific accessibility label and a 48-by-48 cross-platform touch target.
+- Preserve the contact shortcuts when reviewing a completed stop while continuing to hide progress actions such as `Arrive`.
+
+## Completed Deliveries Current Override (2026-07-22)
+
+- Treat Completed Deliveries as a compact operational record, not a dashboard. This section supersedes the older rounded summary card, pill-filter, and proof-missing guidance for this screen.
+- Keep one centered `Completed Deliveries` header with an explicit Back action. Do not show a decorative or non-functional header action.
+- Show the route name and delivery date directly below the header, followed by one flat summary row for Completed, Delivered, and Issues counts.
+- Use `All`, `Delivered`, and `Issues` as the filters. Each filter must be a real tab with selected accessibility state and must immediately filter the visible rows.
+- Do not use `Proof Missing` as a delivery issue. Delivery photos are optional, so missing photo media must not change the delivery outcome or warning state.
+- Derive completed rows from both locally completed stop ids and server terminal stop statuses. Treat `FAILED`, `SKIPPED`, and `CANCELLED` as Issues; treat locally completed stops and `DELIVERED` as Delivered.
+- Render the stop list as one flat divided list without a rounded outer card, shadows, large icons, or separate `View` controls.
+- Make the entire stop row the touch target. A row opens that stop's read-only detail and Back returns to Completed Deliveries.
+- In completed-stop detail, keep order, recipient, address, items, payment, and customer note visible, but remove active-delivery actions such as `Arrive`.
+- Omit unavailable completion time instead of displaying placeholder copy such as `Completed Time`.
+
+## Constraints
+
+- Retain phone/PIN authentication, route details, active delivery, consent, proof, and server assignment semantics.
+- Reuse the existing React Native `StyleSheet`, route card, and controls. Use Expo-compatible React Native Gesture Handler and Reanimated primitives for the custom pull interaction, spring settling, and reduced-motion behavior; use React Native `ActivityIndicator` for the loading icon.
+- Treat this section as the current source of truth for the signed-in shell.
+
+## Global Notifications
+
+- Render transient app messages as a compact snackbar 16px above the device bottom safe-area inset so page headers and Settings remain unobstructed.
+- Never expose API origins, endpoint names, request/response diagnostics, runtime mode, or refresh-success logs in a user-facing snackbar.
+- Indicate successful route refresh only through the pull-refresh activity state and the updated `Last updated` timestamp. Reserve refresh snackbars for actionable failures.
+- Use an opaque dark-neutral surface, white left-aligned 14px semibold text, 14px corner radius, and a subtle functional shadow.
+- Keep the banner inset 16px from both screen edges and allow up to three text lines.
+- Do not use translucent blue surfaces, blue text, centered copy, or pill-shaped notification containers.
+
+## Settings — Phase 1
+
+- Use a quiet iOS-style inset-grouped list: light neutral page background, small uppercase gray section labels, white rounded groups, and thin inset separators.
+- Keep a centered `Settings` title with a circular icon-only back control. The back control must expose the accessibility label `Back`.
+- Show only settings backed by current app state:
+  - `ACCOUNT`: editable global account name and read-only phone number.
+  - `CONSENT`: privacy and location status as `Allowed` or `Denied`; each row opens the published policy document.
+  - `ABOUT`: CLEVER Routes support link and app version.
+  - `ACCOUNT ACTIONS`: public account-deletion information and the authenticated deletion request.
+  - A standalone destructive `Sign Out` row.
+- Restore the accepted consent state with an authenticated session because that
+  session can only be created after both required login consents are accepted.
+- Keep labels and values terse. Do not append consent versions, middle-dot metadata, or explanatory phrases to rows.
+- Do not use dashboard-card borders, elevated shadows, placeholder panels, or explanatory helper paragraphs on this page.
+- Keep navigation provider choices out of Settings; Android owns the default-handler selection and Settings exposes only its reset action.
+- Open privacy, support, and account-deletion information only at the deployed CLEVER Routes public URLs. Keep the authenticated `Delete Account` action separate from the public explanation link.
+- Do not add diagnostic actions.
+
+## Driver Naming — Phase 2
+
+- Show `Name` in the `ACCOUNT` group and open a dedicated name editor from that row.
+- Load and update the self-chosen name through the phone-account bearer contract at `/driver/account/profile`.
+- Limit the trimmed name to 1–80 characters and keep the server response as the displayed source of truth.
+- Explain only on the editor page that the CLEVER Routes account name may differ from store display names.
+- Each Shopify store's driver `displayName` remains store-scoped and independent from the account name and other stores' aliases.
+- Do not copy, backfill, or synchronize Shopify store aliases into the phone-account name.

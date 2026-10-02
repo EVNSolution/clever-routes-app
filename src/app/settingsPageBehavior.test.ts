@@ -1,0 +1,223 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, it } from 'node:test';
+
+const appRootPath = join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx');
+
+function getSettingsPageSource(): string {
+  const source = readFileSync(appRootPath, 'utf8');
+  const start = source.indexOf('function SettingsPage(');
+  const end = source.indexOf('function RouteSessionScreen(', start);
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+
+  return source.slice(start, end);
+}
+
+function getAccountNamePageSource(): string {
+  const source = readFileSync(appRootPath, 'utf8');
+  const start = source.indexOf('function AccountNamePage(');
+  const end = source.indexOf('function RouteSessionScreen(', start);
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+
+  return source.slice(start, end);
+}
+
+describe('Settings page behavior', () => {
+  it('uses an inset-grouped account summary with only working settings', () => {
+    const settingsPage = getSettingsPageSource();
+    const source = readFileSync(appRootPath, 'utf8');
+
+    assert.match(source, /screen === 'settings' \? \([\s\S]*<FixedScreenHeader onBack=\{handleAppBack\} title="Settings"/u);
+    assert.match(settingsPage, />ACCOUNT</u);
+    assert.match(settingsPage, />Name</u);
+    assert.match(settingsPage, /accessibilityLabel="Change Name"/u);
+    assert.match(settingsPage, /name="chevron-forward"/u);
+    assert.match(settingsPage, /onPress=\{onEditName\}/u);
+    assert.match(settingsPage, /isLoadingAccountProfile \? 'Loading…' : accountName \?\? 'Not set'/u);
+    assert.match(settingsPage, />Phone Number</u);
+    assert.match(settingsPage, />CONSENT</u);
+    assert.match(settingsPage, />Privacy</u);
+    assert.match(settingsPage, />Location</u);
+    assert.match(settingsPage, /accessibilityLabel="Read Privacy Policy"/u);
+    assert.match(settingsPage, /accessibilityLabel="Read Location Policy"/u);
+    assert.match(settingsPage, /onPress=\{onOpenConsentDocument\}/u);
+    assert.match(settingsPage, /acceptedPrivacy \? 'Allowed' : 'Denied'/u);
+    assert.match(settingsPage, /acceptedLocation \? 'Allowed' : 'Denied'/u);
+    assert.match(settingsPage, /Platform\.OS === 'android'/u);
+    assert.match(settingsPage, />NAVIGATION</u);
+    assert.match(settingsPage, /convenienceNoticesCopy\.section/u);
+    assert.match(settingsPage, /accessibilityLabel=\{convenienceNoticesCopy\.label\}/u);
+    assert.match(settingsPage, /value=\{convenienceNoticesEnabled\}/u);
+    assert.match(settingsPage, /onValueChange=\{onChangeConvenienceNotices\}/u);
+    assert.match(settingsPage, /accessibilityLabel=\{detailedActiveRouteNotificationCopy\.label\}/u);
+    assert.match(settingsPage, /value=\{detailedActiveRouteNotificationEnabled\}/u);
+    assert.match(settingsPage, /onValueChange=\{onChangeDetailedActiveRouteNotification\}/u);
+    assert.doesNotMatch(settingsPage, /SegmentedTabs|Detailed mode|Compact mode/u);
+    assert.match(settingsPage, /accessibilityLabel="Reset Default Map App"/u);
+    assert.match(settingsPage, />Reset Default Map App</u);
+    assert.match(settingsPage, /onPress=\{onResetDefaultMapApp\}/u);
+    assert.match(settingsPage, />ABOUT</u);
+    assert.match(settingsPage, /accessibilityLabel="Open Support"/u);
+    assert.match(settingsPage, /onPress=\{onOpenSupport\}/u);
+    assert.match(settingsPage, />Version</u);
+    assert.match(settingsPage, />ACCOUNT ACTIONS</u);
+    assert.match(settingsPage, /accessibilityLabel="Read Account Deletion Information"/u);
+    assert.match(settingsPage, /onPress=\{onOpenAccountDeletionInformation\}/u);
+    assert.match(settingsPage, /accessibilityLabel="Delete Account"/u);
+    assert.match(settingsPage, /onPress=\{onRequestAccountDeletion\}/u);
+    assert.match(settingsPage, /accessibilityLabel="Sign Out"/u);
+    assert.match(settingsPage, /onPress=\{onLogout\}/u);
+
+    assert.doesNotMatch(settingsPage, /Profile editing|Display Name|Store Name/u);
+    assert.doesNotMatch(settingsPage, /STOP NAVIGATION APP|Google Maps|Waze/u);
+    assert.doesNotMatch(settingsPage, /navigationProvider|onChangeNavigationProvider/u);
+    assert.doesNotMatch(settingsPage, /Logout and reset this device/u);
+    assert.doesNotMatch(settingsPage, /Needs Review|CONSENT_COPY_VERSIONS|Allowed \u00b7|Denied \u00b7/u);
+  });
+
+  it('suppresses only optional nearby-stop reminders when the preference is disabled', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const locationObserver = source.slice(
+      source.indexOf('registerContinuousLocationTaskObserver(async'),
+      source.indexOf('return () => registerContinuousLocationTaskObserver(null)', source.indexOf('registerContinuousLocationTaskObserver(async')),
+    );
+
+    assert.match(source, /createExpoConvenienceNoticesStore/u);
+    assert.match(source, /convenienceNoticesStore\.load\(\)\.then\(\(enabled\) => \{[\s\S]*setConvenienceNoticesEnabled\(enabled\)/u);
+    assert.match(locationObserver, /convenienceNoticesEnabled/u);
+    assert.match(locationObserver, /scheduleStopArrivalNotification/u);
+    assert.doesNotMatch(locationObserver, /pendingDriverRouteNotification/u);
+  });
+
+  it('persists one foreground-notification detail switch and applies it to every live notification update', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+
+    assert.match(source, /createExpoDetailedActiveRouteNotificationStore/u);
+    assert.match(source, /detailedActiveRouteNotificationStore\.load\(\)\.then\(\(enabled\) => \{[\s\S]*setDetailedActiveRouteNotificationEnabled\(enabled\)/u);
+    assert.match(source, /function handleChangeDetailedActiveRouteNotification\(enabled: boolean\): void/u);
+    assert.equal((source.match(/detailed: detailedActiveRouteNotificationEnabled/g) ?? []).length, 4);
+  });
+
+  it('keeps provider-specific choices out of Settings while Android owns selection', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const settingsPage = getSettingsPageSource();
+
+    assert.doesNotMatch(source, /NavigationProvider|navigationPreference|navigationProvider/u);
+    assert.doesNotMatch(source, /createExpoNavigationPreferenceStore/u);
+    assert.doesNotMatch(settingsPage, /STOP NAVIGATION APP|Google Maps|Waze/u);
+    assert.match(source, /const stopNavigationLinking = useMemo\(\(\) => createExpoStopNavigationLinking\(\), \[\]\)/u);
+    assert.match(source, /resetExpoDefaultMapApp/u);
+    assert.match(source, /function handleResetDefaultMapApp\(\): void/u);
+    assert.match(source, /resetExpoDefaultMapApp\(\)\s*\.then/u);
+    assert.match(source, /Default map app reset\. Choose one the next time you navigate\./u);
+    assert.match(source, /openStopNavigation\(\{[\s\S]*linking: stopNavigationLinking,[\s\S]*platform: Platform\.OS,[\s\S]*stop,[\s\S]*\}\)/u);
+  });
+
+  it('opens the published policy and restores consent for an authenticated session', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+
+    assert.match(
+      source,
+      /ROUTES_APP_PRIVACY_URL = 'https:\/\/clever-route-api\.cleversystem\.ai\/routes-app\/privacy'/u,
+    );
+    assert.match(
+      source,
+      /ROUTES_APP_SUPPORT_URL = 'https:\/\/clever-route-api\.cleversystem\.ai\/routes-app\/support'/u,
+    );
+    assert.match(
+      source,
+      /ROUTES_APP_ACCOUNT_DELETION_URL = 'https:\/\/clever-route-api\.cleversystem\.ai\/routes-app\/account-deletion'/u,
+    );
+    assert.match(source, /Linking\.openURL\(ROUTES_APP_PRIVACY_URL\)/u);
+    assert.match(source, /Linking\.openURL\(ROUTES_APP_SUPPORT_URL\)/u);
+    assert.match(source, /Linking\.openURL\(ROUTES_APP_ACCOUNT_DELETION_URL\)/u);
+    assert.match(
+      source,
+      /setAcceptedPrivacy\(true\);\s+setAcceptedLocation\(true\);\s+setScreen\('mainTabs'\);\s+setIsDriverRestoreComplete\(true\);\s+void handleLoginAndLoadRoutes/u,
+    );
+  });
+
+  it('uses the Android system photo picker without requesting broad media access', () => {
+    const photoCaptureSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../platform/expo/camera/expoProofPhotoCaptureService.ts'),
+      'utf8',
+    );
+
+    assert.match(
+      photoCaptureSource,
+      /source === 'library' && Platform\.OS === 'android'\) \{\s+return 'granted';/u,
+    );
+    assert.match(photoCaptureSource, /ImagePicker\.launchImageLibraryAsync/u);
+  });
+
+  it('edits the global CLEVER Routes account name on a dedicated page', () => {
+    const accountNamePage = getAccountNamePageSource();
+    const source = readFileSync(appRootPath, 'utf8');
+
+    assert.match(source, /screen === 'accountName' \? \([\s\S]*title="Name"/u);
+    assert.match(accountNamePage, /label="Name"/u);
+    assert.match(accountNamePage, /maxLength=\{80\}/u);
+    assert.match(accountNamePage, /autoCapitalize="words"/u);
+    assert.match(accountNamePage, /placeholder="Your name"/u);
+    assert.match(accountNamePage, /This is your name in CLEVER Routes\. Store display names can be different\./u);
+    assert.match(accountNamePage, /label="Save"/u);
+    assert.match(accountNamePage, /onPress=\{onSave\}/u);
+    assert.match(source, /driverAuthService\.getAccountProfile/u);
+    assert.match(source, /driverAuthService\.updateAccountProfile/u);
+    assert.match(source, /const accountAccess = await getActiveAccountAccess\(\)/u);
+  });
+
+  it('does not let a completed name save override Back navigation', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const saveStart = source.indexOf('async function handleSaveAccountName()');
+    const saveEnd = source.indexOf('\n\n  const refreshRouteAccessLookupForSubmission', saveStart);
+    const saveSource = source.slice(saveStart, saveEnd);
+
+    assert.notEqual(saveStart, -1);
+    assert.notEqual(saveEnd, -1);
+    assert.match(saveSource, /const requestScreen = screenRef\.current/u);
+    assert.match(saveSource, /if \(screenRef\.current === requestScreen\) \{[\s\S]*setScreen\('settings'\);[\s\S]*\}/u);
+  });
+
+  it('requires confirmation and preserves unsynced delivery evidence before requesting deletion', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const handlerStart = source.indexOf('function handleRequestAccountDeletion()');
+    const handlerEnd = source.indexOf('\n\n  const refreshRouteAccessLookupForSubmission', handlerStart);
+    const handlerSource = source.slice(handlerStart, handlerEnd);
+
+    assert.notEqual(handlerStart, -1);
+    assert.notEqual(handlerEnd, -1);
+    assert.match(handlerSource, /showOperationalDialog\(\s*'Delete CLEVER Routes account\?'/u);
+    assert.match(handlerSource, /style: 'destructive'/u);
+    assert.match(handlerSource, /getOfflineSubmissionQueueSummary\(queue\)/u);
+    assert.match(handlerSource, /queueSummary\.totalCount > 0/u);
+    assert.match(handlerSource, /driverAuthService\.requestAccountDeletion/u);
+    assert.match(handlerSource, /queue\.completeAccountDeletionAfterServerAudit\(\)/u);
+    assert.match(handlerSource, /await waitForOfflineQueuePersistence\(queue\)/u);
+    assert.match(handlerSource, /await handleLogout\(\)/u);
+    assert.match(handlerSource, /isDriverAccountDeletionActiveRouteError/u);
+  });
+
+  it('uses quiet grouped-list styling instead of dashboard cards', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const settingsStyles = source.slice(
+      source.indexOf('settingsScreen:'),
+      source.indexOf('summaryCard:'),
+    );
+
+    assert.doesNotMatch(settingsStyles, /settingsHeader:|settingsBackButton:/u);
+    assert.match(settingsStyles, /settingsSectionLabel:/u);
+    assert.match(settingsStyles, /settingsGroup:/u);
+    assert.match(settingsStyles, /settingsRow:/u);
+    assert.match(settingsStyles, /settingsRowSeparated:/u);
+    assert.match(settingsStyles, /settingsDeleteAccountText:/u);
+    assert.match(settingsStyles, /settingsSignOutText:/u);
+    assert.doesNotMatch(settingsStyles, /\.\.\.shadow/u);
+  });
+});

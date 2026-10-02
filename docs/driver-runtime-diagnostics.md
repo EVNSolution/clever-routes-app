@@ -1,0 +1,303 @@
+# Driver runtime diagnostics 계약
+
+앱 이슈: `EVNSolution/clever-routes-app#292`
+
+변경 추적: `EVNSolution/clever-change-control#307`
+
+이 문서는 CLEVER Routes 앱과 서버의 진단 수신·판정 계약을 정의한다. 서버 PR #472의 운영 커밋 `675f8d24514bcafbac2e105269de86658c6b512e`는 수신·관리자 조회 API, 권한 검사, 멱등 저장과 30일 보관을 구현했다. 운영 인스턴스 revision과 이미지 digest를 읽기 전용으로 대조했다. 이 서버 증거는 앱 실기기 검증이나 스토어 제출을 대신하지 않는다. `src/app/driverDiagnosticReceiverFixture.ts`는 앱 계약 검증용 mock이다.
+
+## 목적과 증거 경계
+
+서버는 장애 시 다음 질문에 답할 수 있어야 한다.
+
+1. 앱은 통신 중이지만 GPS 수집이 멈췄는가.
+2. GPS callback과 수집은 계속되지만 처리·저장·전송이 멈췄는가.
+3. 인증 또는 경로·세션 상태가 진행을 막았는가.
+4. 서버가 요청을 받았지만 적용하지 못했거나, 적용 후 앱 ACK만 유실됐는가.
+5. 앱 신호가 끊겨 현재 원인을 알 수 없는가.
+
+서버는 관측되지 않은 원인을 추정하지 않는다. 마지막 신호가 오래됐다는 사실만으로 앱 종료, force-stop, 네트워크 단절, 배터리 절전 또는 OS 제한 중 하나를 원인으로 확정하지 않는다. 기기에서 뒤늦게 재생된 과거 기록은 과거 장애 설명에 사용하되 현재 건강 상태를 정상으로 만들지 않는다.
+
+프로토콜 시각은 ISO 8601 UTC 값으로 교환·저장한다. 운영 화면과 장애 보고서에서는 이 시각을 `America/Toronto`로 변환해 표시하며, 화면에 시간대 이름 또는 offset을 함께 표시한다.
+
+## 세션 복구와 배송원 오류 신고
+
+세션 복구 화면의 `Try Again`은 저장된 로그인 읽기, 인증 갱신, 갱신 결과 저장을
+단계별 제한 시간과 단일 진행 작업으로 처리한다. 네트워크 복구와 foreground 복귀도
+같은 진입점을 사용한다. timeout 뒤 native 저장 작업이 아직 끝나지 않았다면 새
+작업을 계속 쌓지 않고 대기 중임을 표시한다. 늦은 갱신 결과의 저장과 확인된 401의
+삭제는 원래 계정·refresh token이 현재 저장값과 일치할 때만 허용한다.
+일시적인 실패는 업무 이벤트·사진을 삭제하지 않는다.
+
+`Report issue`는 복구 요청과 별도로 현재 허용 목록 기반 snapshot을 `USER_REPORT`
+record로 만든다. `diagnosticId`가 보고 번호이며 임의 오류 문자열이나 자유 입력을
+포함하지 않는다. 앱은 같은 복구 화면의 진행 중·접수된 보고를 다시 생성하지 않는다.
+
+- `SAVING`: 암호화 저장 완료를 아직 확인하지 못했다.
+- `QUEUED`: 해당 record의 기기 저장을 확인했으며 서버 접수는 미확인이다. 기존
+  bounded retry와 복구 후 replay를 사용한다.
+- `ACKNOWLEDGED`: 해당 ID가 검증된 서버 응답의 `acceptedDiagnosticIds`에 있다.
+  전송 함수의 boolean이나 queue에서 사라졌다는 사실만으로 접수를 주장하지 않는다.
+- `FAILED`: 기기 저장·보관 한도·계정 변경 또는 해당 ID의 영구 거부를 구분한다.
+
+계정 binding을 증명하지 못하면 보고 불가로 표시한다. 다음 로그인 계정에 신고를
+붙이지 않는다. 인증 갱신이 막혀도 기존 유효 진단 credential을 이용할 수 있으며,
+진단 credential까지 만료됐다면 저장된 신고의 서버 전달은 인증 복구를 기다린다.
+
+서버는 `USER_REPORT`를 먼저 지원해야 한다. 기존 endpoint와 DB를 재사용하며,
+관리자는 `routePlanId`와 `diagnosticId`를 함께 지정해 최근 25건 밖의 보고도 찾는다.
+활성 경로가 없는 보고는 서버의 계정 전용 기록이다. tenant 관리자 API에 노출하지
+않고 권한 있는 서버 운영 담당자만 통제된 직접 조회 절차로 보고 번호를 찾을 수 있다.
+`서버 접수 완료`는 배차 담당자 알림이나 사람의 확인을 의미하지 않는다. 이 기능은
+알림 발송이나 배송 상태 변경을 수행하지 않는다.
+
+## 기존 heartbeat와 독립 진단 채널
+
+기존 `PUT /driver/sync-health` heartbeat는 route bearer, 업무 queue, route session과 연결된 기존 계약으로 유지한다. 신규 진단 채널은 같은 `sync-health` 영역에 속하지만 다음 이유로 별도 endpoint, credential, SQLCipher DB를 사용한다.
+
+- 일반 route/account 인증 갱신이 멈춘 동안에도 이미 발급된 진단 credential로 오류를 보낸다.
+- 업무 이벤트/GPS queue 또는 업무 evidence DB의 저장 지연이 진단 저장과 전송을 막지 않는다.
+- 진단 전송 실패가 배송 이벤트 순서나 GPS 처리 결과를 변경하지 않는다.
+- 서버는 기존 heartbeat 채택률과 신규 진단 채택률을 별도로 확인할 수 있다.
+
+## 인증 계약
+
+### `POST /driver/sync-health/registrations`
+
+앱은 유효한 driver account bearer가 있을 때 진단용 쓰기 credential을 등록한다.
+
+요청:
+
+```json
+{
+  "schemaVersion": 1,
+  "deviceInstanceHash": "lowercase device hash"
+}
+```
+
+응답:
+
+```json
+{
+  "token": "opaque diagnostic write token",
+  "expiresAt": "2026-10-02T14:00:00.000Z"
+}
+```
+
+서버 요구사항:
+
+- token은 driver account와 `deviceInstanceHash`에 묶는다. tenant·driver는 각 record/live context의 실제 route 소유 관계를 검증하여 서버가 도출한다. route가 없는 기록은 계정 범위에만 보존하고 tenant 관리자 조회에 노출하지 않는다.
+- 진단 token은 diagnostics 수신 전용이다. 등록·갱신·철회에는 유효한 account bearer가 필요하다. 배송 조회·변경, 경로 takeover, 고객정보 조회 권한을 주지 않는다.
+- 최대 수명은 24시간이다. 앱은 만료까지 30초 이하이거나 수명이 24시간을 넘는 credential을 사용하지 않는다.
+- 로그아웃·계정 폐기·기기 credential 폐기 시 서버에서 철회할 수 있는 식별자와 감사 기록을 둔다.
+- account bearer 또는 진단 token을 진단 payload, 일반 로그, 오류 문자열에 복사하지 않는다.
+
+앱은 진단 credential을 계정 hash별 SecureStore key에 저장한다. 계정 hash는 기기 내부 partition key이며 registration/diagnostics body에 보내지 않는다.
+
+### `DELETE /driver/sync-health/registrations`
+
+유효한 account bearer와 등록 요청과 같은 body로 해당 계정·기기의 진단 credential을 철회한다. 명시적인 로그아웃에서는 마지막 진단 flush 후 제한 시간 내 철회를 시도하고 로컬 진단 자격을 정리한다. 철회 실패가 로그아웃을 무기한 막지 않는다. 오프라인에서는 서버 철회 완료를 주장하지 않으며 서버의 최대 24시간 만료 제한이 남는다. 일시적인 인증 만료·업무 인증 clear·새 로그인 분리는 서버 DELETE를 호출하지 않는다. 배송 이벤트·사진은 진단 정리 대상이 아니다.
+
+철회 요청의 즉시 실행·5초 timeout·AbortSignal과 새 로그인 세대 보호는 앱 테스트로 검증한다. 실제 기기 철회 결과는 별도의 릴리스 증거로 확인한다.
+
+### `POST /driver/sync-health/diagnostics`
+
+`Authorization: Bearer <diagnostic write token>`과 `Cache-Control: no-store`를 사용한다. 서버는 인증에 성공한 요청의 수신 시각을 서버 clock으로 별도 기록한 뒤 payload 검증·적용 결과를 기록한다.
+
+성공 응답:
+
+```json
+{
+  "acceptedDiagnosticIds": ["accepted record UUID"],
+  "rejectedDiagnostics": [{"diagnosticId": "rejected record UUID", "code": "ROUTE_ACCESS_REVOKED"}],
+  "serverReceivedAt": "2026-10-02T14:00:05.000Z"
+}
+```
+
+- `diagnosticId`는 계정·기기 범위에서 멱등 처리한다. 같은 ID와 같은 payload 재전송은 중복 적용하지 않고 같은 acceptance를 반환한다.
+- 같은 ID의 다른 payload는 `DIAGNOSTIC_ID_CONFLICT`로 거부한다. 영구 거부 코드는 `INVALID_RECORD`, `DEVICE_MISMATCH`, `ROUTE_ACCESS_REVOKED`, `DIAGNOSTIC_ID_CONFLICT` 네 가지다. 앱은 해당 진단 row를 제한된 암호화 격리 저장소로 이동하여 재전송 batch를 막지 않게 한다. 업무 queue는 변경하지 않는다.
+- 응답의 ID는 보낸 batch에 속하고 중복·accepted/rejected 중첩이 없어야 한다. 알 수 없는 코드·잘못된 응답은 protocol 실패로 취급하여 pending 기록을 보존한다. 격리와 재시작 검증은 앱 릴리스 증거로 별도 확인한다.
+- `batchId`도 요청 추적과 응답 유실 대조에 보존한다.
+- `acceptedDiagnosticIds`에는 실제로 영속 수락한 ID만 넣는다. 앱은 요청 batch에 없던 ID를 ACK로 소비하지 않는다.
+- 인증은 됐지만 JSON/schema/영속화/판정 적용에 실패한 요청도 `lastContactAt`과 ingestion failure를 구분해 남긴다. 이를 정상 수락으로 표시하지 않는다.
+
+## envelope v1
+
+앱의 `DriverDiagnosticEnvelope`는 다음 구조다.
+
+```ts
+type DriverDiagnosticEnvelope = {
+  schemaVersion: 1;
+  batchId: string;                 // UUID
+  bootId: string;                  // process boot UUID
+  sentAt: string;                  // client send time
+  discardedRecordCount: number;   // retention/coalescing으로 제거된 수
+  liveContext: DriverDiagnosticContext;
+  liveSnapshot: DriverDiagnosticSnapshot;
+  records: DriverDiagnosticRecord[];
+};
+```
+
+한 batch는 최대 50개 record 또는 직렬화 기준 64 KiB다. `records`는 오프라인·오류·상태 변경 이력이고 `liveSnapshot`은 전송 직전 현재 투영이다. 서버는 오래된 record의 `observedAt`과 현재 snapshot의 `snapshotObservedAt`을 혼동하지 않는다.
+
+### context
+
+```ts
+type DriverDiagnosticContext = {
+  appVersion: string;
+  versionCode: number | null;
+  os: 'ANDROID' | 'IOS';
+  osVersion: string;
+  deviceInstanceHash: string;
+  routePlanId: string | null;
+  sessionGeneration: string | null;
+  assignmentGeneration?: string | null;
+};
+```
+
+`routePlanId`는 UUID 또는 null이다. `sessionGeneration`은 canonical decimal, UUID, ISO timestamp 또는 null이며 기존 저장 session identity와 일치해야 한다. `assignmentGeneration`은 canonical decimal string이다. 현재 진단 `sessionGeneration`은 active route session의 `startedAt`(없으면 `updatedAt`)이며, 기존 heartbeat가 자체 생성하는 session generation과 동일한 값이라고 가정하지 않는다. 두 채널은 동일한 canonical `deviceInstanceHash`를 공유한다. 앱 버전 번호는 설치된 binary 식별 단서이며 그 자체로 소스 SHA를 증명하지 않는다.
+
+### snapshot
+
+snapshot은 다음을 포함한다.
+
+- lifecycle: `FOREGROUND | BACKGROUND | INACTIVE | UNKNOWN`
+- network: `ONLINE | OFFLINE | UNKNOWN`
+- 위치 권한: `DENIED | GRANTED_ALWAYS | GRANTED_FOREGROUND | UNKNOWN`
+- 위치 서비스: `DISABLED | ENABLED | UNKNOWN`
+- 위치 task: `ERROR | EXPECTED | STARTED | STOPPED | UNKNOWN`
+- `locationTaskExpected`: 현재 route 상태상 위치 task가 실행돼야 하는지 여부
+- `lastGpsCallbackAt`, `lastGpsCollectedAt`, `lastGpsPersistedAt`
+- `lastGpsSendAttemptAt`, `lastGpsSendAcknowledgedAt`
+- 업무 queue의 `queueDepth`, `oldestQueuedAt`, 계산된 `oldestAgeMs`, `retryCount`, `nextRetryAt`
+- 단계별 stable blocker와 선택적 HTTP status, client event ID, request ID
+
+live snapshot의 blocker는 최근 최대 10개다. 이벤트별 blocker는 `clientEventId`로 구분하므로 다른 이벤트의 성공이 기존 실패를 지우지 않는다. 같은 이벤트의 같은 사유가 반복되면 `since`를 유지하고, 사유·단계가 바뀌면 새 관측 시각부터 표시한다. 전체 오류 이력은 별도 record에 남되 아래 보존 한도가 적용된다.
+
+`snapshotObservedAt`은 snapshot 생성 시각이다. `stateObservedAt`은 lifecycle, network, 위치 권한·서비스·task 각각을 마지막으로 실제 관측한 시각이다. 값이 `UNKNOWN`이거나 관측이 없으면 해당 관측 시각은 null일 수 있다. 업무 queue에도 별도 `observedAt`이 있으므로 오래된 queue projection을 현재 사실로 취급하지 않는다.
+
+### record
+
+```ts
+type DriverDiagnosticRecord = {
+  diagnosticId: string;  // UUID
+  bootId: string;
+  sequence: number;     // 같은 process boot에서 route/계정 rebind를 거쳐도 증가
+  observedAt: string;
+  kind: 'HEARTBEAT' | 'STATE_CHANGE' | 'ERROR';
+  context: DriverDiagnosticContext;
+  snapshot: DriverDiagnosticSnapshot;
+  identifiers?: { clientEventId?: string; requestId?: string };
+};
+```
+
+정상 foreground heartbeat는 약 60초 간격이다. 상태 변경과 오류는 발생 시 immediate 전송을 요청하지만 최소 5초 전송 간격으로 합쳐진다. 전송 timeout 기본값은 10초이며 실패 시 jitter를 포함한 지수 backoff를 사용하고 최대 약 5분으로 제한한다. foreground/online 전환과 유효한 account 인증 복구는 즉시 재시도를 요청한다. 인증 실패로 계정 저장이 정리되는 경우에는 업무 처리를 기다리게 하지 않고 마지막 진단을 최대 15초 동안 전송한 뒤 분리한다. 일반 인증 실패 중에는 유효한 쓰기 전용 진단 credential로 AUTH 상태를 계속 보고할 수 있지만, 신규 계정 로그인과 명시적 clear는 이전 관측 범위를 분리한다.
+
+백그라운드에서는 OS가 일반 JavaScript timer 실행을 보장하지 않는다. 위치 task callback과 실제 상태·오류 관측은 즉시 record를 만들지만, process가 실행되지 않는 시간에 가상의 heartbeat를 만들지 않는다.
+
+## 단계와 stable reason code
+
+blocker 단계는 `AUTH`, `ROUTE`, `LOCATION`, `PROCESSING`, `STORAGE`, `TRANSPORT`다. 서버와 운영 화면은 자유 문자열 대신 아래 stable code와 HTTP status를 사용한다.
+
+- 인증: `AUTH_CREDENTIAL_MISSING`, `AUTH_REFRESH_FAILED`, `AUTH_REFRESH_TIMEOUT`
+- 경로·세션: `ROUTE_MISMATCH`, `SESSION_MISMATCH`, `ROUTE_NOT_IN_PROGRESS`, `ROUTE_ACCESS_REVOKED`
+- 위치: `LOCATION_PERMISSION_DENIED`, `LOCATION_PERMISSION_STATUS_FAILED`, `LOCATION_SERVICES_DISABLED`, `LOCATION_SERVICE_STATUS_FAILED`, `LOCATION_TASK_NOT_STARTED`, `LOCATION_TASK_STATUS_FAILED`, `LOCATION_TASK_ERROR`, `LOCATION_TASK_START_FAILED`, `LOCATION_TASK_STOP_FAILED`, `LOCATION_CALLBACK_STALE`, `LOCATION_SNAPSHOT_FAILED`
+- 처리·저장: `LOCATION_PIPELINE_TIMEOUT`, `LOCATION_PROCESSING_FAILED`, `STORAGE_OPERATION_TIMEOUT`, `STORAGE_READ_FAILED`, `STORAGE_WRITE_FAILED`, `DIAGNOSTIC_STORAGE_FAILED`
+- 전송: `NETWORK_OFFLINE`, `NETWORK_REQUEST_FAILED`, `HTTP_TIMEOUT`, `HTTP_UNAUTHORIZED`, `HTTP_FORBIDDEN`, `HTTP_RATE_LIMITED`, `HTTP_CLIENT_ERROR`, `HTTP_SERVER_ERROR`, `HTTP_INVALID_RESPONSE`, `REQUEST_ABORTED`, `OPERATION_TIMEOUT`
+
+서버는 알 수 없는 code를 임의 의미로 바꾸지 않고 계약 버전 불일치로 분리한다. 앱은 HTTP response body, URL query, JavaScript error message를 blocker reason으로 전송하지 않는다.
+`STORAGE_READ_FAILED`는 기존 상태 조회 실패, `STORAGE_WRITE_FAILED`는 갱신·삭제 실패를 뜻한다. 저장소를 열기 전에는 계정 소유권을 확정할 수 없으므로 open 실패를 임의 계정의 read/write 실패로 기록하지 않는다.
+완료 보조 저장 작업의 `clientEventId`는 호출마다 새 UUID를 붙인 `completion-assistance-read:<uuid>`, `completion-assistance-write:<uuid>`, `completion-assistance-remove:<uuid>` 형식이다. live recovery는 같은 접두사의 종료된 실패만 해제하며, 다른 업무 저장 실패나 아직 종료되지 않은 watchdog 작업은 해제하지 않는다.
+
+## 기기 저장과 replay
+
+- 진단 record는 업무 evidence DB와 다른 `clever_driver_diagnostics_v1.db`에 저장한다.
+- DB는 SQLCipher를 요구하며 plaintext fallback이 없다.
+- 256-bit DB key와 진단 credential은 device-only SecureStore에 보관하고, 첫 unlock 이후 백그라운드 task에서 접근할 수 있게 한다.
+- record primary key는 `(accountOwnerHash, diagnosticId)`이며 append는 멱등이다.
+- ACK 삭제는 같은 account partition의 수락된 ID만 대상으로 한다.
+- 보존 한도는 계정별 7일, 최대 1,000건이다. 정상 heartbeat는 최신 상태 중심으로 coalesce하며 제거 수를 `discardedRecordCount`로 알린다.
+- 저장된 payload도 read 시 계약 parser를 다시 통과한다. 손상되거나 허용되지 않은 row는 전송하지 않는다.
+
+진단 DB append/read/remove는 5초로 제한된다. 저장이 실패하거나 늦어도 record는 process memory outbox에 남고 네트워크 전송은 계속된다. 원래 native DB 초기화 Promise가 timeout 뒤에 완료되면 같은 cache가 자동으로 사용 가능해진다. native open 자체가 영구 정지한 경우에는 process 안에서 무제한 재오픈하지 않는다. 이런 경우 네트워크 진단은 저장 timeout blocker를 보낼 수 있지만, process가 종료되기 전 DB에 쓰지 못한 memory record의 재실행 후 replay는 보장할 수 없다. 서버는 이 상황도 관측된 저장 실패 이상으로 확대 해석하지 않는다.
+
+## 서버 판정 순서
+
+서버는 `lastContactAt`, 최신 live snapshot, record history, server event attempt를 서로 다른 증거로 저장한다. 권장 판정 순서는 다음과 같다.
+
+| 순서 | 판정 | 필요한 증거 | 금지되는 추론 |
+| --- | --- | --- | --- |
+| 1 | `SIGNAL_ABSENT_UNKNOWN` | 서버 clock 기준 마지막 authenticated contact가 임계값보다 오래됨 | 앱 종료 또는 네트워크 단절로 원인 확정 |
+| 2 | `UNKNOWN_STALE_EVIDENCE` | 현재 contact는 있으나 `snapshotObservedAt` 또는 핵심 field 관측 시각이 오래됨 | replay record로 현재 HEALTHY 판정 |
+| 3 | `SERVER_RECEIVED_NOT_APPLIED` | 같은 `clientEventId`/request ID의 서버 attempt가 `FAILED` 또는 `REJECTED` | client timeout만으로 서버 미적용 판정 |
+| 4 | `SERVER_APPLIED_CLIENT_ACK_UNKNOWN` | server attempt가 `APPLIED`/`DUPLICATE`이고 client ACK 시각은 없음 | 이벤트 재적용 또는 queue 강제 삭제 |
+| 5 | `AUTH_OR_ROUTE_BLOCKED` | fresh AUTH/ROUTE blocker | 익명 401을 특정 기사 요청으로 단정 |
+| 6 | `GPS_POST_COLLECTION_BLOCKED` | GPS callback/collection은 fresh이고 PROCESSING/STORAGE/TRANSPORT blocker 또는 후속 단계 시각 정지 | 좌표가 없다는 이유로 GPS 미수집 단정 |
+| 7 | `GPS_COLLECTION_STOPPED` | 통신과 snapshot은 fresh, `locationTaskExpected=true`, callback/collection이 임계값보다 오래됨 | `locationTaskExpected`가 false/unknown일 때 장애 판정 |
+| 8 | `HEALTHY` | 위 blocker가 없고 GPS callback·collection·send ACK와 queue 관측이 모두 fresh이며 queue가 비어 있음 | 수집만 성공했거나 단일 heartbeat가 수신됐다는 이유로 전체 정상 판정 |
+
+수집 증거만 있고 저장·전송 완료 증거가 충분하지 않으면 `UNKNOWN_INSUFFICIENT_EVIDENCE`다. 위치 수집을 기대하는 신규 boot/route/session에는 첫 서버 접촉 이후 관측 유예를 적용하며, 확인되지 않은 정지 시작 시각을 만들어내지 않는다. 기기 시각이 허용 오차보다 미래인 경우도 `UNKNOWN_STALE_EVIDENCE`로 분리한다.
+
+임계값은 서버 설정으로 버전 관리한다. 계약 mock은 설명용 기본값으로 contact와 snapshot freshness에 각각 2분을 사용하지만, 이 값은 운영 승인값이 아니다.
+
+모든 authenticated request는 현재 통신 증거이므로 replay 수신도 `lastContactAt`을 서버 수신 시각으로 갱신한다. 다만 replay의 오래된 `observedAt`은 현재 단계 상태를 바꾸지 않는다. 서버는 `serverReceivedAt`, client `sentAt`, snapshot `snapshotObservedAt`, record `observedAt`, 업무 event 발생 시각을 별도 열로 보존한다.
+
+④ 판정에는 서버 자체 attempt가 필요하다. 기존 event attempt가 추적하지 않는 GPS 종류가 있다면 GPS ingestion에도 request/client identity와 수신·적용 결과를 추가해야 한다. 앱 blocker만 보고 서버 미적용을 판정하지 않는다.
+
+## 개인정보와 비밀정보 제한
+
+허용 필드는 위 계약에 열거된 값뿐이다. 다음 값은 진단 payload와 운영 diagnostic log에 포함하지 않는다.
+
+- account/route/diagnostic bearer token과 refresh token
+- PIN, 전화번호, 이메일, 이름, 주소, 배송 메모, 고객·주문 payload
+- 원시 위도·경도, 사진, 서명, proof media URL
+- HTTP request/response body, authorization header, 자유 형식 오류 문자열
+
+route ID, session/assignment generation, client event ID, request ID는 서버 attempt와 대조하기 위한 제한된 식별자로 허용한다. 서버 조회 권한과 보관 정책은 tenant/driver 범위로 제한한다. device hash와 계정 hash를 원래 전화번호로 역조회하는 기능을 만들지 않는다.
+
+## 서버 구현 및 운영 화면 최소 요건
+
+서버는 최소한 다음 값을 조회할 수 있어야 한다.
+
+- tenant/driver/device별 `lastContactAt`, 최신 snapshot 관측 시각, 앱/build, OS
+- 현재 판정, 판정 시작 시각, stable blocker와 stage
+- GPS callback→collection→persistence→send attempt→client ACK 시각
+- queue depth/oldest/retry/next retry와 해당 queue 관측 시각
+- route/session/assignment identity와 client event/request identity
+- server ingestion/apply attempt status와 실패 code
+- 과거 record replay 여부와 live snapshot freshness
+
+운영 화면은 “현재 원인 미상”을 정상적인 판정으로 지원해야 한다. 신호 두절 row에는 `원인: UNKNOWN`, 마지막 서버 수신 Toronto 시각, 마지막 fresh snapshot Toronto 시각을 함께 보여준다.
+
+## 완료 검증
+
+서버 구현과 앱 연동이 완료됐다고 판단하려면 다음 fault를 실제 계약으로 재현한다.
+
+1. 위치 callback 중단과 권한 철회: 통신은 유지되고 `GPS_COLLECTION_STOPPED` 또는 명시적 LOCATION blocker가 시작 시각과 함께 보인다.
+2. GPS 처리·업무 DB 저장 hang/error: callback/collection은 계속되고 `GPS_POST_COLLECTION_BLOCKED`와 STORAGE/PROCESSING reason이 보인다. 진단 POST는 계속된다.
+3. route account refresh hang/401 및 route/session mismatch: 일반 인증 갱신을 기다리지 않고 cached 진단 credential로 AUTH/ROUTE blocker를 보낸다.
+4. 서버 `FAILED/REJECTED`: 같은 client event/request attempt와 조인되어 `SERVER_RECEIVED_NOT_APPLIED`가 된다.
+5. 서버 `APPLIED` 후 HTTP 응답 유실: 같은 ID 재전송은 duplicate이고 `SERVER_APPLIED_CLIENT_ACK_UNKNOWN`과 client queue 잔류를 구분한다.
+6. offline 후 복구: 기기 SQLCipher backlog가 자동 replay되고 과거 record가 최신 건강 상태를 덮지 않는다.
+7. process kill/force-stop: 서버는 임계값 이후 `SIGNAL_ABSENT_UNKNOWN`만 표시하며 원인을 확정하지 않는다.
+8. privacy fixture/fuzz: 토큰, PIN, 고객정보, 좌표, 임의 오류 문자열이 parser·영속 row·서버 저장·운영 로그에 들어가지 않는다.
+9. 계정 전환·로그아웃: 이전 account partition의 record/credential이 새 계정 request에 섞이지 않는다.
+10. background/잠금 상태: 첫 unlock 후 위치 callback record가 별도 진단 DB에 저장되고 복구 시 replay된다. OS가 process 실행을 허용하지 않은 구간은 UNKNOWN으로 남는다.
+
+검증 증거는 앱 단위 테스트, server 계약/통합 테스트, 실제 배포 runtime revision, 실제 기기 fault injection을 구분해 남긴다. 앱 source test만으로 운영 서버 수신이나 실제 기기 background 동작을 완료로 보고하지 않는다.
+
+## 배포 순서
+
+1. 서버 migration, registration/diagnostics endpoint, 멱등 수신, attempt join, 조회 projection을 먼저 구현한다.
+2. 서버 fixture에서 구버전 앱의 기존 heartbeat가 그대로 동작함을 확인한다.
+3. 테스트 tenant/device에서 diagnostic credential 발급과 fault matrix를 검증한다.
+4. 신규 앱 binary를 배포하고 version/build별 수신률과 privacy rejection을 확인한다.
+5. 운영 임계값과 경보를 단계적으로 활성화한다. 초기에는 `UNKNOWN`과 stale evidence 비율을 함께 관찰한다.
+
+서버 endpoint가 배포되기 전에 앱을 활성화하면 진단 전송은 backoff하며 로컬 record를 보존하지만 운영 판정은 생기지 않는다. 따라서 서버 수신·조회 준비가 앱 배포보다 먼저다.
+
+## 서버 구현 인계
+
+대상: `clever-route-server/apps/delivery-api`. 서버 PR #472는 별도 작업에서 배포됐다. 이 앱 릴리스 작업에서 서버 구현·운영 설정은 변경하지 않는다.
+
+배포된 서버는 credential 발급·계정/기기 권한 제한, batch 수신·멱등 영속화, 서버 수신 시각과 단계 관측 시각 분리, request/event join, GPS 수신/적용 증거, UNKNOWN을 포함한 운영 조회를 구현한다. 업무 bearer 실패를 진단 bearer 실패와 혼동하지 않으며, tenant/driver 범위는 account 인증 및 실제 route 소유 관계로 검증한다. 실제 수신기에서 위 fault matrix를 통과하기 전까지 운영 완료로 표시하지 않는다. 배포와 운영 데이터 수정은 별도 작업이다.

@@ -7,7 +7,7 @@ import { createInMemoryOfflineSubmissionQueue } from '../offline/offlineSubmissi
 import { sampleInvitedRouteAccess } from '../routeAccess/routeAccess';
 
 describe('driver session reset cleanup', () => {
-  it('clears secure driver access and pending offline submissions', async () => {
+  it('clears secure driver access but seals ordered evidence for account isolation', async () => {
     const deletedKeys: string[] = [];
     const storage = new Map<string, string>();
     const tokenStore = createDriverAccessTokenStore({
@@ -48,12 +48,14 @@ describe('driver session reset cleanup', () => {
 
     assert.deepEqual(result, {
       clearedDriverAccess: true,
-      clearedOfflineSubmissions: 2,
+      clearedOfflineSubmissions: 0,
       kind: 'reset',
+      sealedOfflineSubmissions: 2,
     });
     assert.deepEqual(deletedKeys, [DRIVER_ACCESS_TOKEN_STORAGE_KEY]);
     assert.deepEqual(await tokenStore.loadActiveDriverAccess(), { kind: 'missing' });
-    assert.deepEqual(queue.listPending(), []);
+    assert.equal(queue.listPending().length, 2);
+    assert.equal(queue.listPending().every((item) => item.reconciliation?.reason === 'account_signed_out'), true);
   });
 
   it('waits for queue persistence after clearing retry state', async () => {
@@ -69,14 +71,16 @@ describe('driver session reset cleanup', () => {
           clearCalls += 1;
           return 3;
         },
+        sealForAccountChange: () => ({ discardedLocations: 1, sealed: 3 }),
         whenPersisted: async () => {
           persisted = true;
         },
       },
     });
 
-    assert.equal(clearCalls, 1);
+    assert.equal(clearCalls, 0);
     assert.equal(persisted, true);
-    assert.equal(result.clearedOfflineSubmissions, 3);
+    assert.equal(result.clearedOfflineSubmissions, 1);
+    assert.equal(result.sealedOfflineSubmissions, 3);
   });
 });

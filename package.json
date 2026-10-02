@@ -1,52 +1,98 @@
 {
-  "name": "clever-driver-app",
-  "version": "0.1.0",
+  "name": "clever-routes-app",
+  "version": "1.3.4",
   "private": true,
   "main": "index.ts",
   "scripts": {
+    "postinstall": "node scripts/patch-expo-location-notification.mjs",
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android:dev:install": "ORG_GRADLE_PROJECT_reactNativeArchitectures=arm64-v8a expo run:android --device --variant debugOptimized",
+    "android:dev:start": "expo start --dev-client --localhost --android",
+    "android:qa:build": "npx eas-cli build --platform android --profile preview",
+    "ios": "expo run:ios",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-tests.mjs",
     "check:native-release": "tsx src/release/preflight/nativeReleasePreflightCli.ts",
     "release:evidence:seed": "tsx src/release/evidence/releaseEvidenceSeedCli.ts",
     "release:evidence:verify": "tsx src/release/evidence/releaseEvidenceVerifierCli.ts",
+    "release:android:publish": "tsx src/release/publisher/androidReleasePublisherCli.ts",
     "check:workspace": "npm run check:source-layout && npm run typecheck && npm run test",
     "build": "npm run build:android && npm run build:ios",
     "build:android": "expo export -p android --output-dir dist/android",
+    "prepare:android:firebase": "node scripts/prepare-google-services.mjs",
+    "prepare:android:firebase:local": "node scripts/prepare-google-services.mjs --allow-existing",
+    "eas-build-post-install": "npm run prepare:android:firebase",
+    "prebuild:android:distribution": "npm run prepare:android:firebase && node scripts/verify-distribution-source.mjs",
+    "prebuild:android:device-smoke": "npm run prepare:android:firebase:local",
+    "build:android:device-smoke": "cd android && NODE_ENV=production EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://clever-route.cleversystem.ai ./gradlew app:assembleRelease -PreactNativeArchitectures=arm64-v8a --max-workers=4 --build-cache",
+    "build:android:distribution": "cd android && NODE_ENV=production EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://clever-route.cleversystem.ai ./gradlew app:assembleRelease -PreactNativeArchitectures=armeabi-v7a,arm64-v8a -Pandroid.enableMinifyInReleaseBuilds=true -Pandroid.enableShrinkResourcesInReleaseBuilds=true -Pexpo.useLegacyPackaging=true --max-workers=4 --build-cache",
+    "prebuild:android:distribution:clean": "npm run prebuild:android:distribution",
+    "build:android:distribution:clean": "cd android && NODE_ENV=production EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://clever-route.cleversystem.ai ./gradlew app:clean app:assembleRelease -PreactNativeArchitectures=armeabi-v7a,arm64-v8a -Pandroid.enableMinifyInReleaseBuilds=true -Pandroid.enableShrinkResourcesInReleaseBuilds=true -Pexpo.useLegacyPackaging=true --max-workers=4 --build-cache",
     "build:ios": "expo export -p ios --output-dir dist/ios",
     "check:source-layout": "tsx src/release/preflight/sourceLayoutPreflightCli.ts"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "@maplibre/maplibre-react-native": "^11.3.4",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "expo": "~54.0.35",
-    "expo-camera": "~17.0.10",
-    "expo-image-picker": "~17.0.11",
-    "expo-location": "~19.0.8",
-    "expo-secure-store": "~15.0.8",
-    "expo-speech": "~14.0.8",
-    "expo-status-bar": "~3.0.9",
-    "expo-task-manager": "~14.0.9",
-    "libphonenumber-js": "1.13.1",
-    "react": "19.1.0",
-    "react-native": "0.81.5"
+    "expo": "~57.0.17",
+    "expo-application": "~57.0.2",
+    "expo-camera": "~57.0.4",
+    "expo-clipboard": "~57.0.1",
+    "expo-crypto": "~57.0.2",
+    "expo-dev-client": "~57.0.18",
+    "expo-font": "~57.0.3",
+    "expo-image-picker": "~57.0.16",
+    "expo-location": "~57.0.16",
+    "expo-network": "~57.0.1",
+    "expo-notifications": "~57.0.17",
+    "expo-secure-store": "~57.0.3",
+    "expo-speech": "~57.0.2",
+    "expo-sqlite": "~57.0.2",
+    "expo-status-bar": "~57.0.1",
+    "expo-task-manager": "~57.0.16",
+    "libphonenumber-js": "1.13.6",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-gesture-handler": "~2.32.0",
+    "react-native-reanimated": "4.5.1",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-worklets": "0.10.1"
   },
   "devDependencies": {
-    "@types/node": "^20.19.41",
-    "@types/react": "~19.1.0",
+    "@types/node": "^20.19.43",
+    "@types/react": "~19.2.14",
     "eslint": "^9.0.0",
-    "eslint-config-expo": "~10.0.0",
-    "tsx": "^4.20.6",
-    "typescript": "~5.9.2"
+    "eslint-config-expo": "~57.0.2",
+    "tsx": "^4.22.4",
+    "typescript": "~6.0.3"
   },
   "engines": {
     "node": ">=20.19.4"
   },
   "overrides": {
-    "postcss": "8.5.10",
+    "@expo/metro": "56.0.2",
+    "metro": "0.84.5",
+    "metro-config": "0.84.5",
+    "minimatch@3.1.5": {
+      "brace-expansion": "1.1.21"
+    },
+    "postcss": "8.5.23",
+    "minimatch@10.2.5": {
+      "brace-expansion": "5.0.12"
+    },
+    "js-yaml": "4.3.2",
+    "nanoid": "3.3.18",
     "uuid": "11.1.1",
-    "ws": "8.21.0"
+    "ws": "8.21.0",
+    "shell-quote": "1.10.0"
+  },
+  "expo": {
+    "doctor": {
+      "appConfigFieldsNotSyncedCheck": {
+        "enabled": false
+      }
+    }
   }
 }

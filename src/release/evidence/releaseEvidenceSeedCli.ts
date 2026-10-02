@@ -18,18 +18,19 @@ function readOptional(relativePath: string): string | undefined {
 }
 
 function readInput(): NativeReleasePreflightInput {
-  const iosProjectPbxproj = readOptional('ios/CleverDriver.xcodeproj/project.pbxproj');
+  const iosProjectPbxproj = readOptional('ios/CleverRoutes.xcodeproj/project.pbxproj');
 
   return {
     appConfig: readJson('app.json'),
     easConfig: readJson('eas.json'),
     envExample: readFileSync(resolve(repoRoot, '.env.example'), 'utf8'),
+    packageScripts: readJson<{ scripts?: Record<string, string> }>('package.json').scripts ?? {},
     ...(iosProjectPbxproj === undefined
       ? {}
       : {
           iosNativeProject: {
-            infoPlist: readOptional('ios/CleverDriver/Info.plist'),
-            privacyManifest: readOptional('ios/CleverDriver/PrivacyInfo.xcprivacy'),
+            infoPlist: readOptional('ios/CleverRoutes/Info.plist'),
+            privacyManifest: readOptional('ios/CleverRoutes/PrivacyInfo.xcprivacy'),
             projectPbxproj: iosProjectPbxproj,
           },
         }),
@@ -54,8 +55,8 @@ console.log(buildReleaseEvidenceSeed({
   sourceCommitSha: git(['rev-parse', 'HEAD'], 'unknown'),
   sourceRef: git(['rev-parse', '--abbrev-ref', 'HEAD'], 'unknown'),
   trackingIssues: {
-    nativeBuildEvidence: 'EVNSolution/clever-driver-app#73',
-    physicalDeviceSmoke: 'EVNSolution/clever-driver-app#72',
+    nativeBuildEvidence: 'EVNSolution/clever-routes-app#73',
+    physicalDeviceSmoke: 'EVNSolution/clever-routes-app#72',
     proofMediaProduction: 'EVNSolution/clever-delivery-server#71'
   }
 }));

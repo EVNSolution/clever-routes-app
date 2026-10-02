@@ -1,40 +1,59 @@
 {
   "expo": {
-    "name": "Clever Driver",
-    "slug": "clever-driver-app",
-    "scheme": "clever-driver",
-    "version": "0.1.0",
+    "name": "CLEVER Routes",
+    "slug": "clever-routes-app",
+    "scheme": "clever-routes",
+    "version": "1.3.4",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.evns.cleverdriverapp",
+      "bundleIdentifier": "com.evnsolution.clever.routes",
       "buildNumber": "1",
-      "icon": "./assets/ios-icon.png"
+      "icon": "./assets/icon.png"
     },
     "android": {
-      "package": "com.evns.cleverdriverapp",
-      "edgeToEdgeEnabled": true,
-      "versionCode": 1,
-      "icon": "./assets/android-icon.png",
+      "allowBackup": false,
+      "package": "com.evnsolution.clever.routes",
+      "versionCode": 40,
+      "icon": "./assets/icon.png",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#C7D833"
       },
-      "softwareKeyboardLayoutMode": "resize"
+      "softwareKeyboardLayoutMode": "resize",
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "extra": {
       "projectStartIssue": "EVNSolution/clever-change-control#145",
-      "frameworkBootstrapIssue": "EVNSolution/clever-change-control#146"
+      "frameworkBootstrapIssue": "EVNSolution/clever-change-control#146",
+      "eas": {
+        "projectId": "eb063931-8972-4a74-b56c-dd5897e54439"
+      }
     },
     "plugins": [
-      "expo-secure-store",
+      "expo-notifications",
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": false
+        }
+      ],
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Allow Clever Driver to use your location while you are actively delivering a route.",
-          "locationAlwaysAndWhenInUsePermission": "Allow Clever Driver to use your location for active delivery tracking.",
+          "locationWhenInUsePermission": "Allow CLEVER Routes to use your location while you are actively delivering a route.",
+          "locationAlwaysAndWhenInUsePermission": "Allow CLEVER Routes to use your location for active delivery tracking.",
           "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
@@ -43,17 +62,23 @@
       [
         "expo-image-picker",
         {
-          "cameraPermission": "Allow Clever Driver to take proof photos for active deliveries.",
-          "photosPermission": "Allow Clever Driver to attach proof photos for active deliveries."
+          "cameraPermission": "Allow CLEVER Routes to take proof photos for active deliveries.",
+          "photosPermission": "Allow CLEVER Routes to attach proof photos for active deliveries."
         }
       ],
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Clever Driver to scan proof barcodes for active deliveries."
+          "cameraPermission": "Allow CLEVER Routes to take proof photos for active deliveries.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": false
         }
-      ]
+      ],
+      "@maplibre/maplibre-react-native",
+      "expo-status-bar",
+      "expo-font"
     ],
-    "icon": "./assets/icon.png"
+    "icon": "./assets/icon.png",
+    "owner": "evandsolution"
   }
 }

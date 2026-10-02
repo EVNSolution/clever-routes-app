@@ -1,16 +1,21 @@
-import { getInitialAccessValidation, type DriverFlowState } from '../driverFlow/driverFlow';
-import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
+import type { DriverFlowState } from '../driverFlow/driverFlow';
+import { createDriverApiHttpError, readDriverApiErrorCode } from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
+import {
+  createDriverDiagnosticRequestId,
+  observeDriverDiagnosticOperation,
+} from '../diagnostics/driverDiagnosticObservation';
 
 export type RouteAccessLookupInput = {
+  accountAccessToken: string;
   routeContext?: string | null;
-  phoneE164: string;
 };
 
 export type RouteAccessCompanyGuidance = {
   companyDisplayName: string;
   deliveryDate: string;
   driverInstructions: string[];
+  executionStatus: 'IN_PROGRESS' | 'READY';
   operatorSupportContact: string | null;
   pickupGuidance: string | null;
   routeName: string;
@@ -40,6 +45,9 @@ export type DriverAccessToken = {
 
 export type RouteAccessRouteChoice = {
   routeAccess: {
+    assignmentGeneration: string;
+    driverContractVersion: 2;
+    expectedRouteVersionId: string;
     nextState: 'consent_required';
     routeContext: string;
     routePlanId: string;
@@ -64,18 +72,13 @@ export type RouteAccessLookupResult =
       matches: RouteAccessAmbiguousMatch[];
       resolutionHint?: string | null;
     }
-  | { status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND' };
+  | { status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND' | 'VEHICLE_REQUIRED' };
 
 export type RouteAccessService = {
   lookupRouteAccess(input: RouteAccessLookupInput): Promise<RouteAccessLookupResult>;
 };
 
 export type RouteAccessSubmissionResult =
-  | {
-      kind: 'validation_error';
-      message: string;
-      reason: 'phone_invalid' | 'phone_required';
-    }
   | {
       kind: 'route_choices';
       flowState: Extract<DriverFlowState, 'company_context_confirmed'>;
@@ -99,7 +102,7 @@ export type RouteAccessSubmissionResult =
   | {
       kind: 'denied';
       message: string;
-      status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND';
+      status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND' | 'VEHICLE_REQUIRED';
     };
 
 export type FetchLike = (
@@ -120,6 +123,9 @@ export type FetchLike = (
 export const sampleInvitedRouteAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }> = {
   status: 'INVITED',
   routeAccess: {
+    assignmentGeneration: '7',
+    driverContractVersion: 2,
+    expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
     nextState: 'consent_required',
     routeContext: '11111111-1111-4111-8111-111111111111',
     routePlanId: '11111111-1111-4111-8111-111111111111',
@@ -128,6 +134,7 @@ export const sampleInvitedRouteAccess: Extract<RouteAccessLookupResult, { status
     companyDisplayName: 'Tomatono Toronto',
     deliveryDate: '2026-05-12',
     driverInstructions: ['Bring insulated bag'],
+    executionStatus: 'READY',
     operatorSupportContact: '+14165550000',
     pickupGuidance: 'Meet at dispatch desk by 9:00 AM',
     routeName: 'Tuesday AM Route',
@@ -165,7 +172,7 @@ export const sampleMultipleRouteAccess: Extract<RouteAccessLookupResult, { statu
       timezone: 'America/Toronto',
     },
   ],
-  resolutionHint: 'Use the phone-only route list or contact dispatch.',
+  resolutionHint: 'Use the account route list or contact dispatch.',
 };
 
 export const samplePhoneRouteChoices: Extract<RouteAccessLookupResult, { status: 'ROUTES_FOUND' }> = {
@@ -192,18 +199,10 @@ export async function submitRouteAccess(
   service: RouteAccessService,
 ): Promise<RouteAccessSubmissionResult> {
   const routeContext = input.routeContext?.trim() || null;
-  const phoneE164 = input.phoneE164.trim();
-  const validation = getInitialAccessValidation({ routeContext, phoneE164 });
-
-  if (!validation.ok) {
-    return {
-      kind: 'validation_error',
-      message: getRouteAccessValidationMessage(validation.reason),
-      reason: validation.reason,
-    };
-  }
-
-  const lookup = await service.lookupRouteAccess({ routeContext, phoneE164 });
+  const lookup = await service.lookupRouteAccess({
+    accountAccessToken: input.accountAccessToken.trim(),
+    routeContext,
+  });
   if (lookup.status === 'INVITED') {
     return {
       kind: 'company_guidance',
@@ -240,29 +239,20 @@ export async function submitRouteAccess(
   };
 }
 
-export function getRouteAccessValidationMessage(
-  reason: 'phone_invalid' | 'phone_required',
-): string {
-  switch (reason) {
-    case 'phone_required':
-      return 'Enter the driver phone number in E.164 format.';
-    case 'phone_invalid':
-      return 'Use E.164 phone format, for example +14165550123.';
-  }
-}
-
 export function getRouteAccessMultipleMatchesMessage(): string {
-  return 'Multiple route assignments matched. Use the phone-only route list or contact dispatch.';
+  return 'Multiple route assignments matched. Use the account route list or contact dispatch.';
 }
 
-export function getRouteAccessDeniedMessage(status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND'): string {
+export function getRouteAccessDeniedMessage(status: 'BLOCKED' | 'DISABLED' | 'NOT_FOUND' | 'VEHICLE_REQUIRED'): string {
   switch (status) {
     case 'NOT_FOUND':
-      return 'No active route is assigned to this phone number. Check the phone number or contact dispatch.';
+      return 'No active route is assigned to this account. Contact dispatch if you expected an assignment.';
     case 'DISABLED':
       return 'This driver profile is inactive. Contact dispatch before continuing.';
     case 'BLOCKED':
       return 'This driver profile is blocked. Contact dispatch before continuing.';
+    case 'VEHICLE_REQUIRED':
+      return 'A vehicle must be assigned before this route can appear. Contact dispatch to assign a vehicle.';
   }
 }
 
@@ -288,23 +278,30 @@ export function createRouteAccessApiClient(input: {
 
   return {
     lookupRouteAccess: async (request) => {
-      const response = await fetchImpl(`${baseUrl}/driver/route-access/lookup`, withNoStoreDriverApiRequest({
-        body: JSON.stringify({
-          phoneE164: request.phoneE164,
-          routeContext: request.routeContext?.trim() || null,
-        }),
-        headers: { 'Content-Type': 'application/json' },
-        method: 'POST',
-      }));
-      const payload = await response.json();
-      if (!response.ok) {
-        throw createDriverApiHttpError({
-          endpoint: 'Route access lookup',
-          status: response.status,
-        });
-      }
+      const requestId = createDriverDiagnosticRequestId();
+      return observeDriverDiagnosticOperation({ operation: 'ROUTE_LOOKUP', requestId }, async () => {
+        const response = await fetchImpl(`${baseUrl}/driver/route-access/lookup`, withNoStoreDriverApiRequest({
+          body: JSON.stringify({
+            routeContext: request.routeContext?.trim() || null,
+          }),
+          headers: {
+            Authorization: `Bearer ${request.accountAccessToken.trim()}`,
+            'Content-Type': 'application/json',
+            'X-Request-Id': requestId,
+          },
+          method: 'POST',
+        }));
+        const payload = await response.json();
+        if (!response.ok) {
+          throw createDriverApiHttpError({
+            code: readDriverApiErrorCode(payload),
+            endpoint: 'Route access lookup',
+            status: response.status,
+          });
+        }
 
-      return readRouteAccessEnvelope(payload);
+        return readRouteAccessEnvelope(payload);
+      });
     },
   };
 }
@@ -328,7 +325,7 @@ function isRouteAccessLookupResult(value: unknown): value is RouteAccessLookupRe
   }
 
   const status = (value as { status?: unknown }).status;
-  if (status === 'BLOCKED' || status === 'DISABLED' || status === 'NOT_FOUND') {
+  if (status === 'BLOCKED' || status === 'DISABLED' || status === 'NOT_FOUND' || status === 'VEHICLE_REQUIRED') {
     return true;
   }
 
@@ -391,10 +388,27 @@ function isRouteAccess(value: unknown): value is Extract<RouteAccessLookupResult
 
   const routeAccess = value as Record<string, unknown>;
   return (
+    isAssignmentGeneration(routeAccess.assignmentGeneration) &&
+    routeAccess.driverContractVersion === 2 &&
+    isUuid(routeAccess.expectedRouteVersionId) &&
     routeAccess.nextState === 'consent_required' &&
     typeof routeAccess.routeContext === 'string' &&
     typeof routeAccess.routePlanId === 'string'
   );
+}
+
+function isAssignmentGeneration(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^[1-9][0-9]*$/u.test(value)) return false;
+  try {
+    return BigInt(value) <= 9_223_372_036_854_775_807n;
+  } catch {
+    return false;
+  }
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
 }
 
 function isCompanyGuidance(value: unknown): value is RouteAccessCompanyGuidance {
@@ -408,6 +422,7 @@ function isCompanyGuidance(value: unknown): value is RouteAccessCompanyGuidance 
     typeof guidance.deliveryDate === 'string' &&
     Array.isArray(guidance.driverInstructions) &&
     guidance.driverInstructions.every((item) => typeof item === 'string') &&
+    (guidance.executionStatus === 'READY' || guidance.executionStatus === 'IN_PROGRESS') &&
     nullableString(guidance.operatorSupportContact) &&
     nullableString(guidance.pickupGuidance) &&
     typeof guidance.routeName === 'string' &&

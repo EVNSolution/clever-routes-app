@@ -43,8 +43,60 @@ export type RouteNavigationResult =
     };
 
 type RouteNavigationTarget = {
+  kind: 'address' | 'coordinates';
   value: string;
 };
+
+const GOOGLE_MAPS_DIRECTIONS_URL = 'https://www.google.com/maps/dir/';
+const ANDROID_MAP_RESOLVER_URL = 'clever-routes-map://navigate';
+const GOOGLE_MAPS_MAX_WAYPOINTS = 3;
+
+export function buildDepotNavigationUrl(input: {
+  depot: AssignedRoute['depot'];
+  platform: StopNavigationPlatform;
+}): string | null {
+  const depot = input.depot;
+  if (depot === null || !isValidCoordinatePair(depot.latitude, depot.longitude)) {
+    return null;
+  }
+
+  if (input.platform === 'android') {
+    return `${ANDROID_MAP_RESOLVER_URL}?target=coordinates&latitude=${depot.latitude}&longitude=${depot.longitude}`;
+  }
+
+  return `${GOOGLE_MAPS_DIRECTIONS_URL}?api=1&destination=${encodeURIComponent(formatCoordinatePair(depot.latitude, depot.longitude))}&travelmode=driving&dir_action=navigate`;
+}
+
+export async function openDepotNavigation(input: {
+  depot: AssignedRoute['depot'];
+  linking: StopNavigationLinking;
+  platform: StopNavigationPlatform;
+}): Promise<RouteNavigationResult> {
+  const url = buildDepotNavigationUrl(input);
+  if (url === null) {
+    return {
+      kind: 'skipped',
+      message: 'Company return location is unavailable.',
+      reason: 'missing_destination',
+    };
+  }
+
+  try {
+    await input.linking.openURL(url);
+    return {
+      kind: 'opened',
+      message: 'Opened company return navigation in the map app.',
+      url,
+    };
+  } catch {
+    return {
+      kind: 'failed',
+      message: 'Map app could not be opened for company return.',
+      reason: 'open_failed',
+      url,
+    };
+  }
+}
 
 export function buildRouteNavigationUrl(input: {
   route: AssignedRoute;
@@ -54,8 +106,9 @@ export function buildRouteNavigationUrl(input: {
     return null;
   }
 
-  const destination = targets[targets.length - 1]!;
-  const waypoints = targets.slice(0, -1);
+  const boundedTargets = targets.slice(0, GOOGLE_MAPS_MAX_WAYPOINTS + 1);
+  const destination = boundedTargets[boundedTargets.length - 1]!;
+  const waypoints = boundedTargets.slice(0, -1);
   const params = [
     'api=1',
     'travelmode=driving',
@@ -67,7 +120,7 @@ export function buildRouteNavigationUrl(input: {
     params.push(`waypoints=${waypoints.map((target) => encodeURIComponent(target.value)).join('%7C')}`);
   }
 
-  return `https://www.google.com/maps/dir/?${params.join('&')}`;
+  return `${GOOGLE_MAPS_DIRECTIONS_URL}?${params.join('&')}`;
 }
 
 export async function openRouteNavigation(input: {
@@ -85,9 +138,13 @@ export async function openRouteNavigation(input: {
 
   try {
     await input.linking.openURL(url);
+    const targetCount = buildRouteNavigationTargets(input.route).length;
+    const openedStopCount = Math.min(targetCount, GOOGLE_MAPS_MAX_WAYPOINTS + 1);
     return {
       kind: 'opened',
-      message: `Opened ${formatStopCount(input.route.stops.length)} in the map app.`,
+      message: targetCount > openedStopCount
+        ? `Opened the first ${formatStopCount(openedStopCount)} in Google Maps. Mobile links support up to 3 waypoints and 1 destination.`
+        : `Opened ${formatStopCount(openedStopCount)} in the map app.`,
       url,
     };
   } catch {
@@ -104,38 +161,32 @@ export function buildStopNavigationUrl(input: {
   platform: StopNavigationPlatform;
   stop: AssignedRouteStop;
 }): string | null {
-  const label = buildStopNavigationLabel(input.stop);
-  const encodedLabel = encodeURIComponent(label);
-  const coordinates = input.stop.coordinates;
-
-  if (coordinates !== null) {
-    const coordinatePair = formatCoordinatePair(coordinates.latitude, coordinates.longitude);
-    if (input.platform === 'android') {
-      return `geo:${coordinatePair}?q=${encodeURIComponent(coordinatePair)}(${encodedLabel})`;
-    }
-
-    if (input.platform === 'ios') {
-      return `http://maps.apple.com/?ll=${coordinatePair}&q=${encodedLabel}`;
-    }
-
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coordinatePair)}`;
-  }
-
-  const address = formatStopNavigationAddress(input.stop.address);
-  if (address === null) {
+  const target = buildStopNavigationTarget(input.stop);
+  if (target === null) {
     return null;
   }
 
-  const encodedAddress = encodeURIComponent(address);
   if (input.platform === 'android') {
-    return `geo:0,0?q=${encodedAddress}(${encodedLabel})`;
+    const address = formatStopNavigationAddress(input.stop.address);
+    const coordinates = stopCoordinatesToLngLat(input.stop.coordinates);
+    const params = [`target=${target.kind}`];
+    if (address !== null) {
+      params.push(`address=${encodeURIComponent(address)}`);
+    }
+    if (coordinates !== null) {
+      params.push(`latitude=${coordinates[1]}`);
+      params.push(`longitude=${coordinates[0]}`);
+    }
+    return `${ANDROID_MAP_RESOLVER_URL}?${params.join('&')}`;
   }
 
-  if (input.platform === 'ios') {
-    return `http://maps.apple.com/?q=${encodedAddress}`;
-  }
-
-  return `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+  const params = [
+    'api=1',
+    `destination=${encodeURIComponent(target.value)}`,
+    'travelmode=driving',
+    'dir_action=navigate',
+  ];
+  return `${GOOGLE_MAPS_DIRECTIONS_URL}?${params.join('&')}`;
 }
 
 export async function openStopNavigation(input: {
@@ -154,32 +205,33 @@ export async function openStopNavigation(input: {
 
   try {
     await input.linking.openURL(url);
+    const destination = buildStopNavigationTarget(input.stop)?.value ?? 'the stop location';
     return {
       kind: 'opened',
-      message: `Map opened for ${buildStopNavigationLabel(input.stop)}.`,
+      message: `Map navigation requested for ${destination}.`,
       url,
     };
   } catch {
     return {
       kind: 'failed',
-      message: `Map could not be opened for ${buildStopNavigationLabel(input.stop)}.`,
+      message: 'Map navigation could not be opened for this stop.',
       reason: 'open_failed',
       url,
     };
   }
 }
 
-export function buildStopNavigationLabel(stop: AssignedRouteStop): string {
-  return [`Stop ${stop.sequence}`, stop.orderName.trim()].filter(Boolean).join(' ');
-}
-
 export function formatStopNavigationAddress(address: AssignedRouteAddress): string | null {
+  if (address.address1.trim() === '') {
+    return null;
+  }
+
   const formatted = [
     address.address1,
     address.address2,
     address.city,
     address.province,
-    address.postalCode,
+    normalizeCanadianPostalCode(address.postalCode, address.countryCode),
     address.countryCode,
   ]
     .map((part) => part?.trim() ?? '')
@@ -189,8 +241,26 @@ export function formatStopNavigationAddress(address: AssignedRouteAddress): stri
   return formatted === '' ? null : formatted;
 }
 
+function normalizeCanadianPostalCode(postalCode: string, countryCode: string): string {
+  const compact = postalCode.replace(/\s+/gu, '').toUpperCase();
+  const country = countryCode.trim().toUpperCase();
+  return (country === 'CA' || country === 'CAN') && /^[A-Z][0-9][A-Z][0-9][A-Z][0-9]$/u.test(compact)
+    ? `${compact.slice(0, 3)} ${compact.slice(3)}`
+    : postalCode;
+}
+
 function formatCoordinatePair(latitude: number, longitude: number): string {
   return `${latitude},${longitude}`;
+}
+
+function isValidCoordinatePair(latitude: number, longitude: number): boolean {
+  return Number.isFinite(latitude)
+    && latitude >= -90
+    && latitude <= 90
+    && Number.isFinite(longitude)
+    && longitude >= -180
+    && longitude <= 180
+    && (latitude !== 0 || longitude !== 0);
 }
 
 function buildRouteNavigationTargets(route: AssignedRoute): RouteNavigationTarget[] {
@@ -201,15 +271,16 @@ function buildRouteNavigationTargets(route: AssignedRoute): RouteNavigationTarge
   return [...route.stops]
     .sort((left, right) => left.sequence - right.sequence)
     .map((stop) => {
-      const address = formatStopNavigationAddress(stop.address);
-      if (address !== null) {
-        return { value: address };
+      const stopPoint = stopPointsById.get(stop.deliveryStopId);
+      const stopTarget = buildStopNavigationTarget(stop);
+      if (stopTarget !== null) {
+        return stopTarget;
       }
 
-      const stopPoint = stopPointsById.get(stop.deliveryStopId);
-      const coordinates = stopPoint?.snappedCoordinates ?? stopPoint?.inputCoordinates ?? stopCoordinatesToLngLat(stop.coordinates);
-      if (coordinates !== null) {
-        return { value: formatLngLatForDirections(coordinates) };
+      const routeCoordinates = validLngLat(stopPoint?.inputCoordinates)
+        ?? validLngLat(stopPoint?.snappedCoordinates);
+      if (routeCoordinates !== null) {
+        return { kind: 'coordinates' as const, value: formatLngLatForDirections(routeCoordinates) };
       }
 
       return null;
@@ -217,8 +288,31 @@ function buildRouteNavigationTargets(route: AssignedRoute): RouteNavigationTarge
     .filter((target): target is RouteNavigationTarget => target !== null);
 }
 
+function buildStopNavigationTarget(stop: AssignedRouteStop): RouteNavigationTarget | null {
+  const address = formatStopNavigationAddress(stop.address);
+  const coordinates = stopCoordinatesToLngLat(stop.coordinates);
+  const coordinateTarget = coordinates === null
+    ? null
+    : { kind: 'coordinates' as const, value: formatLngLatForDirections(coordinates) };
+  const addressTarget = address === null ? null : { kind: 'address' as const, value: address };
+
+  return stop.navigationTarget === 'ADDRESS'
+    ? addressTarget ?? coordinateTarget
+    : coordinateTarget ?? addressTarget;
+}
+
 function stopCoordinatesToLngLat(coordinates: AssignedRouteStop['coordinates']): AssignedRouteLngLat | null {
-  return coordinates === null ? null : [coordinates.longitude, coordinates.latitude];
+  return coordinates !== null && isValidCoordinatePair(coordinates.latitude, coordinates.longitude)
+    ? [coordinates.longitude, coordinates.latitude]
+    : null;
+}
+
+function validLngLat(coordinates: AssignedRouteLngLat | null | undefined): AssignedRouteLngLat | null {
+  return coordinates !== null
+    && coordinates !== undefined
+    && isValidCoordinatePair(coordinates[1], coordinates[0])
+    ? coordinates
+    : null;
 }
 
 function formatLngLatForDirections(coordinates: AssignedRouteLngLat): string {

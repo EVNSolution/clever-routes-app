@@ -15,7 +15,7 @@ describe('proof photo capture', () => {
 
     assert.deepEqual(result, {
       kind: 'permission_denied',
-      message: 'Photo permission is required to attach proof media.',
+      message: 'Allow photo access to add a delivery photo.',
       source: 'camera',
     });
   });

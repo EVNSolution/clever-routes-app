@@ -2,13 +2,105 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  applyDriverRouteEtaUpdate,
+  createRouteStartedDriverEvent,
   createDriverEventsApiClient,
   createMockDriverEventService,
+  recordPickupCompletedAfterDeliveryStart,
   recordRouteStartedAfterDeliveryStart,
+  recordStopArrivedAfterDeliveryStart,
 } from './driverEvents';
+import { DriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createInMemoryOfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
+import { sampleAssignedRoute } from '../route/assignedRoute';
+import routeCompletedRequest from '../../test/contractFixtures/routeOperations/v1/fixtures/route-completed.request.json';
+import {
+  installDriverDiagnosticObserver,
+  type DriverDiagnosticObservation,
+} from '../diagnostics/driverDiagnosticObservation';
 
 describe('driver event API boundary', () => {
+  it('keeps route-start coordinates on the immutable start event while preserving the button time', () => {
+    const occurredAt = new Date('2026-09-13T01:00:00.000Z');
+    assert.deepEqual(createRouteStartedDriverEvent({
+      locationEvidence: {
+        accuracyMeters: 12,
+        latitude: 43.6532,
+        longitude: -79.3832,
+        recordedAt: new Date('2026-09-13T00:59:58.000Z'),
+      },
+      occurredAt,
+      routePlanId: 'route-1',
+    }), {
+      accuracyMeters: 12,
+      clientEventId: `route-started-${occurredAt.getTime().toString(36)}`,
+      eventType: 'ROUTE_STARTED',
+      latitude: 43.6532,
+      longitude: -79.3832,
+      occurredAt,
+      routePlanId: 'route-1',
+    });
+  });
+
+  it('sends the canonical v2 lineage and build contract on every ordered event', async () => {
+    let body: unknown;
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      orderedEventContract: {
+        appVersion: routeCompletedRequest.appVersion,
+        assignmentGeneration: routeCompletedRequest.assignmentGeneration,
+        driverContractVersion: 2,
+        expectedRouteVersionId: routeCompletedRequest.expectedRouteVersionId,
+        versionCode: routeCompletedRequest.versionCode,
+      },
+      fetchImpl: async (_url, init) => {
+        body = JSON.parse(init?.body ?? '{}');
+        return { json: async () => ({ data: { duplicate: false, eventId: 'event-id' }, error: null }), ok: true, status: 202 };
+      },
+    });
+
+    await service.recordDriverEvent({
+      clientEventId: routeCompletedRequest.clientEventId,
+      deliveryStopId: null,
+      eventType: 'ROUTE_COMPLETED',
+      occurredAt: new Date(routeCompletedRequest.occurredAt),
+      routePlanId: routeCompletedRequest.routePlanId,
+    });
+
+    assert.deepEqual(body, routeCompletedRequest);
+  });
+
+  it('preserves immutable queued lineage when a reassigned route client replays an older completion', async () => {
+    let body: Record<string, unknown> | undefined;
+    const service = createDriverEventsApiClient({
+      accessToken: 'generation-12-route-token',
+      baseUrl: 'https://delivery.example.com',
+      orderedEventContract: {
+        appVersion: '1.2.0', assignmentGeneration: '12', driverContractVersion: 2,
+        expectedRouteVersionId: '33333333-3333-4333-8333-333333333333', versionCode: 18,
+      },
+      fetchImpl: async (_url, init) => {
+        body = JSON.parse(init?.body ?? '{}') as Record<string, unknown>;
+        return { json: async () => ({ data: { duplicate: false, eventId: 'older-completion' }, error: null }), ok: true, status: 202 };
+      },
+    });
+    const queuedGeneration11 = {
+      appVersion: '1.1.6', assignmentGeneration: '11', clientEventId: 'completion-generation-11',
+      driverContractVersion: 2 as const, eventType: 'ROUTE_COMPLETED' as const,
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-08-22T19:42:10.000Z'), routePlanId: 'reused-route', versionCode: 17,
+    };
+
+    await service.recordDriverEvent(queuedGeneration11);
+
+    assert.equal(body?.assignmentGeneration, '11');
+    assert.equal(body?.expectedRouteVersionId, '22222222-2222-4222-8222-222222222222');
+    assert.equal(body?.appVersion, '1.1.6');
+    assert.equal(body?.versionCode, 17);
+    assert.equal(queuedGeneration11.assignmentGeneration, '11');
+  });
+
   it('posts route started events with driver bearer token evidence', async () => {
     const requests: { body: unknown; cache?: string; credentials?: string; headers: Record<string, string>; method: string; url: string }[] = [];
     const service = createDriverEventsApiClient({
@@ -57,6 +149,56 @@ describe('driver event API boundary', () => {
     });
   });
 
+  it('correlates the first event HTTP failure with the exact request header without exposing the bearer', async () => {
+    const observations: DriverDiagnosticObservation[] = [];
+    let requestHeaders: Record<string, string> = {};
+    installDriverDiagnosticObserver((observation) => { observations.push(observation); }, {
+      requestIdFactory: () => '44444444-4444-4444-8444-444444444444',
+      setTimeout: () => 1,
+      clearTimeout: () => undefined,
+    });
+    const service = createDriverEventsApiClient({
+      accessToken: 'sensitive-driver-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async (_url, init) => {
+        requestHeaders = init?.headers ?? {};
+        return {
+          json: async () => ({ data: null, error: { code: 'SERVER_ERROR' } }),
+          ok: false,
+          status: 503,
+        };
+      },
+    });
+
+    await assert.rejects(service.recordDriverEvent({
+      clientEventId: 'route-started-1',
+      eventType: 'ROUTE_STARTED',
+      occurredAt: new Date('2026-10-01T14:04:03.000Z'),
+      routePlanId: '11111111-1111-4111-8111-111111111111',
+    }));
+    installDriverDiagnosticObserver(null);
+
+    assert.equal(requestHeaders['X-Request-Id'], '44444444-4444-4444-8444-444444444444');
+    assert.deepEqual(observations.map((observation) => observation.kind === 'OPERATION' ? {
+      clientEventId: observation.clientEventId,
+      httpStatus: observation.httpStatus,
+      phase: observation.phase,
+      reasonCode: observation.reasonCode,
+      requestId: observation.requestId,
+      routePlanId: observation.routePlanId,
+    } : null), [
+      {
+        clientEventId: 'route-started-1', httpStatus: undefined, phase: 'STARTED', reasonCode: undefined,
+        requestId: '44444444-4444-4444-8444-444444444444', routePlanId: '11111111-1111-4111-8111-111111111111',
+      },
+      {
+        clientEventId: 'route-started-1', httpStatus: 503, phase: 'FAILED', reasonCode: 'HTTP_SERVER_ERROR',
+        requestId: '44444444-4444-4444-8444-444444444444', routePlanId: '11111111-1111-4111-8111-111111111111',
+      },
+    ]);
+    assert.equal(JSON.stringify(observations).includes('sensitive-driver-token'), false);
+  });
+
   it('posts optional event payload metadata for stop proof events', async () => {
     const requests: { body: unknown }[] = [];
     const service = createDriverEventsApiClient({
@@ -77,7 +219,7 @@ describe('driver event API boundary', () => {
       deliveryStopId: 'stop-1',
       eventType: 'STOP_DELIVERED',
       occurredAt: new Date('2026-05-12T07:15:00.000Z'),
-      payload: { proof: { note: 'Left with concierge', source: 'driver-app-mvp', type: 'DELIVERED_NOTE' } },
+      payload: { proof: { note: 'Left with concierge', source: 'clever-routes-app', type: 'DELIVERED_NOTE' } },
       routePlanId: 'route-1',
     });
 
@@ -86,9 +228,135 @@ describe('driver event API boundary', () => {
       deliveryStopId: 'stop-1',
       eventType: 'STOP_DELIVERED',
       occurredAt: '2026-05-12T07:15:00.000Z',
-      proof: { note: 'Left with concierge', source: 'driver-app-mvp', type: 'DELIVERED_NOTE' },
+      proof: { note: 'Left with concierge', source: 'clever-routes-app', type: 'DELIVERED_NOTE' },
       routePlanId: 'route-1',
     });
+  });
+
+  it('accepts the server-authoritative ETA update returned with an arrival event', async () => {
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          data: {
+            duplicate: false,
+            etaUpdate: {
+              actualArrivalAt: '2026-05-12T11:12:00.000Z',
+              deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+              delaySeconds: 240,
+              previousEstimatedArrivalAt: '2026-05-12T11:08:00.000Z',
+              serverReceivedAt: '2026-05-12T11:12:00.000Z',
+              trigger: 'STOP_ARRIVED',
+              updatedStops: [{
+                deliveryStopId: sampleAssignedRoute.stops[1]!.deliveryStopId,
+                estimatedArrivalAt: '2026-05-12T11:23:00.000Z',
+                sequence: 2,
+              }],
+            },
+            eventId: 'evt_arrived_1',
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await service.recordDriverEvent({
+      clientEventId: 'stop-arrived-1',
+      deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+      eventType: 'STOP_ARRIVED',
+      occurredAt: new Date('2026-05-12T01:00:00.000Z'),
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.etaUpdate?.serverReceivedAt, '2026-05-12T11:12:00.000Z');
+    assert.equal(result.etaUpdate?.delaySeconds, 240);
+  });
+
+  it('accepts the server-authoritative ETA update returned with a delivered event', async () => {
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          data: {
+            duplicate: false,
+            etaUpdate: {
+              actualArrivalAt: null,
+              deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+              delaySeconds: null,
+              previousEstimatedArrivalAt: null,
+              serverReceivedAt: '2026-05-12T11:17:00.000Z',
+              trigger: 'STOP_DELIVERED',
+              updatedStops: [{
+                deliveryStopId: sampleAssignedRoute.stops[1]!.deliveryStopId,
+                estimatedArrivalAt: '2026-05-12T11:28:00.000Z',
+                sequence: 2,
+              }],
+            },
+            eventId: 'evt_delivered_1',
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await service.recordDriverEvent({
+      clientEventId: 'stop-delivered-1',
+      deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+      eventType: 'STOP_DELIVERED',
+      occurredAt: new Date('2026-05-12T11:17:00.000Z'),
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.etaUpdate?.trigger, 'STOP_DELIVERED');
+    assert.equal(result.etaUpdate?.updatedStops[0]?.estimatedArrivalAt, '2026-05-12T11:28:00.000Z');
+  });
+
+  it('accepts the server-authoritative ETA update returned with a failed event', async () => {
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          data: {
+            duplicate: false,
+            etaUpdate: {
+              actualArrivalAt: null,
+              deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+              delaySeconds: null,
+              previousEstimatedArrivalAt: null,
+              serverReceivedAt: '2026-05-12T11:17:00.000Z',
+              trigger: 'STOP_FAILED',
+              updatedStops: [{
+                deliveryStopId: sampleAssignedRoute.stops[1]!.deliveryStopId,
+                estimatedArrivalAt: '2026-05-12T11:28:00.000Z',
+                sequence: 2,
+              }],
+            },
+            eventId: 'evt_failed_1',
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await service.recordDriverEvent({
+      clientEventId: 'stop-failed-1',
+      deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+      eventType: 'STOP_FAILED',
+      occurredAt: new Date('2026-05-12T11:17:00.000Z'),
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.etaUpdate?.trigger, 'STOP_FAILED');
+    assert.equal(result.etaUpdate?.updatedStops[0]?.estimatedArrivalAt, '2026-05-12T11:28:00.000Z');
   });
 
   it('treats duplicate driver event responses as recorded idempotently', async () => {
@@ -112,6 +380,37 @@ describe('driver event API boundary', () => {
     assert.deepEqual(result, { duplicate: true, eventId: 'route-started-1', status: 'recorded' });
   });
 
+  it('preserves the server error code when a route is no longer in progress', async () => {
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          data: null,
+          error: { code: 'ROUTE_NOT_IN_PROGRESS', message: 'Route is not in progress' },
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      service.recordDriverEvent({
+        clientEventId: 'location-1',
+        eventType: 'LOCATION_UPDATED',
+        latitude: 43.6532,
+        longitude: -79.3832,
+        occurredAt: new Date('2026-05-12T07:00:00.000Z'),
+        routePlanId: 'route-1',
+      }),
+      (error: unknown) => (
+        error instanceof DriverApiHttpError
+        && error.status === 409
+        && error.code === 'ROUTE_NOT_IN_PROGRESS'
+      ),
+    );
+  });
+
   it('records route started only after delivery_active is reached', async () => {
     const service = createMockDriverEventService();
 
@@ -131,12 +430,156 @@ describe('driver event API boundary', () => {
     assert.deepEqual(service.recordedEvents.map((event) => event.eventType), ['ROUTE_STARTED']);
   });
 
+  it('returns the configured pickup ETA snapshot from the mock service', async () => {
+    const pickupEtaSnapshot = {
+      calculatedAt: '2026-05-12T11:00:00.000Z',
+      failureCode: null,
+      failureMessage: null,
+      nextStopEta: {
+        deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+        distanceFromPreviousMeters: 180,
+        estimatedArrivalAt: sampleAssignedRoute.stops[0]!.estimatedArrivalAt ?? null,
+        sequence: 1,
+      },
+      pickupCompletedAt: '2026-05-12T11:00:00.000Z',
+      remainingRouteEta: {
+        distanceMeters: sampleAssignedRoute.routeMetrics!.distanceMeters,
+        estimatedCompletionAt: '2026-05-12T11:14:00.000Z',
+      },
+      status: 'READY' as const,
+    };
+    const service = createMockDriverEventService({ pickupEtaSnapshot });
+
+    const result = await recordPickupCompletedAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: service,
+      occurredAt: new Date('2026-05-12T11:00:00.000Z'),
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.deepEqual(result.kind === 'recorded' ? result.etaSnapshot : null, pickupEtaSnapshot);
+    assert.equal(service.recordedEvents[0]?.eventType, 'PICKUP_COMPLETED');
+  });
+
+  it('records STOP_ARRIVED only for an active delivery and applies the returned future ETA', async () => {
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          data: {
+            duplicate: false,
+            etaUpdate: {
+              actualArrivalAt: '2026-05-12T11:12:00.000Z',
+              deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+              delaySeconds: 240,
+              previousEstimatedArrivalAt: '2026-05-12T11:08:00.000Z',
+              serverReceivedAt: '2026-05-12T11:12:00.000Z',
+              trigger: 'STOP_ARRIVED',
+              updatedStops: [{
+                deliveryStopId: sampleAssignedRoute.stops[1]!.deliveryStopId,
+                estimatedArrivalAt: '2026-05-12T11:23:00.000Z',
+                sequence: 2,
+              }],
+            },
+            eventId: 'evt_arrived_1',
+          },
+          error: null,
+        }),
+      }),
+    });
+    const result = await recordStopArrivedAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+      driverEventService: service,
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.equal(result.kind === 'recorded' ? result.etaUpdate?.trigger : null, 'STOP_ARRIVED');
+    const updatedRoute = result.kind === 'recorded' && result.etaUpdate !== undefined
+      ? applyDriverRouteEtaUpdate(sampleAssignedRoute, result.etaUpdate)
+      : sampleAssignedRoute;
+    assert.equal(updatedRoute.stops[0]?.status, 'ARRIVED');
+    assert.equal(updatedRoute.stops[1]?.estimatedArrivalAt, '2026-05-12T11:23:00.000Z');
+  });
+
+  it('includes the captured arrival coordinates and planned-stop distance in the first STOP_ARRIVED event', async () => {
+    const service = createMockDriverEventService();
+    const recordedAt = new Date('2026-08-18T15:48:00.000Z');
+
+    const result = await recordStopArrivedAfterDeliveryStart({
+      arrivalEvidence: {
+        distanceToPlannedStopMeters: 37.4,
+        latitude: 37.5133,
+        longitude: 126.9428,
+        recordedAt,
+      },
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      deliveryStopId: 'stop-1',
+      driverEventService: service,
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.deepEqual(service.recordedEvents[0], {
+      clientEventId: `stop-arrived-stop-1-${recordedAt.getTime().toString(36)}`,
+      deliveryStopId: 'stop-1',
+      eventType: 'STOP_ARRIVED',
+      latitude: 37.5133,
+      longitude: 126.9428,
+      occurredAt: recordedAt,
+      payload: { distanceToPlannedStopMeters: 37.4 },
+      routePlanId: 'route-1',
+    });
+  });
+
+  it('queues STOP_ARRIVED when the server cannot receive the arrival signal', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const orderedEventContract = {
+      appVersion: '1.2.3',
+      assignmentGeneration: '14',
+      driverContractVersion: 2 as const,
+      expectedRouteVersionId: '44444444-4444-4444-8444-444444444444',
+      versionCode: 21,
+    };
+    const result = await recordStopArrivedAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      deliveryStopId: 'stop-1',
+      driverEventService: {
+        prepareDriverEvent: (event) => ({ ...event, ...orderedEventContract }),
+        recordDriverEvent: async () => { throw new Error('network offline'); },
+      },
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(result.kind, 'queued');
+    const pending = queue.listPending()[0];
+    assert.equal(pending?.kind === 'driver_event' ? pending.event.eventType : null, 'STOP_ARRIVED');
+    assert.deepEqual(pending?.kind === 'driver_event' ? {
+      appVersion: pending.event.appVersion,
+      assignmentGeneration: pending.event.assignmentGeneration,
+      driverContractVersion: pending.event.driverContractVersion,
+      expectedRouteVersionId: pending.event.expectedRouteVersionId,
+      versionCode: pending.event.versionCode,
+    } : null, orderedEventContract);
+  });
+
   it('queues route started when the live event submission fails', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
+    const orderedEventContract = {
+      appVersion: '1.2.3', assignmentGeneration: '14', driverContractVersion: 2 as const,
+      expectedRouteVersionId: '44444444-4444-4444-8444-444444444444', versionCode: 21,
+    };
 
     const result = await recordRouteStartedAfterDeliveryStart({
       deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
       driverEventService: {
+        prepareDriverEvent: (event) => ({ ...event, ...orderedEventContract }),
         recordDriverEvent: async () => {
           throw new Error('network offline');
         },
@@ -151,6 +594,13 @@ describe('driver event API boundary', () => {
     assert.equal(pending.length, 1);
     assert.equal(pending[0]?.kind, 'driver_event');
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'ROUTE_STARTED');
+    assert.deepEqual(pending[0]?.kind === 'driver_event' ? {
+      appVersion: pending[0].event.appVersion,
+      assignmentGeneration: pending[0].event.assignmentGeneration,
+      driverContractVersion: pending[0].event.driverContractVersion,
+      expectedRouteVersionId: pending[0].event.expectedRouteVersionId,
+      versionCode: pending[0].event.versionCode,
+    } : null, orderedEventContract);
   });
 
   it('queues route started with re-lookup guidance when live driver event returns unauthorized', async () => {
@@ -181,5 +631,142 @@ describe('driver event API boundary', () => {
     assert.match(result.message, /Driver session expired/iu);
     assert.match(result.message, /HTTP 401/iu);
     assert.equal(queue.listPending().length, 1);
+  });
+
+  it('records PICKUP_COMPLETED and accepts server-returned etaSnapshot', async () => {
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          data: {
+            duplicate: false,
+            etaSnapshot: {
+              calculatedAt: '2026-05-12T11:00:00.000Z',
+              failureCode: null,
+              failureMessage: null,
+              nextStopEta: {
+                deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+                distanceFromPreviousMeters: 180,
+                estimatedArrivalAt: '2026-05-12T11:20:00.000Z',
+                sequence: 1,
+              },
+              pickupCompletedAt: '2026-05-12T10:58:00.000Z',
+              remainingRouteEta: {
+                distanceMeters: 4500,
+                estimatedCompletionAt: '2026-05-12T11:45:00.000Z',
+              },
+              status: 'READY',
+            },
+            eventId: 'evt_pickup_1',
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await recordPickupCompletedAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: service,
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.equal(result.etaSnapshot?.status, 'READY');
+    assert.equal(result.etaSnapshot?.nextStopEta?.sequence, 1);
+    assert.equal(result.etaSnapshot?.remainingRouteEta?.estimatedCompletionAt, '2026-05-12T11:45:00.000Z');
+  });
+
+  it('accepts duplicate PICKUP_COMPLETED responses with etaSnapshot and omitted etaUpdate', async () => {
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          data: {
+            duplicate: true,
+            etaSnapshot: {
+              calculatedAt: '2026-05-12T11:00:00.000Z',
+              failureCode: null,
+              failureMessage: null,
+              nextStopEta: {
+                deliveryStopId: sampleAssignedRoute.stops[0]!.deliveryStopId,
+                distanceFromPreviousMeters: 180,
+                estimatedArrivalAt: '2026-05-12T11:20:00.000Z',
+                sequence: 1,
+              },
+              pickupCompletedAt: '2026-05-12T10:58:00.000Z',
+              remainingRouteEta: {
+                distanceMeters: 4500,
+                estimatedCompletionAt: '2026-05-12T11:45:00.000Z',
+              },
+              status: 'READY',
+            },
+            eventId: 'evt_pickup_original',
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await recordPickupCompletedAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: service,
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.kind, 'recorded');
+    assert.equal(result.duplicate, true);
+    assert.equal(result.eventId, 'evt_pickup_original');
+    assert.equal(result.etaUpdate, undefined);
+    assert.equal(result.etaSnapshot?.status, 'READY');
+  });
+
+  it('queues PICKUP_COMPLETED when a recorded response omits etaSnapshot', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const orderedEventContract = {
+      appVersion: '1.2.3', assignmentGeneration: '14', driverContractVersion: 2 as const,
+      expectedRouteVersionId: '44444444-4444-4444-8444-444444444444', versionCode: 21,
+    };
+    const service = createDriverEventsApiClient({
+      accessToken: 'fixture-driver-access-token',
+      baseUrl: 'https://delivery.example.com',
+      orderedEventContract,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          data: {
+            duplicate: false,
+            eventId: 'evt_pickup_missing_snapshot',
+          },
+          error: null,
+        }),
+      }),
+    });
+
+    const result = await recordPickupCompletedAfterDeliveryStart({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: service,
+      offlineQueue: queue,
+      routePlanId: sampleAssignedRoute.id,
+    });
+
+    assert.equal(result.kind, 'queued');
+    assert.match(result.message, /ETA snapshot/iu);
+    const pending = queue.listPending();
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'PICKUP_COMPLETED');
+    assert.deepEqual(pending[0]?.kind === 'driver_event' ? {
+      appVersion: pending[0].event.appVersion,
+      assignmentGeneration: pending[0].event.assignmentGeneration,
+      driverContractVersion: pending[0].event.driverContractVersion,
+      expectedRouteVersionId: pending[0].event.expectedRouteVersionId,
+      versionCode: pending[0].event.versionCode,
+    } : null, orderedEventContract);
   });
 });

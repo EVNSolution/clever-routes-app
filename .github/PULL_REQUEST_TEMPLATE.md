@@ -1,7 +1,7 @@
 # CLEVER PR review completion
 
-- target repo: `EVNSolution/clever-driver-app`
-- target service: `clever-driver-app`
+- target repo: `EVNSolution/clever-routes-app`
+- target service: `clever-routes-app`
 - target branch: `dev` / `main`
 - source branch:
 - project-start issue:

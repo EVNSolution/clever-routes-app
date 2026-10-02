@@ -49,6 +49,9 @@ type DisplayNamesConstructor = new (
 ) => { of(code: string): string | undefined };
 
 type IntlLocaleWithWeekInfo = {
+  getWeekInfo?: () => {
+    firstDay?: number;
+  };
   weekInfo?: {
     firstDay?: number;
   };
@@ -300,7 +303,7 @@ export function getDriverPhoneCountryLabel(
   const countryName = getDisplayName({ code: country.iso2, locale, type: 'region' });
   const languageName = getDisplayName({ code: country.primaryLanguageCode, locale, type: 'language' });
 
-  return `${countryName} · ${country.iso2} · ${country.callingCode} · ${languageName}`;
+  return `${countryName} ${country.iso2} ${country.callingCode} ${languageName}`;
 }
 
 export function findDriverPhoneCountry(countryIso2: string): DriverPhoneCountry | null {
@@ -422,7 +425,8 @@ function getWeekStartsOn(locale: string): DriverWeekStartDay {
   }
 
   try {
-    const firstDay = new LOCALE(locale).weekInfo?.firstDay;
+    const localeInfo = new LOCALE(locale);
+    const firstDay = localeInfo.weekInfo?.firstDay ?? localeInfo.getWeekInfo?.().firstDay;
 
     if (typeof firstDay === 'number') {
       return WEEK_START_BY_FIRST_DAY[firstDay] ?? 'monday';

@@ -12,12 +12,25 @@
       }
     },
     "production": {
+      "credentialsSource": "remote",
       "distribution": "store",
       "environment": "production",
-      "autoIncrement": true
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      }
+    },
+    "production-local": {
+      "extends": "production",
+      "autoIncrement": false
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "android": {
+        "track": "production",
+        "releaseStatus": "completed"
+      }
+    }
   }
 }

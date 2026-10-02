@@ -11,8 +11,8 @@
 
 - project-start issue: `EVNSolution/clever-change-control#145`
 - change-control issue: `EVNSolution/clever-change-control#145`
-- target repo: `EVNSolution/clever-driver-app`
-- target service: `clever-driver-app`
+- target repo: `EVNSolution/clever-routes-app`
+- target service: `clever-routes-app`
 - template lineage: `clever-agent-project/docs/templates@main`
 - default work branch: `dev`
 

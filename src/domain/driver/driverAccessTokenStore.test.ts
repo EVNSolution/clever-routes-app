@@ -1,209 +1,598 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { DriverAccountAccessToken } from '../driverAuth/driverAuth';
+import { sampleInvitedRouteAccess } from '../routeAccess/routeAccess';
 import {
   createDriverAccessTokenStore,
   DRIVER_ACCESS_TOKEN_STORAGE_KEY,
   type SecureTokenStorage,
+  StaleDriverAccessError,
 } from './driverAccessTokenStore';
-import { sampleInvitedRouteAccess } from '../routeAccess/routeAccess';
 
-function createMemoryStorage(seed: Record<string, string | null> = {}): SecureTokenStorage & { values: Record<string, string | null> } {
+function createMemoryStorage(seed: Record<string, string | null> = {}): SecureTokenStorage & {
+  values: Record<string, string | null>;
+} {
   const values = { ...seed };
   return {
     values,
-    deleteItemAsync: async (key) => {
-      values[key] = null;
-    },
+    deleteItemAsync: async (key) => { values[key] = null; },
     getItemAsync: async (key) => values[key] ?? null,
-    setItemAsync: async (key, value) => {
-      values[key] = value;
-    },
+    setItemAsync: async (key, value) => { values[key] = value; },
   };
 }
 
-test('saves route lookup driver access and restores it before expiry', async () => {
+function accountAccess(overrides: Partial<DriverAccountAccessToken> = {}): DriverAccountAccessToken {
+  return {
+    accessToken: 'account-access-token',
+    expiresAt: '2026-05-12T07:00:00.000Z',
+    refreshToken: 'account-refresh-token',
+    refreshTokenExpiresAt: '2026-06-12T07:00:00.000Z',
+    tokenType: 'Bearer',
+    ttlSeconds: 900,
+    use: 'driver_account',
+    ...overrides,
+  };
+}
+
+async function saveAccount(
+  store: ReturnType<typeof createDriverAccessTokenStore>,
+  access = accountAccess(),
+): Promise<void> {
+  await store.saveAuthenticatedDriver({
+    accountAccess: access,
+    phoneE164: '+821089216198',
+  });
+}
+
+test('saves a phone account before any route is assigned', async () => {
   const storage = createMemoryStorage();
   const store = createDriverAccessTokenStore({
     now: () => new Date('2026-05-12T06:45:00.000Z'),
     storage,
   });
 
-  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await saveAccount(store);
   const restored = await store.loadActiveDriverAccess();
 
   assert.equal(restored.kind, 'active');
-  if (restored.kind !== 'active') {
-    return;
-  }
-  assert.deepEqual(restored.routeAccess, sampleInvitedRouteAccess.routeAccess);
-  assert.deepEqual(restored.driverAccess, sampleInvitedRouteAccess.driverAccess);
-});
-
-test('saves verified driver profile before any route is assigned', async () => {
-  const storage = createMemoryStorage();
-  const store = createDriverAccessTokenStore({
-    now: () => new Date('2026-05-12T06:45:00.000Z'),
-    storage,
-  });
-
-  await store.saveVerifiedDriver({
-    displayName: 'Minji Kim',
-    driverAccess: {
-      ...sampleInvitedRouteAccess.driverAccess,
-      refreshToken: 'valid-rt',
-      refreshTokenExpiresAt: '2026-06-12T06:55:00.000Z',
-    },
-    phoneE164: '+821089216198',
-  });
-  const restored = await store.loadActiveDriverAccess();
-
-  assert.equal(restored.kind, 'active');
-  if (restored.kind !== 'active') {
-    return;
-  }
-  assert.deepEqual(restored.driverProfile, {
-    displayName: 'Minji Kim',
-    phoneE164: '+821089216198',
-  });
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.accountAccess.use, 'driver_account');
+  assert.deepEqual(restored.driverProfile, { phoneE164: '+821089216198' });
+  assert.equal(restored.driverAccess, undefined);
   assert.equal(restored.routeAccess, undefined);
 });
 
-test('preserves verified driver profile when saving route access later', async () => {
+test('keeps account access separate when saving selected route access', async () => {
   const storage = createMemoryStorage();
   const store = createDriverAccessTokenStore({
     now: () => new Date('2026-05-12T06:45:00.000Z'),
     storage,
   });
 
-  await store.saveVerifiedDriver({
-    displayName: 'Minji Kim',
-    driverAccess: {
-      ...sampleInvitedRouteAccess.driverAccess,
-      refreshToken: 'valid-rt',
-      refreshTokenExpiresAt: '2026-06-12T06:55:00.000Z',
-    },
-    phoneE164: '+821089216198',
-  });
+  await saveAccount(store);
   await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
   const restored = await store.loadActiveDriverAccess();
 
   assert.equal(restored.kind, 'active');
-  if (restored.kind !== 'active') {
-    return;
-  }
-  assert.deepEqual(restored.driverProfile, {
-    displayName: 'Minji Kim',
-    phoneE164: '+821089216198',
-  });
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.accountAccess.accessToken, 'account-access-token');
+  assert.equal(restored.driverAccess?.accessToken, 'fixture-driver-access-token');
   assert.deepEqual(restored.routeAccess, sampleInvitedRouteAccess.routeAccess);
 });
 
-test('preserves verified refresh token when route lookup access is saved later', async () => {
+test('does not overwrite persisted access for a different active route', async () => {
   const storage = createMemoryStorage();
   const store = createDriverAccessTokenStore({
     now: () => new Date('2026-05-12T06:45:00.000Z'),
     storage,
   });
 
-  await store.saveVerifiedDriver({
-    displayName: 'Minji Kim',
-    driverAccess: {
-      ...sampleInvitedRouteAccess.driverAccess,
-      accessToken: 'verified-access-token',
-      refreshToken: 'valid-rt',
-      refreshTokenExpiresAt: '2026-06-12T06:55:00.000Z',
-    },
-    phoneE164: '+821089216198',
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({
+    navigationStepIndex: 1,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
   });
-  await store.saveFromInvitedRouteAccess({
+  const saved = await store.saveFromInvitedRouteAccess({
     ...sampleInvitedRouteAccess,
     driverAccess: {
       ...sampleInvitedRouteAccess.driverAccess,
-      accessToken: 'route-lookup-access-token',
+      accessToken: 'different-route-token',
+    },
+    routeAccess: {
+      ...sampleInvitedRouteAccess.routeAccess,
+      routePlanId: 'different-route',
     },
   });
+  const activeRouteSaved = await store.saveActiveRouteSession({
+    navigationStepIndex: 0,
+    routePlanId: 'different-route',
+  });
+
+  assert.equal(saved, false);
+  assert.equal(activeRouteSaved, false);
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.driverAccess?.accessToken, sampleInvitedRouteAccess.driverAccess.accessToken);
+  assert.equal(restored.routeAccess?.routePlanId, sampleInvitedRouteAccess.routeAccess.routePlanId);
+  assert.equal(restored.activeRouteSession?.routePlanId, sampleInvitedRouteAccess.routeAccess.routePlanId);
+});
+
+test('updates same-route access generation without replacing the active session', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+  const startedAt = '2026-05-12T06:30:00.000Z';
+
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1'],
+    navigationStepIndex: 2,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+    startedAt,
+  });
+  const saved = await store.saveFromInvitedRouteAccess({
+    ...sampleInvitedRouteAccess,
+    driverAccess: {
+      ...sampleInvitedRouteAccess.driverAccess,
+      accessToken: 'redispatched-route-token',
+    },
+    routeAccess: {
+      ...sampleInvitedRouteAccess.routeAccess,
+      assignmentGeneration: '8',
+    },
+  });
+
+  assert.equal(saved, true);
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.driverAccess?.accessToken, 'redispatched-route-token');
+  assert.equal(restored.routeAccess?.assignmentGeneration, '8');
+  assert.equal(restored.activeRouteSession?.startedAt, startedAt);
+  assert.equal(restored.activeRouteSession?.navigationStepIndex, 2);
+  assert.deepEqual(restored.activeRouteSession?.completedStopIds, ['stop-1']);
+});
+
+test('does not let a stale same-route save remove a concurrently completed stop', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1'],
+    navigationStepIndex: 2,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  });
+  await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1', 'stop-2'],
+    navigationStepIndex: 3,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  });
+  await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1'],
+    navigationStepIndex: 2,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  });
+
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.deepEqual(restored.activeRouteSession?.completedStopIds, ['stop-1', 'stop-2']);
+});
+
+test('serializes concurrent token refresh and active route cleanup', async () => {
+  const storage = createMemoryStorage();
+  const baseSetItem = storage.setItemAsync;
+  let delayNextWrite = false;
+  storage.setItemAsync = async (key, value) => {
+    if (delayNextWrite) {
+      delayNextWrite = false;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await baseSetItem(key, value);
+  };
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({
+    navigationStepIndex: 1,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  });
+  delayNextWrite = true;
+  await Promise.all([
+    store.clearActiveRouteSession(),
+    store.saveRefreshedAccountAccess(accountAccess({ accessToken: 'refreshed-account-access' })),
+  ]);
+
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.activeRouteSession, undefined);
+  assert.equal(restored.accountAccess.accessToken, 'refreshed-account-access');
+});
+
+test('refreshes only account access and preserves route and active session', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({ navigationStepIndex: 2, routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId });
+  await store.saveRefreshedAccountAccess(accountAccess({ accessToken: 'refreshed-account-access' }));
   const restored = await store.loadActiveDriverAccess();
 
   assert.equal(restored.kind, 'active');
-  if (restored.kind !== 'active') {
-    return;
-  }
-  assert.equal(restored.driverAccess.accessToken, 'route-lookup-access-token');
-  assert.equal(restored.driverAccess.refreshToken, 'valid-rt');
-  assert.equal(restored.driverAccess.refreshTokenExpiresAt, '2026-06-12T06:55:00.000Z');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.accountAccess.accessToken, 'refreshed-account-access');
+  assert.equal(restored.driverAccess?.accessToken, 'fixture-driver-access-token');
+  assert.equal(restored.activeRouteSession?.navigationStepIndex, 2);
 });
 
-test('clears and refuses to restore an expired driver access token', async () => {
+test('rejects a stale account refresh and clear after another account signs in', async () => {
   const storage = createMemoryStorage();
   const store = createDriverAccessTokenStore({
-    now: () => new Date('2026-05-12T07:00:00.000Z'),
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+  const previousIdentity = {
+    accessToken: 'account-access-token',
+    phoneE164: '+821089216198',
+    refreshToken: 'previous-refresh-token',
+  };
+  await saveAccount(store, accountAccess({ refreshToken: previousIdentity.refreshToken }));
+  await store.saveAuthenticatedDriver({
+    accountAccess: accountAccess({
+      accessToken: 'replacement-access-token',
+      refreshToken: 'replacement-refresh-token',
+    }),
+    phoneE164: '+14165550100',
+  });
+
+  await assert.rejects(
+    store.saveRefreshedAccountAccess(accountAccess({
+      accessToken: 'late-previous-access-token',
+      refreshToken: 'late-previous-refresh-token',
+    }), previousIdentity),
+    (error: unknown) => error instanceof StaleDriverAccessError
+      && error.message === 'Stored driver access changed before the operation completed.',
+  );
+  await assert.rejects(
+    store.clear(previousIdentity),
+    StaleDriverAccessError,
+  );
+
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.driverProfile.phoneE164, '+14165550100');
+  assert.equal(restored.accountAccess.accessToken, 'replacement-access-token');
+  assert.equal(restored.accountAccess.refreshToken, 'replacement-refresh-token');
+});
+
+test('rejects stale save and clear when the server reuses the same-account refresh token', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+  const phoneE164 = '+821089216198';
+  const reusedRefreshToken = 'server-reused-refresh-token';
+  await saveAccount(store, accountAccess({
+    accessToken: 'access-generation-1',
+    refreshToken: reusedRefreshToken,
+  }));
+  await store.saveRefreshedAccountAccess(accountAccess({
+    accessToken: 'access-generation-2',
+    refreshToken: reusedRefreshToken,
+  }), {
+    accessToken: 'access-generation-1',
+    phoneE164,
+    refreshToken: reusedRefreshToken,
+  });
+
+  await assert.rejects(
+    store.saveRefreshedAccountAccess(accountAccess({
+      accessToken: 'late-access-generation-1',
+      refreshToken: reusedRefreshToken,
+    }), {
+      accessToken: 'access-generation-1',
+      phoneE164,
+      refreshToken: reusedRefreshToken,
+    }),
+    StaleDriverAccessError,
+  );
+  await assert.rejects(store.clear({
+    accessToken: 'access-generation-1',
+    phoneE164,
+    refreshToken: reusedRefreshToken,
+  }), StaleDriverAccessError);
+
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.accountAccess.accessToken, 'access-generation-2');
+  assert.equal(restored.accountAccess.refreshToken, reusedRefreshToken);
+});
+
+test('conditionally refreshes and clears only the matching account identity', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+  const expected = {
+    accessToken: 'account-access-token',
+    phoneE164: '+821089216198',
+    refreshToken: 'matching-refresh-token',
+  };
+  await saveAccount(store, accountAccess({ refreshToken: expected.refreshToken }));
+  await store.saveRefreshedAccountAccess(accountAccess({
+    accessToken: 'matched-refreshed-access',
+    refreshToken: 'matched-refreshed-token',
+  }), expected);
+  await store.clear({
+    accessToken: 'matched-refreshed-access',
+    phoneE164: expected.phoneE164,
+    refreshToken: 'matched-refreshed-token',
+  });
+
+  assert.deepEqual(await store.loadActiveDriverAccess(), { kind: 'missing' });
+  await assert.rejects(
+    store.saveRefreshedAccountAccess(accountAccess(), expected),
+    StaleDriverAccessError,
+  );
+});
+
+test('keeps a stable route-session generation and route-start acknowledgement', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+  const startedAt = '2026-05-12T06:44:00.000Z';
+
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({
+    navigationStepIndex: 0,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+    startedAt,
+  });
+  assert.equal(
+    await store.markActiveRouteStarted(sampleInvitedRouteAccess.routeAccess.routePlanId, startedAt),
+    true,
+  );
+  await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1'],
+    navigationStepIndex: 1,
+    pickupCompleted: true,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  });
+  await store.saveActiveRouteSession({
+    navigationStepIndex: 2,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  });
+
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.activeRouteSession?.startedAt, startedAt);
+  assert.equal(restored.activeRouteSession?.pickupCompletedAt, '2026-05-12T06:45:00.000Z');
+  assert.equal(restored.activeRouteSession?.routeStartedRecordedAt, '2026-05-12T06:45:00.000Z');
+  assert.deepEqual(restored.activeRouteSession?.completedStopIds, ['stop-1']);
+  assert.equal(
+    await store.clearActiveRouteSession(
+      sampleInvitedRouteAccess.routeAccess.routePlanId,
+      '2026-05-12T06:43:00.000Z',
+    ),
+    false,
+  );
+  assert.equal(
+    await store.clearActiveRouteSession(
+      sampleInvitedRouteAccess.routeAccess.routePlanId,
+      startedAt,
+      `${Number(sampleInvitedRouteAccess.routeAccess.assignmentGeneration) + 1}`,
+    ),
+    false,
+  );
+  assert.equal(
+    await store.clearActiveRouteSession(
+      sampleInvitedRouteAccess.routeAccess.routePlanId,
+      startedAt,
+      sampleInvitedRouteAccess.routeAccess.assignmentGeneration,
+    ),
+    true,
+  );
+});
+
+test('persists the trusted route-start location without letting later progress replace it', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+  const routeStartedLocation = {
+    accuracyMeters: 8,
+    latitude: 43.6532,
+    longitude: -79.3832,
+    recordedAt: '2026-09-13T00:59:58.000Z',
+  };
+
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({
+    navigationStepIndex: 0,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+    routeStartedLocation,
+  });
+  await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1'],
+    navigationStepIndex: 1,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+    routeStartedLocation: {
+      accuracyMeters: 5,
+      latitude: 37.5665,
+      longitude: 126.978,
+      recordedAt: '2026-09-13T01:05:00.000Z',
+    },
+  });
+
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.deepEqual(restored.activeRouteSession?.routeStartedLocation, routeStartedLocation);
+});
+
+test('clears only the active route session without signing out', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
     storage,
   });
 
+  await saveAccount(store);
   await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({ navigationStepIndex: 1, routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId });
+  await store.clearActiveRouteSession();
   const restored = await store.loadActiveDriverAccess();
 
-  assert.deepEqual(restored, { kind: 'expired', isReturningDriver: true, routeAccess: sampleInvitedRouteAccess.routeAccess });
-  assert.equal(storage.values[DRIVER_ACCESS_TOKEN_STORAGE_KEY], null);
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.activeRouteSession, undefined);
+  assert.deepEqual(restored.routeAccess, sampleInvitedRouteAccess.routeAccess);
+  assert.equal(restored.accountAccess.accessToken, 'account-access-token');
 });
 
-test('returns refresh_required when AT is expired but RT is valid', async () => {
+test('clears deleted route cache while keeping the account signed in', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({ navigationStepIndex: 1, routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId });
+  await store.clearCachedRouteAccess();
+  const restored = await store.loadActiveDriverAccess();
+
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.accountAccess.accessToken, 'account-access-token');
+  assert.equal(restored.driverAccess, undefined);
+  assert.equal(restored.routeAccess, undefined);
+  assert.equal(restored.activeRouteSession, undefined);
+});
+
+test('does not clear targeted route access while that route is active', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({
+    navigationStepIndex: 1,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  });
+
+  assert.equal(
+    await store.clearCachedRouteAccess(sampleInvitedRouteAccess.routeAccess.routePlanId),
+    false,
+  );
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.activeRouteSession?.routePlanId, sampleInvitedRouteAccess.routeAccess.routePlanId);
+  assert.equal(restored.driverAccess?.accessToken, sampleInvitedRouteAccess.driverAccess.accessToken);
+});
+
+test('returns refresh_required when account access expires but refresh remains valid', async () => {
   const storage = createMemoryStorage();
   const store = createDriverAccessTokenStore({
     now: () => new Date('2026-05-12T07:00:00.000Z'),
     storage,
   });
 
-  await store.saveFromInvitedRouteAccess({
-    ...sampleInvitedRouteAccess,
-    driverAccess: {
-      ...sampleInvitedRouteAccess.driverAccess,
-      expiresAt: '2026-05-12T06:55:00.000Z',
-      refreshToken: 'valid-rt',
-      refreshTokenExpiresAt: '2026-06-12T06:55:00.000Z',
-    }
-  });
-
+  await saveAccount(store);
   const restored = await store.loadActiveDriverAccess();
   assert.equal(restored.kind, 'refresh_required');
 });
 
-test('returns expired with isReturningDriver when both AT and RT are expired', async () => {
+test('clears an account session after both access and refresh expire', async () => {
   const storage = createMemoryStorage();
   const store = createDriverAccessTokenStore({
     now: () => new Date('2026-06-13T07:00:00.000Z'),
     storage,
   });
 
-  await store.saveFromInvitedRouteAccess({
-    ...sampleInvitedRouteAccess,
-    driverAccess: {
-      ...sampleInvitedRouteAccess.driverAccess,
-      expiresAt: '2026-05-12T06:55:00.000Z',
-      refreshToken: 'expired-rt',
-      refreshTokenExpiresAt: '2026-06-12T06:55:00.000Z',
-    }
-  });
-
+  await saveAccount(store);
   const restored = await store.loadActiveDriverAccess();
-  assert.equal(restored.kind, 'expired');
-  if (restored.kind === 'expired') {
-    assert.equal(restored.isReturningDriver, true);
-  }
+
+  assert.deepEqual(restored, {
+    driverProfile: { phoneE164: '+821089216198' },
+    kind: 'expired',
+  });
+  assert.equal(storage.values[DRIVER_ACCESS_TOKEN_STORAGE_KEY], null);
 });
 
-test('clears malformed persisted token payloads instead of reusing them', async () => {
+test('invalidates legacy and malformed token payloads', async () => {
   const storage = createMemoryStorage({
-    [DRIVER_ACCESS_TOKEN_STORAGE_KEY]: JSON.stringify({ schemaVersion: 1, driverAccess: { accessToken: 'missing fields' } }),
+    [DRIVER_ACCESS_TOKEN_STORAGE_KEY]: JSON.stringify({
+      driverAccess: sampleInvitedRouteAccess.driverAccess,
+      savedAt: '2026-05-12T06:45:00.000Z',
+      schemaVersion: 3,
+    }),
   });
-  const store = createDriverAccessTokenStore({
-    now: () => new Date('2026-05-12T06:45:00.000Z'),
+  const store = createDriverAccessTokenStore({ storage });
+
+  assert.deepEqual(await store.loadActiveDriverAccess(), { kind: 'invalid' });
+  assert.equal(storage.values[DRIVER_ACCESS_TOKEN_STORAGE_KEY], null);
+});
+
+test('persists completion_pending across restart until the server receipt is acknowledged', async () => {
+  const storage = createMemoryStorage();
+  const first = createDriverAccessTokenStore({
+    now: () => new Date('2026-08-22T19:42:10.000Z'),
     storage,
   });
+  await saveAccount(first, accountAccess({
+    expiresAt: '2026-08-23T07:00:00.000Z',
+    refreshTokenExpiresAt: '2026-09-12T07:00:00.000Z',
+  }));
+  await first.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await first.saveActiveRouteSession({ navigationStepIndex: 11, routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId });
+  assert.equal(await first.markActiveRouteCompletionPending({
+    clientEventId: '01K37KITCHENERCOMPLETE',
+    occurredAt: '2026-08-22T19:42:10.000Z',
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  }), true);
 
-  const restored = await store.loadActiveDriverAccess();
-
-  assert.deepEqual(restored, { kind: 'invalid' });
-  assert.equal(storage.values[DRIVER_ACCESS_TOKEN_STORAGE_KEY], null);
+  const restarted = createDriverAccessTokenStore({
+    now: () => new Date('2026-08-22T19:43:00.000Z'),
+    storage,
+  });
+  const restored = await restarted.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  assert.equal(restored.kind === 'active' ? restored.activeRouteSession?.status : null, 'completion_pending');
+  assert.equal(restored.kind === 'active' ? restored.activeRouteSession?.completionClientEventId : null, '01K37KITCHENERCOMPLETE');
 });

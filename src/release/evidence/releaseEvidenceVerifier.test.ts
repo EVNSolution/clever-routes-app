@@ -10,7 +10,7 @@ const completeManifest = `# Clever Driver release evidence manifest
 | Field | Value |
 | --- | --- |
 | Source commit SHA | 1c9c624ad82530311a301c80dbb939694b4ecafe |
-| GitHub PR / merge reference | EVNSolution/clever-driver-app#79 |
+| GitHub PR / merge reference | EVNSolution/clever-routes-app#79 |
 | App version | 0.1.0 |
 | iOS build number | 1 |
 | Android version code | 1 |

@@ -1,4 +1,4 @@
-# Clever Driver release evidence manifest template
+# CLEVER Routes release evidence manifest template
 
 ## Use and storage rules
 
@@ -46,6 +46,9 @@ copy after verification.
 | Evidence storage location | pending |
 | Synthetic data only? | yes / no |
 | Production validation approval reference, if any | pending / n/a |
+| Privacy policy URL | `https://clever-route-api.cleversystem.ai/routes-app/privacy` |
+| Support URL | `https://clever-route-api.cleversystem.ai/routes-app/support` |
+| Account-deletion URL | `https://clever-route-api.cleversystem.ai/routes-app/account-deletion` |
 
 ## Build evidence
 
@@ -59,6 +62,7 @@ copy after verification.
 | Field | Value |
 | --- | --- |
 | Delivery server environment | pending |
+| `EXPO_PUBLIC_DRIVER_RUNTIME_MODE` source | EAS `preview` / EAS `production` / other |
 | `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` source | EAS `preview` / EAS `production` / other |
 | Driver route fixture reference | pending |
 | Shop/company fixture reference | pending |
@@ -89,7 +93,7 @@ Use sanitized references to external screenshots/videos/logs only.
 | Continuous/background-capable location task | pending | pending | pending | pending | pending |
 | Proof photo capture from camera/library | pending | pending | pending | pending | pending |
 | Proof media scan rejection UX | pending | pending | pending | pending | pending |
-| Signature and barcode proof capture | pending | pending | pending | pending | pending |
+| Signature proof capture | pending | pending | pending | pending | pending |
 | Offline queue retry/discard UI after network loss | pending | pending | pending | pending | pending |
 | Token expiry, invalid persisted token, or live downstream `401` recovery | pending | pending | pending | pending | pending |
 | Driver session reset/sign-out cleanup | pending | pending | pending | pending | pending |
@@ -104,7 +108,9 @@ Result values: `pass`, `fail`, `blocked`, or `not-run`.
 | Privacy policy URL approved | pending | pending | pending | pending |
 | App Store privacy answers reviewed | pending | pending | pending | pending |
 | Google Play Data safety answers reviewed | pending | pending | pending | pending |
+| Stable synthetic Play review account and assigned route verified | pending | pending | pending | Do not store credentials in git or GitHub |
 | Background location review rationale approved | pending | pending | pending | pending |
+| Background-location demonstration video accepted | pending | pending | pending | Show disclosure, runtime permission, active-route tracking, and tracking stop |
 | Photo/video permission review approved | pending | pending | pending | pending |
 | Google Play minimum-scope permission review completed | pending | pending | pending | Location/photo-video reviewed; Contacts permissions absent in native manifest |
 | Store/private distribution path approved | pending | pending | pending | pending |
@@ -133,7 +139,7 @@ Decision timestamp:
 
 | Blocker | Issue | Status / evidence reference |
 | --- | --- | --- |
-| Physical iOS/Android smoke evidence | EVNSolution/clever-driver-app#72 | pending |
-| Native EAS builds, signing, store/privacy approvals, license decision | EVNSolution/clever-driver-app#73 | pending |
+| Physical iOS/Android smoke evidence | EVNSolution/clever-routes-app#72 | pending |
+| Native EAS builds, signing, store/privacy approvals, license decision | EVNSolution/clever-routes-app#73 | pending |
 | Production proof-media object storage, signed access, scanner, cleanup evidence | EVNSolution/clever-delivery-server#71 | pending |
 | Baseline context-monorepo service pointer | EVNSolution/clever-context-monorepo#23 / PR #24 | complete; open a new context issue only if production runtime/API boundaries change |

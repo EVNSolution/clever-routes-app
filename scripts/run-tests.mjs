@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-const testFileSuffix = ".test.ts";
+const testFilePattern = /\.test\.tsx?$/u;
 const sourceRoot = "src";
 
 function collectTestFiles(directory) {
@@ -17,7 +17,7 @@ function collectTestFiles(directory) {
         return collectTestFiles(path);
       }
 
-      return stats.isFile() && path.endsWith(testFileSuffix) ? [path] : [];
+      return stats.isFile() && testFilePattern.test(path) ? [path] : [];
     })
     .sort();
 }
@@ -30,7 +30,7 @@ function collectRequestedTestFiles(paths) {
       return collectTestFiles(path);
     }
 
-    if (stats.isFile() && path.endsWith(testFileSuffix)) {
+    if (stats.isFile() && testFilePattern.test(path)) {
       return [path];
     }
 
@@ -50,7 +50,7 @@ if (testFiles.length === 0) {
   const sourceDescription = requestedPaths.length === 0
     ? `${sourceRoot}/`
     : requestedPaths.join(", ");
-  console.error(`No ${testFileSuffix} files found for ${sourceDescription}.`);
+  console.error(`No .test.ts or .test.tsx files found for ${sourceDescription}.`);
   process.exit(1);
 }
 

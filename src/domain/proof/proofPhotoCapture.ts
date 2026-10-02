@@ -24,7 +24,7 @@ export async function captureProofPhoto(input: {
   if (permission !== 'granted') {
     return {
       kind: 'permission_denied',
-      message: 'Photo permission is required to attach proof media.',
+      message: 'Allow photo access to add a delivery photo.',
       source: input.source,
     };
   }

@@ -1,17 +1,30 @@
 import type { DeliveryStartResult } from '../delivery/deliveryStart';
-import { formatDriverApiErrorForDriver, getDriverApiRequiresRouteLookup } from '../../api/deliveryServer/driverApiError';
-import type { DriverEventRecordResult, DriverEventService, DriverEventType } from '../events/driverEvents';
+import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
+import {
+  formatDriverApiErrorForDriver,
+  getDriverApiRequiresRouteLookup,
+  getDriverApiRequiresRouteReconciliation,
+} from '../../api/deliveryServer/driverApiError';
+import {
+  prepareDriverEventForPersistence,
+  type DriverEventRecordResult,
+  type DriverEventService,
+  type DriverEventType,
+} from '../events/driverEvents';
 import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
-import type { ProofBarcodeReference } from '../proof/proofBarcodeCapture';
 import type { ProofMediaReference } from '../proof/proofMediaUpload';
 import type { ProofSignatureReference } from '../proof/proofSignatureCapture';
 
 export type StopProofAction = 'delivered' | 'failed';
-export type StopProofFailureReason = 'CUSTOMER_UNAVAILABLE' | 'DAMAGED' | 'INACCESSIBLE' | 'OTHER';
+export type StopProofFailureReason =
+  | 'ADMIN_ROUTE_ASSIGNMENT_ERROR'
+  | 'CUSTOMER_UNAVAILABLE'
+  | 'DAMAGED'
+  | 'INACCESSIBLE'
+  | 'OTHER';
 
 export type StopProofEventInput = {
   action: StopProofAction;
-  barcodes?: ProofBarcodeReference[];
   deliveryStopId: string;
   media?: ProofMediaReference[];
   note: string;
@@ -25,13 +38,23 @@ export type StopProofEventInput = {
 export type StopProofEventResult =
   | (DriverEventRecordResult & { kind: 'recorded' })
   | { kind: 'blocked'; message: string; reason: 'delivery_not_active' }
-  | { kind: 'queued'; message: string; queueItemId: string; reason: 'record_failed'; requiresRouteLookup?: true };
+  | {
+    kind: 'queued';
+    message: string;
+    queueItemId: string;
+    reason: 'record_failed';
+    requiresRouteLookup?: true;
+    requiresRouteReconciliation?: true;
+  };
 
 export async function recordStopProofEventAfterDeliveryStart(input: {
+  attemptTimeoutMs?: number;
+  cancelAttemptTimeout?: (handle: unknown) => void;
   deliveryStart: DeliveryStartResult;
   driverEventService: DriverEventService;
   input: StopProofEventInput;
   offlineQueue?: OfflineSubmissionQueue;
+  scheduleAttemptTimeout?: (expire: () => void, timeoutMs: number) => unknown;
 }): Promise<StopProofEventResult> {
   if (input.deliveryStart.kind !== 'delivery_active') {
     return {
@@ -41,33 +64,58 @@ export async function recordStopProofEventAfterDeliveryStart(input: {
     };
   }
 
-  const event = {
+  const event = prepareDriverEventForPersistence(input.driverEventService, {
     clientEventId: createClientEventId(`stop-${input.input.action}`),
     deliveryStopId: input.input.deliveryStopId,
     eventType: getStopProofEventType(input.input.action),
     occurredAt: input.input.occurredAt ?? new Date(),
     payload: { proof: getStopProofPayload(input.input) },
     routePlanId: input.input.routePlanId,
-  };
+  });
+  const queued = input.offlineQueue?.enqueueDriverEvent(event);
 
+  if (input.offlineQueue !== undefined) {
+    await input.offlineQueue.whenPersisted();
+  }
+
+  let result: DriverEventRecordResult;
   try {
-    const result = await input.driverEventService.recordDriverEvent(event);
-
-    return { ...result, kind: 'recorded' };
+    result = await runBoundedAsyncOperation(
+      (signal) => input.driverEventService.recordDriverEvent(event, { signal }),
+      {
+        ...(input.cancelAttemptTimeout === undefined ? {} : { cancel: input.cancelAttemptTimeout }),
+        ...(input.scheduleAttemptTimeout === undefined ? {} : { schedule: input.scheduleAttemptTimeout }),
+        timeoutMs: input.attemptTimeoutMs ?? 15_000,
+      },
+    );
   } catch (error) {
-    if (input.offlineQueue === undefined) {
+    if (input.offlineQueue === undefined || queued === undefined) {
       throw error;
     }
 
-    const queued = input.offlineQueue.enqueueDriverEvent(event);
+    const requiresRouteReconciliation = getDriverApiRequiresRouteReconciliation(error);
+    if (requiresRouteReconciliation === true) {
+      input.offlineQueue.blockRouteSubmissionsForReconciliation(input.input.routePlanId);
+    }
+    await input.offlineQueue.whenPersisted();
     return {
       kind: 'queued',
       message: `Stop proof event queued for retry: ${formatDriverApiErrorForDriver(error)}`,
       queueItemId: queued.queueItemId,
       reason: 'record_failed',
       ...(getDriverApiRequiresRouteLookup(error) === undefined ? {} : { requiresRouteLookup: true as const }),
+      ...(requiresRouteReconciliation === undefined
+        ? {}
+        : { requiresRouteReconciliation: true as const }),
     };
   }
+
+  if (input.offlineQueue !== undefined && queued !== undefined) {
+    input.offlineQueue.acknowledge(queued.queueItemId);
+    await input.offlineQueue.whenPersisted();
+  }
+
+  return { ...result, kind: 'recorded' };
 }
 
 function getStopProofEventType(action: StopProofAction): Extract<DriverEventType, 'STOP_DELIVERED' | 'STOP_FAILED'> {
@@ -79,27 +127,24 @@ function getStopProofPayload(input: StopProofEventInput): Record<string, unknown
     ...getProofMedia(input.photoUris ?? []),
     ...(input.media ?? []),
   ];
-  const barcodes = input.barcodes ?? [];
   const signatures = input.signatures ?? [];
 
   if (input.action === 'delivered') {
     return {
-      ...(barcodes.length === 0 ? {} : { barcodes }),
       ...(media.length === 0 ? {} : { media }),
       note: input.note,
       ...(signatures.length === 0 ? {} : { signatures }),
-      source: 'driver-app-mvp',
+      source: 'clever-routes-app',
       type: 'DELIVERED_NOTE',
     };
   }
 
   return {
-    ...(barcodes.length === 0 ? {} : { barcodes }),
     ...(media.length === 0 ? {} : { media }),
     note: input.note,
     reason: input.reason ?? 'OTHER',
     ...(signatures.length === 0 ? {} : { signatures }),
-    source: 'driver-app-mvp',
+    source: 'clever-routes-app',
     type: 'FAILED_REASON',
   };
 }

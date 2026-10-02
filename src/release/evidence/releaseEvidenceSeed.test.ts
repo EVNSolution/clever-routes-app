@@ -32,8 +32,8 @@ const baseInput: ReleaseEvidenceSeedInput = {
   sourceCommitSha: 'abc123def456',
   sourceRef: 'dev',
   trackingIssues: {
-    nativeBuildEvidence: 'EVNSolution/clever-driver-app#73',
-    physicalDeviceSmoke: 'EVNSolution/clever-driver-app#72',
+    nativeBuildEvidence: 'EVNSolution/clever-routes-app#73',
+    physicalDeviceSmoke: 'EVNSolution/clever-routes-app#72',
     proofMediaProduction: 'EVNSolution/clever-delivery-server#71'
   }
 };
@@ -49,8 +49,8 @@ test('renders a non-secret release evidence seed for the current source revision
   assert.match(markdown, /\| Android version code \| `1` \|/);
   assert.match(markdown, /`npx eas-cli build --platform android --profile preview`/);
   assert.match(markdown, /`npx eas-cli build --platform ios --profile preview`/);
-  assert.match(markdown, /EVNSolution\/clever-driver-app#72/);
-  assert.match(markdown, /EVNSolution\/clever-driver-app#73/);
+  assert.match(markdown, /EVNSolution\/clever-routes-app#72/);
+  assert.match(markdown, /EVNSolution\/clever-routes-app#73/);
   assert.match(markdown, /EVNSolution\/clever-delivery-server#71/);
   assert.match(markdown, /Expo\/EAS project ownership/);
   assert.match(markdown, /\| `expo.identity` \| pass \| Expo identity is pinned\. \|/);

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document records the repo baseline for the `clever-driver-app` implementation branch. Product scope and scenario details remain in `docs/project-brief.md`; agent workflow rules remain in `AGENTS.md`.
+This document records the repo baseline for the `clever-routes-app` implementation branch. Product scope and scenario details remain in `docs/project-brief.md`; agent workflow rules remain in `AGENTS.md`.
 
 ## Mobile runtime baseline
 
@@ -12,7 +12,7 @@ This document records the repo baseline for the `clever-driver-app` implementati
 - Node floor: `.nvmrc` pins `20.19.4`; `package.json` allows Node `>=20.19.4`
 - Text normalization: `.editorconfig` sets UTF-8, LF, final newline, trailing-whitespace trim, and two-space indentation for source/docs files; `.gitattributes` normalizes reviewed TypeScript/JavaScript/Markdown/YAML/JSON/shell text files to LF and marks evidence/release/signing artifact patterns as binary
 - Entry point: `index.ts` registering `App.tsx`
-- Current implementation depth: local Expo country-aware phone lookup, broad supported-country i18n metadata and phone formatting, company guidance, safe multi-company ambiguity guidance, consent gate, assigned-route screen, stop-card OS map handoff, driver access token handoff, native secure token persistence/expiry clearing, optional `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL` live API mode with no-store/no-cookie driver API requests, live downstream `401` expired-token recovery through secure-token clearing plus phone re-lookup guidance, delivery-start foreground location permission gate, route-started driver event boundary, foreground one-shot `LOCATION_UPDATED` event sync, continuous background-capable `LOCATION_UPDATED` task setup, native proof photo URI capture, proof media upload references, local proof-media smoke mock modes, scanner-rejected proof photo recapture guidance, signature/barcode proof capture, richer stop delivered/failed proof metadata controls, durable app-side offline queue/retry for driver events and retryable proof media, explicit app-side offline queue retention/discard thresholds, delivery finish `ROUTE_COMPLETED` cleanup, driver session reset/sign-out cleanup for secure access plus queued retry state, and EAS preview/production native build-profile scaffolding; delivery-server now has a proof-media scan rejection hook and local cleanup runner, while server-issued token refresh/strong re-auth, production proof-media object storage/signed access/deployed scanner evidence, physical-device background smoke evidence, owner-controlled signing/store setup, and store/privacy disclosure evidence remain later slices
+- Current implementation depth: native Expo phone + six-digit PIN account login, invitation + forced-PIN first registration without driver name, separate SecureStore account/route credentials, account refresh and account-bearer route lookup, authoritative deleted-route cache clearing, consent and assigned-route views, map/location tracking, proof capture/upload, offline retry/discard, route completion cleanup, direct Android update discovery, version 1.3.0 (`versionCode` 36) Android native source, and EAS preview/production profile scaffolding. Shopify invitation/signup creation remains manual and outside app/server automation; SMS OTP, forgotten-PIN recovery, production signing/store approval, and final privacy evidence remain later owner-approved slices.
 
 ## Scripts
 
@@ -38,8 +38,7 @@ point to the external evidence manifests/runbooks and explicitly forbid pasting
 private artifacts, signing material, screenshots, videos, secrets, raw PII, or
 completed manifests into GitHub.
 
-`.github/workflows/ci.yml` runs on pull requests to `dev`/`main` and pushes to
-`dev`/`main`. The workflow uses the Node version from `.nvmrc`, installs from
+`.github/workflows/ci.yml` is manually dispatched when remote verification is needed, avoiding automatic Actions-minute use on every PR/push. The workflow uses the Node version from `.nvmrc`, installs from
 `package-lock.json` with `npm ci`, then runs the same source-controlled gates
 used before release-sensitive PRs: `npm run check:workspace`, `npm run lint`,
 `npm run check:native-release`, `npm run release:evidence:seed`, `npm run
@@ -59,9 +58,11 @@ physical-device/store/privacy evidence.
 | `preview` | Internal physical-device evidence builds; Android emits `.apk`; iOS uses internal distribution credentials | `npx eas-cli build --platform android --profile preview` / `npx eas-cli build --platform ios --profile preview` |
 | `production` | Store/TestFlight/Google Play candidate archives | `npx eas-cli build --platform all --profile production` |
 
+Use `npm run android:dev:install` only for an intentional Metro-backed developer device, then use `npm run android:dev:start` for JS/TS iteration. QA devices use `npm run android:qa:build`; the repository intentionally provides no ambiguous `npm run android` alias. Local release-mode smoke uses `npm run build:android:device-smoke`, which is self-contained but is not an approved distributable artifact.
+
 The EAS config intentionally does not commit Expo project IDs, Apple/Google credentials, signing files, store metadata, or concrete delivery-server origins. EAS `preview` and `production` environment values must be created in the owner-controlled Expo/EAS project before native builds are run.
 
-`eas.json` sets `cli.requireCommit=true` to bind native build evidence to committed source. It also sets `cli.appVersionSource=remote`; `app.json` keeps initial `ios.buildNumber` and `android.versionCode` at `1` so the first remote version sync has a clear baseline, while production builds use `autoIncrement`.
+`eas.json` sets `cli.requireCommit=true` to bind native build evidence to committed source. It also sets `cli.appVersionSource=remote`; `app.json` keeps the reviewed native source version, currently Android `1.3.0` (`versionCode` 36), while future production store builds use `autoIncrement`.
 
 `npm run check:native-release` must pass before EAS build evidence or release-sensitive PRs. This preflight is intentionally source-controlled and secret-free: it checks bundle/package identity, native version pins, permission plugin copy, preview/production profile shape, and `.env.example` coverage. It does not prove Expo/EAS project ownership, Apple/Google signing authority, store/private distribution approval, privacy copy approval, or the public license decision.
 
@@ -78,7 +79,7 @@ The EAS config intentionally does not commit Expo project IDs, Apple/Google cred
 - Expo/React Native local output: `.expo/`, `.expo-shared/`, `.eas/`, `web-build/`, `*.jsbundle`
 - generated native build/tooling output: root/Android Gradle folders, Android `.cxx`, app build/captures/local properties, iOS build/DerivedData/Pods/xcuserdata state, heap profiles
 - mobile signing artifacts, store credentials, and binaries: `*.apk`, `*.apks`, `*.aab`, `*.ipa`, `*.dSYM/`, `credentials.json`, `eas-credentials.json`, `google-play-service-account*.json`, `app-store-connect-api-key*.json`, `*.keystore`, `*.jks`, `*.p8`, `*.p12`, `*.mobileprovision`, `*.cer`, `*.pem`
-- release/physical-device smoke evidence artifacts: `evidence/`, `release-evidence/`, `smoke-evidence/`, matching `docs/*evidence/` folders, completed `release-evidence-manifest-*.md` copies, and `clever-driver-*` screenshot/video/log/PDF/media files generated from `docs/physical-device-smoke-runbook.md`
+- release/physical-device smoke evidence artifacts: `evidence/`, `release-evidence/`, `smoke-evidence/`, matching `docs/*evidence/` folders, completed `release-evidence-manifest-*.md` copies, and `clever-routes-*` screenshot/video/log/PDF/media files generated from `docs/physical-device-smoke-runbook.md`
 - OS/editor noise: `.DS_Store`, `Thumbs.db`, `.idea/`, `.vscode/`
 
 `.dockerignore` mirrors the same secret/evidence/generated-output policy for any
@@ -106,7 +107,7 @@ Before opening an implementation PR, re-check these repo baseline files together
 - `eas.json`: preview/internal and production/store profile settings, EAS environment names, require-commit policy, and app version source match the release evidence plan.
 - `npm run check:native-release`: local native release config preflight passes, while external owner-controlled blockers remain tracked in `docs/release-readiness.md`.
 - `npm run release:evidence:verify -- <external-manifest-path>`: completed external release evidence manifests are checked before release approval; the completed manifest itself stays out of git.
-- `.github/workflows/ci.yml`: PR/push CI keeps local source-controlled gates aligned with the documented release-sensitive validation commands.
+- `.github/workflows/ci.yml`: manually dispatched CI keeps remote source-controlled gates aligned with the documented release-sensitive validation commands.
 - `.github/PULL_REQUEST_TEMPLATE.md`: target issue, change-control issue, concurrent-work gate, validation evidence, and context/wiki completion fields are filled before issue closure.
 - `CONTRIBUTING.md` and `SECURITY.md`: human workflow, security/privacy reporting, sensitive evidence handling, and generated-file guardrails stay current.
 - `docs/release-readiness.md`: physical-device smoke matrix, store/privacy disclosure checklist, and release blockers match current runtime behavior.
@@ -117,9 +118,9 @@ Before opening an implementation PR, re-check these repo baseline files together
 These items are intentionally left for later issues because they affect API, compliance, release, or device behavior beyond this bootstrap:
 
 1. Store/private distribution policy and owner-controlled EAS environment values for preview/production.
-2. Server-issued driver session/access token refresh, OTP, managed identity, or stronger re-auth UX beyond the current app-side phone re-lookup recovery after short-lived token expiry.
+2. Server-owned SMS OTP onboarding/recovery, forgotten-PIN policy, and any stronger managed identity or device-binding policy beyond the current account refresh session.
 3. Consent legal copy source and consent version contract.
-5. Production proof media storage policy: persistent photo/signature/barcode storage ownership, access, retention, and deletion rules.
+5. Production proof media storage policy: persistent photo/signature storage ownership, access, retention, and deletion rules.
 6. Store disclosure matrix and production privacy copy for continuous background location; tracked in `docs/release-readiness.md`.
 7. Expo/EAS project ownership, App Store/Play Store signing ownership, and credential rotation policy.
 8. Minimum supported iOS/Android versions and physical-device background-location smoke matrix; tracked in `docs/release-readiness.md`.
