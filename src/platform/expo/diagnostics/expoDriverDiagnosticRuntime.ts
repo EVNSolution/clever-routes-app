@@ -1,6 +1,7 @@
 import { withNoStoreDriverApiRequest } from '../../../api/deliveryServer/driverApiRequestOptions';
 import * as Crypto from 'expo-crypto';
 import * as Location from 'expo-location';
+import * as Network from 'expo-network';
 import * as SecureStore from 'expo-secure-store';
 import { AppState, Platform } from 'react-native';
 import { CONTINUOUS_LOCATION_TASK_NAME } from '../../../domain/location/continuousLocationStream';
@@ -12,16 +13,28 @@ import { runBoundedAsyncOperation } from '../../../domain/async/boundedAsyncOper
 import type { DriverAccessRestoreResult } from '../../../domain/driver/driverAccessTokenStore';
 import { equalDiagnosticContext, restoreDiagnosticBinding, type DiagnosticBinding as Binding } from '../../../app/diagnosticBindingRestore';
 import { DRIVER_ACCESS_TOKEN_STORAGE_KEY } from '../../../domain/driver/driverAccessTokenStore';
-import { emitDriverDiagnosticObservation, installDriverDiagnosticObserver, type DriverDiagnosticObservation } from '../../../domain/diagnostics/driverDiagnosticObservation';
+import {
+  captureDriverDiagnosticOperationObserverForOwner,
+  emitDriverDiagnosticObservation,
+  installDriverDiagnosticObserver,
+  type DriverDiagnosticObservation,
+  type DriverDiagnosticOperationObserver,
+} from '../../../domain/diagnostics/driverDiagnosticObservation';
 import { createDriverDiagnosticOutbox } from '../../../domain/diagnostics/driverDiagnosticOutbox';
 import { createDriverDiagnosticRecorder } from '../../../domain/diagnostics/driverDiagnosticRecorder';
 import { createDriverDiagnosticTransport } from '../../../domain/diagnostics/driverDiagnosticTransport';
 import type { OfflineSubmissionQueue } from '../../../domain/offline/offlineSubmissionQueue';
+import { getNetworkReachability } from '../../../domain/offline/offlineRetryTrigger';
 import { readInstalledDriverAppVersion } from '../application/expoAppVersionService';
 import { probeLocationDiagnosticStates } from '../location/locationDiagnosticOrchestration';
 import { getExpoDriverSyncIdentity } from '../secureStore/expoDriverSyncIdentity';
 import { getExpoDiagnosticStorage } from './expoDiagnosticStorage';
 import { getExpoDiagnosticCredentialStore } from './expoDiagnosticCredentialStore';
+import { createExpoDriverDiagnosticNetworkState } from './expoDriverDiagnosticNetworkState';
+import {
+  createDriverDiagnosticAmbientProbe,
+  isDriverDiagnosticForegroundTransition,
+} from './driverDiagnosticAmbientProbe';
 
 const BINDING_KEY = 'clever.driverDiagnostics.binding.v1';
 const secureOptions = { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY };
@@ -50,10 +63,29 @@ let bootId: string | null = null;
 let diagnosticSequence = 0;
 let suppressAccessUntilBusinessClear = false;
 let revocationBarrier: Promise<void> | null = null;
+const diagnosticNetworkState = createExpoDriverDiagnosticNetworkState();
 
 
 function bounded<T>(operation: () => Promise<T>) { return runBoundedAsyncOperation(operation, { timeoutMs: 5000 }); }
 function currentLifecycle() { return AppState.currentState === 'active' ? 'FOREGROUND' : AppState.currentState === 'background' ? 'BACKGROUND' : 'INACTIVE'; }
+const ambientProbe = createDriverDiagnosticAmbientProbe({
+  captureIdentity: () => active,
+  getLifecycle: currentLifecycle,
+  isCurrent: (identity) => active === identity,
+  observe: (identity, patch) => {
+    if (active !== identity) return;
+    if (patch.network !== undefined) {
+      diagnosticNetworkState.update(
+        patch.network === 'ONLINE' ? 'online' : patch.network === 'OFFLINE' ? 'offline' : 'unknown',
+      );
+    }
+    emitDriverDiagnosticObservation({ kind: 'STATE', patch });
+  },
+  readNetwork: () => bounded(async () => {
+    const reachability = getNetworkReachability(await Network.getNetworkStateAsync());
+    return reachability === 'online' ? 'ONLINE' : reachability === 'offline' ? 'OFFLINE' : 'UNKNOWN';
+  }),
+});
 function persistBinding(binding: Binding | null) {
   void bounded(() => bindingPersistence.persist(binding === null ? null : JSON.stringify(binding))).catch(() => undefined);
 }
@@ -63,8 +95,12 @@ function observe(event: DriverDiagnosticObservation) {
   if (current === null) { early = [...early.slice(-99), event]; return; }
   if (event.kind === 'OPERATION' && event.routePlanId && current.binding.context.routePlanId !== event.routePlanId) return;
   refreshQueueProjection();
+  const previousLifecycle = current.projection.snapshot().lifecycle;
   const changed = current.projection.observe(event);
-  if (event.kind === 'STATE' && event.patch?.lifecycle === 'FOREGROUND') {
+  if (
+    event.kind === 'STATE'
+    && isDriverDiagnosticForegroundTransition(previousLifecycle, event.patch?.lifecycle)
+  ) {
     current.recorder.notifyForeground();
     void probeLocation();
   }
@@ -131,7 +167,11 @@ function bind(binding: Binding, preserveEarly: boolean) {
   const pending = preserveEarly ? early : [];
   early = [];
   pending.forEach(observe);
-  emitDriverDiagnosticObservation({ kind: 'STATE', patch: { lifecycle: currentLifecycle() } });
+  emitDriverDiagnosticObservation({
+    kind: 'STATE',
+    patch: diagnosticNetworkState.bindingPatch(currentLifecycle()),
+  });
+  void ambientProbe.probe();
   void outbox.hydrate().then(() => { if (active?.outbox === outbox) heartbeatIfDue(true); });
   void probeLocation();
   heartbeatIfDue(true);
@@ -156,8 +196,14 @@ export function startExpoDriverDiagnosticRuntime(): void {
     Object.assign(restored.binding.context, { appVersion: version?.versionName ?? 'unknown', versionCode: version?.versionCode ?? null, osVersion: String(Platform.Version) });
     bind(restored.binding, true);
   }).catch(() => undefined);
-  AppState.addEventListener('change', () => emitDriverDiagnosticObservation({ kind: 'STATE', patch: { lifecycle: currentLifecycle() } }));
-  setInterval(() => { if (AppState.currentState === 'active') { heartbeatIfDue(); void probeLocation(); } }, 60000);
+  AppState.addEventListener('change', () => { void ambientProbe.probe(); });
+  setInterval(() => {
+    if (AppState.currentState === 'active') {
+      void ambientProbe.probe();
+      heartbeatIfDue();
+      void probeLocation();
+    }
+  }, 60000);
 }
 
 /** Tokens stay in memory/SecureStore adapters; they are never diagnostic event fields. */
@@ -308,9 +354,18 @@ export function updateExpoDriverDiagnosticNextRetry(at: string | null): void {
   if (active?.projection.setNextRetryAt(at)) active.recorder.emitStateChange();
 }
 export function updateExpoDriverDiagnosticNetwork(network: 'online' | 'offline' | 'unknown'): void {
+  const normalizedNetwork = diagnosticNetworkState.update(network);
   startExpoDriverDiagnosticRuntime();
-  emitDriverDiagnosticObservation({ kind: 'STATE', patch: { network: network === 'online' ? 'ONLINE' : network === 'offline' ? 'OFFLINE' : 'UNKNOWN' } });
+  emitDriverDiagnosticObservation({ kind: 'STATE', patch: { network: normalizedNetwork } });
   if (network === 'online') active?.recorder.notifyOnline();
+}
+export function captureExpoDriverDiagnosticOperationObserver(
+  accountOwnerHash: string,
+): DriverDiagnosticOperationObserver {
+  return captureDriverDiagnosticOperationObserverForOwner(
+    accountOwnerHash,
+    active?.binding.accountOwnerHash ?? null,
+  );
 }
 async function probeLocation() {
   if (probing || !active) return;

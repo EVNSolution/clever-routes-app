@@ -78,6 +78,126 @@ test('queue age grows without waiting on business persistence', () => {
   at = '2026-10-01T14:02:00.000Z';
   assert.equal(projection.snapshot().businessQueue.oldestAgeMs, 120000);
 });
+
+test('a successful completion update retry clears a settled update failure', () => {
+  const projection = createDriverDiagnosticProjection(() => new Date(start));
+  projection.observe({
+    clientEventId: 'completion-assistance-write:10000000-0000-4000-8000-000000000001',
+    kind: 'OPERATION',
+    observedAt: start,
+    operation: 'STORAGE_WRITE',
+    phase: 'FAILED',
+    reasonCode: 'STORAGE_WRITE_FAILED',
+  });
+  projection.observe({
+    clientEventId: 'completion-assistance-write:10000000-0000-4000-8000-000000000002',
+    kind: 'OPERATION',
+    observedAt: start,
+    operation: 'STORAGE_WRITE',
+    phase: 'SUCCEEDED',
+  });
+
+  const snapshot = projection.snapshot();
+  assert.deepEqual(snapshot.blockers, []);
+  assert.equal(snapshot.lastGpsSendAcknowledgedAt, null);
+});
+
+test('a successful storage retry does not clear an unresolved watchdog operation', () => {
+  const projection = createDriverDiagnosticProjection(() => new Date(start));
+  projection.observe({
+    clientEventId: 'completion-assistance-write:20000000-0000-4000-8000-000000000001',
+    kind: 'OPERATION',
+    observedAt: start,
+    operation: 'STORAGE_WRITE',
+    phase: 'WATCHDOG_TIMEOUT',
+    reasonCode: 'STORAGE_OPERATION_TIMEOUT',
+  });
+  projection.observe({
+    clientEventId: 'completion-assistance-write:20000000-0000-4000-8000-000000000002',
+    kind: 'OPERATION',
+    observedAt: start,
+    operation: 'STORAGE_WRITE',
+    phase: 'SUCCEEDED',
+  });
+
+  assert.deepEqual(projection.snapshot().blockers?.map(({ clientEventId, reason }) => ({ clientEventId, reason })), [{
+    clientEventId: 'completion-assistance-write:20000000-0000-4000-8000-000000000001',
+    reason: 'STORAGE_OPERATION_TIMEOUT',
+  }]);
+});
+
+test('a storage success in a new owner projection cannot clear the previous owner failure', () => {
+  const ownerA = createDriverDiagnosticProjection(() => new Date(start));
+  const ownerB = createDriverDiagnosticProjection(() => new Date(start));
+  ownerA.observe({
+    clientEventId: 'completion-assistance-read:30000000-0000-4000-8000-000000000001',
+    kind: 'OPERATION',
+    observedAt: start,
+    operation: 'STORAGE_READ',
+    phase: 'FAILED',
+    reasonCode: 'STORAGE_READ_FAILED',
+  });
+  ownerB.observe({
+    clientEventId: 'completion-assistance-read:30000000-0000-4000-8000-000000000002',
+    kind: 'OPERATION',
+    observedAt: start,
+    operation: 'STORAGE_READ',
+    phase: 'SUCCEEDED',
+  });
+
+  assert.equal(ownerA.snapshot().blockers?.[0]?.reason, 'STORAGE_READ_FAILED');
+  assert.deepEqual(ownerB.snapshot().blockers, []);
+});
+
+test('a completion update success cannot clear an unrelated GPS storage failure', () => {
+  const projection = createDriverDiagnosticProjection(() => new Date(start));
+  projection.observe({
+    clientEventId: 'location-updated-gpspersist',
+    kind: 'OPERATION',
+    observedAt: start,
+    operation: 'STORAGE_WRITE',
+    phase: 'FAILED',
+    reasonCode: 'STORAGE_WRITE_FAILED',
+  });
+  projection.observe({
+    clientEventId: 'completion-assistance-write:40000000-0000-4000-8000-000000000002',
+    kind: 'OPERATION',
+    observedAt: start,
+    operation: 'STORAGE_WRITE',
+    phase: 'SUCCEEDED',
+  });
+
+  assert.equal(projection.snapshot().blockers?.[0]?.clientEventId, 'location-updated-gpspersist');
+});
+
+test('a completion update success cannot clear remove failure but a remove retry can', () => {
+  const projection = createDriverDiagnosticProjection(() => new Date(start));
+  projection.observe({
+    clientEventId: 'completion-assistance-remove:50000000-0000-4000-8000-000000000001',
+    kind: 'OPERATION',
+    observedAt: start,
+    operation: 'STORAGE_WRITE',
+    phase: 'FAILED',
+    reasonCode: 'STORAGE_WRITE_FAILED',
+  });
+  projection.observe({
+    clientEventId: 'completion-assistance-write:50000000-0000-4000-8000-000000000002',
+    kind: 'OPERATION',
+    observedAt: start,
+    operation: 'STORAGE_WRITE',
+    phase: 'SUCCEEDED',
+  });
+  assert.equal(projection.snapshot().blockers?.[0]?.clientEventId, 'completion-assistance-remove:50000000-0000-4000-8000-000000000001');
+
+  projection.observe({
+    clientEventId: 'completion-assistance-remove:50000000-0000-4000-8000-000000000003',
+    kind: 'OPERATION',
+    observedAt: start,
+    operation: 'STORAGE_WRITE',
+    phase: 'SUCCEEDED',
+  });
+  assert.deepEqual(projection.snapshot().blockers, []);
+});
 test('task recovery preserves a simultaneous denied permission', () => {
   const projection = createDriverDiagnosticProjection(() => new Date(start));
   projection.observe({ kind: 'STATE', observedAt: start, blocker: { stage: 'LOCATION', reasonCode: 'LOCATION_PERMISSION_DENIED' } });

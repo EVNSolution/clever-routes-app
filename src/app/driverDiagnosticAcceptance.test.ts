@@ -443,7 +443,7 @@ describe('contract mock server acceptance for driver diagnostics', () => {
     assert.deepEqual(harness.outbox.listPending(), []);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(quarantineStarted, true);
-    assert.deepEqual(storage.quarantined, []);
+    assert.equal(storage.quarantined.length, 0);
     assert.equal(storage.records.some((candidate) => (
       (candidate as { diagnosticId?: string }).diagnosticId === rejectedId
     )), true);

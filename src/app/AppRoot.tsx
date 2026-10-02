@@ -37,6 +37,7 @@ import {
   type OperationalDialogState,
 } from './OperationalDialog';
 import { createRouteProgressRefreshGuard } from './routeProgressRefreshGuard';
+import { clearInvoluntaryDriverSession } from './involuntaryDriverSessionClear';
 import { useCompletionAssistance } from './useCompletionAssistance';
 import { CompletionAssistancePanel, LocationInferenceNotice } from './CompletionAssistancePanel';
 import { getLocationInferredStopIds } from './completionAssistanceDisplay';
@@ -3044,8 +3045,12 @@ function DriverApp() {
           setMessage('Sign in again to confirm the pending route completion. GPS tracking stays stopped until the receipt is resolved.');
           return;
         }
-        await clearAndStopActiveLocationSession();
-        await driverAccessTokenStore.clear();
+        await clearInvoluntaryDriverSession({
+          clearAccess: () => driverAccessTokenStore.clear(),
+          clearLocation: async () => {
+            await clearAndStopActiveLocationSession();
+          },
+        });
         resetRouteProgress();
         setVerifiedDriverPhoneE164(null);
         setScreen('loginPhone');
@@ -3135,8 +3140,12 @@ function DriverApp() {
       );
     } catch (error) {
       if (shouldDiscardSavedLoginAfterRefreshFailure(error)) {
-        await clearAndStopActiveLocationSession();
-        await driverAccessTokenStore.clear();
+        await clearInvoluntaryDriverSession({
+          clearAccess: () => driverAccessTokenStore.clear(),
+          clearLocation: async () => {
+            await clearAndStopActiveLocationSession();
+          },
+        });
         resetRouteProgress();
         setVerifiedDriverPhoneE164(null);
         setRouteSyncState('idle');

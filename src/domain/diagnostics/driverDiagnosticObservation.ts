@@ -12,6 +12,7 @@ export type DriverDiagnosticOperation =
   | 'GPS_SEND'
   | 'PROOF_UPLOAD'
   | 'ROUTE_LOOKUP'
+  | 'STORAGE_READ'
   | 'STORAGE_WRITE';
 
 export type DriverDiagnosticObservationReasonCode = DriverDiagnosticReasonCode;
@@ -166,6 +167,18 @@ export function captureDriverDiagnosticOperationObserver(): DriverDiagnosticOper
   );
 }
 
+export function captureDriverDiagnosticOperationObserverForOwner(
+  expectedAccountOwnerHash: string,
+  currentAccountOwnerHash: string | null,
+): DriverDiagnosticOperationObserver {
+  if (expectedAccountOwnerHash !== currentAccountOwnerHash) {
+    return async <T>(_metadata: DriverDiagnosticOperationMetadata, operation: () => Promise<T>) => (
+      Promise.resolve().then(operation)
+    );
+  }
+  return captureDriverDiagnosticOperationObserver();
+}
+
 export async function observeDriverDiagnosticOperation<T>(
   metadata: DriverDiagnosticOperationMetadata,
   operation: () => Promise<T>,
@@ -195,7 +208,7 @@ async function observeDriverDiagnosticOperationWithRuntime<T>(
       phase: 'WATCHDOG_TIMEOUT',
       reasonCode: safeMetadata.operation === 'AUTH_REFRESH'
         ? 'AUTH_REFRESH_TIMEOUT'
-        : safeMetadata.operation === 'STORAGE_WRITE'
+        : safeMetadata.operation === 'STORAGE_WRITE' || safeMetadata.operation === 'STORAGE_READ'
           ? 'STORAGE_OPERATION_TIMEOUT'
           : 'OPERATION_TIMEOUT',
     });
@@ -219,7 +232,9 @@ async function observeDriverDiagnosticOperationWithRuntime<T>(
         ...safeMetadata,
         ...(safeMetadata.operation === 'STORAGE_WRITE'
           ? { reasonCode: 'STORAGE_WRITE_FAILED' as const }
-          : classifyDriverDiagnosticError(error)),
+          : safeMetadata.operation === 'STORAGE_READ'
+            ? { reasonCode: 'STORAGE_READ_FAILED' as const }
+            : classifyDriverDiagnosticError(error)),
         kind: 'OPERATION',
         phase: 'FAILED',
       });

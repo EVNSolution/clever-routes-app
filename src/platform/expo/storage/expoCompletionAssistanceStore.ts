@@ -4,6 +4,8 @@ import {
   createCompletionAssistanceStore,
   type CompletionAssistanceStore,
 } from '../../../domain/completion/completionAssistanceSync';
+import { observeCompletionAssistanceStorage } from '../../../domain/completion/completionAssistanceStorageDiagnostics';
+import { captureExpoDriverDiagnosticOperationObserver } from '../diagnostics/expoDriverDiagnosticRuntime';
 import { getExpoEncryptedEvidenceStore } from './expoOfflineSubmissionQueueStorage';
 
 let completionAssistanceStorePromise: Promise<CompletionAssistanceStore> | null = null;
@@ -11,7 +13,11 @@ let completionAssistanceStorePromise: Promise<CompletionAssistanceStore> | null 
 export function createExpoCompletionAssistanceStore(): Promise<CompletionAssistanceStore> {
   if (completionAssistanceStorePromise === null) {
     completionAssistanceStorePromise = getExpoEncryptedEvidenceStore()
-      .then(createCompletionAssistanceStore)
+      .then((storage) => createCompletionAssistanceStore(observeCompletionAssistanceStorage(
+        storage,
+        captureExpoDriverDiagnosticOperationObserver,
+        () => Crypto.randomUUID(),
+      )))
       .catch((error: unknown) => {
         completionAssistanceStorePromise = null;
         throw error;

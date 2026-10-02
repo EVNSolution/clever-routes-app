@@ -263,9 +263,24 @@ describe('driver diagnostics', () => {
       sequence: 1,
       snapshot,
     });
+    outbox.record({
+      bootId: ids.boot1,
+      context,
+      diagnosticId: ids.diag2,
+      identifiers: {
+        clientEventId: 'completion-assistance-write:50000000-0000-4000-8000-000000000001',
+      },
+      kind: 'ERROR',
+      observedAt: '2026-10-01T14:05:01.000Z',
+      sequence: 2,
+      snapshot,
+    });
     assert.deepEqual(outbox.listPending()[0]?.identifiers, {
       clientEventId: 'continuous-location-2026-10-01T14:04:19.000Z-0',
       requestId: '40000000-0000-4000-8000-000000000001',
+    });
+    assert.deepEqual(outbox.listPending()[1]?.identifiers, {
+      clientEventId: 'completion-assistance-write:50000000-0000-4000-8000-000000000001',
     });
   });
 

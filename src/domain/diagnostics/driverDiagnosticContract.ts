@@ -34,6 +34,7 @@ export const DRIVER_DIAGNOSTIC_REASON_CODES = [
   'ROUTE_NOT_IN_PROGRESS',
   'SESSION_MISMATCH',
   'STORAGE_OPERATION_TIMEOUT',
+  'STORAGE_READ_FAILED',
   'STORAGE_WRITE_FAILED',
 ] as const;
 
@@ -147,7 +148,7 @@ export type DriverDiagnosticResponse = {
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const isoTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u;
 const sessionGenerationPattern = /^(?:[0-9]{1,20}|[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu;
-const generatedClientEventIdPattern = /^(?:(?:route-started|route-completed|route-released|pickup-completed|location-updated|stop-delivered|stop-failed)-[a-z0-9]{1,32}|stop-arrived-[0-9a-f-]{36}-[a-z0-9]{1,32}|continuous-location-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z-[0-9]{1,6}|[0-9A-HJKMNP-TV-Z]{20,26})$/u;
+const generatedClientEventIdPattern = /^(?:(?:route-started|route-completed|route-released|pickup-completed|location-updated|stop-delivered|stop-failed)-[a-z0-9]{1,32}|stop-arrived-[0-9a-f-]{36}-[a-z0-9]{1,32}|continuous-location-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z-[0-9]{1,6}|completion-assistance-(?:read|remove|write):[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[0-9A-HJKMNP-TV-Z]{20,26})$/u;
 const versionPattern = /^[A-Za-z0-9._+()-]{1,64}$/u;
 const hashPattern = /^[a-fA-F0-9]{32,128}$/u;
 const reasonCodes = new Set<string>(DRIVER_DIAGNOSTIC_REASON_CODES);
