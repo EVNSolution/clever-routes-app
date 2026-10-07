@@ -36,6 +36,11 @@ import {
   type OperationalDialogButton,
   type OperationalDialogState,
 } from './OperationalDialog';
+import { LiveRouteChangeBanner } from './liveRouteChangeBanner';
+import { applyLiveRouteChange, getLiveRouteRecoveryProgress, hasPendingLiveRouteChange, observeLiveRoutePublication, preserveLiveRouteStep, retryLiveRouteAcknowledgement, stageLiveRouteRefresh, supportsLiveRouteChanges, shouldCheckLiveRouteChange } from './liveRouteChangeController';
+import { emptyLiveRouteChangeState, type LiveRouteChangeState, type LiveRouteChangeUiDraft } from '../domain/route/liveRouteChangeStore';
+import { createExpoLiveRouteChangeStore } from '../platform/expo/storage/expoLiveRouteChangeStore';
+import { mergeLiveRouteExecutionState, type LiveRouteChangeService } from '../domain/route/liveRouteChange';
 import { createRouteProgressRefreshGuard } from './routeProgressRefreshGuard';
 import { clearInvoluntaryDriverSession } from './involuntaryDriverSessionClear';
 import { useCompletionAssistance } from './useCompletionAssistance';
@@ -67,7 +72,6 @@ import {
   buildOutOfOrderStopArrivalWarning,
   getActiveRouteStepAfterRefresh,
   getAssignedRouteProgressAfterPickup,
-  getAssignedRouteServerProgress,
   getCurrentRouteStop,
   getNextIncompleteRouteStepIndex,
   getRouteReturnStepIndex,
@@ -96,6 +100,7 @@ import { startDeliveryWithForegroundPermission, type DeliveryStartResult } from 
 import { createDriverApiClientsFromRouteAccess } from '../api/deliveryServer/driverApiClients';
 import { createDriverAppReleaseApiClient } from '../api/deliveryServer/driverAppReleaseApi';
 import {
+  DriverApiHttpError,
   isDriverAccountDeletionActiveRouteError,
   isDriverApiUnauthorizedError,
 } from '../api/deliveryServer/driverApiError';
@@ -397,6 +402,18 @@ function DriverApp() {
   const [stopArrivalProximityByStopId, setStopArrivalProximityByStopId] = useState<Record<string, StopArrivalProximityEvidence | null>>({});
   const [latestGpsSample, setLatestGpsSample] = useState<{ accuracyMeters: number | null; capturedAt: string } | null>(null);
   const [pendingDriverRouteNotification, setPendingDriverRouteNotification] = useState<PendingDriverRouteNotification | null>(null);
+  const [liveRouteStates, setLiveRouteStates] = useState<Record<string, LiveRouteChangeState>>({});
+  const liveRouteStatesRef = useRef<Record<string, LiveRouteChangeState>>({});
+  const liveRouteOwnerRef = useRef<string | null>(null);
+  const liveRouteBasesRef = useRef<Record<string, AssignedRoute>>({});
+  const [liveRouteErrors, setLiveRouteErrors] = useState<Record<string, string>>({});
+  const [isApplyingLiveRoute, setIsApplyingLiveRoute] = useState(false);
+  const liveRoutePollRunningRef = useRef(false);
+  const liveRouteApplyRunningRef = useRef(false);
+  const liveRouteAccessBlockedRef = useRef(new Set<string>());
+  const liveRouteSessionsRef = useRef<RouteSession[]>([]);
+  const liveRouteInputRef = useRef({ currentStopId: null as string | null, selectedStopDetailsId: null as string | null, navigationStepIndex: 0,
+    proofDrafts: {} as Record<string, StopProofDraft>, proofPhotoResults: {} as Record<string, ProofPhotoCaptureResult>, proofMediaResults: {} as Record<string, ProofMediaUploadResult> });
 
   const [submission, setSubmission] = useState<RouteAccessSubmissionResult | null>(null);
   const [, setConsentSubmission] = useState<DriverConsentSubmissionResult | null>(null);
@@ -470,7 +487,8 @@ function DriverApp() {
     || isCompletingStop
     || isRecordingArrival
     || isStartingRoute
-    || isFinishingRoute;
+    || isFinishingRoute
+    || isApplyingLiveRoute;
   const selectedRouteIdRef = useRef<string | null>(null);
   const routesAtTopRef = useRef(true);
   const [areRoutesAtTop, setAreRoutesAtTop] = useState(true);
@@ -539,6 +557,13 @@ function DriverApp() {
   }, []);
 
   const blockMutationWhileStorageDegraded = useCallback((): boolean => {
+    const selected = liveRouteSessionsRef.current.find(session => session.route.id === selectedRouteIdRef.current);
+    const saved = selected === undefined ? undefined : liveRouteStatesRef.current[liveRouteStateKey(selected.route.id, selected.routeAccess.assignmentGeneration)];
+    const accessBlocked = selected !== undefined && liveRouteAccessBlockedRef.current.has(liveRouteStateKey(selected.route.id, selected.routeAccess.assignmentGeneration));
+    if (saved?.appliedRoute === null || liveRouteApplyRunningRef.current || accessBlocked) {
+      setMessage('Apply the delivery list update before continuing this route.');
+      return true;
+    }
     if (offlineStorageState !== 'STORAGE_DEGRADED') return false;
     setMessage('Delivery updates are read-only until encrypted offline storage recovers. Retry Storage from My Routes.');
     return true;
@@ -1220,6 +1245,8 @@ function DriverApp() {
           localAuditPersisted = false;
         }
       }
+      const liveOwner = driverSyncBoundAccountOwnerHashRef.current;
+      if (liveOwner !== null) await (await createExpoLiveRouteChangeStore()).removeAccount(liveOwner);
       await handleLogout();
       setMessage(localAuditPersisted
         ? 'Account deletion request received. You have been signed out.'
@@ -1323,7 +1350,10 @@ function DriverApp() {
         return null;
       }
 
-      const refreshedSubmission = toCompanyGuidanceSubmission(refreshedChoice);
+      const appliedState = liveRouteStatesRef.current[liveRouteStateKey(routePlanId, refreshedChoice.routeAccess.assignmentGeneration)];
+      const refreshedSubmission = toCompanyGuidanceSubmission(appliedState?.appliedPublicationVersionId == null ? refreshedChoice : {
+        ...refreshedChoice, routeAccess: { ...refreshedChoice.routeAccess, expectedRouteVersionId: appliedState.appliedPublicationVersionId },
+      });
       if (options?.isCurrent?.() === false) return null;
       if (options?.projectRuntimeState !== false) {
         setSubmission((current) => (
@@ -1332,7 +1362,7 @@ function DriverApp() {
             : current
         ));
         setRouteSessions((current) => current.map((session) => (
-          session.routeAccess.routePlanId === routePlanId ? { ...session, ...refreshedChoice } : session
+          session.routeAccess.routePlanId === routePlanId ? { ...session, ...refreshedSubmission } : session
         )));
       }
       if (options?.persistAccess !== false) {
@@ -1394,6 +1424,74 @@ function DriverApp() {
         })
       : undefined
   ), [refreshDriverAccessForSubmission]);
+
+  const publishLiveRouteState = useCallback((owner: string, state: LiveRouteChangeState): void => {
+    if (driverSyncBoundAccountOwnerHashRef.current !== owner) return;
+    if (liveRouteOwnerRef.current !== owner) {
+      liveRouteOwnerRef.current = owner;
+      liveRouteStatesRef.current = {};
+      liveRouteBasesRef.current = {};
+      setLiveRouteErrors({});
+    }
+    const key = liveRouteStateKey(state.routePlanId, state.assignmentGeneration);
+    liveRouteStatesRef.current = { ...liveRouteStatesRef.current, [key]: state };
+    setLiveRouteStates(liveRouteStatesRef.current);
+  }, []);
+
+  const createLiveRouteService = useCallback((choice: RouteAccessRouteChoice, isCurrent: () => boolean): LiveRouteChangeService => {
+    if (runtimeConfig.mode !== 'live') throw new Error('Live route changes require the delivery server.');
+    return createDriverApiClientsFromRouteAccess({
+      baseUrl: runtimeConfig.deliveryServerBaseUrl,
+      routeAccess: toInvitedRouteAccess(toCompanyGuidanceSubmission(choice)),
+      refreshDriverAccess: buildDriverAccessRefresh(toCompanyGuidanceSubmission(choice), {
+        isCurrent, persistAccess: false, persistAccountAccess: false, preserveMissingRoute: true, projectRuntimeState: false,
+      }),
+    }).liveRouteChangeService;
+  }, [buildDriverAccessRefresh, runtimeConfig]);
+
+  const gateLiveRouteSession = useCallback(async (choice: RouteAccessRouteChoice, route: AssignedRoute, owner: string,
+    isCurrent: () => boolean): Promise<RouteSession> => {
+    if (runtimeConfig.mode !== 'live' || !supportsLiveRouteChanges(route.shopDomain)) return { ...choice, route };
+    const key = liveRouteStateKey(route.id, choice.routeAccess.assignmentGeneration);
+    const store = await createExpoLiveRouteChangeStore();
+    let state = await store.read(owner, route.id, choice.routeAccess.assignmentGeneration);
+    if (!isCurrent()) throw new Error('Driver account changed during route refresh.');
+    try {
+      const service = createLiveRouteService(choice, isCurrent);
+      const publication = !shouldCheckLiveRouteChange(route.shopDomain, choice.companyGuidance.executionStatus, activeRoutePlanId === route.id) && state?.pendingPublication == null
+        ? null
+        : await runBoundedAsyncOperation(signal => service.getLiveRouteChange({ routePlanId: route.id }, { signal }), { timeoutMs: 15_000 });
+      if (!isCurrent()) throw new Error('Driver account changed during route refresh.');
+      state = await store.update(owner, route.id, choice.routeAccess.assignmentGeneration, current => {
+        if (!isCurrent()) throw new Error('Driver account changed during route refresh.');
+        return stageLiveRouteRefresh({ state: current, route, publication, assignmentGeneration: choice.routeAccess.assignmentGeneration,
+          expectedRouteVersionId: choice.routeAccess.expectedRouteVersionId });
+      });
+      if (isCurrent()) { liveRouteAccessBlockedRef.current.delete(key); setLiveRouteErrors(current => { const next = { ...current }; delete next[key]; return next; }); }
+    } catch (error) {
+      if (!isCurrent()) throw error;
+      // Older backends have no endpoint. Never bypass a known enrollment or an access denial.
+      if (error instanceof DriverApiHttpError && error.status === 404 && state?.pendingPublication == null) {
+        state = await store.update(owner, route.id, choice.routeAccess.assignmentGeneration, current => stageLiveRouteRefresh({
+          state: current, route, publication: null, assignmentGeneration: choice.routeAccess.assignmentGeneration,
+          expectedRouteVersionId: choice.routeAccess.expectedRouteVersionId,
+        }));
+      } else {
+        if (error instanceof DriverApiHttpError && (error.status === 403 || error.status === 409)) liveRouteAccessBlockedRef.current.add(key);
+        state = state ?? emptyLiveRouteChangeState(route.id, choice.routeAccess.assignmentGeneration);
+        if (state.appliedRoute !== null) {
+          try { state = { ...state, appliedRoute: mergeLiveRouteExecutionState(state.appliedRoute, route) }; }
+          catch { state = { ...state, appliedRoute: null }; }
+        }
+        setLiveRouteErrors(current => ({ ...current, [key]: 'The delivery list could not be checked. Retry when connected.' }));
+      }
+    }
+    if (!isCurrent()) throw new Error('Driver account changed during route refresh.');
+    publishLiveRouteState(owner, state);
+    liveRouteBasesRef.current[key] = route;
+    return { ...choice, route: state.appliedRoute ?? hideUnappliedRouteContent(route), routeAccess: { ...choice.routeAccess,
+      expectedRouteVersionId: state.appliedPublicationVersionId ?? choice.routeAccess.expectedRouteVersionId } };
+  }, [activeRoutePlanId, createLiveRouteService, publishLiveRouteState, runtimeConfig.mode]);
 
   const flushCompletionClearOutbox = useCallback(async (): Promise<boolean> => {
     if (runtimeConfig.mode !== 'live' || networkReachability !== 'online') return false;
@@ -1588,6 +1686,10 @@ function DriverApp() {
         throw new Error('Account access is required before completion receipt recovery.');
       }
       for (const session of sessions) {
+        if (liveRouteStatesRef.current[liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration)]?.appliedRoute === null) {
+          completedWithoutRetainedFailures = false;
+          continue;
+        }
         const routeSubmission = toCompanyGuidanceSubmission(session);
         const persistedCleanupAccess = await runBoundedAsyncOperation(
           async () => driverAccessTokenStore.loadActiveDriverAccess(),
@@ -1624,6 +1726,7 @@ function DriverApp() {
           isCurrent,
           lifecycleSignal,
           orderedEventAccessIdentity: {
+            allowPreviousPublicationStopEvents: liveRouteStatesRef.current[liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration)]?.pendingPublication != null,
             assignmentGeneration: routeSubmission.routeAccess.assignmentGeneration,
             driverContractVersion: routeSubmission.routeAccess.driverContractVersion,
             expectedRouteVersionId: routeSubmission.routeAccess.expectedRouteVersionId,
@@ -1827,6 +1930,15 @@ function DriverApp() {
     routeReconciliationCount,
     routeSyncState,
   ]);
+  useEffect(() => {
+    liveRouteSessionsRef.current = routeSessions;
+    liveRouteInputRef.current = { currentStopId: currentStop?.deliveryStopId ?? null, selectedStopDetailsId, navigationStepIndex,
+      proofDrafts, proofPhotoResults, proofMediaResults };
+  }, [currentStop, navigationStepIndex, proofDrafts, proofMediaResults, proofPhotoResults, routeSessions, selectedStopDetailsId]);
+  const selectedLiveRouteKey = selectedRouteSession === null ? null : liveRouteStateKey(selectedRouteSession.route.id, selectedRouteSession.routeAccess.assignmentGeneration);
+  const selectedLiveRouteState = selectedLiveRouteKey === null ? undefined : liveRouteStates[selectedLiveRouteKey];
+  const selectedLiveRouteRecovery = selectedLiveRouteState?.appliedRoute === null;
+
   const currentStopPhotoResult = currentStop === null ? undefined : proofPhotoResults[currentStop.deliveryStopId];
   const currentStopPhotoUri = currentStopPhotoResult?.kind === 'captured' ? currentStopPhotoResult.uri : undefined;
   const stopDetailsProgressState = selectedRoute === null
@@ -2622,6 +2734,7 @@ function DriverApp() {
     }
 
     let persistedActiveRouteSession = options.activeRouteSession ?? null;
+    let replacedAssignment = false;
     let loginAccountOwnerHash: string | null = null;
     let loginLifecycleSignal: AbortSignal | null = null;
     let accountQueueForLogin: OfflineSubmissionQueue | null = null;
@@ -2642,6 +2755,13 @@ function DriverApp() {
       accountQueueForLogin = accountQueue;
       loginAccountOwnerHash = accountOwnerHash;
       driverSyncBoundAccountOwnerHashRef.current = accountOwnerHash;
+      if (liveRouteOwnerRef.current !== accountOwnerHash) {
+        liveRouteOwnerRef.current = accountOwnerHash;
+        liveRouteStatesRef.current = {};
+        liveRouteBasesRef.current = {};
+        setLiveRouteStates({});
+        setLiveRouteErrors({});
+      }
       driverSyncLifecycleAbortControllerRef.current = new AbortController();
       driverSyncRouteAbortControllerRef.current = new AbortController();
       loginLifecycleSignal = driverSyncLifecycleAbortControllerRef.current.signal;
@@ -2762,6 +2882,36 @@ function DriverApp() {
         return;
       }
 
+      const previousRouteId = persistedActiveRouteSession?.routePlanId ?? activeRoutePlanId;
+      const previousChoice = liveRouteSessionsRef.current.find(session => session.route.id === previousRouteId);
+      const previousAccess = previousChoice?.routeAccess ?? options.persistedAccess?.routeAccess;
+      const replacementChoice = choices.find(choice => choice.routeAccess.routePlanId === previousRouteId);
+      if (previousRouteId !== null && previousAccess !== undefined && replacementChoice !== undefined
+        && previousAccess.routePlanId === replacementChoice.routeAccess.routePlanId
+        && previousAccess.assignmentGeneration !== replacementChoice.routeAccess.assignmentGeneration) {
+        // Retain old-generation evidence, but never let its inputs become a new assignment draft.
+        const oldState = liveRouteStatesRef.current[liveRouteStateKey(previousRouteId, previousAccess.assignmentGeneration)];
+        if (oldState?.appliedRoute != null) {
+          const latest = liveRouteInputRef.current;
+          const ids = new Set(oldState.appliedRoute.stops.map(stop => stop.deliveryStopId));
+          const filter = <T,>(values: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(values).filter(([id]) => ids.has(id)));
+          const draft: LiveRouteChangeUiDraft = { currentStopId: ids.has(latest.currentStopId ?? '') ? latest.currentStopId : null,
+            selectedStopDetailsId: ids.has(latest.selectedStopDetailsId ?? '') ? latest.selectedStopDetailsId : null,
+            proofDrafts: filter(latest.proofDrafts), proofPhotoResults: filter(latest.proofPhotoResults), proofMediaResults: filter(latest.proofMediaResults) };
+          await (await createExpoLiveRouteChangeStore()).update(accountOwnerHash, previousRouteId, previousAccess.assignmentGeneration,
+            current => {
+              if (!isLoginAccountCurrent()) throw new Error('Driver assignment changed before saving its draft.');
+              return { ...(current ?? oldState), uiDraft: draft };
+            });
+        }
+        if (!isLoginAccountCurrent()) return;
+        await clearAndStopActiveLocationSession(previousRouteId);
+        if (!isLoginAccountCurrent()) return;
+        resetActiveRouteProgress();
+        persistedActiveRouteSession = null;
+        replacedAssignment = true;
+      }
+
       const loadedSessions: RouteSession[] = [];
       let routeLoadFailed = false;
 
@@ -2775,7 +2925,7 @@ function DriverApp() {
           },
           getDriverConsentServiceForCurrentSubmission({
             fallback: mockDriverConsentService,
-            refreshDriverAccess: buildDriverAccessRefresh(choiceSubmission),
+            refreshDriverAccess: buildDriverAccessRefresh(choiceSubmission, { isCurrent: isLoginAccountCurrent, projectRuntimeState: false, persistAccess: false }),
             runtimeConfig,
             submission: choiceSubmission,
           }),
@@ -2797,16 +2947,14 @@ function DriverApp() {
           },
           getAssignedRouteServiceForCurrentSubmission({
             fallback: mockAssignedRouteService,
-            refreshDriverAccess: buildDriverAccessRefresh(choiceSubmission),
+            refreshDriverAccess: buildDriverAccessRefresh(choiceSubmission, { isCurrent: isLoginAccountCurrent, projectRuntimeState: false, persistAccess: false }),
             runtimeConfig,
             submission: choiceSubmission,
           }),
         );
         if (assignedRouteResult.kind === 'route_ready') {
-          loadedSessions.push({
-            ...choice,
-            route: assignedRouteResult.route,
-          });
+          loadedSessions.push(await gateLiveRouteSession(choice, assignedRouteResult.route, accountOwnerHash, isLoginAccountCurrent));
+          if (!isLoginAccountCurrent()) return;
         } else if (assignedRouteResult.kind !== 'no_assigned_route') {
           routeLoadFailed = true;
           setMessage(assignedRouteResult.message);
@@ -2858,7 +3006,8 @@ function DriverApp() {
         : null;
       const serverActiveProgress = serverActiveRouteSession === null
         ? null
-        : getAssignedRouteServerProgress(serverActiveRouteSession.route);
+        : getLiveRouteRecoveryProgress(serverActiveRouteSession.route, liveRouteStatesRef.current[liveRouteStateKey(serverActiveRouteSession.route.id, serverActiveRouteSession.routeAccess.assignmentGeneration)]?.appliedRoute === null
+          ? liveRouteBasesRef.current[liveRouteStateKey(serverActiveRouteSession.route.id, serverActiveRouteSession.routeAccess.assignmentGeneration)] : undefined);
       const serverRestoreTimestamp = new Date().toISOString();
       let activeRouteSession: PersistedActiveRouteSession | null = effectivePersistedActiveRouteSession ?? (
         serverActiveRouteSession === null || serverActiveProgress === null
@@ -2939,7 +3088,9 @@ function DriverApp() {
           }
           activeRouteSession = latestActiveRouteSession;
         }
-        const restoredServerProgress = getAssignedRouteServerProgress(restoredActiveSession.route);
+        const restoreKey = liveRouteStateKey(restoredActiveSession.route.id, restoredActiveSession.routeAccess.assignmentGeneration);
+        const restoredServerProgress = getLiveRouteRecoveryProgress(restoredActiveSession.route,
+          liveRouteStatesRef.current[restoreKey]?.appliedRoute === null ? liveRouteBasesRef.current[restoreKey] : undefined);
         setServerConfirmedStopIds(restoredServerProgress.completedStopIds);
         const pickupCompletionQueueState = getPickupCompletionQueueState(queue, restoredActiveSession.route.id);
         const hasDurablePickupEvidence = pickupCompletionQueueState !== 'none';
@@ -2969,17 +3120,24 @@ function DriverApp() {
             ...restoredServerProgress.completedStopIds,
           ]),
         ];
-        const restoredStepIndex = clampRouteNavigationStepIndex(
-          pickupIsUnconfirmed
-            ? COMPANY_STEP_INDEX
-            : getActiveRouteStepAfterRefresh({
-                completedStopIds: restoredCompletedStopIds,
-                route: restoredActiveSession.route,
-              }),
-          restoredActiveSession.route,
-        );
+        const liveState = liveRouteStatesRef.current[liveRouteStateKey(restoredActiveSession.route.id, restoredActiveSession.routeAccess.assignmentGeneration)];
+        const savedStopId = shouldResetProgress || replacedAssignment ? liveState?.uiDraft?.currentStopId : liveRouteInputRef.current.currentStopId;
+        const restoredStepIndex = liveState?.appliedRoute === null
+          ? activeRouteSession?.navigationStepIndex ?? COMPANY_STEP_INDEX
+          : savedStopId != null && restoredActiveSession.route.stops.some(stop => stop.deliveryStopId === savedStopId && !restoredCompletedStopIds.includes(savedStopId))
+            ? preserveLiveRouteStep(restoredActiveSession.route, savedStopId, activeRouteSession?.navigationStepIndex ?? 0)
+            : clampRouteNavigationStepIndex(
+                pickupIsUnconfirmed ? COMPANY_STEP_INDEX : getActiveRouteStepAfterRefresh({ completedStopIds: restoredCompletedStopIds, route: restoredActiveSession.route }),
+                restoredActiveSession.route,
+              );
+        if ((shouldResetProgress || replacedAssignment) && liveState?.uiDraft != null) {
+          setProofDrafts(liveState.uiDraft.proofDrafts);
+          setProofPhotoResults(liveState.uiDraft.proofPhotoResults);
+          setProofMediaResults(liveState.uiDraft.proofMediaResults);
+          setSelectedStopDetailsId(liveState.uiDraft.selectedStopDetailsId);
+        }
         setCompletedStopIds((current) => [...new Set([
-          ...current,
+          ...(replacedAssignment ? [] : current),
           ...restoredCompletedStopIds,
         ])]);
         if (hasDurablePickupEvidence && activeRouteSession !== null) {
@@ -3015,6 +3173,7 @@ function DriverApp() {
         if (shouldNavigateOnSuccess) {
           setScreen('mainTabs');
         }
+        if (liveState?.appliedRoute === null) return;
         if (restoredActiveSession.pendingRouteEnd !== undefined) {
           setContinuousLocationResult({ kind: 'stopped', taskName: CONTINUOUS_LOCATION_TASK_NAME });
           setMessage('Route completion is still pending server confirmation. GPS tracking stays stopped while receipt recovery retries.');
@@ -3100,7 +3259,9 @@ function DriverApp() {
       setIsInitialRouteRestoreComplete(true);
     }
   }, [
+    activeRoutePlanId,
     buildDriverAccessRefresh,
+    gateLiveRouteSession,
     clearAndStopActiveLocationSession,
     continuousLocationStreamService,
     detailedActiveRouteNotificationEnabled,
@@ -3212,8 +3373,191 @@ function DriverApp() {
     verifiedDriverPhoneE164,
   ]);
 
+  const pollLiveRouteChanges = useCallback(async (routePlanId?: string): Promise<void> => {
+    if (runtimeConfig.mode !== 'live' || !isInitialRouteRestoreComplete || isLoggingIn || isRefreshingRoutes
+      || isStartingRoute || routeStartRecoveryState !== 'idle'
+      || networkReachability !== 'online' || liveRoutePollRunningRef.current || liveRouteApplyRunningRef.current) return;
+    const owner = driverSyncBoundAccountOwnerHashRef.current;
+    if (owner === null) return;
+    const epoch = driverSyncAccountEpochRef.current;
+    liveRoutePollRunningRef.current = true;
+    try {
+      const store = await createExpoLiveRouteChangeStore();
+      for (const session of liveRouteSessionsRef.current) {
+        if (!shouldCheckLiveRouteChange(session.companyGuidance.shopDomain, session.companyGuidance.executionStatus, activeRoutePlanId === session.route.id) || (routePlanId !== undefined && session.route.id !== routePlanId)) continue;
+        const routeId = session.route.id;
+        const generation = session.routeAccess.assignmentGeneration;
+        const key = liveRouteStateKey(routeId, generation);
+        const isCurrent = () => epoch === driverSyncAccountEpochRef.current && driverSyncBoundAccountOwnerHashRef.current === owner
+          && liveRouteSessionsRef.current.some(candidate => candidate.route.id === routeId && candidate.routeAccess.assignmentGeneration === generation);
+        if (!isCurrent()) return;
+        try {
+          const service = createLiveRouteService(session, isCurrent);
+          const publication = await runBoundedAsyncOperation(signal => service.getLiveRouteChange({ routePlanId: routeId }, { signal }), { timeoutMs: 15_000 });
+          if (!isCurrent()) return;
+          let state = await store.read(owner, routeId, generation);
+          if (publication === null && state?.pendingPublication != null) throw new Error('The enrolled route publication is unavailable.');
+          if (publication !== null) {
+            state = await store.update(owner, routeId, generation, current => {
+              if (!isCurrent()) throw new Error('Driver account or route assignment changed.');
+              return observeLiveRoutePublication(current ?? emptyLiveRouteChangeState(routeId, generation), publication);
+            });
+          }
+          if (!isCurrent()) return;
+          if (state !== null) publishLiveRouteState(owner, state);
+          if (state?.ackPendingPublicationVersionId != null) {
+            state = await retryLiveRouteAcknowledgement({ store, accountOwnerHash: owner, routePlanId: routeId, assignmentGeneration: generation, service, isCurrent });
+            if (isCurrent() && state !== null) publishLiveRouteState(owner, state);
+          }
+          if (isCurrent()) { liveRouteAccessBlockedRef.current.delete(key); setLiveRouteErrors(current => { const next = { ...current }; delete next[key]; return next; }); }
+        } catch (error) {
+          if (!isCurrent()) return;
+          if (error instanceof DriverApiHttpError && error.status === 404 && liveRouteStatesRef.current[key]?.pendingPublication == null) continue;
+          if (error instanceof DriverApiHttpError && (error.status === 403 || error.status === 409)) liveRouteAccessBlockedRef.current.add(key);
+          setLiveRouteErrors(current => ({ ...current, [key]: 'The delivery list could not be checked. Retry when connected.' }));
+        }
+      }
+    } finally { liveRoutePollRunningRef.current = false; }
+  }, [activeRoutePlanId, createLiveRouteService, isInitialRouteRestoreComplete, isLoggingIn, isRefreshingRoutes, isStartingRoute, networkReachability, publishLiveRouteState, routeStartRecoveryState, runtimeConfig.mode]);
+
+  useEffect(() => {
+    if (!isInitialRouteRestoreComplete || verifiedDriverPhoneE164 === null) return;
+    void pollLiveRouteChanges();
+    const interval = setInterval(() => { if (AppState.currentState === 'active') void pollLiveRouteChanges(); }, 30_000);
+    const remove = AppState.addEventListener('change', state => { if (state === 'active') void pollLiveRouteChanges(); });
+    return () => { clearInterval(interval); remove.remove(); };
+  }, [isInitialRouteRestoreComplete, pollLiveRouteChanges, verifiedDriverPhoneE164]);
+
+  const buildLiveRouteUiDraft = useCallback((route: AssignedRoute): LiveRouteChangeUiDraft => {
+    const latest = liveRouteInputRef.current;
+    const ids = new Set(route.stops.map(stop => stop.deliveryStopId));
+    const filter = <T,>(values: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(values).filter(([id]) => ids.has(id)));
+    return { currentStopId: ids.has(latest.currentStopId ?? '') ? latest.currentStopId : null,
+      selectedStopDetailsId: ids.has(latest.selectedStopDetailsId ?? '') ? latest.selectedStopDetailsId : null,
+      proofDrafts: filter(latest.proofDrafts), proofPhotoResults: filter(latest.proofPhotoResults), proofMediaResults: filter(latest.proofMediaResults) };
+  }, []);
+
+  useEffect(() => {
+    if (isLoggingIn || !isInitialRouteRestoreComplete || activeRoutePlanId === null || liveRouteApplyRunningRef.current) return;
+    const owner = driverSyncBoundAccountOwnerHashRef.current;
+    const session = routeSessions.find(candidate => candidate.route.id === activeRoutePlanId);
+    if (owner === null || session === undefined || !supportsLiveRouteChanges(session.companyGuidance.shopDomain)) return;
+    const generation = session.routeAccess.assignmentGeneration;
+    const key = liveRouteStateKey(session.route.id, generation);
+    if (liveRouteStatesRef.current[key]?.appliedRoute == null) return;
+    const epoch = driverSyncAccountEpochRef.current;
+    const uiDraft = buildLiveRouteUiDraft(session.route);
+    const isCurrent = () => epoch === driverSyncAccountEpochRef.current && driverSyncBoundAccountOwnerHashRef.current === owner
+      && liveRouteSessionsRef.current.some(candidate => candidate.route.id === session.route.id && candidate.routeAccess.assignmentGeneration === generation);
+    void createExpoLiveRouteChangeStore().then(store => store.update(owner, session.route.id, generation, current => {
+      if (!isCurrent() || current === null) throw new Error('Driver route changed before saving its draft.');
+      return { ...current, uiDraft, appliedRoute: current.appliedRoute !== null && current.appliedPublicationVersionId === session.routeAccess.expectedRouteVersionId
+        ? mergeLiveRouteExecutionState(current.appliedRoute, session.route) : current.appliedRoute };
+    })).then(state => { if (isCurrent()) publishLiveRouteState(owner, state); }).catch(() => {
+      if (isCurrent()) setLiveRouteErrors(current => ({ ...current, [key]: 'Delivery notes could not be saved. Keep the app open and retry.' }));
+    });
+  }, [activeRoutePlanId, buildLiveRouteUiDraft, isInitialRouteRestoreComplete, isLoggingIn, navigationStepIndex, proofDrafts,
+    proofMediaResults, proofPhotoResults, publishLiveRouteState, routeSessions, selectedStopDetailsId]);
+
+  const liveBannerSession = routeSessions.find(session => {
+    const key = liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration);
+    const state = liveRouteStates[key];
+    return (session.route.id === selectedRouteId || session.route.id === activeRoutePlanId)
+      && state !== undefined && (state.appliedRoute === null || hasPendingLiveRouteChange(state) || liveRouteErrors[key] !== undefined);
+  }) ?? routeSessions.find(session => {
+    const state = liveRouteStates[liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration)];
+    return state !== undefined && (state.appliedRoute === null || hasPendingLiveRouteChange(state));
+  });
+  const liveBannerKey = liveBannerSession === undefined ? null : liveRouteStateKey(liveBannerSession.route.id, liveBannerSession.routeAccess.assignmentGeneration);
+  const liveBannerState = liveBannerKey === null ? undefined : liveRouteStates[liveBannerKey];
+
+  async function handleApplyLiveRoute(): Promise<void> {
+    if (liveBannerSession === undefined || isNavigationInterruptionProtected || isRefreshingRoutes || isLoggingIn
+      || liveRouteApplyRunningRef.current || offlineStorageState === 'STORAGE_DEGRADED') return;
+    const release = routeProgressRefreshGuardRef.current.beginRefresh();
+    if (release === null) return;
+    const owner = driverSyncBoundAccountOwnerHashRef.current;
+    if (owner === null) { release(); return; }
+    const session = liveBannerSession;
+    const routeId = session.route.id;
+    const generation = session.routeAccess.assignmentGeneration;
+    const key = liveRouteStateKey(routeId, generation);
+    const epoch = driverSyncAccountEpochRef.current;
+    const isCurrent = () => epoch === driverSyncAccountEpochRef.current && driverSyncBoundAccountOwnerHashRef.current === owner
+      && liveRouteSessionsRef.current.some(candidate => candidate.route.id === routeId && candidate.routeAccess.assignmentGeneration === generation);
+    const wasRecovery = liveRouteStatesRef.current[key]?.appliedRoute === null;
+    let projectedRecovery = false;
+    liveRouteApplyRunningRef.current = true;
+    setIsApplyingLiveRoute(true);
+    try {
+      const store = await createExpoLiveRouteChangeStore();
+      const service = createLiveRouteService(session, isCurrent);
+      const current = await store.read(owner, routeId, generation);
+      if (!isCurrent()) return;
+      // A saved Apply whose ACK was lost is confirmed before any newer content is applied.
+      if (current?.ackPendingPublicationVersionId != null) {
+        const acknowledged = await retryLiveRouteAcknowledgement({ store, accountOwnerHash: owner, routePlanId: routeId, assignmentGeneration: generation, service, isCurrent });
+        if (isCurrent() && acknowledged !== null) publishLiveRouteState(owner, acknowledged);
+      } else {
+        const baseRoute = current?.appliedRoute == null ? liveRouteBasesRef.current[key]
+          : mergeLiveRouteExecutionState(current.appliedRoute, session.route);
+        if (baseRoute === undefined) throw new Error('The assigned route must be loaded before applying changes.');
+        const input = liveRouteInputRef.current;
+        const isSelected = selectedRouteIdRef.current === routeId;
+        const uiDraft = isSelected && current?.appliedRoute !== null ? buildLiveRouteUiDraft(baseRoute) : current?.uiDraft ?? (isSelected ? {
+          ...buildLiveRouteUiDraft(baseRoute), currentStopId: baseRoute.stops[input.navigationStepIndex - 1]?.deliveryStopId ?? null,
+        } : undefined);
+        const applied = await applyLiveRouteChange({ store, service, accountOwnerHash: owner, routePlanId: routeId, assignmentGeneration: generation,
+          baseRoute, expectedRouteVersionId: session.routeAccess.expectedRouteVersionId, uiDraft, isCurrent,
+          onApplied: async state => {
+            if (!isCurrent() || state.appliedRoute === null || state.appliedPublicationVersionId === null) return;
+            const updated: RouteSession = { ...session, route: state.appliedRoute, routeAccess: { ...session.routeAccess, expectedRouteVersionId: state.appliedPublicationVersionId } };
+            const stopId = isSelected ? uiDraft?.currentStopId ?? input.currentStopId : null;
+            const step = preserveLiveRouteStep(state.appliedRoute, stopId,
+              isSelected ? input.navigationStepIndex : 0);
+            if (!isCurrent()) return;
+            // SQLCipher already committed N. Project N before secondary session writes can fail.
+            publishLiveRouteState(owner, state);
+            projectedRecovery = wasRecovery;
+            setRouteSessions(sessions => sessions.map(candidate => candidate.route.id === routeId && candidate.routeAccess.assignmentGeneration === generation ? updated : candidate));
+            if (isSelected) {
+              setSubmission(toCompanyGuidanceSubmission(updated));
+              setNavigationStepIndex(step);
+              if (uiDraft !== undefined) {
+                setSelectedStopDetailsId(liveRouteInputRef.current.selectedStopDetailsId ?? uiDraft.selectedStopDetailsId);
+                setProofDrafts(previous => ({ ...previous, ...uiDraft.proofDrafts }));
+                setProofPhotoResults(previous => ({ ...previous, ...uiDraft.proofPhotoResults }));
+                setProofMediaResults(previous => ({ ...previous, ...uiDraft.proofMediaResults }));
+              }
+              if (activeRoutePlanId === routeId) {
+                const saved = await driverAccessTokenStore.saveActiveRouteSession({ routePlanId: routeId, completedStopIds, navigationStepIndex: step });
+                if (!saved) throw new Error('The applied route is saved but its session marker needs retry.');
+              }
+              if (!isCurrent()) return;
+              await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(toCompanyGuidanceSubmission(updated)));
+            }
+          },
+        });
+        if (isCurrent()) publishLiveRouteState(owner, applied);
+      }
+      if (isCurrent()) setLiveRouteErrors(errors => { const next = { ...errors }; delete next[key]; return next; });
+    } catch {
+      if (isCurrent()) setLiveRouteErrors(errors => ({ ...errors, [key]: 'The route update is not fully confirmed. Keep this notice and retry.' }));
+    } finally {
+      liveRouteApplyRunningRef.current = false;
+      setIsApplyingLiveRoute(false);
+      release();
+      if (projectedRecovery && isCurrent()) void handleRefreshRoutes();
+    }
+  }
+
   useEffect(() => {
     const receiveRouteNotification = (data: DriverRouteNotificationData, openRequested: boolean) => {
+      const session = liveRouteSessionsRef.current.find(candidate => candidate.route.id === data.routePlanId);
+      if (session !== undefined && supportsLiveRouteChanges(session.companyGuidance.shopDomain) && data.action === 'changed') {
+        void pollLiveRouteChanges(data.routePlanId);
+        return;
+      }
       setPendingDriverRouteNotification({ data, openRequested, refreshRequired: true });
       if (verifiedDriverPhoneE164 !== null) {
         setMessage(isNavigationInterruptionProtected
@@ -3248,6 +3592,7 @@ function DriverApp() {
     };
   }, [
     isNavigationInterruptionProtected,
+    pollLiveRouteChanges,
     stopArrivalNotificationService,
     verifiedDriverPhoneE164,
   ]);
@@ -3263,6 +3608,13 @@ function DriverApp() {
       return undefined;
     }
     const timeout = setTimeout(() => {
+      const notifiedSession = routeSessions.find(session => session.route.id === pendingDriverRouteNotification.data.routePlanId);
+      if (notifiedSession !== undefined && pendingDriverRouteNotification.data.action === 'changed'
+        && supportsLiveRouteChanges(notifiedSession.companyGuidance.shopDomain)) {
+        setPendingDriverRouteNotification(null);
+        void pollLiveRouteChanges(notifiedSession.route.id);
+        return;
+      }
       if (routeSyncState === 'idle') {
         void handleRefreshRoutes();
         return;
@@ -3329,6 +3681,7 @@ function DriverApp() {
     isRefreshingRoutes,
     isNavigationInterruptionProtected,
     pendingDriverRouteNotification,
+    pollLiveRouteChanges,
     routeSessions,
     routeProgressGuardIdleRevision,
     routeSyncState,
@@ -4629,6 +4982,7 @@ function DriverApp() {
   }
 
   async function handleOpenRouteNavigation(route: AssignedRoute | null) {
+    if (selectedLiveRouteRecovery || liveRouteApplyRunningRef.current) return;
     if (route === null) {
       setMessage('No route is available to open in map.');
       return;
@@ -4659,6 +5013,7 @@ function DriverApp() {
   }
 
   async function handleOpenNavigationForStop(stop: AssignedRouteStop | null) {
+    if (selectedLiveRouteRecovery || liveRouteApplyRunningRef.current) return;
     if (stop === null || selectedRoute === null) {
       setMessage('No stop is available to open in map.');
       return;
@@ -4941,6 +5296,10 @@ function DriverApp() {
         setRouteRecoveryRefreshReason('rolling_eta_snapshot_synced');
       }
 
+      setRouteSessions(sessions => sessions.map(session => session.route.id === selectedRoute.id ? {
+        ...session, route: { ...session.route, stops: session.route.stops.map(candidate => candidate.deliveryStopId === stop.deliveryStopId
+          ? { ...candidate, status: action === 'delivered' ? 'DELIVERED' : 'FAILED' } : candidate) },
+      } : session));
       const nextCompletedStopIds = [...new Set([...completedStopIds, stop.deliveryStopId])];
       setCompletedStopIds(nextCompletedStopIds);
       if (result.kind === 'recorded') {
@@ -5370,14 +5729,6 @@ function DriverApp() {
     }));
   }
 
-  function resetRouteProgress() {
-    registerContinuousLocationTaskObserver(null);
-    setRouteSessions([]);
-    setConsentSubmission(null);
-    resetActiveRouteProgress();
-    setSelectedRouteId(null);
-  }
-
   function resetActiveRouteProgress() {
     setDeliveryStartResult(null);
     setDeliveryFinishResult(null);
@@ -5404,6 +5755,15 @@ function DriverApp() {
     setSelectedStopDetailsId(null);
     setArrivalCheckReturnScreen('routeSession');
   }
+
+  function resetRouteProgress() {
+    registerContinuousLocationTaskObserver(null);
+    setRouteSessions([]);
+    setConsentSubmission(null);
+    resetActiveRouteProgress();
+    setSelectedRouteId(null);
+  }
+
 
   function refreshOfflineQueueCount() {
     syncOfflineQueueState(offlineSubmissionQueue);
@@ -5472,6 +5832,12 @@ function DriverApp() {
 
     resetRouteProgress();
     setPendingDriverRouteNotification(null);
+    liveRouteStatesRef.current = {};
+    liveRouteBasesRef.current = {};
+    liveRouteOwnerRef.current = null;
+    liveRouteAccessBlockedRef.current.clear();
+    setLiveRouteStates({});
+    setLiveRouteErrors({});
     hasCheckedInitialDriverRouteNotificationRef.current = false;
     setRouteSyncState('idle');
     setLastRoutesUpdatedAt(null);
@@ -5697,6 +6063,13 @@ function DriverApp() {
         ) : (
           <View style={styles.standardScreenFrame}>
             {standardScreenHeader}
+            {liveBannerState !== undefined && verifiedDriverPhoneE164 !== null ? (
+              <LiveRouteChangeBanner routeName={liveBannerSession?.route.name ?? 'Delivery route'} busy={isApplyingLiveRoute} disabled={isNavigationInterruptionProtected || isRefreshingRoutes || isLoggingIn || offlineStorageState === 'STORAGE_DEGRADED'}
+                recovery={liveBannerState.appliedRoute === null}
+                acknowledgementOnly={liveBannerState.ackPendingPublicationVersionId !== null}
+                error={liveBannerKey === null ? null : liveRouteErrors[liveBannerKey] ?? null}
+                onApply={() => { void handleApplyLiveRoute(); }} />
+            ) : null}
             <View style={styles.scrollStage}>
             {screen === 'mainTabs' ? (
               <View pointerEvents="none" style={styles.pullRefreshReveal}>
@@ -5884,7 +6257,7 @@ function DriverApp() {
             />
           ) : null}
 
-          {screen === 'routeSession' && selectedRoute !== null ? (
+          {screen === 'routeSession' && selectedRoute !== null && !selectedLiveRouteRecovery ? (
             <>
               {driverSyncHealth?.conflict === true ? (
                 <View style={styles.driverSyncTakeoverAction}>
@@ -5928,7 +6301,7 @@ function DriverApp() {
             </>
           ) : null}
 
-          {screen === 'stopDetails' && stopDetailsStop !== null ? (
+          {screen === 'stopDetails' && stopDetailsStop !== null && !selectedLiveRouteRecovery ? (
             <>
             <LocationInferenceNotice state={completionAssistance.state} identity={selectedRouteSession?.routeAccess}
               stops={selectedRoute?.stops} stopId={stopDetailsStop.deliveryStopId}
@@ -5950,7 +6323,7 @@ function DriverApp() {
             </>
           ) : null}
 
-          {screen === 'arrivalCheck' && currentStop !== null ? (
+          {screen === 'arrivalCheck' && currentStop !== null && !selectedLiveRouteRecovery ? (
             <ArrivalCheckScreen
               draft={getProofDraft(proofDrafts[currentStop.deliveryStopId])}
               isCapturingPhoto={isCapturingPhoto}
@@ -8176,6 +8549,14 @@ function getProofMediaUploadServiceForCurrentSubmission(input: {
     refreshDriverAccess: input.refreshDriverAccess,
     routeAccess: toInvitedRouteAccess(input.submission),
   }).proofMediaUploadService;
+}
+
+function liveRouteStateKey(routePlanId: string, assignmentGeneration: string): string {
+  return `${routePlanId}:${assignmentGeneration}`;
+}
+
+function hideUnappliedRouteContent(route: AssignedRoute): AssignedRoute {
+  return { ...route, stops: [], routeGeometry: null, routeStopPoints: [], routeMapPreview: null, routeMetrics: null, etaSnapshot: null };
 }
 
 function toInvitedRouteAccess(result: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>): Extract<RouteAccessLookupResult, { status: 'INVITED' }> {

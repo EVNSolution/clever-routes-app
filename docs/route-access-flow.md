@@ -25,6 +25,11 @@ The app now has an interactive phone-first driver flow:
 15. An authoritative empty route list, `NOT_FOUND`, or a missing prior assignment removes that route from the app and clears only route-scoped cache. Network errors retain the last safe cache.
 16. `NO_ASSIGNED_ROUTE`, `DISABLED`, `BLOCKED`, and API errors stay in safe user-visible states without exposing other tenant/driver data.
 
+KFood office changes use a separate publication gate during delivery. The driver
+keeps the locally applied addresses and order until selecting Apply changes.
+See [KFood live route changes](./kfood-live-route-change.md) for persistence,
+acknowledgement retry, and the same-assignment offline-event boundary.
+
 ## Local mock boundary
 
 `src/app/AppRoot.tsx` uses mock account-auth, route-access, consent, and assigned-route services only when `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock` is explicitly configured. The mock runs the same phone + PIN → account-authenticated route choice → route details → live tracking → stop proof/completion flow without a live server. It never pretends that an SMS was sent. Missing live API configuration stops startup instead of silently showing fixture routes.

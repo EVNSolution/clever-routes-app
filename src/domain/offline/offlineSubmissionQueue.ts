@@ -842,6 +842,8 @@ export async function retryOfflineSubmissions(input: {
   isCurrent?: () => boolean;
   lifecycleSignal?: AbortSignal;
   orderedEventAccessIdentity?: {
+    /** Set only after authoritative enrollment for this route and assignment. */
+    allowPreviousPublicationStopEvents?: boolean;
     assignmentGeneration: string;
     driverContractVersion: number;
     expectedRouteVersionId: string;
@@ -921,7 +923,7 @@ export async function retryOfflineSubmissions(input: {
         if (
           isOrderedWorkflowEvidence(item)
           && input.orderedEventAccessIdentity !== undefined
-          && !hasExactOrderedEventAccessIdentity(item.event, input.orderedEventAccessIdentity)
+          && !hasCompatibleOrderedEventAccessIdentity(item.event, input.orderedEventAccessIdentity)
         ) {
           if (input.queue.quarantine(item.queueItemId, 'assignment_changed')) blocked += 1;
           if (routePlanId !== undefined) {
@@ -995,6 +997,17 @@ export async function retryOfflineSubmissions(input: {
       }
     } catch (error) {
       if (!isCurrent()) break;
+      if (item.kind === 'driver_event' && isOrderedWorkflowEvidence(item)
+        && error instanceof DriverApiHttpError && error.status === 409
+        && (error.code === 'ROUTE_VERSION_MISMATCH' || error.code === 'ROUTE_ASSIGNMENT_CHANGED')) {
+        input.queue.recordRetryFailure(item.queueItemId, error);
+        if (input.queue.quarantine(item.queueItemId, 'assignment_changed')) blocked += 1;
+        if (routePlanId !== undefined) {
+          reconciliationRoutePlanIds.add(routePlanId);
+          workflowBlockedRoutePlanIds.add(routePlanId);
+        }
+        continue;
+      }
       if (
         routePlanId !== undefined
         && getDriverApiRequiresRouteReconciliation(error) === true
@@ -1187,14 +1200,20 @@ function sortJsonValue(value: unknown): unknown {
   );
 }
 
-function hasExactOrderedEventAccessIdentity(
+function hasCompatibleOrderedEventAccessIdentity(
   event: DriverEventInput,
   access: NonNullable<Parameters<typeof retryOfflineSubmissions>[0]['orderedEventAccessIdentity']>,
 ): boolean {
   return event.routePlanId === access.routePlanId
     && event.assignmentGeneration === access.assignmentGeneration
     && event.driverContractVersion === access.driverContractVersion
-    && event.expectedRouteVersionId === access.expectedRouteVersionId;
+    && (event.expectedRouteVersionId === access.expectedRouteVersionId || (
+      access.allowPreviousPublicationStopEvents === true
+      && access.driverContractVersion === 2
+      && typeof event.expectedRouteVersionId === 'string' && event.expectedRouteVersionId.trim() !== ''
+      && typeof event.deliveryStopId === 'string' && event.deliveryStopId.trim() !== ''
+      && (event.eventType === 'STOP_ARRIVED' || event.eventType === 'STOP_DELIVERED' || event.eventType === 'STOP_FAILED')
+    ));
 }
 
 function getProofMediaQueueItemId(request: ProofMediaUploadRequest): string {

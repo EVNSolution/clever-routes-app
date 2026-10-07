@@ -80,9 +80,10 @@ function createDatabase(input?: {
         const payload = tables.get('support_export_markers')?.get(recordKey);
         return payload === undefined ? null : { payload, recordKey } as T;
       }
-      if (sql.includes('FROM completion_assistance_state')) {
+      if (sql.includes('FROM completion_assistance_state') || sql.includes('FROM live_route_change_state')) {
         const accountOwnerHash = String(params[0] ?? '');
-        const payload = tables.get('completion_assistance_state')?.get(accountOwnerHash);
+        const table = /FROM ([a-z_]+)/iu.exec(sql)?.[1] ?? '';
+        const payload = tables.get(table)?.get(accountOwnerHash);
         return payload === undefined ? null : { payload, recordKey: accountOwnerHash } as T;
       }
       return null;
@@ -119,6 +120,46 @@ function createDatabase(input?: {
 }
 
 describe('encrypted driver evidence store', () => {
+  it('adds encrypted live route state to an existing v2 database and isolates account rows', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const input = {
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    };
+    const owner = 'a1'.repeat(32);
+    const otherOwner = 'b2'.repeat(32);
+    const store = await createEncryptedEvidenceStore(input);
+    await store.updateLiveRouteChangeState(owner, (raw) => {
+      assert.equal(raw, null);
+      return '{"applied":"N","ackPending":"N","privateAddress":"700 Example Avenue"}';
+    });
+    await store.updateLiveRouteChangeState(otherOwner, () => '{"applied":"other"}');
+    const restarted = await createEncryptedEvidenceStore(input);
+    assert.match((await restarted.readLiveRouteChangeState(owner))!, /700 Example Avenue/u);
+    await restarted.updateLiveRouteChangeState(owner, (raw) => JSON.stringify({ ...JSON.parse(raw!), ackPending: null }));
+    assert.equal(JSON.parse((await restarted.readLiveRouteChangeState(owner))!).ackPending, null);
+    await restarted.removeLiveRouteChangeState(owner);
+    assert.equal(await restarted.readLiveRouteChangeState(owner), null);
+    assert.equal(await restarted.readLiveRouteChangeState(otherOwner), '{"applied":"other"}');
+    assert.match(db.commands.join('\n'), /CREATE TABLE IF NOT EXISTS live_route_change_state/u);
+    assert.doesNotMatch(db.commands.join('\n'), /PRAGMA user_version =/u);
+    assert.doesNotMatch(await restarted.exportDiagnostics(), /700 Example Avenue/u);
+    await assert.rejects(store.updateLiveRouteChangeState('+14165550123', () => '{}'), /SHA-256/u);
+  });
+
+  it('propagates a failed live-state commit without reporting an applied publication', async () => {
+    const db = createDatabase({ userVersion: 2, failOn: 'INSERT OR REPLACE INTO live_route_change_state' });
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const owner = 'a1'.repeat(32);
+    await assert.rejects(store.updateLiveRouteChangeState(owner, () => '{"applied":"N"}'), /database failure/u);
+    assert.equal(await store.readLiveRouteChangeState(owner), null);
+  });
+
   it('atomically persists completion assistance per validated account hash', async () => {
     const db = createDatabase({ userVersion: 2 });
     const store = await createEncryptedEvidenceStore({

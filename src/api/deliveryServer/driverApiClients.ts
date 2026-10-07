@@ -23,17 +23,24 @@ import {
 } from '../../domain/proof/proofMediaUpload';
 import type { DriverAccessToken, RouteAccessLookupResult } from '../../domain/routeAccess/routeAccess';
 import { observeDriverDiagnosticOperation } from '../../domain/diagnostics/driverDiagnosticObservation';
+import {
+  createLiveRouteChangeApiClient,
+  type LiveRouteChangeFetchLike,
+  type LiveRouteChangeService,
+} from '../../domain/route/liveRouteChange';
 
 export type DriverApiClients = {
   assignedRouteService: AssignedRouteService;
   driverConsentService: DriverConsentService;
   driverEventService: DriverEventService;
+  liveRouteChangeService: LiveRouteChangeService;
   proofMediaUploadService: ProofMediaUploadService;
 };
 
 export type DriverApiClientsFetchLike = AssignedRouteFetchLike
   & DriverConsentFetchLike
   & DriverEventFetchLike
+  & LiveRouteChangeFetchLike
   & ProofMediaUploadFetchLike;
 
 export type DriverAccessRefresh = (signal?: AbortSignal) => Promise<DriverAccessToken | null>;
@@ -117,6 +124,11 @@ function createDriverApiClientsFromAccessToken(input: {
       fetchImpl: input.fetchImpl,
       orderedEventContract: input.orderedEventContract,
     }),
+    liveRouteChangeService: createLiveRouteChangeApiClient({
+      accessToken,
+      baseUrl: input.baseUrl,
+      fetchImpl: input.fetchImpl,
+    }),
     proofMediaUploadService: createProofMediaUploadApiClient({
       accessToken,
       baseUrl: input.baseUrl,
@@ -177,6 +189,16 @@ function withDriverAccessRefresh(input: {
       prepareDriverEvent: (request) => clients.driverEventService.prepareDriverEvent?.(request) ?? request,
       recordDriverEvent: (request, options) => runWithRefresh(
         (client) => client.driverEventService.recordDriverEvent(request, options),
+        options?.signal,
+      ),
+    },
+    liveRouteChangeService: {
+      getLiveRouteChange: (request, options) => runWithRefresh(
+        (client) => client.liveRouteChangeService.getLiveRouteChange(request, options),
+        options?.signal,
+      ),
+      acknowledgeLiveRouteChange: (request, options) => runWithRefresh(
+        (client) => client.liveRouteChangeService.acknowledgeLiveRouteChange(request, options),
         options?.signal,
       ),
     },

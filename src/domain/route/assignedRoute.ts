@@ -604,7 +604,7 @@ function readAssignedRouteLookupResult(value: unknown): AssignedRouteLookupResul
   return null;
 }
 
-function isAssignedRoute(value: unknown): value is AssignedRoute {
+export function isAssignedRoute(value: unknown): value is AssignedRoute {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }

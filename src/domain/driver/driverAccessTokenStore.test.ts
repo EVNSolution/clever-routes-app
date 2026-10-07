@@ -120,7 +120,7 @@ test('does not overwrite persisted access for a different active route', async (
   assert.equal(restored.activeRouteSession?.routePlanId, sampleInvitedRouteAccess.routeAccess.routePlanId);
 });
 
-test('updates same-route access generation without replacing the active session', async () => {
+test('keeps the active session when the same assignment receives a new publication', async () => {
   const storage = createMemoryStorage();
   const store = createDriverAccessTokenStore({
     now: () => new Date('2026-05-12T06:45:00.000Z'),
@@ -144,7 +144,7 @@ test('updates same-route access generation without replacing the active session'
     },
     routeAccess: {
       ...sampleInvitedRouteAccess.routeAccess,
-      assignmentGeneration: '8',
+      expectedRouteVersionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     },
   });
 
@@ -153,8 +153,69 @@ test('updates same-route access generation without replacing the active session'
   assert.equal(restored.kind, 'active');
   if (restored.kind !== 'active') return;
   assert.equal(restored.driverAccess?.accessToken, 'redispatched-route-token');
-  assert.equal(restored.routeAccess?.assignmentGeneration, '8');
+  assert.equal(restored.routeAccess?.assignmentGeneration, sampleInvitedRouteAccess.routeAccess.assignmentGeneration);
+  assert.equal(restored.routeAccess?.expectedRouteVersionId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
   assert.equal(restored.activeRouteSession?.startedAt, startedAt);
+  assert.equal(restored.activeRouteSession?.navigationStepIndex, 2);
+  assert.deepEqual(restored.activeRouteSession?.completedStopIds, ['stop-1']);
+});
+
+test('clears the active session when the same route is reassigned to a new generation', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+  const initial = {
+    ...sampleInvitedRouteAccess,
+    routeAccess: { ...sampleInvitedRouteAccess.routeAccess, assignmentGeneration: '2' },
+  };
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(initial);
+  await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1'],
+    navigationStepIndex: 2,
+    pickupCompleted: true,
+    routePlanId: initial.routeAccess.routePlanId,
+    startedAt: '2026-05-12T06:30:00.000Z',
+  });
+  const saved = await store.saveFromInvitedRouteAccess({
+    ...initial,
+    driverAccess: { ...initial.driverAccess, accessToken: 'new-assignment-token' },
+    routeAccess: { ...initial.routeAccess, assignmentGeneration: '3' },
+  });
+
+  assert.equal(saved, true);
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
+  assert.equal(restored.activeRouteSession, undefined);
+  assert.equal(restored.routeAccess?.assignmentGeneration, '3');
+  assert.equal(restored.driverAccess?.accessToken, 'new-assignment-token');
+  assert.equal(restored.accountAccess.accessToken, 'account-access-token');
+});
+
+test('preserves the existing legacy session policy when stored assignment generation is absent', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-05-12T06:45:00.000Z'),
+    storage,
+  });
+  await saveAccount(store);
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  await store.saveActiveRouteSession({
+    completedStopIds: ['stop-1'],
+    navigationStepIndex: 2,
+    routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+  });
+  const legacy = JSON.parse(storage.values[DRIVER_ACCESS_TOKEN_STORAGE_KEY]!);
+  delete legacy.routeAccess.assignmentGeneration;
+  storage.values[DRIVER_ACCESS_TOKEN_STORAGE_KEY] = JSON.stringify(legacy);
+
+  assert.equal(await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess), true);
+  const restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind, 'active');
+  if (restored.kind !== 'active') return;
   assert.equal(restored.activeRouteSession?.navigationStepIndex, 2);
   assert.deepEqual(restored.activeRouteSession?.completedStopIds, ['stop-1']);
 });
