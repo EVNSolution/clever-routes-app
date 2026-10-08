@@ -16,6 +16,7 @@ type EasBuildProfile = {
   credentialsSource?: string;
   developmentClient?: boolean;
   distribution?: string;
+  env?: Record<string, string>;
   environment?: string;
   extends?: string;
 };
@@ -47,6 +48,24 @@ test('defines native EAS build profiles for preview and production evidence', ()
   assert.equal(eas.submit?.production?.android?.releaseStatus, 'completed');
 });
 
+test('enables KFood only in the signed production-kfood-on profile', () => {
+  const eas = readJson<{ build?: Record<string, EasBuildProfile> }>('eas.json');
+  const profile = eas.build?.['production-kfood-on'];
+
+  assert.equal(profile?.extends, 'production');
+  assert.equal(profile?.env?.EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA, 'true');
+  assert.equal(profile?.env?.EXPO_PUBLIC_DRIVER_RUNTIME_MODE, 'live');
+  assert.equal(profile?.env?.EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL, 'https://clever-route.cleversystem.ai');
+  for (const name of ['production', 'production-local', 'production-kfood-on']) {
+    const candidate = eas.build?.[name];
+    assert.notEqual(candidate?.developmentClient, true);
+    assert.notEqual(candidate?.android?.withoutCredentials, true);
+    if (name !== 'production-kfood-on') {
+      assert.equal(candidate?.env?.EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA, undefined);
+    }
+  }
+});
+
 test('keeps source-controlled Android versions aligned across Expo and Gradle', () => {
   const appConfig = readJson<{
     expo?: {
@@ -62,8 +81,8 @@ test('keeps source-controlled Android versions aligned across Expo and Gradle', 
   const versionCode = Number(androidBuildGradle.match(/\bversionCode\s+(\d+)/u)?.[1]);
   const versionName = androidBuildGradle.match(/\bversionName\s+"([^"]+)"/u)?.[1];
 
-  assert.equal(appConfig.expo?.version, '1.3.4');
-  assert.equal(appConfig.expo?.android?.versionCode, 40);
+  assert.equal(appConfig.expo?.version, '1.3.6');
+  assert.equal(appConfig.expo?.android?.versionCode, 42);
   assert.equal(appConfig.expo?.ios?.bundleIdentifier, 'com.evnsolution.clever.routes');
   assert.equal(appConfig.expo?.ios?.buildNumber, '1');
   assert.equal(appConfig.expo?.android?.package, 'com.evnsolution.clever.routes');

@@ -1,0 +1,784 @@
+{
+  "schemaVersion": 1,
+  "scope": "Focused native KFood single-completion and Cash acceptance",
+  "date": "2026-10-08",
+  "timeZone": "UTC",
+  "sourceCommit": "985f999ad2c4f9354ff2c856174e4542410c6554",
+  "device": "R3CN80SCYPL",
+  "qaPackage": "com.evnsolution.clever.routes.cashqa",
+  "appVersion": "1.3.5",
+  "versionCode": 41,
+  "apkSha256": "ce8a8b1e6ebbe76c80a54e1879e73282025dd924dbbe9ac31cf9bf30a25c8ec6",
+  "artifactRoot": "/Users/jiin/.codex/artifacts/kfood-pr299-release-ready-20261008",
+  "fixtureSnapshotRecordedAt": "2026-10-08T12:08:02.554Z",
+  "summary": {
+    "stopDeliveredCount": 7,
+    "stopArrivedCount": 0,
+    "receiptCount": 7,
+    "distinctClientEventIdCount": 7,
+    "oneServerEventAndReceiptPerClientEventId": true
+  },
+  "receipts": [
+    {
+      "stopIndex": 1,
+      "clientEventId": "1aef6f0f-9c05-4a82-bcbb-98b9efb30148",
+      "eventId": "d71a1663-ad11-468f-8ca9-c6ce06bdfe72",
+      "receiptId": "7e88c6a5-80e7-4977-acb8-27e6a3332829",
+      "occurredAt": "2026-10-08T11:39:26.884Z",
+      "recordedAt": "2026-10-08T11:39:27.270Z",
+      "paymentMethod": "CASH",
+      "currencyCode": "CAD",
+      "expectedAmount": "122.25",
+      "actualAmount": "122.00",
+      "differenceAmount": "-0.25",
+      "serverEventCount": 1,
+      "serverReceiptCount": 1
+    },
+    {
+      "stopIndex": 8,
+      "clientEventId": "dfc3e125-5fe6-4f8f-af33-5849b7d39130",
+      "eventId": "4f25d4ad-6690-4c49-b1db-9e7149f12eb8",
+      "receiptId": "a4ddbe95-a9d2-4605-b2db-f64f98f654c8",
+      "occurredAt": "2026-10-08T11:48:16.630Z",
+      "recordedAt": "2026-10-08T11:48:16.987Z",
+      "paymentMethod": "ETRANSFER",
+      "currencyCode": "CAD",
+      "expectedAmount": "122.25",
+      "actualAmount": null,
+      "differenceAmount": null,
+      "serverEventCount": 1,
+      "serverReceiptCount": 1
+    },
+    {
+      "stopIndex": 2,
+      "clientEventId": "96102f07-ca0e-44d0-8080-8fc56d74a38c",
+      "eventId": "512c948c-89de-48f4-8085-79271713e1eb",
+      "receiptId": "7c46eb97-7cca-42e4-9d42-b71adb0819ba",
+      "occurredAt": "2026-10-08T11:49:36.361Z",
+      "recordedAt": "2026-10-08T11:49:36.791Z",
+      "paymentMethod": "CASH",
+      "currencyCode": "CAD",
+      "expectedAmount": "122.25",
+      "actualAmount": "122.25",
+      "differenceAmount": "0.00",
+      "serverEventCount": 1,
+      "serverReceiptCount": 1
+    },
+    {
+      "stopIndex": 3,
+      "clientEventId": "41d6f31e-f520-4d51-93dd-97cf867bf798",
+      "eventId": "25a9ed61-36c2-44b7-8147-33ec8ce6dca6",
+      "receiptId": "2e0d14f9-4fd5-4212-aa43-3bf29648ddb9",
+      "occurredAt": "2026-10-08T11:50:43.110Z",
+      "recordedAt": "2026-10-08T11:50:43.639Z",
+      "paymentMethod": "CASH",
+      "currencyCode": "CAD",
+      "expectedAmount": "122.25",
+      "actualAmount": "123.00",
+      "differenceAmount": "0.75",
+      "serverEventCount": 1,
+      "serverReceiptCount": 1
+    },
+    {
+      "stopIndex": 4,
+      "clientEventId": "1a5b9f5a-432f-4a38-bd22-29f52e6d6464",
+      "eventId": "5c284280-d418-4735-aa60-eb23d44bb33f",
+      "receiptId": "db5ccb59-e316-4dc5-ab21-3f7e43a9fd6a",
+      "occurredAt": "2026-10-08T11:51:49.072Z",
+      "recordedAt": "2026-10-08T11:51:49.807Z",
+      "paymentMethod": "CASH",
+      "currencyCode": "CAD",
+      "expectedAmount": "122.25",
+      "actualAmount": "0.00",
+      "differenceAmount": "-122.25",
+      "serverEventCount": 1,
+      "serverReceiptCount": 1
+    },
+    {
+      "stopIndex": 5,
+      "clientEventId": "0636b42b-2e56-49f8-b718-ef3f37203f0d",
+      "eventId": "3c4b8f87-5a42-4873-bb46-8e42d529a295",
+      "receiptId": "e034f471-1dd3-408e-97ec-d88cdfbf0fb8",
+      "occurredAt": "2026-10-08T11:52:52.098Z",
+      "recordedAt": "2026-10-08T11:52:53.134Z",
+      "paymentMethod": "ETRANSFER",
+      "currencyCode": "CAD",
+      "expectedAmount": "122.25",
+      "actualAmount": null,
+      "differenceAmount": null,
+      "serverEventCount": 1,
+      "serverReceiptCount": 1
+    },
+    {
+      "stopIndex": 9,
+      "clientEventId": "d88b41cf-3fce-4c8c-92ff-4b15ef2e349c",
+      "eventId": "8740dae0-8f7b-4091-8e09-0b6cdaf68852",
+      "receiptId": "f0562969-1de8-42a0-98de-a4a248fd4e2a",
+      "occurredAt": "2026-10-08T11:54:35.058Z",
+      "recordedAt": "2026-10-08T11:58:55.038Z",
+      "paymentMethod": "CASH",
+      "currencyCode": "CAD",
+      "expectedAmount": null,
+      "actualAmount": "50.00",
+      "differenceAmount": null,
+      "serverEventCount": 1,
+      "serverReceiptCount": 1
+    }
+  ],
+  "checkpointReceiptCounts": {
+    "cash-before-first-confirm.json": 0,
+    "future-cancelled.json": 1,
+    "future-confirmed.json": 2,
+    "cash-three-amounts.json": 4,
+    "cash-zero-result.json": 5,
+    "etransfer-one-tap.json": 6,
+    "after-commit-restart.json": 1,
+    "offline-after-refresh.json": 7
+  },
+  "screenAssertions": {
+    "current-first-stop": {
+      "qaPackageOnly": true,
+      "completeDeliveryLabelCount": 1,
+      "arriveActionPresent": false
+    },
+    "cash-empty-current": {
+      "qaPackageOnly": true,
+      "emptyAmountPlaceholderPresent": true
+    },
+    "cash-empty-error": {
+      "qaPackageOnly": true,
+      "requiredAmountErrorPresent": true
+    },
+    "cash-cancelled": {
+      "qaPackageOnly": true
+    },
+    "cash-draft-restored": {
+      "qaPackageOnly": true,
+      "draftAmount122Present": true
+    },
+    "stop-details-address": {
+      "qaPackageOnly": true,
+      "copyAddressAvailable": true,
+      "orderPresent": true,
+      "callAvailable": true,
+      "messageAvailable": true,
+      "phoneUnavailable": false
+    },
+    "missing-phone-details": {
+      "qaPackageOnly": true,
+      "copyAddressAvailable": true,
+      "orderPresent": true,
+      "callAvailable": false,
+      "messageAvailable": false,
+      "phoneUnavailable": true
+    },
+    "future-order-confirmation": {
+      "qaPackageOnly": true
+    },
+    "future-cancelled": {
+      "qaPackageOnly": true
+    },
+    "future-confirmed": {
+      "qaPackageOnly": true,
+      "currentStop2Present": true
+    },
+    "after-commit-restart": {
+      "qaPackageOnly": true
+    },
+    "recovered-receipt-details": {
+      "qaPackageOnly": true
+    },
+    "receipt-equal": {
+      "qaPackageOnly": true
+    },
+    "receipt-123": {
+      "qaPackageOnly": true
+    },
+    "receipt-zero": {
+      "qaPackageOnly": true
+    },
+    "current-etransfer-before": {
+      "qaPackageOnly": true
+    },
+    "etransfer-one-tap-complete": {
+      "qaPackageOnly": true
+    },
+    "offline-pending-before-kill": {
+      "qaPackageOnly": true
+    },
+    "offline-after-restart": {
+      "qaPackageOnly": true
+    },
+    "offline-restored-amount": {
+      "qaPackageOnly": true,
+      "pendingLabelPresent": true,
+      "submittedCash50Present": true
+    },
+    "offline-restored-pending-list": {
+      "qaPackageOnly": true
+    },
+    "offline-final-server-receipt": {
+      "qaPackageOnly": true,
+      "recordedByServer": true,
+      "actualCash50Visible": true,
+      "unknownExpectedPreserved": true,
+      "unknownDifferencePreserved": true
+    }
+  },
+  "processKillAfterCommit": {
+    "originalClientEventId": "1aef6f0f-9c05-4a82-bcbb-98b9efb30148",
+    "originalOccurredAt": "2026-10-08T11:39:26.884Z",
+    "amount": "122.00",
+    "receiptId": "7e88c6a5-80e7-4977-acb8-27e6a3332829",
+    "heldAt": "2026-10-08T11:39:27.305Z",
+    "responseDelivered": false,
+    "forceStopAt": "2026-10-08T11:39:27.474969+00:00",
+    "pidBefore": "16662",
+    "pidAfterKill": "",
+    "restartPid": "17941",
+    "restartPidEvidence": "Native test operator observation and subsequent process-scoped log",
+    "serverEventCount": 1,
+    "serverReceiptCount": 1,
+    "recoveredOnDevice": true
+  },
+  "offlineProcessKill": {
+    "originalClientEventId": "d88b41cf-3fce-4c8c-92ff-4b15ef2e349c",
+    "originalOccurredAt": "2026-10-08T11:54:35.058Z",
+    "amount": "50.00",
+    "receiptId": "f0562969-1de8-42a0-98de-a4a248fd4e2a",
+    "transportFailureMode": "Synthetic QA server destroys transport while offline",
+    "killedAt": "2026-10-08T11:55:30.692283+00:00",
+    "pidBefore": "17941",
+    "pidAfterKill": null,
+    "restartPid": "21070",
+    "restartPidEvidence": "Native test operator observation",
+    "sameInstallation": true,
+    "receiptCountBeforeKill": 6,
+    "pendingAmountVisibleAfterRestart": true,
+    "firstRefreshCommittedAt": "2026-10-08T11:58:55.038Z",
+    "heldAt": "2026-10-08T11:58:55.062Z",
+    "responseDelivered": false,
+    "holdReleasedAt": "2026-10-08T11:59:10.040Z",
+    "holdReleaseReason": "client_connection_closed",
+    "secondExplicitRefreshReconciledApplied": true,
+    "finalQueueDepth": 0,
+    "finalQueueObservedAt": "2026-10-08T12:01:49.545Z",
+    "serverEventCount": 1,
+    "serverReceiptCount": 1,
+    "finalAcknowledgedReceiptScreenRecaptured": true
+  },
+  "businessQueueTimeline": [
+    {
+      "observedAt": "2026-10-08T11:43:04.106Z",
+      "kind": "STATE_CHANGE",
+      "queueDepth": 1,
+      "oldestQueuedAt": "2026-10-08T11:39:26.884Z"
+    },
+    {
+      "observedAt": "2026-10-08T11:43:04.935Z",
+      "kind": "STATE_CHANGE",
+      "queueDepth": 0,
+      "oldestQueuedAt": null
+    },
+    {
+      "observedAt": "2026-10-08T11:55:38.363Z",
+      "kind": "STATE_CHANGE",
+      "queueDepth": 6,
+      "oldestQueuedAt": "2026-10-08T11:54:34.577Z"
+    },
+    {
+      "observedAt": "2026-10-08T11:59:42.088Z",
+      "kind": "HEARTBEAT",
+      "queueDepth": 1,
+      "oldestQueuedAt": "2026-10-08T11:54:35.058Z"
+    },
+    {
+      "observedAt": "2026-10-08T12:01:49.545Z",
+      "kind": "STATE_CHANGE",
+      "queueDepth": 0,
+      "oldestQueuedAt": null
+    },
+    {
+      "observedAt": "2026-10-08T12:01:49.545Z",
+      "kind": "HEARTBEAT",
+      "queueDepth": 0,
+      "oldestQueuedAt": null
+    },
+    {
+      "observedAt": "2026-10-08T12:02:11.373Z",
+      "kind": "STATE_CHANGE",
+      "queueDepth": 0,
+      "oldestQueuedAt": null
+    }
+  ],
+  "nativeStorage": {
+    "library": {
+      "library": "lib/arm64-v8a/libexpo-sqlite.so",
+      "abi": "arm64-v8a",
+      "elfMachine": 183,
+      "sizeBytes": 1901944,
+      "sha256": "a72ccca61adfaeda45d5c88b90b67e92bae3442c8a4a6f2004750f5d645db07c",
+      "definedSymbols": {
+        "sqlcipher_version": {
+          "definedInLibrary": true,
+          "symbolTable": "DYNSYM"
+        }
+      },
+      "sqlcipherMarkerCounts": {
+        "sqlcipher_export": 5,
+        "cipher_version": 2,
+        "cipher_integrity_check": 1,
+        "SQLCIPHER": 24,
+        "sqlcipher_codec_ctx_set_pass": 1
+      },
+      "relatedDefinedSymbols": [
+        {
+          "name": "exsqlite3_rekey_v2",
+          "definedInLibrary": true
+        },
+        {
+          "name": "exsqlite3_rekey",
+          "definedInLibrary": true
+        },
+        {
+          "name": "sqlcipher_version",
+          "definedInLibrary": true
+        },
+        {
+          "name": "exsqlite3_key_v2",
+          "definedInLibrary": true
+        },
+        {
+          "name": "exsqlite3_key",
+          "definedInLibrary": true
+        }
+      ]
+    },
+    "configuration": {
+      "sqlcipherEnabled": "app.json plugin expo-sqlite.useSQLCipher=true; android/gradle.properties expo.sqlite.useSQLCipher=true",
+      "databaseName": "clever_driver_evidence_v2.db",
+      "derivedAndroidUser0Path": "/data/user/0/com.evnsolution.clever.routes.cashqa/files/SQLite/clever_driver_evidence_v2.db",
+      "keyStorage": "Expo SecureStore logical key clever.driverEvidence.sqlcipherKey.v2; 32 random bytes; Android Keystore encrypted; value not read",
+      "openGate": "PRAGMA key applied before cipher_version, sqlite_master and schema reads; unavailable cipher or invalid key rejects queue creation"
+    },
+    "directDatabaseOrKeyExtraction": false,
+    "evidenceType": "Compiled native SQLCipher and actual device process-restart recovery; no file-mock storage",
+    "processScopedLogCheck": {
+      "devicePid": "21070",
+      "lineCount": 972,
+      "sqliteExceptionReleasedObjectOrFatalExceptionMatches": 0,
+      "scope": "Captured log buffer only; not a general absence-of-error claim"
+    }
+  },
+  "deviceInterruption": {
+    "observedAt": "2026-10-08T12:02:20.481605+00:00",
+    "foreground": "com.android.settings/.Settings$WifiSettingsActivity",
+    "action": "QA helper rejected input; device mutations stopped",
+    "resumedAfterReadOnlyOwnershipCheck": true,
+    "resumedEvidence": "QA foreground restored; only owned process-scoped ADB readers found; read-only QA screenshot reviewed before input resumed."
+  },
+  "limitations": [
+    "This is a focused native QA pass on the isolated cashqa package and synthetic local server contract. It does not authorize merge, deployment, store rollout, or replacement of the production app.",
+    "Additional native account-switch, reassignment, and PR297 Dispatch screen checks were not run in this focused pass. They remain supplemental native release checks; prior code or HTTP tests do not substitute for those screens.",
+    "No on-device database file or key was extracted or decrypted. SQLCipher library inclusion, fail-closed storage configuration, and real process-restart behavior corroborate native persistence; they do not directly inspect encrypted database bytes.",
+    "The fixture export omits detailed diagnostic operation and error fields. Runtime diagnostic rows cannot prove the absence of every SQLite or cipher error.",
+    "Reconnect recovery used explicit refresh twice. This pass does not establish unattended reconnect latency.",
+    "The binary storage report predates the offline kill test. Its offline-case-pending limitation is superseded by the completed offline evidence in this document; its direct-database-inspection limitation remains."
+  ],
+  "artifactManifest": [
+    {
+      "path": "screenshots/R3CN80SCYPL-current-first-stop.xml",
+      "sha256": "231053980e9b6eb83dacada88f6616859aa028ae8801399aaca6244cf32c8649",
+      "sizeBytes": 17168
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-current-first-stop.png",
+      "sha256": "8f335ca7c634a0218d2291f7598810489aa6c04b57384ed5602f756bd21d8406",
+      "sizeBytes": 166483,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-cash-empty-current.xml",
+      "sha256": "918408256a5fee20cea294a8d7211697314e14498037660cc129a57b760b424e",
+      "sizeBytes": 6496
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-cash-empty-current.png",
+      "sha256": "a1c37507669f2fdfb97c1ae1e53dd28ba356cb2470079c99e7888026652b1019",
+      "sizeBytes": 180759,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-cash-empty-error.xml",
+      "sha256": "64e708ab31ec2ba4a74e0777e137ac3f882b48e74a5647be5d51865839c0759c",
+      "sizeBytes": 6890
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-cash-empty-error.png",
+      "sha256": "c2a14741b4dc289ccedf37e9edad37cdfac55159f1da75531d188454bd9d58d2",
+      "sizeBytes": 189805,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-cash-cancelled.xml",
+      "sha256": "231053980e9b6eb83dacada88f6616859aa028ae8801399aaca6244cf32c8649",
+      "sizeBytes": 17168
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-cash-cancelled.png",
+      "sha256": "4856cad42e72bb84788a0ee844ec47233aae87dd9bccff451e9792652c71685d",
+      "sizeBytes": 165684,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-cash-draft-restored.xml",
+      "sha256": "185af988caf1b8451dc595639b4a8d2f3e1881d349a5ffbad0402b14c16fd71c",
+      "sizeBytes": 6474
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-cash-draft-restored.png",
+      "sha256": "dca3c935238185d15fa02518569241de26bad8e47c4f3bc5e8a776609668e347",
+      "sizeBytes": 182608,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-stop-details-address.xml",
+      "sha256": "157382d49f6dcf22e6be29a8e66ebd7f489a3847d389ed05e5514c2cf5717e1d",
+      "sizeBytes": 18044
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-stop-details-address.png",
+      "sha256": "b44778a40b6d528218c3cbc977539cb16ecc2cc7840cb59cbe5368c33ddafbaa",
+      "sizeBytes": 178408,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-missing-phone-details.xml",
+      "sha256": "5b51c2efe46377f2eb82fe3c5b7d66975678ab12e931365b24045387957203ef",
+      "sizeBytes": 16634
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-missing-phone-details.png",
+      "sha256": "a4e8ed4444b4dd2824c3d3f9d0d063ae9cdaddd8d71da85a6b2392b611197c7f",
+      "sizeBytes": 167687,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-future-order-confirmation.xml",
+      "sha256": "a54a9f491eb834263f7010469bb51839c4c3c591fe17d56dc148390de1859eb4",
+      "sizeBytes": 5597
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-future-order-confirmation.png",
+      "sha256": "a0a994f99297559f5ef0898dd3f7ed5bafc5606c038719c4c25f12175411453f",
+      "sizeBytes": 169683,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-future-cancelled.xml",
+      "sha256": "aec023cf36d22afd55383b6eff01fc8013251ceb71680787e30924c4578537e7",
+      "sizeBytes": 15953
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-future-cancelled.png",
+      "sha256": "d792fd835b4aced05518c1494699926cfa12ce2ef47986da185243d93d6ab7d3",
+      "sizeBytes": 143366,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-future-confirmed.xml",
+      "sha256": "26c3b62edd64ccc3413a5cf74fcf40ede015fdde3849823fc47143f8c67b4910",
+      "sizeBytes": 20888
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-future-confirmed.png",
+      "sha256": "a23447caf4e0d3014c83f956d2ce77de93c325151c936ec534b9edd0268557d2",
+      "sizeBytes": 192052,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-after-commit-restart.xml",
+      "sha256": "9ba8e5e99db6e13c26b3990fcd8ad2542d9c81f7599cb825b56e074b06db8ef2",
+      "sizeBytes": 8922
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-after-commit-restart.png",
+      "sha256": "71849920c06378bead271c3e4fa4009e349c28c94437bcf84c2dab8722a8d405",
+      "sizeBytes": 61587,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-recovered-receipt-details.xml",
+      "sha256": "d4dde86f4791370f162580b23a6c6b151dcacd2d6173305857662e62e2bb20d2",
+      "sizeBytes": 17770
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-recovered-receipt-details.png",
+      "sha256": "58227f609d085c075be7bda56f24239616444c8e3c2712c849c334923de4dbd0",
+      "sizeBytes": 155134,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-receipt-equal.xml",
+      "sha256": "3539c6a538012efbaf633293a012554fe790c018d009c487cac6b31cf8b4eee0",
+      "sizeBytes": 18049
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-receipt-equal.png",
+      "sha256": "8d5b120e34775a32b14a477aec560b201b0559ab11e2d110aaba9c0c4bf11edb",
+      "sizeBytes": 173027,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-receipt-123.xml",
+      "sha256": "1f61693e106c20a3600166109b9634dc517c65715254734d78616bb512745f0a",
+      "sizeBytes": 18043
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-receipt-123.png",
+      "sha256": "2d09e202a4bbd08fa8169d7f045f3af19b0d67f2161186a38174e0373a0ff50b",
+      "sizeBytes": 175173,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-receipt-zero.xml",
+      "sha256": "a2ab0ea955ce2f7774ccc4549cc2c05b3a4bbd719eb0b31c5aae01f8923506b8",
+      "sizeBytes": 18047
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-receipt-zero.png",
+      "sha256": "3ebbd848d99c9ddbdd0b61c277b713c91568dddd5bc7d4359c0e4cd22c548387",
+      "sizeBytes": 170801,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-current-etransfer-before.xml",
+      "sha256": "1874c7e525086a888b828661308f56b23e2fe6c759da9da202f5fa63ea73a513",
+      "sizeBytes": 20173
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-current-etransfer-before.png",
+      "sha256": "e14990c384fcd86e8d5fdc7f5189ae25c6ffb101d9d7c795dd46c1e498a8ef4d",
+      "sizeBytes": 133107,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-etransfer-one-tap-complete.xml",
+      "sha256": "60df0c46c11170682281f294e77842958ab63b729d7e2cef9492d95a7b61986d",
+      "sizeBytes": 20849
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-etransfer-one-tap-complete.png",
+      "sha256": "ad392b8fd2efac98f430288e1e608e0efa06d93d5d6d01958383f353f663533c",
+      "sizeBytes": 159712,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-offline-pending-before-kill.xml",
+      "sha256": "f957b38dbdbbbde1ac82691b9b1b5f5330cbf0c9044e9845edffe255081232bf",
+      "sizeBytes": 20244
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-offline-pending-before-kill.png",
+      "sha256": "4c755545448f6c6a3853be8543d60f11dfdf8a461fa2204427bdf6f83113e03c",
+      "sizeBytes": 228748,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-offline-after-restart.xml",
+      "sha256": "d7897dd4e2a6464a9609cfdef40441bc14648282edecb7a22e03c64586b72ee2",
+      "sizeBytes": 10117
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-offline-after-restart.png",
+      "sha256": "200c738043dc3cf385be401dc70d6866ad2d1a7bed9a6b5fc7e68b124d606c9f",
+      "sizeBytes": 66852,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-offline-restored-amount.xml",
+      "sha256": "c956d7b74134516182c5bf47bcf666b8227d2a42e119b304fb82c1dfeaa4710b",
+      "sizeBytes": 18784
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-offline-restored-amount.png",
+      "sha256": "631e8585babf2bde05aafa64fd038fac989e57321085191a3b3a909ac5569793",
+      "sizeBytes": 181214,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-offline-restored-pending-list.xml",
+      "sha256": "4a4ffbcd7ae7f418e6a224a864c4d4675a01ecc1fb1c6e450cf6e49482a6dfd2",
+      "sizeBytes": 41695
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-offline-restored-pending-list.png",
+      "sha256": "290bd85913c498f96bdc8ecbb5d5a95f33b9ab365e1051704b799fa75a72dd40",
+      "sizeBytes": 248489,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "cash-before-first-confirm.json",
+      "sha256": "4d35d5b8a2097891efe656ca2f8538ba5fc1ec71daa3b5da16533e5e57a3d892",
+      "sizeBytes": 144
+    },
+    {
+      "path": "future-cancelled.json",
+      "sha256": "745d8f89bd54ad170f61cc6568472e45b22dfabd774a3314dfcd6dc33853e9b5",
+      "sizeBytes": 15158
+    },
+    {
+      "path": "future-confirmed.json",
+      "sha256": "f9e07c43369abb305df59413278a50063b5db42931f87bbd93147c1759c4061c",
+      "sizeBytes": 20299
+    },
+    {
+      "path": "cash-three-amounts.json",
+      "sha256": "a1ee1258e1aba1bbdcec22ee9781cc90dcb10a4a58f8cb5575d1be1e8d3ab600",
+      "sizeBytes": 32129
+    },
+    {
+      "path": "cash-zero-result.json",
+      "sha256": "b7302e0b35949542cd67342467390d4d022d60dc8087f946dc5b87fe933072b1",
+      "sizeBytes": 37756
+    },
+    {
+      "path": "etransfer-one-tap.json",
+      "sha256": "5b3bf517168986b2c8aa08c1d1184a3ec63db37716d7027a67658e2fe42406d3",
+      "sizeBytes": 43215
+    },
+    {
+      "path": "after-commit-restart.json",
+      "sha256": "745d8f89bd54ad170f61cc6568472e45b22dfabd774a3314dfcd6dc33853e9b5",
+      "sizeBytes": 15158
+    },
+    {
+      "path": "offline-after-refresh.json",
+      "sha256": "9eba68c5889d13ba0e484b31e660de671b69583ab09d7158b304025c8739a147",
+      "sizeBytes": 54079
+    },
+    {
+      "path": "native-kill-after-commit.json",
+      "sha256": "2069d235d48207cd14661911821c3514ee01e1cfdce661dacf0eb893aaa928aa",
+      "sizeBytes": 8878
+    },
+    {
+      "path": "offline-native-kill.json",
+      "sha256": "f13b849ff662dfbc8e954e4953ee9538c030156f75a24a4bd7fe75aa366df572",
+      "sizeBytes": 183
+    },
+    {
+      "path": "device-occupation-interruption.json",
+      "sha256": "c1d4aa8a5640efe0205516414a39f25f81de6b2ca1f97bb7309feb7b089d66a2",
+      "sizeBytes": 244
+    },
+    {
+      "path": "checks/native-storage-evidence.json",
+      "sha256": "19007d6cefc7a6db2a09785e23214f11a33a1281633ca97fb811a3eb9689d78b",
+      "sizeBytes": 5679
+    },
+    {
+      "path": "native-fixture.json",
+      "sha256AtInspection": "c6a4bb449023fd699a7b1945a24e75be80f2ea74d0c47f6d7a0be8b8437f947c",
+      "sizeBytesAtInspection": 1142941,
+      "recordedAt": "2026-10-08T12:08:02.554Z",
+      "mutableSnapshot": true,
+      "sha256": "c6a4bb449023fd699a7b1945a24e75be80f2ea74d0c47f6d7a0be8b8437f947c",
+      "sizeBytes": 1142941
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-offline-final-server-receipt.xml",
+      "sha256": "e1f0efcbbc2fc6f7568c3eba43ecff860b5c09e8c9458f564dfddb7d78159dad",
+      "sizeBytes": 18069
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-offline-final-server-receipt.png",
+      "sha256": "a47ce3c0b097662238f46405a9680034958c91eaef14a28f279d6b938ed4527c",
+      "sizeBytes": 185379,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-final-ack-stop-list.xml",
+      "sha256": "4a4ffbcd7ae7f418e6a224a864c4d4675a01ecc1fb1c6e450cf6e49482a6dfd2",
+      "sizeBytes": 41695
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-final-ack-stop-list.png",
+      "sha256": "cbe141a4b3fd25057f61737bf3ac486846592dd45a882730f56a13f30be61d7b",
+      "sizeBytes": 263586,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-device-returned-readonly.png",
+      "sha256": "e3f18f6a3b58e033b25db9a5d73e4a97c36eb6125dfe4257a3979643760c3b3d",
+      "sizeBytes": 79568,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "native-cleanup.json",
+      "sha256": "9965cee8fcceb0fecd028fc132f0220c864f7fa9cc20426b190ac79e93b9f77e",
+      "sizeBytes": 246
+    },
+    {
+      "path": "preserved-operating-packages.json",
+      "sha256": "b67d0ff9e672cb14d60f00df4c74203535a5fdbe063641d59bf5b700a74db946",
+      "sizeBytes": 469
+    },
+    {
+      "path": "cashqa-41-pid21070.log",
+      "sha256": "588b8f6f2ee3965c966d3f6a85def0aa008198cdb1a1e82b81bdfd61d8bfd08f",
+      "sizeBytes": 145190
+    }
+  ],
+  "cleanup": {
+    "at": "2026-10-08T12:08:56.876367+00:00",
+    "cashQaStopped": true,
+    "qaPid": null,
+    "ownedReverse8445Removed": true,
+    "otherReverses": "",
+    "qaDataRetained": true,
+    "operatingPackagesUnchanged": true,
+    "fixtureShutdownConfirmed": true,
+    "temporaryDatabaseAndProofFilesRemoved": true
+  },
+  "preservedOperatingPackages": {
+    "com.evnsolution.clever.routes": {
+      "unchanged": true,
+      "versionCode": "39 minSdk=24 targetSdk=36",
+      "versionName": "1.3.3",
+      "firstInstallTime": "2026-10-02 23:52:14",
+      "lastUpdateTime": "2026-10-02 23:52:14"
+    },
+    "com.evnsolution.clever.routes.qa": {
+      "unchanged": true,
+      "versionCode": "40 minSdk=24 targetSdk=36",
+      "versionName": "1.3.4",
+      "firstInstallTime": "2026-10-08 10:26:18",
+      "lastUpdateTime": "2026-10-08 15:50:49"
+    }
+  }
+}

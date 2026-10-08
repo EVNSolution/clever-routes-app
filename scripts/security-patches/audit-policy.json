@@ -1,0 +1,357 @@
+{
+  "schemaVersion": 1,
+  "lockfileSha256": "33d0ac51c628b64cad2ecebc8af85c6f1858485bb0f840962d53c6c304281a6c",
+  "patchManifestSha256": "e37cd2a51e3528c59ba6e2ab7ff22b0e947592c8ebdc28fab33fad6c0cbbb589",
+  "advisories": {
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm": {
+      "source": 1240992,
+      "name": "braces",
+      "dependency": "braces",
+      "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+      "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+      "severity": "high",
+      "cwe": [
+        "CWE-674"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      },
+      "range": "<=3.0.3"
+    },
+    "https://github.com/advisories/GHSA-86w9-cpqp-85rv": {
+      "source": 1240912,
+      "name": "node-forge",
+      "dependency": "node-forge",
+      "title": "node-forge RSA PKCS#1 v1.5 signature verification accepts extra nested DigestAlgorithm elements",
+      "url": "https://github.com/advisories/GHSA-86w9-cpqp-85rv",
+      "severity": "high",
+      "cwe": [
+        "CWE-347"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+      },
+      "range": "<=1.4.0"
+    }
+  },
+  "packages": {
+    "@expo/cli": {
+      "nodes": [
+        "node_modules/expo/node_modules/@expo/cli"
+      ],
+      "via": [
+        "@expo/code-signing-certificates",
+        "@expo/metro",
+        "@expo/metro-config",
+        "node-forge"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/expo/node_modules/@expo/cli",
+          "version": "57.0.23",
+          "integrity": "sha512-stzSYxVwbWGbKR+mrYT6s4Rt6HrcUxb0JrHyebDGL4ehpvfRTv0rMzn4Q7fqB6f5wJ1KCmf6OAgqgK+TTB8/FA=="
+        }
+      ]
+    },
+    "@expo/code-signing-certificates": {
+      "nodes": [
+        "node_modules/@expo/code-signing-certificates"
+      ],
+      "via": [
+        "node-forge"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/@expo/code-signing-certificates",
+          "version": "0.0.6",
+          "integrity": "sha512-iNe0puxwBNEcuua9gmTGzq+SuMDa0iATai1FlFTMHJ/vUmKvN/V//drXoLJkVb5i5H3iE/n/qIJxyoBnXouD0w=="
+        }
+      ]
+    },
+    "@expo/metro": {
+      "nodes": [
+        "node_modules/@expo/metro"
+      ],
+      "via": [
+        "metro",
+        "metro-config",
+        "metro-file-map",
+        "metro-transform-worker"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/@expo/metro",
+          "version": "56.0.2",
+          "integrity": "sha512-Ld5AeYMCCDa8bLeWhfuLbZFFjlV3f6ORqyPz2glGh6RltIngMuLf9BTC2yvHFjkKuGxL5SynijmA8xmNNWn5iA=="
+        }
+      ]
+    },
+    "@expo/metro-config": {
+      "nodes": [
+        "node_modules/expo/node_modules/@expo/metro-config"
+      ],
+      "via": [
+        "@expo/metro"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/expo/node_modules/@expo/metro-config",
+          "version": "57.0.12",
+          "integrity": "sha512-S62Lrq35HZqBFD55423pmWb8PjaiR/W02zQC1uECBmw1vTN8WZaFz4TJ0i21EeJzwfebMb9MLxL8JZ102Z6VbA=="
+        }
+      ]
+    },
+    "@expo/metro-file-map": {
+      "nodes": [
+        "node_modules/@expo/metro-file-map"
+      ],
+      "via": [
+        "micromatch"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/@expo/metro-file-map",
+          "version": "57.0.3",
+          "integrity": "sha512-1OXy+uPYY5uc7Tm4VBsd2NRn+3wHhqeqNuEO/Xo4kmYgv8FjYgUAc+bUXON9FpC2ikcLn4EVlGM9ce2exx9Mlg=="
+        }
+      ]
+    },
+    "@maplibre/maplibre-react-native": {
+      "nodes": [
+        "node_modules/@maplibre/maplibre-react-native"
+      ],
+      "via": [
+        "expo",
+        "react-native"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/@maplibre/maplibre-react-native",
+          "version": "11.3.4",
+          "integrity": "sha512-SgGFf+CWWNeTRBnBKcOKF6c7CiRhm+YgPNktg7HAzRsWoKeGMZy6u52STaTh4iP/2pwJygJPyiJJMkwzwW2Svg=="
+        }
+      ]
+    },
+    "@react-native/community-cli-plugin": {
+      "nodes": [
+        "node_modules/@react-native/community-cli-plugin"
+      ],
+      "via": [
+        "@react-native/metro-config",
+        "metro",
+        "metro-config"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/@react-native/community-cli-plugin",
+          "version": "0.86.3",
+          "integrity": "sha512-qSDL9LQc5mZSZPNczT95WU9YQuPzxBklgON9vLhhqfI0yWIwKInqFx88dQ/uiEXBtf0yossthaQIqA4Ml6bF6g=="
+        }
+      ]
+    },
+    "@react-native/metro-config": {
+      "nodes": [
+        "node_modules/@react-native/metro-config"
+      ],
+      "via": [
+        "metro-config"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/@react-native/metro-config",
+          "version": "0.86.3",
+          "integrity": "sha512-qdzDMepV2xdUhsO4XC7idnnbt8K6+Hd59AjeK9y4KS86fxSQq5oL0TAbqUuajDGR7beNQoYTuS6AowN/zP0oaQ=="
+        }
+      ]
+    },
+    "@react-native/virtualized-lists": {
+      "nodes": [
+        "node_modules/@react-native/virtualized-lists"
+      ],
+      "via": [
+        "react-native"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/@react-native/virtualized-lists",
+          "version": "0.86.3",
+          "integrity": "sha512-1j44NEyNn05Ut40vHAmoSWbsIcybFkMAOBTwQt1PrESyfSS+qBoyU1LGIogNva0VIa0rQyEC5PzbA7R4/7Nhyw=="
+        }
+      ]
+    },
+    "braces": {
+      "nodes": [
+        "node_modules/braces"
+      ],
+      "via": [
+        "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/braces",
+          "version": "3.0.3",
+          "integrity": "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA=="
+        }
+      ]
+    },
+    "expo": {
+      "nodes": [
+        "node_modules/expo"
+      ],
+      "via": [
+        "@expo/cli",
+        "@expo/metro",
+        "@expo/metro-config"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/expo",
+          "version": "57.0.21",
+          "integrity": "sha512-lQmC0kCJCleO+uLUwHXY0pLDzcvedKEsX+pmJp4mSxn3JlWDTZvUb0e5UIlV7+bqlN68LpAeKG4c2lrN4zuP0Q=="
+        }
+      ]
+    },
+    "metro": {
+      "nodes": [
+        "node_modules/metro"
+      ],
+      "via": [
+        "metro-config",
+        "metro-file-map",
+        "metro-transform-worker"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/metro",
+          "version": "0.84.5",
+          "integrity": "sha512-r1liLkyFZMVSEMNjU1CJU5pRzs3NdkxHqXS60O25c0rCIqAR+cGk7rPydw/g0WAIKVXojIBIF45yYBPagJGcgw=="
+        }
+      ]
+    },
+    "metro-config": {
+      "nodes": [
+        "node_modules/metro-config"
+      ],
+      "via": [
+        "metro"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/metro-config",
+          "version": "0.84.5",
+          "integrity": "sha512-zie+uN6oohscowi2S7ByU+wUw6CrT4ZxW9uAbONOObSxx86RGmnIAmjXHLkfmcdYoY7jzOPEbqcI6oeVmqyBQA=="
+        }
+      ]
+    },
+    "metro-file-map": {
+      "nodes": [
+        "node_modules/metro-file-map"
+      ],
+      "via": [
+        "micromatch"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/metro-file-map",
+          "version": "0.84.5",
+          "integrity": "sha512-mlm/JL8toSbSc2akpKIGmzvrVRSCgZ5vkbycI34oMLoOnLGuLyC8WTyVJ6P0hZG/usDaGwZSl/s9BCRriqjGJA=="
+        }
+      ]
+    },
+    "metro-transform-worker": {
+      "nodes": [
+        "node_modules/metro-transform-worker"
+      ],
+      "via": [
+        "metro"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/metro-transform-worker",
+          "version": "0.84.5",
+          "integrity": "sha512-ui1Z8x4s5RL36gMmKLaMMO7O9NNDHNdthEZSCDQHAau3JcAsTaFOK6I+2q4I/kW5u8hSEjJk9L45TXSVJw6g1A=="
+        }
+      ]
+    },
+    "micromatch": {
+      "nodes": [
+        "node_modules/micromatch"
+      ],
+      "via": [
+        "braces"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/micromatch",
+          "version": "4.0.8",
+          "integrity": "sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA=="
+        }
+      ]
+    },
+    "node-forge": {
+      "nodes": [
+        "node_modules/node-forge"
+      ],
+      "via": [
+        "https://github.com/advisories/GHSA-86w9-cpqp-85rv"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/node-forge",
+          "version": "1.4.0",
+          "integrity": "sha512-LarFH0+6VfriEhqMMcLX2F7SwSXeWwnEAJEsYm5QKWchiVYVvJyV9v7UDvUv+w5HO23ZpQTXDv/GxdDdMyOuoQ=="
+        }
+      ]
+    },
+    "react-native": {
+      "nodes": [
+        "node_modules/react-native"
+      ],
+      "via": [
+        "@react-native/community-cli-plugin",
+        "@react-native/virtualized-lists"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/react-native",
+          "version": "0.86.3",
+          "integrity": "sha512-JR5s3bM9ezud+Mw24GlNXNfthqPIKwrQgPPJcam+L97t2sKjjEavhCzBn+fyqZZRcM5+XlhYxpTxVkK7e1n38Q=="
+        }
+      ]
+    },
+    "react-native-reanimated": {
+      "nodes": [
+        "node_modules/react-native-reanimated"
+      ],
+      "via": [
+        "react-native",
+        "react-native-worklets"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/react-native-reanimated",
+          "version": "4.5.1",
+          "integrity": "sha512-RnMvtDuR+68ig864gAvZCOdZehqhC5rFmMo0kn+ARfgVSTvFeF6IFLBVgMPUu0KwihaapEyW24WRi6nEyy1kSA=="
+        }
+      ]
+    },
+    "react-native-worklets": {
+      "nodes": [
+        "node_modules/react-native-worklets"
+      ],
+      "via": [
+        "@react-native/metro-config",
+        "react-native"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/react-native-worklets",
+          "version": "0.10.1",
+          "integrity": "sha512-62mRM19bDpfpdI8HLkEErcdOsrAPDtE9lA/sw+5lLRpzBHNhxaoj9QyY2KjXqUmirelxkX4zuPGTC3VdA0feJA=="
+        }
+      ]
+    }
+  }
+}

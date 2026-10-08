@@ -2328,6 +2328,104 @@ describe('offline submission queue', () => {
     assert.equal(restarted.listPending()[0]?.reconciliation?.reason, 'assignment_changed');
   });
 
+  it('replays an enrolled same-assignment old-publication stop with its original identity after restart', async () => {
+    const storage = createMemoryStorage();
+    const queue = await createPersistentOfflineSubmissionQueue({ storage });
+    const original = queue.enqueueDriverEvent({
+      appVersion: '1.3.4', assignmentGeneration: '2', clientEventId: 'unchanged-stop-version-n',
+      driverContractVersion: 2, eventType: 'STOP_DELIVERED', deliveryStopId: 'stop-2',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-10-07T10:00:00.000Z'), routePlanId: 'kfood-route', versionCode: 40,
+      payload: { proof: { note: 'Original note from stop 2' } },
+    }).event;
+    await queue.whenPersisted();
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage });
+    const sent: typeof original[] = [];
+    const result = await retryOfflineSubmissions({
+      queue: restarted,
+      orderedEventAccessIdentity: {
+        allowPreviousPublicationStopEvents: true,
+        assignmentGeneration: '2', driverContractVersion: 2,
+        expectedRouteVersionId: '33333333-3333-4333-8333-333333333333', routePlanId: 'kfood-route',
+      },
+      driverEventService: { recordDriverEvent: async (event) => {
+        sent.push(event);
+        return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+      } },
+      proofMediaUploadService: createMockProofMediaUploadService(),
+      now: () => new Date('2026-10-07T10:01:00.000Z'),
+    });
+    assert.equal(result.succeeded, 1);
+    assert.equal(result.blocked ?? 0, 0);
+    assert.deepEqual(sent, [original]);
+    assert.equal(restarted.listPending().length, 0);
+  });
+
+  for (const guard of [
+    { label: 'unflagged stop', eventType: 'STOP_DELIVERED' as const, flag: undefined, generation: '2', stopId: 'stop-2' },
+    { label: 'unenrolled stop', eventType: 'STOP_DELIVERED' as const, flag: false, generation: '2', stopId: 'stop-2' },
+    { label: 'route completion', eventType: 'ROUTE_COMPLETED' as const, flag: true, generation: '2', stopId: 'stop-2' },
+    { label: 'pickup event', eventType: 'PICKUP_COMPLETED' as const, flag: true, generation: '2', stopId: 'stop-2' },
+    { label: 'another assignment', eventType: 'STOP_DELIVERED' as const, flag: true, generation: '3', stopId: 'stop-2' },
+    { label: 'missing stop identity', eventType: 'STOP_DELIVERED' as const, flag: true, generation: '2', stopId: undefined },
+  ]) {
+    it(`keeps version preflight strict for ${guard.label}`, async () => {
+      const queue = createInMemoryOfflineSubmissionQueue();
+      const original = queue.enqueueDriverEvent({
+        assignmentGeneration: '2', clientEventId: 'original-stop-event', driverContractVersion: 2,
+        eventType: guard.eventType, deliveryStopId: guard.stopId,
+        expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+        occurredAt: new Date('2026-10-07T10:00:00.000Z'), routePlanId: 'guarded-route',
+      }).event;
+      const result = await retryOfflineSubmissions({
+        queue,
+        orderedEventAccessIdentity: {
+          allowPreviousPublicationStopEvents: guard.flag,
+          assignmentGeneration: guard.generation, driverContractVersion: 2,
+          expectedRouteVersionId: '33333333-3333-4333-8333-333333333333', routePlanId: 'guarded-route',
+        },
+        driverEventService: { recordDriverEvent: async () => { throw new Error('must not send'); } },
+        proofMediaUploadService: createMockProofMediaUploadService(),
+      });
+      assert.equal(result.retried, 1);
+      assert.equal(result.failed, 0);
+      assert.equal(result.blocked, 1);
+      const retained = queue.listPending()[0];
+      assert.equal(retained?.kind, 'driver_event');
+      if (retained?.kind === 'driver_event') assert.deepEqual(retained.event, original);
+      assert.equal(retained?.state, 'QUARANTINED');
+    });
+  }
+
+  it('retains the changed-stop original event when server publication history rejects replay', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const original = queue.enqueueDriverEvent({
+      assignmentGeneration: '2', clientEventId: 'changed-stop-version-n', driverContractVersion: 2,
+      eventType: 'STOP_DELIVERED', deliveryStopId: 'stop-7',
+      expectedRouteVersionId: '22222222-2222-4222-8222-222222222222',
+      occurredAt: new Date('2026-10-07T10:00:00.000Z'), routePlanId: 'kfood-route',
+    }).event;
+    let sent = 0;
+    const result = await retryOfflineSubmissions({
+      queue,
+      orderedEventAccessIdentity: {
+        allowPreviousPublicationStopEvents: true, assignmentGeneration: '2', driverContractVersion: 2,
+        expectedRouteVersionId: '33333333-3333-4333-8333-333333333333', routePlanId: 'kfood-route',
+      },
+      driverEventService: { recordDriverEvent: async (event) => {
+        sent += 1;
+        assert.deepEqual(event, original);
+        throw createDriverApiHttpError({ code: 'ROUTE_VERSION_MISMATCH', endpoint: 'Driver event', status: 409 });
+      } },
+      proofMediaUploadService: createMockProofMediaUploadService(),
+    });
+    assert.equal(sent, 1);
+    assert.deepEqual(result.reconciliationRoutePlanIds, ['kfood-route']);
+    const retained = queue.listPending()[0];
+    assert.equal(retained?.state, 'QUARANTINED');
+    if (retained?.kind === 'driver_event') assert.deepEqual(retained.event, original);
+  });
+
   it('aborts an account-A ordinary retry without mutating its queue after account-B login', async () => {
     const ownerA = 'a'.repeat(64);
     const ownerB = 'b'.repeat(64);

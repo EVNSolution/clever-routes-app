@@ -1,0 +1,232 @@
+{
+  "schemaVersion": 1,
+  "syntheticDataOnly": true,
+  "startingMobileSha": "309ef4dd4fdc3532d597274f2486b55e8d2f66a5",
+  "serverSourceSha": "9bd6e7b8408508c83b1e4255a62c37ee9b983bf0",
+  "shopifySourceSha": "e3f5a2a9819cb0ddd58766912b8ff31de2c759ae",
+  "nativeStage": "Final frozen runtime after cached reconnect GPS correction",
+  "mobileSourceTreeSha256": "9eb86a1562920174046a8f903e3ef5c3d77c1f4529d51a09ba6f62f99abe8986",
+  "testedApkSha256": "78026c97382701fd7b276f1fdb352c9778566666dd63d2c6bfd08362aeac984c",
+  "device": {
+    "kind": "dedicated emulator",
+    "androidApi": 35,
+    "abi": "arm64-v8a",
+    "package": "com.evnsolution.clever.routes.qa",
+    "versionName": "1.3.4",
+    "versionCode": 40
+  },
+  "routePlanId": "212d382a-dfcc-40cb-8495-5ebfead1b310",
+  "baselineRouteVersionId": "139d8ca7-a466-4d3e-a1e3-8d5ade098346",
+  "exactAcknowledgement": {
+    "requests": [
+      {
+        "at": "2026-10-08T02:54:51.716Z",
+        "status": 200,
+        "input": {
+          "publicationVersionId": "7f071d0c-cedc-4701-92b7-3b97a4158d9f",
+          "assignmentGeneration": "2"
+        },
+        "responseLostAfterCommit": true,
+        "appliedVersionId": "7f071d0c-cedc-4701-92b7-3b97a4158d9f",
+        "pending": true
+      },
+      {
+        "at": "2026-10-08T02:54:51.788Z",
+        "status": 200,
+        "input": {
+          "publicationVersionId": "7f071d0c-cedc-4701-92b7-3b97a4158d9f",
+          "assignmentGeneration": "2"
+        },
+        "responseLostAfterCommit": false,
+        "appliedVersionId": "7f071d0c-cedc-4701-92b7-3b97a4158d9f",
+        "pending": true
+      }
+    ]
+  },
+  "completionRetry": {
+    "clientEventId": "stop-delivered-muyy6gul",
+    "identicalOriginalRequests": true,
+    "requestSha256": "0e706485ae25c36c45dbe89a0dae785de29b42bdf899b61b345f827beeb7b0a5",
+    "requests": [
+      {
+        "at": "2026-10-08T02:58:58.975Z",
+        "status": 202,
+        "responseLostAfterCommit": true,
+        "duplicate": false
+      },
+      {
+        "at": "2026-10-08T02:58:59.074Z",
+        "status": 200,
+        "responseLostAfterCommit": false,
+        "duplicate": true
+      }
+    ],
+    "committedRowCount": 1,
+    "completionPhotoMetadata": "local file URI; baseline queue does not project retried mediaId"
+  },
+  "proofMedia": [
+    {
+      "id": "b4b4759e-abb3-4169-833a-e13ec4c369cc",
+      "routePlanId": "212d382a-dfcc-40cb-8495-5ebfead1b310",
+      "deliveryStopId": "1423932e-582e-4bff-9bcd-8d97a778d7d9",
+      "uploadStatus": "READY",
+      "idempotencyKey": "proof-media-v1:b6572fde21953c7eacf8654253e4505f",
+      "contentType": "image/jpeg",
+      "sizeBytes": 11355,
+      "sha256": "540be3f70fbf394715b7b7e4bde806cb0071a645c06b8ce74d1e22a51b2acb2c"
+    }
+  ],
+  "localProofFiles": [
+    {
+      "mediaId": "b4b4759e-abb3-4169-833a-e13ec4c369cc",
+      "sizeBytes": 11355,
+      "sha256": "540be3f70fbf394715b7b7e4bde806cb0071a645c06b8ce74d1e22a51b2acb2c",
+      "matchesCommittedHash": true
+    }
+  ],
+  "accountReassignment": {
+    "sameRouteId": true,
+    "toSecond": {
+      "routePlanId": "212d382a-dfcc-40cb-8495-5ebfead1b310",
+      "driverId": "eb068d42-efca-42e9-8fe0-0ba84bec8c71",
+      "assignmentGeneration": "3"
+    },
+    "backToFirst": {
+      "routePlanId": "212d382a-dfcc-40cb-8495-5ebfead1b310",
+      "driverId": "7d97da08-d2d5-4536-b46b-0e4db7e9e0d9",
+      "assignmentGeneration": "4"
+    },
+    "observedOldDraftsAbsent": true
+  },
+  "nativeReadyDsv": [
+    {
+      "kind": "ready",
+      "routePlanId": "d339c83b-70c0-4ee8-8203-408daafd8d96",
+      "startAndPickup": [
+        {
+          "at": "2026-10-08T03:04:31.350Z",
+          "status": 202,
+          "eventType": "ROUTE_STARTED"
+        },
+        {
+          "at": "2026-10-08T03:04:31.693Z",
+          "status": 202,
+          "eventType": "PICKUP_COMPLETED"
+        }
+      ],
+      "scope": "existing route selection/start/pickup smoke only"
+    },
+    {
+      "kind": "dsv",
+      "routePlanId": "269f8917-4e8a-4324-8469-26a4921e3eea",
+      "startAndPickup": [
+        {
+          "at": "2026-10-08T03:05:47.730Z",
+          "status": 202,
+          "eventType": "ROUTE_STARTED"
+        },
+        {
+          "at": "2026-10-08T03:05:47.947Z",
+          "status": 202,
+          "eventType": "PICKUP_COMPLETED"
+        }
+      ],
+      "scope": "existing route selection/start/pickup smoke only"
+    }
+  ],
+  "cachedReconnectBackground": {
+    "start": "2026-10-08T02:56:10.060405+00:00",
+    "end": "2026-10-08T02:58:38.020271+00:00",
+    "seconds": 147.959866,
+    "locationCount": 15,
+    "first": "2026-10-08T02:56:14.993Z",
+    "last": "2026-10-08T02:58:35.771Z",
+    "assignmentGenerations": [
+      "2"
+    ]
+  },
+  "encryptedDatabase": {
+    "encryptedEvidenceDbBytes": 184320,
+    "dbHasPlainSqliteHeader": false,
+    "containsRawInput": false,
+    "dbSha256": "2cd55892e0163a5d5de1cedc2be64dc3ea249ffd1bf2c1894f2896f0a616c580",
+    "cleanup": "HTTPS/Fastify/Prisma closed; temporary PostgreSQL and local synthetic proof files stopped/removed"
+  },
+  "unverified": [
+    {
+      "item": "real push including duplicate notification delivery",
+      "condition": "QA package registered with test push provider and dedicated device"
+    },
+    {
+      "item": "physical camera input and hardware/OEM background GPS",
+      "condition": "exclusive physical test window/device; shared DSV interval excluded"
+    },
+    {
+      "item": "cloud proof storage/provider read access",
+      "condition": "test provider storage and read credentials"
+    },
+    {
+      "item": "live authenticated Shopify embedded iframe",
+      "condition": "foreign Shopify acceptance task with authenticated browser"
+    },
+    {
+      "item": "canonical KFood explicit Apply context",
+      "condition": "update owning context repository before integration"
+    },
+    {
+      "item": "native process kill before immediate ACK or completion retry",
+      "condition": "dedicated native fault window that stops the process between response loss and retry"
+    }
+  ],
+  "ackRecoveryBoundary": "Native exact retry completed immediately before restart; cold unacknowledged recovery is covered separately by actual HTTP/store integration.",
+  "completionRecoveryBoundary": "Native exact retry completed immediately; native process kill while the completion response is unacknowledged remains unverified.",
+  "nativePermissionBoundary": "Permissions were granted to the dedicated QA package before the final frozen rerun. Permission-prompt UI is not claimed for this rerun.",
+  "offlineBoundary": "Native cached route and notice restore after force-stop without reset; stable preserved input screenshot is after reconnect.",
+  "screenshots": [
+    {
+      "path": "kfood-live-change-native-20261008/save-private.png",
+      "sha256": "1279491f70aa5b4bca165e8bf54a3bd05ff6b468a27411cbb938406a09e4fab8",
+      "stage": "final frozen runtime"
+    },
+    {
+      "path": "kfood-live-change-native-20261008/pending-original-list.png",
+      "sha256": "85a6f64c49ae9fbcd96c8425939488af2202f62989677e5bd11fdaaa3a172d36",
+      "stage": "final frozen runtime"
+    },
+    {
+      "path": "kfood-live-change-native-20261008/apply-n-awaiting-confirmation.png",
+      "sha256": "be8c736053fdfc8c76f58692353c46e1f8b4831557fcb5af12288c52863734f2",
+      "stage": "final frozen runtime"
+    },
+    {
+      "path": "kfood-live-change-native-20261008/offline-cached-notice.png",
+      "sha256": "1c08333c86b33a2812237fed3a8b748fadd05b496d86dfeb84d6f1ca996bd07c",
+      "stage": "final frozen runtime"
+    },
+    {
+      "path": "kfood-live-change-native-20261008/recovered-photo-notes.png",
+      "sha256": "eb1a33d67fbf3829ef4b54b77df8c4acd3fd0846c458c094348f517614c5da5a",
+      "stage": "final frozen runtime"
+    },
+    {
+      "path": "kfood-live-change-native-20261008/second-account-empty-input.png",
+      "sha256": "2e63628461d0d132e34e96ef5366f0f31b6667dc78a72fb9fee37174bca38d96",
+      "stage": "final frozen runtime"
+    },
+    {
+      "path": "kfood-live-change-native-20261008/new-generation-empty-input.png",
+      "sha256": "1cace8551c73efe0b6ff2d4fa9ab13e292d588eb610f8c07a25e0bf3fa022abc",
+      "stage": "final frozen runtime"
+    },
+    {
+      "path": "kfood-live-change-native-20261008/ready-stop1.png",
+      "sha256": "1b0d5df0b97bdf174fdd6a5b112d5ab9950e2c5cbbcabf4bb95ca983c44664af",
+      "stage": "final frozen runtime"
+    },
+    {
+      "path": "kfood-live-change-native-20261008/dsv-stop1.png",
+      "sha256": "15e86abe59b4ddd5d1739babde02dc56e280e4c311eca52b44899dec904463a2",
+      "stage": "final frozen runtime"
+    }
+  ]
+}

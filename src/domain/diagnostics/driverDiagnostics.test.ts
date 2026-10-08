@@ -117,7 +117,7 @@ describe('driver diagnostics', () => {
       read: async () => [],
       remove: async () => undefined,
     };
-    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     const transport = createDriverDiagnosticTransport({
       batchIdFactory: () => ids.batch1,
       credentialStore: { get: async () => null, remove: async () => undefined, set: async () => undefined },
@@ -147,11 +147,11 @@ describe('driver diagnostics', () => {
 
   it('replays durable records after restart and keeps them until an explicit accepted-id ACK', async () => {
     const storage = memoryStorage();
-    const first = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const first = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     first.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
     await new Promise((resolve) => setImmediate(resolve));
 
-    const restarted = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const restarted = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     await restarted.hydrate();
     assert.deepEqual(restarted.listPending().map(({ diagnosticId }) => diagnosticId), [ids.diag1]);
     restarted.acknowledge(['unknown-id'], 'account-a');
@@ -182,14 +182,14 @@ describe('driver diagnostics', () => {
         }
       },
     };
-    const first = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const first = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     first.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
     first.acknowledge([ids.diag1], 'account-a');
     appendGate.resolve();
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
-    const restarted = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const restarted = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     await restarted.hydrate();
     assert.deepEqual(restarted.listPending(), []);
     assert.deepEqual(persisted, []);
@@ -197,13 +197,13 @@ describe('driver diagnostics', () => {
 
   it('orders retention removal after the append of a newly discarded overflow record', async () => {
     const storage = memoryStorage();
-    const first = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', maxRecords: 1, storage });
+    const first = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', maxRecords: 1, now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     first.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
     first.record({ bootId: ids.boot1, context, diagnosticId: ids.diag2, kind: 'STATE_CHANGE', observedAt: '2026-10-01T14:05:01.000Z', sequence: 2, snapshot });
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
-    const restarted = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', maxRecords: 1, storage });
+    const restarted = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', maxRecords: 1, now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     await restarted.hydrate();
     assert.deepEqual(restarted.listPending().map(({ diagnosticId }) => diagnosticId), [ids.diag1]);
   });
@@ -211,7 +211,7 @@ describe('driver diagnostics', () => {
   it('does not let a late send completion ACK a newly selected account', async () => {
     const sendResult = deferred<{ acceptedDiagnosticIds: string[]; rejectedDiagnostics: never[]; serverReceivedAt: string }>();
     const storage = memoryStorage();
-    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
     const transport = createDriverDiagnosticTransport({
       batchIdFactory: () => ids.batch1,
@@ -239,7 +239,7 @@ describe('driver diagnostics', () => {
       sequence: 1, snapshot: { ...snapshot, longitude: -79.4 }, url: 'https://secret.example/path',
     };
     const storage = memoryStorage([poisoned, { ...poisoned, diagnosticId: 'bad id with spaces' }]);
-    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     await outbox.hydrate();
     const serialized = JSON.stringify(outbox.buildBatch({ batchId: ids.batch1, bootId: ids.boot2, liveContext: context, liveSnapshot: snapshot }));
     assert.match(serialized, new RegExp(ids.diag1));
@@ -249,7 +249,7 @@ describe('driver diagnostics', () => {
 
   it('preserves only UUID or known producer-shaped request and client event identifiers', () => {
     const storage = memoryStorage();
-    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     outbox.record({
       bootId: ids.boot1,
       context,
@@ -306,7 +306,7 @@ describe('driver diagnostics', () => {
   it('bounds credential and send failures and backs off without a busy loop', async () => {
     const schedules: { delayMs: number; run: () => void }[] = [];
     const storage = memoryStorage();
-    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
     const transport = createDriverDiagnosticTransport({
       batchIdFactory: () => ids.batch1,
@@ -330,7 +330,9 @@ describe('driver diagnostics', () => {
   it('sends fresh live state separately from replay so old history cannot replace current evidence', async () => {
     const storage = memoryStorage();
     const oldSnapshot = { ...snapshot, lifecycle: 'BACKGROUND' as const, network: 'OFFLINE' as const };
-    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const outbox = createDriverDiagnosticOutbox({
+      accountOwnerHash: 'account-a', storage, now: () => new Date('2026-10-01T14:05:00.000Z'),
+    });
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-09-30T14:05:00.000Z', sequence: 1, snapshot: oldSnapshot });
     const envelope = outbox.buildBatch({ batchId: ids.batch1, bootId: ids.boot2, liveContext: context, liveSnapshot: snapshot });
     assert.equal(envelope.liveSnapshot.network, 'ONLINE');
@@ -562,7 +564,7 @@ describe('driver diagnostics', () => {
 
   it('backs off when a non-empty diagnostic batch receives an empty ACK', async () => {
     const schedules: { delayMs: number; run: () => void }[] = [];
-    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage: memoryStorage() });
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage: memoryStorage() });
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
     const transport = createDriverDiagnosticTransport({
       batchIdFactory: () => ids.batch1,
@@ -585,7 +587,7 @@ describe('driver diagnostics', () => {
 
   it('quarantines only permanent rejections from the sent batch and keeps replay moving', async (test) => {
     const storage = memoryStorage();
-    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag2, kind: 'STATE_CHANGE', observedAt: '2026-10-01T14:05:01.000Z', sequence: 2, snapshot });
     const transport = createDriverDiagnosticTransport({
@@ -622,7 +624,7 @@ describe('driver diagnostics', () => {
     ];
     for (const response of invalidResponses) {
       const storage = memoryStorage();
-      const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+      const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
       outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
       const transport = createDriverDiagnosticTransport({
         batchIdFactory: () => ids.batch1,
@@ -641,13 +643,13 @@ describe('driver diagnostics', () => {
 
   it('durably quarantines a rejected record so restart does not replay it', async () => {
     const storage = memoryStorage();
-    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
     outbox.quarantine([{ code: 'DIAGNOSTIC_ID_CONFLICT', diagnosticId: ids.diag1 }], 'account-a', '2026-10-01T14:05:02.000Z');
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
-    const restarted = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const restarted = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage });
     await restarted.hydrate();
     assert.deepEqual(restarted.listPending(), []);
     assert.equal(storage.quarantined.length, 1);
@@ -803,7 +805,7 @@ describe('driver diagnostics', () => {
   it('waits for an older in-flight envelope then sends one fresh final envelope without the rate delay', async () => {
     const firstResponse = deferred<{ acceptedDiagnosticIds: string[]; rejectedDiagnostics: never[]; serverReceivedAt: string }>();
     const sentIds: string[][] = [];
-    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage: memoryStorage() });
+    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', now: () => new Date('2026-10-01T14:05:00.000Z'), storage: memoryStorage() });
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-10-01T14:05:00.000Z', sequence: 1, snapshot });
     let sends = 0;
     let batchSequence = 0;
@@ -932,6 +934,7 @@ describe('driver diagnostics', () => {
     };
     const outbox = createDriverDiagnosticOutbox({
       accountOwnerHash: 'account-a',
+      now: () => new Date('2026-10-01T14:05:00.000Z'),
       onStorageStateChange: (state) => { transitions.push(state.kind); },
       storage,
     });

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { createHash } from 'node:crypto';
 
 import {
   DRIVER_EVIDENCE_DATABASE_NAME,
@@ -80,9 +81,10 @@ function createDatabase(input?: {
         const payload = tables.get('support_export_markers')?.get(recordKey);
         return payload === undefined ? null : { payload, recordKey } as T;
       }
-      if (sql.includes('FROM completion_assistance_state')) {
+      if (sql.includes('FROM completion_assistance_state') || sql.includes('FROM live_route_change_state')) {
         const accountOwnerHash = String(params[0] ?? '');
-        const payload = tables.get('completion_assistance_state')?.get(accountOwnerHash);
+        const table = /FROM ([a-z_]+)/iu.exec(sql)?.[1] ?? '';
+        const payload = tables.get(table)?.get(accountOwnerHash);
         return payload === undefined ? null : { payload, recordKey: accountOwnerHash } as T;
       }
       return null;
@@ -119,6 +121,238 @@ function createDatabase(input?: {
 }
 
 describe('encrypted driver evidence store', () => {
+  it('keeps exact Cash request and accepted receipt in SQLCipher through restart and sign-out', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    let currentTime = new Date('2026-10-08T07:00:00.000Z');
+    const now = () => currentTime;
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database, randomBytes: async () => new Uint8Array(32), now,
+    });
+    const queue = await createPersistentOfflineSubmissionQueue({ storage: store, now });
+    const event = { appVersion: '1.3.4', assignmentGeneration: '2', clientEventId: 'cash-event',
+      completion: { version: 1 as const, cashReceived: { amount: '9999999999999999.25', currency: 'CAD' } },
+      deliveryStopId: 'cash-stop', driverContractVersion: 2 as const, eventType: 'STOP_DELIVERED' as const,
+      expectedRouteVersionId: 'original-publication', occurredAt: now(), payload: { proof: { note: 'Original note' } }, routePlanId: 'cash-route', versionCode: 40 };
+    const queued = queue.enqueueDriverEvent(event);
+    await queue.whenPersisted();
+    const pendingWrite = db.runCalls.find(call => call.sql.includes('INTO sensitive_evidence'));
+    assert.equal(pendingWrite?.params[4], '9999-12-31T23:59:59.999Z');
+    currentTime = new Date('2026-10-20T07:00:00.000Z');
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage: store, now });
+    const saved = restarted.listPending()[0];
+    assert.deepEqual(saved?.kind === 'driver_event' ? saved.event : null, event);
+    const completion = { id: 'cash-receipt', eventId: 'server-event', deliveryStopId: 'cash-stop', routePlanId: 'cash-route', driverId: 'driver',
+      assignmentGeneration: '2', expectedRouteVersionId: 'original-publication', method: 'CASH' as const,
+      payment: { method: 'CASH' as const, methodTitle: 'Cash', gatewayNames: ['Cash'], financialStatus: 'PENDING', expectedAmount: '9999999999999999.50', currencyCode: 'CAD', expectedAmountSource: 'SHOPIFY_OUTSTANDING' as const, requiresCashInput: true },
+      expectedAmount: '9999999999999999.50', actualAmount: '9999999999999999.25', differenceAmount: '-0.25', currencyCode: 'CAD', occurredAt: event.occurredAt.toISOString(), recordedAt: now().toISOString() };
+    assert.equal(restarted.acknowledge(queued.queueItemId, completion), true);
+    await restarted.whenPersisted();
+    const afterAck = await createPersistentOfflineSubmissionQueue({ storage: store, now });
+    assert.deepEqual(afterAck.getStopCompletion('cash-route', 'cash-stop'), completion);
+    assert.equal(afterAck.listPending().length, 0);
+    afterAck.bindAccountOwnerHash('b'.repeat(64));
+    assert.equal(afterAck.getStopCompletion('cash-route', 'cash-stop'), null);
+    const publicRows = [...(db.tables.get('workflow_evidence')?.values() ?? [])].join('');
+    assert.equal(publicRows.includes('9999999999999999'), false);
+    assert.equal((await store.exportDiagnostics()).includes('9999999999999999'), false);
+    const sensitiveKey = `${queued.accountOwnerHash}:${queued.queueItemId}`;
+    const savedSensitive = db.tables.get('sensitive_evidence')!.get(sensitiveKey)!;
+    for (const corrupted of [
+      '{malformed',
+      JSON.stringify({ ...JSON.parse(savedSensitive), completion: { version: 1, cashReceived: { amount: 12, currency: 'CAD' } } }),
+    ]) {
+      db.tables.get('sensitive_evidence')!.set(sensitiveKey, corrupted);
+      await assert.rejects(createPersistentOfflineSubmissionQueue({ storage: store, now }), /STORAGE_DEGRADED/u);
+      assert.equal(db.tables.get('workflow_evidence')?.size, 1);
+      assert.equal(db.tables.get('sensitive_evidence')?.get(sensitiveKey), corrupted);
+    }
+    db.tables.get('sensitive_evidence')?.clear();
+    await assert.rejects(createPersistentOfflineSubmissionQueue({ storage: store, now }), /STORAGE_DEGRADED: original completion input/u);
+    assert.equal(db.tables.get('workflow_evidence')?.size, 1, 'missing sensitive input must not delete the original envelope');
+  });
+
+  it('serializes cold-start queue hydration reads and live-route reads on the shared native handle', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database, randomBytes: async () => new Uint8Array(32),
+    });
+    let reading = false;
+    const read = async <T>(operation: () => Promise<T>): Promise<T> => {
+      if (reading) throw Object.assign(new Error('native statement already released'), { code: 'ERR_USING_RELEASED_SHARED_OBJECT' });
+      reading = true;
+      try { await new Promise<void>(resolve => setImmediate(resolve)); return await operation(); }
+      finally { reading = false; }
+    };
+    const getAll = db.database.getAllAsync;
+    const getFirst = db.database.getFirstAsync;
+    db.database.getAllAsync = <T>(sql: string, ...params: unknown[]) => read(() => getAll<T>(sql, ...params));
+    db.database.getFirstAsync = <T>(sql: string, ...params: unknown[]) => read(() => getFirst<T>(sql, ...params));
+    const results = await Promise.allSettled([
+      store.getItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY), store.readLiveRouteChangeState('a'.repeat(64)),
+    ]);
+    assert.deepEqual(results.map(result => result.status), ['fulfilled', 'fulfilled']);
+  });
+
+  it('serializes parallel migration verification reads on the transaction handle', async () => {
+    const db = createDatabase();
+    let reading = false;
+    const getAll = db.database.getAllAsync;
+    db.database.getAllAsync = async <T>(sql: string, ...params: unknown[]) => {
+      if (reading) throw Object.assign(new Error('native statement already released'), { code: 'ERR_USING_RELEASED_SHARED_OBJECT' });
+      reading = true;
+      try { await new Promise<void>(resolve => setImmediate(resolve)); return await getAll<T>(sql, ...params); }
+      finally { reading = false; }
+    };
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      legacyStorage: { getItem: async () => '{"items":[],"version":2}', removeItem: async () => undefined },
+      openDatabaseAsync: async () => db.database, randomBytes: async () => new Uint8Array(32),
+      sha256: async value => new Uint8Array(createHash('sha256').update(value).digest()),
+    });
+    assert.equal(await store.getItem(OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY), null);
+  });
+
+  it('drains queued transaction reads before native rollback closes the handle after a parallel read rejects', async () => {
+    const db = createDatabase();
+    const transaction = { ...db.database };
+    let release!: () => void; let started!: () => void;
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    let reads = 0; let closed = false; let queriedClosedHandle = false;
+    transaction.getAllAsync = async <T>(sql: string, ...params: unknown[]) => {
+      reads += 1;
+      if (reads === 1) throw new Error('migration verification read failed');
+      if (reads === 2) { started(); await hold; }
+      if (closed) queriedClosedHandle = true;
+      return db.database.getAllAsync<T>(sql, ...params);
+    };
+    db.database.withExclusiveTransactionAsync = async operation => {
+      try { await operation(transaction); }
+      finally { closed = true; }
+    };
+    const outcome = createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      legacyStorage: { getItem: async () => '{"items":[],"version":2}', removeItem: async () => undefined },
+      openDatabaseAsync: async () => db.database, randomBytes: async () => new Uint8Array(32),
+      sha256: async value => new Uint8Array(createHash('sha256').update(value).digest()),
+    }).then(() => null, error => error as Error);
+    await entered;
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(closed, false, 'rollback must wait for queued statements to finish');
+    } finally { release(); }
+    assert.match((await outcome)!.message, /migration verification read failed/u);
+    assert.equal(queriedClosedHandle, false);
+  });
+
+  it('serializes live drafts and photos before a native exclusive writer can reject their order', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const transactionDatabase = { ...db.database };
+    let release!: () => void;
+    let started!: () => void;
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    let writing = false;
+    let first = true;
+    db.database.withExclusiveTransactionAsync = async operation => {
+      if (writing) throw new Error('database is locked');
+      writing = true;
+      try {
+        if (first) { first = false; started(); await hold; }
+        await operation(transactionDatabase);
+      } finally { writing = false; }
+    };
+    const owner = 'a'.repeat(64);
+    const older = store.updateLiveRouteChangeState(owner, () => '{"notes":"older"}');
+    await entered;
+    const newest = store.updateLiveRouteChangeState(owner, raw => JSON.stringify({ ...JSON.parse(raw!), notes: 'newest' }));
+    const photo = store.updateLiveRouteChangeState(owner, raw => JSON.stringify({ ...JSON.parse(raw!), photo: 'original-photo' }));
+    const results = Promise.allSettled([older, newest, photo]);
+    release();
+    assert.deepEqual((await results).map(result => result.status), ['fulfilled', 'fulfilled', 'fulfilled']);
+    assert.deepEqual(JSON.parse((await store.readLiveRouteChangeState(owner))!), { notes: 'newest', photo: 'original-photo' });
+  });
+
+  it('queues returned-store plain writes behind native exclusive transactions without deadlock', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const transactionDatabase = { ...db.database };
+    let release!: () => void; let started!: () => void;
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    let writing = false;
+    db.database.withExclusiveTransactionAsync = async operation => {
+      if (writing) throw new Error('database is locked');
+      writing = true; started();
+      try { await hold; await operation(transactionDatabase); }
+      finally { writing = false; }
+    };
+    const runAsync = db.database.runAsync;
+    db.database.runAsync = async (sql, ...params) => {
+      if (writing) throw new Error('database is locked');
+      return runAsync(sql, ...params);
+    };
+    const draft = store.updateLiveRouteChangeState('a'.repeat(64), () => '{"notes":"saved"}');
+    await entered;
+    const exportMarker = store.exportSupportQuarantine();
+    const results = Promise.allSettled([draft, exportMarker]);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    release();
+    assert.deepEqual((await results).map(result => result.status), ['fulfilled', 'fulfilled']);
+    assert.equal(await store.readLiveRouteChangeState('a'.repeat(64)), '{"notes":"saved"}');
+  });
+
+  it('adds encrypted live route state to an existing v2 database and isolates account rows', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    const input = {
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    };
+    const owner = 'a1'.repeat(32);
+    const otherOwner = 'b2'.repeat(32);
+    const store = await createEncryptedEvidenceStore(input);
+    await store.updateLiveRouteChangeState(owner, (raw) => {
+      assert.equal(raw, null);
+      return '{"applied":"N","ackPending":"N","privateAddress":"700 Example Avenue"}';
+    });
+    await store.updateLiveRouteChangeState(otherOwner, () => '{"applied":"other"}');
+    const restarted = await createEncryptedEvidenceStore(input);
+    assert.match((await restarted.readLiveRouteChangeState(owner))!, /700 Example Avenue/u);
+    await restarted.updateLiveRouteChangeState(owner, (raw) => JSON.stringify({ ...JSON.parse(raw!), ackPending: null }));
+    assert.equal(JSON.parse((await restarted.readLiveRouteChangeState(owner))!).ackPending, null);
+    await restarted.removeLiveRouteChangeState(owner);
+    assert.equal(await restarted.readLiveRouteChangeState(owner), null);
+    assert.equal(await restarted.readLiveRouteChangeState(otherOwner), '{"applied":"other"}');
+    assert.match(db.commands.join('\n'), /CREATE TABLE IF NOT EXISTS live_route_change_state/u);
+    assert.doesNotMatch(db.commands.join('\n'), /PRAGMA user_version =/u);
+    assert.doesNotMatch(await restarted.exportDiagnostics(), /700 Example Avenue/u);
+    await assert.rejects(store.updateLiveRouteChangeState('+14165550123', () => '{}'), /SHA-256/u);
+  });
+
+  it('propagates a failed live-state commit without reporting an applied publication', async () => {
+    const db = createDatabase({ userVersion: 2, failOn: 'INSERT OR REPLACE INTO live_route_change_state' });
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database,
+      randomBytes: async () => new Uint8Array(32),
+    });
+    const owner = 'a1'.repeat(32);
+    await assert.rejects(store.updateLiveRouteChangeState(owner, () => '{"applied":"N"}'), /database failure/u);
+    assert.equal(await store.readLiveRouteChangeState(owner), null);
+  });
+
   it('atomically persists completion assistance per validated account hash', async () => {
     const db = createDatabase({ userVersion: 2 });
     const store = await createEncryptedEvidenceStore({
@@ -630,8 +864,10 @@ describe('encrypted driver evidence store', () => {
       source: 'camera' as const,
       uri: 'file:///private/proof-restart.jpg',
     };
-    const queued = queue.enqueueProofMediaUpload(request);
+    const queued = queue.enqueueProofMediaUpload(request, { assignmentGeneration: '2' });
     await queue.whenPersisted();
+    assert.equal(queued.assignmentGeneration, '2');
+    assert.match(queued.idempotencyKey ?? '', /^proof-media-v1:[0-9a-f]{32}$/u);
     let beforeRestartKey: string | undefined;
     await retryOfflineSubmissions({
       driverEventService: { recordDriverEvent: async () => { throw new Error('unused'); } },
@@ -659,6 +895,8 @@ describe('encrypted driver evidence store', () => {
     const restored = restartedQueue.listPending()[0];
     assert.equal(restored?.kind, 'proof_media');
     assert.equal(restored?.kind === 'proof_media' ? restored.request.uri : null, request.uri);
+    assert.equal(restored?.kind === 'proof_media' ? restored.assignmentGeneration : null, '2');
+    assert.equal(restored?.kind === 'proof_media' ? restored.idempotencyKey : null, queued.idempotencyKey);
     let afterRestartKey: string | undefined;
     const replay = await retryOfflineSubmissions({
       driverEventService: { recordDriverEvent: async () => { throw new Error('unused'); } },

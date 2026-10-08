@@ -320,17 +320,23 @@ export function createDriverAccessTokenStore(input: {
         JSON.stringify(payload),
       );
     }),
-    saveFromInvitedRouteAccess: (routeAccess) => runSerialized(() => updateStoredPayload((payload) => (
-      payload.activeRouteSession !== undefined
-      && payload.activeRouteSession.routePlanId !== routeAccess.routeAccess.routePlanId
-        ? null
-        : {
-            ...payload,
-            driverAccess: routeAccess.driverAccess,
-            routeAccess: routeAccess.routeAccess,
-            savedAt: now().toISOString(),
-          }
-    ))),
+    saveFromInvitedRouteAccess: (routeAccess) => runSerialized(() => updateStoredPayload((payload) => {
+      if (payload.activeRouteSession !== undefined
+        && payload.activeRouteSession.routePlanId !== routeAccess.routeAccess.routePlanId) return null;
+      const previousGeneration = payload.routeAccess?.assignmentGeneration;
+      let nextPayload = payload;
+      // Missing legacy lineage keeps its existing restore policy; a known reassignment does not.
+      if (previousGeneration !== undefined && previousGeneration !== routeAccess.routeAccess.assignmentGeneration) {
+        const { activeRouteSession: _activeRouteSession, ...rest } = payload;
+        nextPayload = rest;
+      }
+      return {
+        ...nextPayload,
+        driverAccess: routeAccess.driverAccess,
+        routeAccess: routeAccess.routeAccess,
+        savedAt: now().toISOString(),
+      };
+    })),
     saveRefreshedAccountAccess: async (accountAccess, expected) => {
       await runSerialized(async () => {
         const payload = await loadStoredPayload();

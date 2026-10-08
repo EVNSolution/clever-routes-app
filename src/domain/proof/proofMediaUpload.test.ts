@@ -210,6 +210,20 @@ describe('proof media upload', () => {
     assert.notEqual(getProofMediaUploadIdempotencyKey({ ...request, fileName: 'another.jpg' }), key);
   });
 
+  it('keeps the server key format while separating assignment generations with the same photo identity', () => {
+    const request = {
+      deliveryStopId: 'stop-1', fileName: 'proof.jpg', routePlanId: 'route-1',
+      source: 'camera' as const, uri: 'file:///first/proof.jpg',
+    };
+    const previousKey = getProofMediaUploadIdempotencyKey(request, { assignmentGeneration: '2' });
+    const currentKey = getProofMediaUploadIdempotencyKey(request, { assignmentGeneration: '3' });
+    assert.notEqual(currentKey, previousKey);
+    assert.notEqual(currentKey, getProofMediaUploadIdempotencyKey(request));
+    assert.match(currentKey, /^proof-media-v1:[0-9a-f]{32}$/u);
+    assert.equal(currentKey.length, 47);
+    assert.equal(getProofMediaUploadIdempotencyKey({ ...request, uri: 'file:///retry/proof.jpg' }, { assignmentGeneration: '3' }), currentKey);
+  });
+
   it('does not upload proof media when photo capture did not produce a file URI', async () => {
     const result = await uploadCapturedProofPhoto({
       captureResult: { kind: 'cancelled', source: 'library' },

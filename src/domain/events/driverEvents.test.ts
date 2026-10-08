@@ -11,6 +11,7 @@ import {
   recordStopArrivedAfterDeliveryStart,
 } from './driverEvents';
 import { DriverApiHttpError } from '../../api/deliveryServer/driverApiError';
+import type { DriverEventInput } from './driverEvents';
 import { createInMemoryOfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 import { sampleAssignedRoute } from '../route/assignedRoute';
 import routeCompletedRequest from '../../test/contractFixtures/routeOperations/v1/fixtures/route-completed.request.json';
@@ -18,6 +19,76 @@ import {
   installDriverDiagnosticObserver,
   type DriverDiagnosticObservation,
 } from '../diagnostics/driverDiagnosticObservation';
+
+const cashCompletionReceipt = {
+  id: 'receipt-1', eventId: 'event-1', deliveryStopId: 'stop-1', routePlanId: 'route-1', driverId: 'driver-1',
+  assignmentGeneration: '2', expectedRouteVersionId: 'version-1', method: 'CASH',
+  payment: { method: 'CASH', methodTitle: 'Cash', gatewayNames: ['Cash'], financialStatus: 'PENDING',
+    expectedAmount: '122.25', currencyCode: 'CAD', expectedAmountSource: 'SHOPIFY_OUTSTANDING', requiresCashInput: true },
+  expectedAmount: '122.25', actualAmount: '122.00', differenceAmount: '-0.25', currencyCode: 'CAD',
+  occurredAt: '2026-10-08T07:00:00.000Z', recordedAt: '2026-10-08T07:00:02.000Z',
+};
+
+describe('v1 stop completion API boundary', () => {
+  const event: DriverEventInput = {
+    clientEventId: 'cash-original-client-id', eventType: 'STOP_DELIVERED', deliveryStopId: 'stop-1',
+    routePlanId: 'route-1', occurredAt: new Date(cashCompletionReceipt.occurredAt), driverContractVersion: 2,
+    assignmentGeneration: '2', expectedRouteVersionId: 'version-1',
+    completion: { version: 1, cashReceived: { amount: '122.00', currency: 'CAD' } },
+  };
+
+  it('sends completion at top level and retains every original identity field on replay', async () => {
+    let body: Record<string, unknown> = {};
+    const client = createDriverEventsApiClient({
+      accessToken: 'token', baseUrl: 'https://delivery.example.com',
+      orderedEventContract: { appVersion: 'new', versionCode: 99, assignmentGeneration: '3',
+        expectedRouteVersionId: 'new-version', driverContractVersion: 2 },
+      fetchImpl: async (_url, init) => {
+        body = JSON.parse(init?.body ?? '{}');
+        return { ok: true, status: 202, json: async () => ({ data: {
+          duplicate: false, eventId: 'event-1', completion: cashCompletionReceipt,
+        } }) };
+      },
+    });
+    const result = await client.recordDriverEvent(event);
+    assert.deepEqual(body.completion, event.completion);
+    assert.equal(body.payload, undefined);
+    assert.equal(body.expectedAmount, undefined);
+    assert.equal(body.assignmentGeneration, '2');
+    assert.equal(body.expectedRouteVersionId, 'version-1');
+    assert.equal(body.clientEventId, event.clientEventId);
+    assert.equal(body.occurredAt, cashCompletionReceipt.occurredAt);
+    assert.deepEqual(result.completion, cashCompletionReceipt);
+    assert.equal(Object.isFrozen(result.completion), true);
+  });
+
+  it('does not accept a v1 success without the matching immutable completion', async () => {
+    for (const completion of [undefined, null, {},
+      { ...cashCompletionReceipt, actualAmount: '123.00' },
+      { ...cashCompletionReceipt, assignmentGeneration: '3' },
+      { ...cashCompletionReceipt, eventId: 'wrong-event' },
+      { ...cashCompletionReceipt, deliveryStopId: 'wrong-stop' }]) {
+      const client = createDriverEventsApiClient({
+        accessToken: 'token', baseUrl: 'https://delivery.example.com',
+        fetchImpl: async () => ({ ok: true, status: 202,
+          json: async () => ({ data: { duplicate: false, eventId: 'event-1', completion } }) }),
+      });
+      await assert.rejects(client.recordDriverEvent(event), /completion/u);
+    }
+  });
+
+  it('rejects malformed completion input before any request is sent', async () => {
+    let sent = 0;
+    const client = createDriverEventsApiClient({
+      accessToken: 'token', baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => { sent += 1; throw new Error('must not send'); },
+    });
+    await assert.rejects(client.recordDriverEvent({ ...event,
+      completion: { version: 1, cashReceived: { amount: '1e2', currency: 'CAD' } },
+    }), /completion/u);
+    assert.equal(sent, 0);
+  });
+});
 
 describe('driver event API boundary', () => {
   it('keeps route-start coordinates on the immutable start event while preserving the button time', () => {

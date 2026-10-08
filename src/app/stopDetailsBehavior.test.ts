@@ -57,7 +57,7 @@ describe('stop details simplification', () => {
     assert.match(componentSource, /item\.options\.map\(\(option\) => `\$\{option\.key\}: \$\{option\.value\}`\)\.join\(', '\)/u);
     assert.match(componentSource, /stop\.customerNote\?\.trim\(\) \|\| 'No delivery instructions provided\.'/u);
     assert.match(componentSource, /No delivery instructions provided\./u);
-    assert.match(componentSource, /label="Arrive"/u);
+    assert.match(componentSource, /label=\{singleCompletion \? "Complete Delivery" : "Arrive"\}/u);
     assert.match(componentSource, /label="Navigate"/u);
     assert.match(componentSource, />Skip Stop<\/Text>/u);
     assert.match(componentSource, /styles\.stopDetailsSkipAction/u);
@@ -115,7 +115,7 @@ describe('stop details simplification', () => {
 
     assert.match(
       componentSource,
-      /label="Arrive"[\s\S]*tone="arrive"[\s\S]*label="Navigate"[\s\S]*tone="navigate"/u,
+      /label=\{singleCompletion \? "Complete Delivery" : "Arrive"\}[\s\S]*tone="arrive"[\s\S]*label="Navigate"[\s\S]*tone="navigate"/u,
     );
     assert.doesNotMatch(componentSource, /label="Call"|tone="call"/u);
     assert.match(componentSource, /onMessage\(\): void/u);

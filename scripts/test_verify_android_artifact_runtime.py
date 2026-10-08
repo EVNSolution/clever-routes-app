@@ -51,6 +51,11 @@ class AndroidArtifactRuntimeTests(unittest.TestCase):
         self.assertFalse(evidence['passed'])
         self.assertIn('error', evidence)
 
+    def test_cash_qa_endpoint_cannot_pass_as_production(self):
+        code, evidence = self.verify('.apk', PRODUCTION_URL + b'\x00https://localhost:8445')
+        self.assertEqual(code, 1)
+        self.assertEqual(evidence['forbiddenEndpointOccurrences'], {'https://localhost:8445': 1})
+
 
 if __name__ == '__main__':
     unittest.main()

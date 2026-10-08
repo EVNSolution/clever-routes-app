@@ -17,6 +17,13 @@ import type {
 } from '../route/assignedRoute';
 import type { RouteEventLocationEvidence } from '../route/routeEndPolicy';
 import {
+  matchesStopCompletionEvent,
+  readStopCompletion,
+  readStopCompletionInput,
+  type StopCompletion,
+  type StopCompletionInput,
+} from '../stop/stopCompletion';
+import {
   createDriverDiagnosticRequestId,
   observeDriverDiagnosticOperation,
 } from '../diagnostics/driverDiagnosticObservation';
@@ -36,6 +43,7 @@ export type DriverEventInput = {
   appVersion?: string;
   assignmentGeneration?: string;
   clientEventId: string;
+  completion?: StopCompletionInput;
   deliveryStopId?: string | null;
   driverContractVersion?: 2;
   eventType: DriverEventType;
@@ -57,6 +65,7 @@ export type DriverOrderedEventContract = {
 };
 
 export type DriverEventRecordResult = {
+  completion?: StopCompletion;
   duplicate: boolean;
   etaSnapshot?: DriverRouteEtaSnapshot;
   etaUpdate?: DriverRouteEtaUpdate;
@@ -177,7 +186,8 @@ export function createDriverEventsApiClient(input: {
       && input.orderedEventContract !== undefined
       && !hasCompleteOrderedEventContract(event)
     ) {
-      return { ...event, ...input.orderedEventContract };
+      // A restored request may predate build metadata. Never replace its original lineage.
+      return { ...input.orderedEventContract, ...event };
     }
     return event;
   };
@@ -186,6 +196,14 @@ export function createDriverEventsApiClient(input: {
     prepareDriverEvent,
     recordDriverEvent: async (event, options) => {
       const preparedEvent = prepareDriverEvent(event);
+      if (preparedEvent.completion !== undefined && (
+        readStopCompletionInput(preparedEvent.completion) === null
+        || preparedEvent.eventType !== 'STOP_DELIVERED' || preparedEvent.driverContractVersion !== 2
+        || !preparedEvent.deliveryStopId || !preparedEvent.routePlanId || !preparedEvent.clientEventId
+        || !/^[1-9]\d*$/u.test(preparedEvent.assignmentGeneration ?? '') || !preparedEvent.expectedRouteVersionId
+      )) {
+        throw createDriverApiHttpError({ code: 'CASH_COMPLETION_INVALID', endpoint: 'Driver event completion', status: 400 });
+      }
       const requestId = createDriverDiagnosticRequestId();
       return observeDriverDiagnosticOperation({
         clientEventId: preparedEvent.clientEventId,
@@ -217,7 +235,7 @@ export function createDriverEventsApiClient(input: {
           });
         }
 
-        return readDriverEventRecordEnvelope(payload);
+        return readDriverEventRecordEnvelope(payload, preparedEvent);
       });
     },
   };
@@ -440,10 +458,12 @@ export function applyDriverRouteEtaUpdate(route: AssignedRoute, etaUpdate: Drive
 
 function toDriverEventRequestBody(event: DriverEventInput): Record<string, unknown> {
   return {
+    ...(event.payload === undefined ? {} : event.payload),
     ...(event.accuracyMeters === undefined ? {} : { accuracyMeters: event.accuracyMeters }),
     ...(event.appVersion === undefined ? {} : { appVersion: event.appVersion }),
     ...(event.assignmentGeneration === undefined ? {} : { assignmentGeneration: event.assignmentGeneration }),
     clientEventId: event.clientEventId,
+    ...(event.completion === undefined ? {} : { completion: event.completion }),
     ...(event.deliveryStopId === undefined ? {} : { deliveryStopId: event.deliveryStopId }),
     ...(event.driverContractVersion === undefined ? {} : { driverContractVersion: event.driverContractVersion }),
     eventType: event.eventType,
@@ -451,13 +471,12 @@ function toDriverEventRequestBody(event: DriverEventInput): Record<string, unkno
     ...(event.latitude === undefined ? {} : { latitude: event.latitude }),
     ...(event.longitude === undefined ? {} : { longitude: event.longitude }),
     occurredAt: event.occurredAt.toISOString(),
-    ...(event.payload === undefined ? {} : event.payload),
     ...(event.routePlanId === undefined ? {} : { routePlanId: event.routePlanId }),
     ...(event.versionCode === undefined ? {} : { versionCode: event.versionCode }),
   };
 }
 
-function readDriverEventRecordEnvelope(payload: unknown): DriverEventRecordResult {
+function readDriverEventRecordEnvelope(payload: unknown, event: DriverEventInput): DriverEventRecordResult {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
     throw new Error('Invalid driver event response');
   }
@@ -467,7 +486,16 @@ function readDriverEventRecordEnvelope(payload: unknown): DriverEventRecordResul
     throw new Error('Invalid driver event response');
   }
 
+  const completion = readStopCompletion(data.completion);
+  if ((data.completion !== undefined && completion === null)
+    || (event.completion !== undefined && (completion === null
+      || completion.eventId !== data.eventId || !matchesStopCompletionEvent(completion, event)))) {
+    // A successful legacy response is not proof that the server stored Cash.
+    throw new Error('Invalid driver event completion response; the saved request still needs receipt confirmation.');
+  }
+
   return {
+    ...(completion === null ? {} : { completion }),
     duplicate: data.duplicate,
     ...(data.etaUpdate === undefined ? {} : { etaUpdate: data.etaUpdate }),
     ...(data.etaSnapshot === undefined ? {} : { etaSnapshot: data.etaSnapshot }),
@@ -477,6 +505,7 @@ function readDriverEventRecordEnvelope(payload: unknown): DriverEventRecordResul
 }
 
 function isDriverEventRecordData(value: unknown): value is {
+  completion?: unknown;
   duplicate: boolean;
   etaUpdate?: DriverRouteEtaUpdate;
   etaSnapshot?: DriverRouteEtaSnapshot;

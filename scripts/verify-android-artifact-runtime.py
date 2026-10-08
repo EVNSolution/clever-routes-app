@@ -12,6 +12,9 @@ FORBIDDEN_ENDPOINTS = (
     b'https://localhost:8443',
     b'http://localhost:8443',
     b'https://127.0.0.1:8443',
+    b'https://localhost:8445',
+    b'http://localhost:8445',
+    b'https://127.0.0.1:8445',
 )
 BUNDLE_MEMBERS = {
     '.aab': 'base/assets/index.android.bundle',

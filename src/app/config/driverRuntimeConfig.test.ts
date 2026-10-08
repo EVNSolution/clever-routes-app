@@ -120,3 +120,13 @@ describe('driver runtime API config', () => {
     ]);
   });
 });
+
+describe('single completion rollout', () => {
+  it('defaults OFF and requires the exact QA opt-in', () => {
+    const base = { EXPO_PUBLIC_DRIVER_RUNTIME_MODE: 'live', EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: 'https://delivery.example.com' };
+    assert.equal(readDriverRuntimeConfig(base).kfoodSingleCompletionQaEnabled, false);
+    assert.equal(readDriverRuntimeConfig({ ...base, EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA: 'true' }).kfoodSingleCompletionQaEnabled, true);
+    assert.equal(readDriverRuntimeConfig({ ...base, EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA: '1' }).kfoodSingleCompletionQaEnabled, false);
+    assert.equal(readDriverRuntimeConfig({ EXPO_PUBLIC_DRIVER_RUNTIME_MODE: 'mock', EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA: 'true' }).kfoodSingleCompletionQaEnabled, false);
+  });
+});
