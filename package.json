@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-tests.mjs",
     "test:host-security": "node scripts/run-tests.mjs src/release/preflight/hostSecurityPatches.test.ts",
+    "verify:host-security": "node scripts/verify-host-security.mjs",
     "check:native-release": "tsx src/release/preflight/nativeReleasePreflightCli.ts",
     "release:evidence:seed": "tsx src/release/evidence/releaseEvidenceSeedCli.ts",
     "release:evidence:verify": "tsx src/release/evidence/releaseEvidenceVerifierCli.ts",

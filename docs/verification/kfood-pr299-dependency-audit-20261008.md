@@ -135,6 +135,11 @@ No red-to-green audit result exists. npm reports affected package identities; it
 
 ## Concrete next options
 
+The [supplemental verifier and CI proposal](kfood-pr299-supplemental-security-gate-20261008.md)
+now provide an executable assessment of these pinned backports. Raw npm audit
+output and its failing exit code remain separate evidence. The existing CI gate
+is unchanged; supplemental verification is not a release approval.
+
 1. Review the implemented pinned patches and final CI clean-install/export evidence. The source-level regression results support this bounded backport; they do not authorize an audit exception.
 2. To clear the existing audit gate, adopt a compatible published fixed dependency or a reviewed dependency-path replacement that removes the affected code and passes the unchanged scanner. Verify advisory coverage and rerun the security, Metro, signing, and required build checks. Changing only a package name/version to evade detection is not a fix.
 3. Until the unchanged gate passes, retain the release block. No SDK downgrade, threshold reduction, advisory suppression, or host-only exposure waiver is included.
