@@ -1,6 +1,10 @@
 # PR299 feature activation conditions — 2026-10-08
 
-The signed **1.3.5 / 41 candidate is OFF**. Publishing that AAB would not enable the new Cash flow. Preserve it unchanged. This record defines a later ON candidate; it does not enable a flag, reserve a version, build, merge, deploy, or publish anything.
+The preserved signed **1.3.5 / 41 candidate is OFF**. Publishing that AAB would not enable the new Cash flow. The owner has now authorized integration, deployment, Play internal testing and publication after the checks below. Preparation is not proof of publication.
+
+The app integration commit is `ddb724e2b9f2eb3737b5a443b6c61c2c4c54be3f`. It preserves both reviewed PR297 and PR299 commits and has the exact reviewed `08a84098` file tree. The next candidate identity is **1.3.6 / 42**, using only the `production-kfood-on` EAS profile. At preparation, EAS had reserved 41 and Play's latest uploaded bundle was 40; recheck before the one controlled build.
+
+The product API and app contract documents are the release contract sources for this rollout. HQ canonical-document migration is pending; that separate migration is not a release blocker. Do not edit the old context repository's read-only Cash statement as a new canonical source.
 
 App source inspected: `757baefff29f3e7afef800d0fd080df1fad721d8`. The signed OFF artifact was built from `985f999ad2c4f9354ff2c856174e4542410c6554`; its SHA-256 is `3c620a406c54e7bf8af0b9d1f1c2b0bbd7a682daa0252d30fa1986e67313b789`. See [candidate provenance](kfood-pr299-release-candidate-20261008.md).
 
@@ -20,7 +24,7 @@ All conditions below must hold. The flag alone is insufficient.
 
 Source: [runtime configuration](../../src/app/config/driverRuntimeConfig.ts), [feature predicate and Cash input](../../src/app/kfoodSingleCompletion.ts), [route and submission guards](../../src/app/AppRoot.tsx), and [payment parser](../../src/domain/stop/stopCompletion.ts).
 
-No product-code change is needed to exercise this existing gate. The current flag is deliberately named as a QA opt-in. Using it for a release needs an explicit reviewed rollout decision and a recorded build configuration. Do not silently change the general `production` environment or imply that the QA name is already an operational rollout policy.
+No product-code change is needed to exercise this existing gate. The flag retains its original QA name. This authorized rollout selects it explicitly in the candidate-specific `production-kfood-on` profile; the general `production` environment and the existing `production` / `production-local` profiles remain OFF by default.
 
 The predicate has **no package, driver-account, or percentage rollout gate**. An ON installation enables every route that meets the table. Select the installation cohort through the approved distribution plan. A finer cohort or remote kill switch would require separate scope and implementation.
 
@@ -55,6 +59,8 @@ Server integration and app integration are separate gates:
 - Release: complete the remaining security and native release checks. Use their final records rather than reclassifying fixture success as production readiness.
 
 Freeze the final reviewed source and dependency set before preparing one later ON build. Record these exact settings in a reviewed candidate-specific build configuration:
+
+`production-kfood-on` extends the signed store `production` profile, fixes the three public inputs below, and sets `EXPO_NO_DOTENV=1`. It inherits remote credentials, AAB output and remote version auto-increment. The source identity metadata changes to 1.3.6/42; lockfile dependency entries remain identical. The security policy's lock hash binds the updated root version metadata without changing any advisory, dependency path or patch pin.
 
 | Build input | Required value |
 | --- | --- |

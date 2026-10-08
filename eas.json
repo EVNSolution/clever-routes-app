@@ -23,6 +23,15 @@
     "production-local": {
       "extends": "production",
       "autoIncrement": false
+    },
+    "production-kfood-on": {
+      "extends": "production",
+      "env": {
+        "EXPO_NO_DOTENV": "1",
+        "EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA": "true",
+        "EXPO_PUBLIC_DRIVER_RUNTIME_MODE": "live",
+        "EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL": "https://clever-route.cleversystem.ai"
+      }
     }
   },
   "submit": {
