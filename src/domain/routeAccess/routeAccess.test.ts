@@ -5,12 +5,31 @@ import {
   createMockRouteAccessService,
   createRouteAccessApiClient,
   getRouteAccessDeniedMessage,
+  RouteAccessTransportError,
   sampleInvitedRouteAccess,
   submitRouteAccess,
 } from './routeAccess';
 import { installDriverDiagnosticObserver } from '../diagnostics/driverDiagnosticObservation';
 
 describe('driver route access UX flow', () => {
+  it('marks fetch rejection as transport failure without depending on native error wording', async () => {
+    const client = createRouteAccessApiClient({ baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => { throw new Error('connection reset; private URI and token'); },
+    });
+    await assert.rejects(client.lookupRouteAccess({ accountAccessToken: 'account-access-token' }),
+      (error: unknown) => error instanceof RouteAccessTransportError
+        && error.message === 'Route access lookup transport failed.');
+  });
+
+  it('keeps JSON parsing failures outside the transport classification', async () => {
+    const parseError = new SyntaxError('Network request failed while parsing invalid JSON');
+    const client = createRouteAccessApiClient({ baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({ ok: true, json: async () => { throw parseError; } }),
+    });
+    await assert.rejects(client.lookupRouteAccess({ accountAccessToken: 'account-access-token' }),
+      (error: unknown) => error === parseError && !(error instanceof RouteAccessTransportError));
+  });
+
   it('uses account access and maps returned routes to selectable route choices', async () => {
     let lookupCalls = 0;
     const result = await submitRouteAccess(

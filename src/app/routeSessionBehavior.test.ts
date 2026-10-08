@@ -39,7 +39,7 @@ describe('route session current task behavior', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
 
     assert.match(appSource, /companyGuidance\.executionStatus === 'IN_PROGRESS'/u);
-    assert.match(appSource, /getAssignedRouteServerProgress/u);
+    assert.match(appSource, /getLiveRouteRecoveryProgress/u);
     assert.match(appSource, /const pickupIsUnconfirmed = restoredServerProgress\.navigationStepIndex === COMPANY_STEP_INDEX[\s\S]*activeRouteSession\?\.pickupCompletedAt === undefined/u);
     assert.match(appSource, /pickupIsUnconfirmed[\s\S]*\? COMPANY_STEP_INDEX/u);
     assert.match(appSource, /setCompletedStopIds\(\(current\) => \[\.\.\.new Set\(\[/u);
@@ -927,7 +927,7 @@ describe('stop completion proof copy', () => {
     assert.match(appSource, /driverAccessTokenStore\.saveRefreshedAccountAccess\(refreshResult\.accountAccess, \{\s+accessToken: restoredAccess\.accountAccess\.accessToken,\s+phoneE164: restoredAccess\.driverProfile\.phoneE164,\s+refreshToken: restoredAccess\.accountAccess\.refreshToken,/u);
     assert.match(appSource, /accountAccessToken: accountAccess\.accessToken/u);
     assert.match(appSource, /refreshDriverAccess: buildDriverAccessRefresh\(submission\)/u);
-    assert.match(appSource, /refreshDriverAccess: buildDriverAccessRefresh\(choiceSubmission\)/u);
+    assert.match(appSource, /refreshDriverAccess: buildDriverAccessRefresh\(choiceSubmission, \{ isCurrent: isLoginAccountCurrent, projectRuntimeState: false, persistAccess: false \}\)/u);
     assert.match(appSource, /setRouteSessions\(\(current\) => current\.map/u);
     assert.match(appSource, /\? refreshedSubmission/u);
     assert.doesNotMatch(appSource, /refreshDriverAuthSessionForProofUpload/u);

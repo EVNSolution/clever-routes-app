@@ -111,9 +111,13 @@ export type OfflineDriverEventQueueItem = OfflineEvidenceIdentity & {
 };
 
 export type OfflineProofMediaQueueItem = OfflineEvidenceIdentity & {
+  /** Local replay lineage. This field is not sent in the proof-media request. */
+  assignmentGeneration?: string;
   attempts: number;
   enqueuedAt: string;
   firstErrorCode?: string;
+  /** Retained retry key. Older records without this field use their original v1 photo key. */
+  idempotencyKey?: string;
   kind: 'proof_media';
   lastErrorCode?: string;
   queueItemId: string;
@@ -134,7 +138,8 @@ export type OfflineSubmissionQueue = {
   discardRouteSubmissions(routePlanId: string): number;
   enqueueDriverEvent(event: DriverEventInput): OfflineDriverEventQueueItem;
   enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
-  enqueueProofMediaUpload(request: ProofMediaUploadRequest): OfflineProofMediaQueueItem;
+  enqueueProofMediaUpload(request: ProofMediaUploadRequest, scope?: { assignmentGeneration: string }): OfflineProofMediaQueueItem;
+  findProofMediaUpload(request: ProofMediaUploadRequest, scope?: { assignmentGeneration: string }): OfflineProofMediaQueueItem | undefined;
   getAccountOwnerHash(): string | null;
   getCompletionClearTelemetry(entry: OfflineCompletionClearOutboxEntry): OfflineRouteCompletionTelemetry | null;
   getRouteCompletionTelemetry(routePlanId: string): OfflineRouteCompletionTelemetry;
@@ -276,6 +281,21 @@ export function hasPendingPickupCompletion(queue: Pick<OfflineSubmissionQueue, '
   return getPickupCompletionQueueState(queue, routePlanId) === 'pending';
 }
 
+export function resolveProofMediaUploadIdempotencyKey(input: {
+  accountOwnerHash: string | null;
+  queue: Pick<OfflineSubmissionQueue, 'findProofMediaUpload' | 'getAccountOwnerHash'> | null;
+  request: ProofMediaUploadRequest;
+  scope?: { assignmentGeneration: string };
+}): string {
+  const retained = input.accountOwnerHash !== null && input.queue?.getAccountOwnerHash() === input.accountOwnerHash
+    ? input.queue.findProofMediaUpload(input.request, input.scope)
+    : undefined;
+  if (retained !== undefined && retained.accountOwnerHash === input.accountOwnerHash) {
+    return retained.idempotencyKey ?? getProofMediaUploadIdempotencyKey(retained.request);
+  }
+  return getProofMediaUploadIdempotencyKey(input.request, input.scope);
+}
+
 export function createInMemoryOfflineSubmissionQueue(input?: {
   accountOwnerHash?: string | null;
   initialItems?: OfflineSubmissionQueueItem[];
@@ -314,6 +334,16 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
 
   function findActiveItem(queueItemId: string) {
     return activeItems().find((item) => item.queueItemId === queueItemId);
+  }
+
+  function findProofMediaUpload(request: ProofMediaUploadRequest, scope?: { assignmentGeneration: string }) {
+    return activeItems().find((item): item is OfflineProofMediaQueueItem => (
+      item.kind === 'proof_media'
+      && item.assignmentGeneration === scope?.assignmentGeneration
+      && item.request.routePlanId === request.routePlanId
+      && item.request.deliveryStopId === request.deliveryStopId
+      && item.request.fileName === request.fileName
+    ));
   }
 
   function appendJournal(item: OfflineSubmissionQueueItem, kind: OfflineEvidenceJournalEntry['kind'], code: string) {
@@ -517,18 +547,23 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       }
       return results.map((result) => result.item);
     },
-    enqueueProofMediaUpload: (request) => {
+    enqueueProofMediaUpload: (request, scope) => {
       requireMutable();
-      const queueItemId = getProofMediaQueueItemId(request);
-      const existing = findActiveItem(queueItemId);
-      if (existing?.kind === 'proof_media') {
+      if (scope !== undefined && !isCanonicalAssignmentGeneration(scope.assignmentGeneration)) {
+        throw new Error('Proof-media evidence requires a canonical assignment generation.');
+      }
+      const existing = findProofMediaUpload(request, scope);
+      if (existing !== undefined) {
         return existing;
       }
+      const queueItemId = getProofMediaQueueItemId(request, scope);
 
       const item: OfflineProofMediaQueueItem = {
         accountOwnerHash: activeAccountOwnerHash!,
+        ...(scope === undefined ? {} : { assignmentGeneration: scope.assignmentGeneration }),
         attempts: 0,
         enqueuedAt: now().toISOString(),
+        ...(scope === undefined ? {} : { idempotencyKey: getProofMediaUploadIdempotencyKey(request, scope) }),
         journal: [{ at: now().toISOString(), code: 'ENQUEUED', kind: 'ENQUEUED' }],
         kind: 'proof_media',
         queueSequence: nextQueueSequence,
@@ -542,6 +577,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       emitChange();
       return item;
     },
+    findProofMediaUpload,
     getAccountOwnerHash: () => activeAccountOwnerHash,
     getCompletionClearTelemetry: (entry) => {
       const completion = activeItems().find((item): item is OfflineDriverEventQueueItem => (
@@ -842,6 +878,8 @@ export async function retryOfflineSubmissions(input: {
   isCurrent?: () => boolean;
   lifecycleSignal?: AbortSignal;
   orderedEventAccessIdentity?: {
+    /** Set only after authoritative enrollment for this route and assignment. */
+    allowPreviousPublicationStopEvents?: boolean;
     assignmentGeneration: string;
     driverContractVersion: number;
     expectedRouteVersionId: string;
@@ -921,7 +959,7 @@ export async function retryOfflineSubmissions(input: {
         if (
           isOrderedWorkflowEvidence(item)
           && input.orderedEventAccessIdentity !== undefined
-          && !hasExactOrderedEventAccessIdentity(item.event, input.orderedEventAccessIdentity)
+          && !hasCompatibleOrderedEventAccessIdentity(item.event, input.orderedEventAccessIdentity)
         ) {
           if (input.queue.quarantine(item.queueItemId, 'assignment_changed')) blocked += 1;
           if (routePlanId !== undefined) {
@@ -971,8 +1009,16 @@ export async function retryOfflineSubmissions(input: {
           routeLookupReason = 'rolling_eta_snapshot_synced';
         }
       } else {
+        const access = input.orderedEventAccessIdentity;
+        if (access?.driverContractVersion === 2 && (
+          item.request.routePlanId !== access.routePlanId
+          || item.assignmentGeneration !== access.assignmentGeneration
+        )) {
+          if (input.queue.quarantine(item.queueItemId, 'assignment_changed')) blocked += 1;
+          continue;
+        }
         await runAttempt((signal) => input.proofMediaUploadService.uploadProofMedia(item.request, {
-          idempotencyKey: getProofMediaUploadIdempotencyKey(item.request),
+          idempotencyKey: item.idempotencyKey ?? getProofMediaUploadIdempotencyKey(item.request),
           signal,
         }));
       }
@@ -995,6 +1041,17 @@ export async function retryOfflineSubmissions(input: {
       }
     } catch (error) {
       if (!isCurrent()) break;
+      if (item.kind === 'driver_event' && isOrderedWorkflowEvidence(item)
+        && error instanceof DriverApiHttpError && error.status === 409
+        && (error.code === 'ROUTE_VERSION_MISMATCH' || error.code === 'ROUTE_ASSIGNMENT_CHANGED')) {
+        input.queue.recordRetryFailure(item.queueItemId, error);
+        if (input.queue.quarantine(item.queueItemId, 'assignment_changed')) blocked += 1;
+        if (routePlanId !== undefined) {
+          reconciliationRoutePlanIds.add(routePlanId);
+          workflowBlockedRoutePlanIds.add(routePlanId);
+        }
+        continue;
+      }
       if (
         routePlanId !== undefined
         && getDriverApiRequiresRouteReconciliation(error) === true
@@ -1187,18 +1244,25 @@ function sortJsonValue(value: unknown): unknown {
   );
 }
 
-function hasExactOrderedEventAccessIdentity(
+function hasCompatibleOrderedEventAccessIdentity(
   event: DriverEventInput,
   access: NonNullable<Parameters<typeof retryOfflineSubmissions>[0]['orderedEventAccessIdentity']>,
 ): boolean {
   return event.routePlanId === access.routePlanId
     && event.assignmentGeneration === access.assignmentGeneration
     && event.driverContractVersion === access.driverContractVersion
-    && event.expectedRouteVersionId === access.expectedRouteVersionId;
+    && (event.expectedRouteVersionId === access.expectedRouteVersionId || (
+      access.allowPreviousPublicationStopEvents === true
+      && access.driverContractVersion === 2
+      && typeof event.expectedRouteVersionId === 'string' && event.expectedRouteVersionId.trim() !== ''
+      && typeof event.deliveryStopId === 'string' && event.deliveryStopId.trim() !== ''
+      && (event.eventType === 'STOP_ARRIVED' || event.eventType === 'STOP_DELIVERED' || event.eventType === 'STOP_FAILED')
+    ));
 }
 
-function getProofMediaQueueItemId(request: ProofMediaUploadRequest): string {
-  return `proof-media:${request.routePlanId}:${request.deliveryStopId}:${request.fileName}`;
+function getProofMediaQueueItemId(request: ProofMediaUploadRequest, scope?: { assignmentGeneration: string }): string {
+  const prefix = scope === undefined ? 'proof-media' : `proof-media-assignment:${scope.assignmentGeneration}`;
+  return `${prefix}:${request.routePlanId}:${request.deliveryStopId}:${request.fileName}`;
 }
 
 function getQueueItemRoutePlanId(item: OfflineSubmissionQueueItem): string | undefined {
@@ -1307,6 +1371,8 @@ function toPersistedQueueItem(item: OfflineSubmissionQueueItem): Record<string, 
 
   return {
     ...base,
+    ...(item.assignmentGeneration === undefined ? {} : { assignmentGeneration: item.assignmentGeneration }),
+    ...(item.idempotencyKey === undefined ? {} : { idempotencyKey: item.idempotencyKey }),
     request: item.request,
   };
 }
@@ -1399,15 +1465,20 @@ function readPersistedQueueItem(
 
   if (data.kind === 'proof_media') {
     const request = readPersistedProofMediaRequest(data.request);
-    if (request === null) {
+    const assignmentGeneration = data.assignmentGeneration;
+    const idempotencyKey = readOptionalString(data.idempotencyKey);
+    if (request === null || (assignmentGeneration !== undefined && !isCanonicalAssignmentGeneration(assignmentGeneration))
+      || idempotencyKey === null || (idempotencyKey !== undefined && !/^proof-media-v1:[a-f0-9]{32}$/u.test(idempotencyKey))) {
       return null;
     }
 
     return {
       accountOwnerHash,
+      ...(assignmentGeneration === undefined ? {} : { assignmentGeneration: assignmentGeneration as string }),
       attempts,
       enqueuedAt,
       ...(firstErrorCode === undefined ? {} : { firstErrorCode }),
+      ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
       journal,
       kind: 'proof_media',
       ...(lastErrorCode === undefined ? {} : { lastErrorCode }),
@@ -1420,6 +1491,10 @@ function readPersistedQueueItem(
   }
 
   return null;
+}
+
+function isCanonicalAssignmentGeneration(value: unknown): value is string {
+  return typeof value === 'string' && /^[1-9]\d{0,18}$/u.test(value) && BigInt(value) <= 9223372036854775807n;
 }
 
 function readOptionalReconciliation(value: unknown): OfflineSubmissionReconciliation | undefined | null {

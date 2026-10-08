@@ -330,7 +330,9 @@ describe('driver diagnostics', () => {
   it('sends fresh live state separately from replay so old history cannot replace current evidence', async () => {
     const storage = memoryStorage();
     const oldSnapshot = { ...snapshot, lifecycle: 'BACKGROUND' as const, network: 'OFFLINE' as const };
-    const outbox = createDriverDiagnosticOutbox({ accountOwnerHash: 'account-a', storage });
+    const outbox = createDriverDiagnosticOutbox({
+      accountOwnerHash: 'account-a', storage, now: () => new Date('2026-10-01T14:05:00.000Z'),
+    });
     outbox.record({ bootId: ids.boot1, context, diagnosticId: ids.diag1, kind: 'ERROR', observedAt: '2026-09-30T14:05:00.000Z', sequence: 1, snapshot: oldSnapshot });
     const envelope = outbox.buildBatch({ batchId: ids.batch1, bootId: ids.boot2, liveContext: context, liveSnapshot: snapshot });
     assert.equal(envelope.liveSnapshot.network, 'ONLINE');

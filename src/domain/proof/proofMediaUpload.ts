@@ -236,8 +236,14 @@ function postProofMediaFormDataWithXmlHttpRequest(input: {
   });
 }
 
-export function getProofMediaUploadIdempotencyKey(request: ProofMediaUploadRequest): string {
-  const identity = `${request.routePlanId}\u0000${request.deliveryStopId}\u0000${request.fileName}`;
+export function getProofMediaUploadIdempotencyKey(
+  request: ProofMediaUploadRequest,
+  scope?: { assignmentGeneration: string },
+): string {
+  const photoIdentity = `${request.routePlanId}\u0000${request.deliveryStopId}\u0000${request.fileName}`;
+  const identity = scope === undefined
+    ? photoIdentity
+    : `assignment\u0000${scope.assignmentGeneration}\u0000${photoIdentity}`;
   return `proof-media-v1:${[
     0x811c9dc5,
     0x9e3779b9,

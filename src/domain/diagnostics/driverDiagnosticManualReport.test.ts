@@ -260,6 +260,7 @@ describe('driver diagnostic manual report', () => {
       credentialStore: { get: async () => ({ expiresAt: '2026-10-02T13:00:00.000Z', token: 'credential' }), remove: async () => undefined, set: async () => undefined },
       deviceInstanceHash: context.deviceInstanceHash,
       minimumAttemptIntervalMs: 0,
+      now: () => new Date('2026-10-01T14:05:00.000Z'),
       outbox: timeoutOutbox,
       register: async () => { throw new Error('unused'); },
       schedule: () => ({ scheduled: true }),

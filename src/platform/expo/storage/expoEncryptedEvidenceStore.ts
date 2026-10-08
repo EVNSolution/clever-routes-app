@@ -9,6 +9,7 @@ import {
   type OfflineSubmissionQueueStorage,
 } from '../../../domain/offline/offlineSubmissionQueue';
 import type { DriverEventType } from '../../../domain/events/driverEvents';
+import type { LiveRouteChangeRawStorage } from '../../../domain/route/liveRouteChangeStore';
 
 export const DRIVER_EVIDENCE_DATABASE_NAME = 'clever_driver_evidence_v2.db';
 export const DRIVER_EVIDENCE_KEY_STORAGE_KEY = 'clever.driverEvidence.sqlcipherKey.v2';
@@ -22,7 +23,7 @@ export type SupportQuarantineExport = {
   scope: 'account' | 'global';
 };
 
-export type EncryptedEvidenceStore = OfflineSubmissionQueueStorage & {
+export type EncryptedEvidenceStore = OfflineSubmissionQueueStorage & LiveRouteChangeRawStorage & {
   exportDiagnostics(): Promise<string>;
   exportSupportQuarantine(input?: { accountOwnerHash?: string }): Promise<SupportQuarantineExport>;
   purgeExportedSupportQuarantine(input: { accountOwnerHash?: string; exportToken: string }): Promise<number>;
@@ -78,7 +79,7 @@ export async function createEncryptedEvidenceStore(input: {
     throw new Error('Encrypted evidence database key is missing or invalid. Preserve the database for support recovery.');
   }
 
-  const database = await input.openDatabaseAsync(input.databaseName ?? DRIVER_EVIDENCE_DATABASE_NAME);
+  const database = serializeEvidenceOperations(await input.openDatabaseAsync(input.databaseName ?? DRIVER_EVIDENCE_DATABASE_NAME)).database;
   await database.execAsync(`PRAGMA key = "x'${key}'";`);
   const cipher = await database.getFirstAsync<{ cipher_version?: string | null }>(
     'PRAGMA cipher_version;',
@@ -264,6 +265,20 @@ export async function createEncryptedEvidenceStore(input: {
       );
       return row?.payload ?? null;
     },
+    readLiveRouteChangeState: async (accountOwnerHash) => {
+      requireSha256AccountOwnerHash(accountOwnerHash);
+      const row = await database.getFirstAsync<StoredRow>(
+        'SELECT account_owner_hash AS recordKey, payload FROM live_route_change_state WHERE account_owner_hash = ? LIMIT 1;',
+        accountOwnerHash,
+      );
+      return row?.payload ?? null;
+    },
+    removeLiveRouteChangeState: async (accountOwnerHash) => {
+      requireSha256AccountOwnerHash(accountOwnerHash);
+      await database.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync('DELETE FROM live_route_change_state WHERE account_owner_hash = ?;', accountOwnerHash);
+      });
+    },
     removeCompletionAssistanceState: async (accountOwnerHash) => {
       requireSha256AccountOwnerHash(accountOwnerHash);
       await database.withExclusiveTransactionAsync(async (transaction) => {
@@ -298,7 +313,45 @@ export async function createEncryptedEvidenceStore(input: {
       if (updated === null) throw new Error('Completion assistance state update did not complete.');
       return updated;
     },
+    updateLiveRouteChangeState: async (accountOwnerHash, mutate) => {
+      requireSha256AccountOwnerHash(accountOwnerHash);
+      let updated: string | null = null;
+      await database.withExclusiveTransactionAsync(async (transaction) => {
+        const row = await transaction.getFirstAsync<StoredRow>(
+          'SELECT account_owner_hash AS recordKey, payload FROM live_route_change_state WHERE account_owner_hash = ? LIMIT 1;',
+          accountOwnerHash,
+        );
+        updated = mutate(row?.payload ?? null);
+        await transaction.runAsync(
+          'INSERT OR REPLACE INTO live_route_change_state (account_owner_hash, payload, updated_at) VALUES (?, ?, ?);',
+          accountOwnerHash, updated, now().toISOString(),
+        );
+      });
+      if (updated === null) throw new Error('Live route state update did not complete.');
+      return updated;
+    },
   };
+}
+
+function serializeEvidenceOperations(database: EvidenceDatabase): { database: EvidenceDatabase; drain(): Promise<void> } {
+  let pending: Promise<void> = Promise.resolve();
+  const run = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = pending.then(operation);
+    pending = result.then(() => undefined, () => undefined);
+    return result;
+  };
+  return { drain: () => pending, database: {
+    execAsync: sql => run(() => database.execAsync(sql)),
+    getAllAsync: <T>(sql: string, ...params: unknown[]) => run(() => database.getAllAsync<T>(sql, ...params)),
+    getFirstAsync: <T>(sql: string, ...params: unknown[]) => run(() => database.getFirstAsync<T>(sql, ...params)),
+    runAsync: (sql, ...params) => run(() => database.runAsync(sql, ...params)),
+    withExclusiveTransactionAsync: operation => run(() => database.withExclusiveTransactionAsync(async transaction => {
+      // The transaction uses its own connection and queue, so inner calls cannot deadlock the outer operation.
+      const serialized = serializeEvidenceOperations(transaction);
+      try { await operation(serialized.database); }
+      finally { await serialized.drain(); }
+    })),
+  } };
 }
 
 async function createSchema(database: EvidenceDatabase) {
@@ -350,6 +403,11 @@ async function createSchema(database: EvidenceDatabase) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS completion_assistance_state (
+      account_owner_hash TEXT PRIMARY KEY NOT NULL,
+      payload TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS live_route_change_state (
       account_owner_hash TEXT PRIMARY KEY NOT NULL,
       payload TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -1021,6 +1079,8 @@ function redactReplayPayload(item: Record<string, unknown>) {
     const request = typeof item.request === 'object' && item.request !== null ? item.request as Record<string, unknown> : {};
     return {
       ...identity,
+      ...(item.assignmentGeneration === undefined ? {} : { assignmentGeneration: item.assignmentGeneration }),
+      ...(item.idempotencyKey === undefined ? {} : { idempotencyKey: item.idempotencyKey }),
       request: {
         deliveryStopId: request.deliveryStopId,
         routePlanId: request.routePlanId,

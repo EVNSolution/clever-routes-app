@@ -220,4 +220,93 @@ describe('driver API client token handoff', () => {
       versionCode: 116,
     });
   });
+
+  it('refreshes live-change GET authentication and preserves its lifecycle signal', async () => {
+    const signal = new AbortController().signal;
+    const requests: { authorization: string | undefined; signal: AbortSignal | undefined }[] = [];
+    const clients = createDriverApiClientsFromRouteAccess({
+      baseUrl: 'https://delivery.example.com/',
+      routeAccess: sampleInvitedRouteAccess,
+      refreshDriverAccess: async (refreshSignal) => {
+        assert.equal(refreshSignal, signal);
+        return { ...sampleInvitedRouteAccess.driverAccess, accessToken: 'refreshed-route-token' };
+      },
+      fetchImpl: async (_url, init) => {
+        requests.push({ authorization: init?.headers?.Authorization, signal: init && 'signal' in init ? init.signal : undefined });
+        return requests.length === 1
+          ? { ok: false, status: 401, json: async () => ({ data: null, error: { code: 'UNAUTHORIZED' } }) }
+          : { ok: true, status: 200, json: async () => ({ data: null, error: null }) };
+      },
+    });
+
+    assert.equal(await clients.liveRouteChangeService.getLiveRouteChange({
+      routePlanId: sampleInvitedRouteAccess.routeAccess.routeContext,
+    }, { signal }), null);
+    assert.deepEqual(requests, [
+      { authorization: 'Bearer fixture-driver-access-token', signal },
+      { authorization: 'Bearer refreshed-route-token', signal },
+    ]);
+  });
+
+  it('retries ACK with the original publication identity even when a newer publication is returned', async () => {
+    const bodies: string[] = [];
+    const routePlanId = sampleInvitedRouteAccess.routeAccess.routeContext;
+    const acknowledgedId = '90000000-0000-4000-8000-000000000001';
+    const latestId = '90000000-0000-4000-8000-000000000002';
+    const clients = createDriverApiClientsFromRouteAccess({
+      baseUrl: 'https://delivery.example.com/',
+      routeAccess: sampleInvitedRouteAccess,
+      refreshDriverAccess: async () => sampleInvitedRouteAccess.driverAccess,
+      fetchImpl: async (_url, init) => {
+        bodies.push(init && 'body' in init && typeof init.body === 'string' ? init.body : 'missing');
+        return bodies.length === 1
+          ? { ok: false, status: 401, json: async () => ({ data: null, error: { code: 'UNAUTHORIZED' } }) }
+          : { ok: true, status: 200, json: async () => ({
+            data: {
+              routePlanId, publicationVersionId: latestId, assignmentGeneration: '2', sequence: 2,
+              publishedAt: '2026-10-07T10:00:00.000Z', appliedVersionId: acknowledgedId, pending: true,
+              snapshot: { schemaVersion: 1, stops: [] },
+            }, error: null,
+          }) };
+      },
+    });
+
+    const response = await clients.liveRouteChangeService.acknowledgeLiveRouteChange({
+      routePlanId, publicationVersionId: acknowledgedId, assignmentGeneration: '2',
+    });
+    assert.equal(bodies.length, 2);
+    assert.equal(bodies[0], bodies[1]);
+    assert.equal(JSON.parse(bodies[1]!).publicationVersionId, acknowledgedId);
+    assert.equal(response.publicationVersionId, latestId);
+    assert.equal(response.pending, true);
+  });
+
+  it('does not replay an ACK after account lifecycle cancellation during token refresh', async () => {
+    let calls = 0;
+    let resolveRefresh!: () => void;
+    const lifecycle = new AbortController();
+    const clients = createDriverApiClientsFromRouteAccess({
+      baseUrl: 'https://delivery.example.com/',
+      routeAccess: sampleInvitedRouteAccess,
+      fetchImpl: async () => {
+        calls += 1;
+        return { ok: false, status: 401, json: async () => ({ data: null, error: { code: 'UNAUTHORIZED' } }) };
+      },
+      refreshDriverAccess: (signal) => {
+        assert.equal(signal, lifecycle.signal);
+        return new Promise((resolve) => {
+          resolveRefresh = () => resolve({ ...sampleInvitedRouteAccess.driverAccess, accessToken: 'another-account-token' });
+        });
+      },
+    });
+    const pending = clients.liveRouteChangeService.acknowledgeLiveRouteChange({
+      routePlanId: sampleInvitedRouteAccess.routeAccess.routeContext,
+      publicationVersionId: '90000000-0000-4000-8000-000000000001', assignmentGeneration: '2',
+    }, { signal: lifecycle.signal });
+    await new Promise((resolve) => setImmediate(resolve));
+    lifecycle.abort();
+    resolveRefresh();
+    await assert.rejects(pending, /HTTP 401/u);
+    assert.equal(calls, 1);
+  });
 });

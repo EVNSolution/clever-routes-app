@@ -1,0 +1,64 @@
+{
+  "verifiedAt": "2026-10-08T06:10:00.731Z",
+  "status": "pass",
+  "serverSourceSha": "9bd6e7b8408508c83b1e4255a62c37ee9b983bf0",
+  "shopifySourceSha": "e3f5a2a9819cb0ddd58766912b8ff31de2c759ae",
+  "mobileBaseSha": "701b03779bf14f81fb67ecc197df03055a94df3e",
+  "mobileSourceSha256": "6a8adc5b646677cf67d0067c4c90c70661347c955f05c7499a22f462401d8b21",
+  "environment": {
+    "database": "temporary PostgreSQL 17 cluster, loopback only, PR486 Prisma migrations",
+    "transport": "real Fastify HTTP, real Prisma repositories and locally signed synthetic route/account JWTs",
+    "office": "actual PR328 Shopify BFF helpers with authenticated synthetic session",
+    "mobile": "actual driver API clients, live-change controller/domain store and offline submission queue",
+    "persistence": "production domain store using atomic temporary file adapter and store recreation",
+    "providers": "disabled; no real push, geocoding, payment or store access"
+  },
+  "checks": [
+    {
+      "name": "Actual Shopify BFF Save is private to the office; mobile GET remains at the baseline publication",
+      "result": "pass"
+    },
+    {
+      "name": "Dispatch creates pending state; actual refresh controller retains original content and gates missing local baseline recovery",
+      "result": "pass"
+    },
+    {
+      "name": "Explicit Apply uses exact immutable N; N+1 published during ACK keeps the banner and does not silently replace applied N",
+      "result": "pass"
+    },
+    {
+      "name": "Lost ACK response retains durable applied snapshot and exact ACK identity; new store instance safely retries without cross-account or generation state",
+      "result": "pass"
+    },
+    {
+      "name": "Actual offline queue submits unchanged stop 2 evidence with its original clientEventId, generation, publication and payload; server accepts it",
+      "result": "pass"
+    },
+    {
+      "name": "Changed stop 7 evidence reaches authoritative server validation and remains quarantined with its original identity after rejection",
+      "result": "pass"
+    },
+    {
+      "name": "A reordered target rejects old-publication evidence through the same actual queue/API path",
+      "result": "pass"
+    },
+    {
+      "name": "Non-enrolled queue behavior, route-level evidence and wrong generations remain blocked; wrong-generation ACK is rejected by real HTTP server",
+      "result": "pass"
+    },
+    {
+      "name": "Execution refresh advances delivered status while preserving applied addresses and order until the next explicit Apply",
+      "result": "pass"
+    },
+    {
+      "name": "Explicit Apply accepts the new future order and clears pending while preserving completion, proof drafts and monetary fields",
+      "result": "pass"
+    }
+  ],
+  "limitations": [
+    "This run does not render React Native UI or replace physical-device acceptance.",
+    "The file adapter proves domain-store restart behavior; native SQLCipher and SecureStore need device tests.",
+    "Push delivery, background OS lifecycle, live Shopify authentication and provider routing are not exercised."
+  ],
+  "cleanup": "Fastify, Prisma and temporary PostgreSQL are closed and temporary fixture/state files removed in finally"
+}

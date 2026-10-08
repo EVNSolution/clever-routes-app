@@ -269,6 +269,13 @@ const MULTIPLE_MATCH_KEYS = new Set([
   'timezone',
 ]);
 
+export class RouteAccessTransportError extends Error {
+  constructor() {
+    super('Route access lookup transport failed.');
+    this.name = 'RouteAccessTransportError';
+  }
+}
+
 export function createRouteAccessApiClient(input: {
   baseUrl: string;
   fetchImpl?: FetchLike;
@@ -280,7 +287,7 @@ export function createRouteAccessApiClient(input: {
     lookupRouteAccess: async (request) => {
       const requestId = createDriverDiagnosticRequestId();
       return observeDriverDiagnosticOperation({ operation: 'ROUTE_LOOKUP', requestId }, async () => {
-        const response = await fetchImpl(`${baseUrl}/driver/route-access/lookup`, withNoStoreDriverApiRequest({
+        const requestOptions = withNoStoreDriverApiRequest({
           body: JSON.stringify({
             routeContext: request.routeContext?.trim() || null,
           }),
@@ -290,7 +297,13 @@ export function createRouteAccessApiClient(input: {
             'X-Request-Id': requestId,
           },
           method: 'POST',
-        }));
+        });
+        let response: Awaited<ReturnType<FetchLike>>;
+        try {
+          response = await fetchImpl(`${baseUrl}/driver/route-access/lookup`, requestOptions);
+        } catch {
+          throw new RouteAccessTransportError();
+        }
         const payload = await response.json();
         if (!response.ok) {
           throw createDriverApiHttpError({
