@@ -3,7 +3,15 @@ apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
 def googleServicesConfigFile = file("google-services.json")
-if (googleServicesConfigFile.exists()) {
+// The local QA package has no production Firebase registration or provider access.
+def isKfoodQaBuild = gradle.startParameter.taskNames.any { it.toLowerCase().contains('qa') }
+if (isKfoodQaBuild && gradle.startParameter.taskNames.any { !it.toLowerCase().contains('qa') }) {
+    throw new GradleException('Run QA tasks in a separate Gradle invocation from production tasks.')
+}
+if (isKfoodQaBuild && !file('src/qa/res/raw/kfood_qa_ca.pem').exists()) {
+    throw new GradleException('Prepare the local QA certificate with scripts/build-kfood-native-qa.mjs before building QA.')
+}
+if (googleServicesConfigFile.exists() && !isKfoodQaBuild) {
     apply plugin: "com.google.gms.google-services"
 }
 
@@ -124,6 +132,13 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
             def enablePngCrunchInRelease = findProperty('android.enablePngCrunchInReleaseBuilds') ?: 'true'
             crunchPngs enablePngCrunchInRelease.toBoolean()
+        }
+        if (isKfoodQaBuild) {
+            qa {
+                initWith release
+                applicationIdSuffix '.qa'
+                matchingFallbacks = ['release']
+            }
         }
     }
     packagingOptions {

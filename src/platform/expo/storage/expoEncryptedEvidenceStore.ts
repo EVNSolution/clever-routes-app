@@ -79,7 +79,7 @@ export async function createEncryptedEvidenceStore(input: {
     throw new Error('Encrypted evidence database key is missing or invalid. Preserve the database for support recovery.');
   }
 
-  const database = await input.openDatabaseAsync(input.databaseName ?? DRIVER_EVIDENCE_DATABASE_NAME);
+  const database = serializeEvidenceOperations(await input.openDatabaseAsync(input.databaseName ?? DRIVER_EVIDENCE_DATABASE_NAME)).database;
   await database.execAsync(`PRAGMA key = "x'${key}'";`);
   const cipher = await database.getFirstAsync<{ cipher_version?: string | null }>(
     'PRAGMA cipher_version;',
@@ -331,6 +331,27 @@ export async function createEncryptedEvidenceStore(input: {
       return updated;
     },
   };
+}
+
+function serializeEvidenceOperations(database: EvidenceDatabase): { database: EvidenceDatabase; drain(): Promise<void> } {
+  let pending: Promise<void> = Promise.resolve();
+  const run = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = pending.then(operation);
+    pending = result.then(() => undefined, () => undefined);
+    return result;
+  };
+  return { drain: () => pending, database: {
+    execAsync: sql => run(() => database.execAsync(sql)),
+    getAllAsync: <T>(sql: string, ...params: unknown[]) => run(() => database.getAllAsync<T>(sql, ...params)),
+    getFirstAsync: <T>(sql: string, ...params: unknown[]) => run(() => database.getFirstAsync<T>(sql, ...params)),
+    runAsync: (sql, ...params) => run(() => database.runAsync(sql, ...params)),
+    withExclusiveTransactionAsync: operation => run(() => database.withExclusiveTransactionAsync(async transaction => {
+      // The transaction uses its own connection and queue, so inner calls cannot deadlock the outer operation.
+      const serialized = serializeEvidenceOperations(transaction);
+      try { await operation(serialized.database); }
+      finally { await serialized.drain(); }
+    })),
+  } };
 }
 
 async function createSchema(database: EvidenceDatabase) {
@@ -1058,6 +1079,7 @@ function redactReplayPayload(item: Record<string, unknown>) {
     const request = typeof item.request === 'object' && item.request !== null ? item.request as Record<string, unknown> : {};
     return {
       ...identity,
+      ...(item.assignmentGeneration === undefined ? {} : { assignmentGeneration: item.assignmentGeneration }),
       request: {
         deliveryStopId: request.deliveryStopId,
         routePlanId: request.routePlanId,

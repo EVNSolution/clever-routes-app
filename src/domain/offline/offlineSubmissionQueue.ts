@@ -111,6 +111,8 @@ export type OfflineDriverEventQueueItem = OfflineEvidenceIdentity & {
 };
 
 export type OfflineProofMediaQueueItem = OfflineEvidenceIdentity & {
+  /** Local replay lineage. This field is not sent in the proof-media request. */
+  assignmentGeneration?: string;
   attempts: number;
   enqueuedAt: string;
   firstErrorCode?: string;
@@ -134,7 +136,7 @@ export type OfflineSubmissionQueue = {
   discardRouteSubmissions(routePlanId: string): number;
   enqueueDriverEvent(event: DriverEventInput): OfflineDriverEventQueueItem;
   enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
-  enqueueProofMediaUpload(request: ProofMediaUploadRequest): OfflineProofMediaQueueItem;
+  enqueueProofMediaUpload(request: ProofMediaUploadRequest, scope?: { assignmentGeneration: string }): OfflineProofMediaQueueItem;
   getAccountOwnerHash(): string | null;
   getCompletionClearTelemetry(entry: OfflineCompletionClearOutboxEntry): OfflineRouteCompletionTelemetry | null;
   getRouteCompletionTelemetry(routePlanId: string): OfflineRouteCompletionTelemetry;
@@ -517,8 +519,11 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       }
       return results.map((result) => result.item);
     },
-    enqueueProofMediaUpload: (request) => {
+    enqueueProofMediaUpload: (request, scope) => {
       requireMutable();
+      if (scope !== undefined && !isCanonicalAssignmentGeneration(scope.assignmentGeneration)) {
+        throw new Error('Proof-media evidence requires a canonical assignment generation.');
+      }
       const queueItemId = getProofMediaQueueItemId(request);
       const existing = findActiveItem(queueItemId);
       if (existing?.kind === 'proof_media') {
@@ -527,6 +532,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
 
       const item: OfflineProofMediaQueueItem = {
         accountOwnerHash: activeAccountOwnerHash!,
+        ...(scope === undefined ? {} : { assignmentGeneration: scope.assignmentGeneration }),
         attempts: 0,
         enqueuedAt: now().toISOString(),
         journal: [{ at: now().toISOString(), code: 'ENQUEUED', kind: 'ENQUEUED' }],
@@ -973,6 +979,14 @@ export async function retryOfflineSubmissions(input: {
           routeLookupReason = 'rolling_eta_snapshot_synced';
         }
       } else {
+        const access = input.orderedEventAccessIdentity;
+        if (access?.driverContractVersion === 2 && (
+          item.request.routePlanId !== access.routePlanId
+          || item.assignmentGeneration !== access.assignmentGeneration
+        )) {
+          if (input.queue.quarantine(item.queueItemId, 'assignment_changed')) blocked += 1;
+          continue;
+        }
         await runAttempt((signal) => input.proofMediaUploadService.uploadProofMedia(item.request, {
           idempotencyKey: getProofMediaUploadIdempotencyKey(item.request),
           signal,
@@ -1326,6 +1340,7 @@ function toPersistedQueueItem(item: OfflineSubmissionQueueItem): Record<string, 
 
   return {
     ...base,
+    ...(item.assignmentGeneration === undefined ? {} : { assignmentGeneration: item.assignmentGeneration }),
     request: item.request,
   };
 }
@@ -1418,12 +1433,14 @@ function readPersistedQueueItem(
 
   if (data.kind === 'proof_media') {
     const request = readPersistedProofMediaRequest(data.request);
-    if (request === null) {
+    const assignmentGeneration = data.assignmentGeneration;
+    if (request === null || (assignmentGeneration !== undefined && !isCanonicalAssignmentGeneration(assignmentGeneration))) {
       return null;
     }
 
     return {
       accountOwnerHash,
+      ...(assignmentGeneration === undefined ? {} : { assignmentGeneration: assignmentGeneration as string }),
       attempts,
       enqueuedAt,
       ...(firstErrorCode === undefined ? {} : { firstErrorCode }),
@@ -1439,6 +1456,10 @@ function readPersistedQueueItem(
   }
 
   return null;
+}
+
+function isCanonicalAssignmentGeneration(value: unknown): value is string {
+  return typeof value === 'string' && /^[1-9]\d{0,18}$/u.test(value) && BigInt(value) <= 9223372036854775807n;
 }
 
 function readOptionalReconciliation(value: unknown): OfflineSubmissionReconciliation | undefined | null {

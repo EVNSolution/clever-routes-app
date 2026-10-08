@@ -1,10 +1,10 @@
 {
-  "verifiedAt": "2026-10-07T12:45:04.941Z",
+  "verifiedAt": "2026-10-08T02:55:49.681Z",
   "status": "pass",
   "serverSourceSha": "9bd6e7b8408508c83b1e4255a62c37ee9b983bf0",
   "shopifySourceSha": "e3f5a2a9819cb0ddd58766912b8ff31de2c759ae",
-  "mobileBaseSha": "143915fc7f1e80c91ca4ec652f4587d65205e447",
-  "mobileSourceSha256": "23bea788faed8958d8b08365c10794c0e0766d500ac452447798911afba7f9e4",
+  "mobileBaseSha": "309ef4dd4fdc3532d597274f2486b55e8d2f66a5",
+  "mobileSourceSha256": "9eb86a1562920174046a8f903e3ef5c3d77c1f4529d51a09ba6f62f99abe8986",
   "environment": {
     "database": "temporary PostgreSQL 17 cluster, loopback only, PR486 Prisma migrations",
     "transport": "real Fastify HTTP, real Prisma repositories and locally signed synthetic route/account JWTs",

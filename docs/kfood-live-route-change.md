@@ -28,6 +28,27 @@ isolated by account owner, route, and assignment generation. It contains the
 applied route, publication identity, pending change, acknowledgement retry, and
 delivery input needed for recovery. It does not store authentication tokens.
 
+Photo selection and upload retain the initiating account, route, assignment generation,
+and stop ID. A late camera or upload result cannot update a different account or
+assignment. Selecting a replacement photo clears the previous upload result before
+saving the new photo. Unsent proof media from an unknown or superseded V2 assignment
+is quarantined before upload. Its original queue identity remains available.
+
+When account lookup fails because the connection is unavailable, the app can restore
+an active KFood route from the encrypted applied snapshot. The saved account, active
+route and assignment must match. Authentication rejection and assignment conflict do
+not use this fallback. The fallback does not initiate tracking or replay delivery
+evidence. Reopening a route hydrates its saved input. While this cache is unvalidated,
+queue replay and publication acknowledgement remain paused. Foreground connection
+recovery validates the account and assignment with the server before restoring tracking.
+The retry uses the existing polling cadence and preserves the applied list and draft.
+
+The encrypted database serializes operations on each native connection. An exclusive
+transaction uses a separate operation queue. The queue drains before rollback or
+connection closure. Evidence token refresh requires the original route, assignment
+generation and contract. A newer publication in the same assignment can still refresh
+its token, while replay retains the original event identity.
+
 Idle cache entries expire after 30 days. Entries with pending changes,
 acknowledgements, or unfinished proof input remain available. Signing out does
 not delete that evidence. Account deletion removes the account's live-change cache.
@@ -76,3 +97,6 @@ Local unit tests and a synthetic HTTP integration run do not prove device camera
 background delivery, SQLCipher native recovery, or push-provider behavior. A test
 APK is a local validation artifact. It is not a Play Store release or permission
 to replace a driver's installed application.
+
+The follow-up findings and acceptance limits are recorded in
+[the 2026-10-08 verification record](verification/kfood-live-change-final-20261008.md).
