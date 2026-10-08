@@ -1,5 +1,7 @@
 # PR299 focused native acceptance — 2026-10-08
 
+The later [remaining native pass](kfood-pr299-native-remaining-20261008.md) completes account switch, reassignment, and Dispatch/Apply on the same immutable QA41 APK. The historical captures and results below remain unchanged.
+
 The focused native pass completed on **R3CN80SCYPL** using the isolated QA package. The synthetic server recorded **7 `STOP_DELIVERED`, 0 `STOP_ARRIVED`, and 7 receipts**. Each client event ID has exactly one completion event and one receipt.
 
 Both process-kill cases preserved the original Cash request. The final offline receipt screen showed **Recorded by server** and **CAD 50.00**. Server receipts and native queue diagnostics also confirm acknowledgement.
@@ -89,7 +91,7 @@ The configured database is `clever_driver_evidence_v2.db`. Its derived Android u
 
 At `12:02:20.481605Z`, the device foreground changed externally to `com.android.settings/.Settings$WifiSettingsActivity`. The QA helper rejected input. All device mutations stopped. `device-occupation-interruption.json` records the boundary. After the QA app returned to the foreground, a separate read-only check found only this task's log readers. Input resumed only for the final receipt capture and cleanup.
 
-- Native account-switch, reassignment, and PR297 Dispatch screen checks were not run in this focused pass. They remain supplemental native release checks.
+- Native account-switch, reassignment, and PR297 Dispatch screen checks were not run in this focused pass. They subsequently passed in the [remaining native pass](kfood-pr299-native-remaining-20261008.md).
 - Recovery used explicit refresh. Unattended reconnect latency was not established.
 - Native store-build/device acceptance and wider legacy release gates are separate from this QA-package evidence.
 - No merge, deployment, store rollout, or production-app replacement is claimed or authorized by this record.

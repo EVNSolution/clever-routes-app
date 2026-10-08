@@ -4,7 +4,7 @@
   "private": true,
   "main": "index.ts",
   "scripts": {
-    "postinstall": "node scripts/patch-expo-location-notification.mjs",
+    "postinstall": "node scripts/patch-host-security.mjs && node scripts/patch-expo-location-notification.mjs",
     "start": "expo start",
     "android:dev:install": "ORG_GRADLE_PROJECT_reactNativeArchitectures=arm64-v8a expo run:android --device --variant debugOptimized",
     "android:dev:start": "expo start --dev-client --localhost --android",
@@ -13,6 +13,7 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-tests.mjs",
+    "test:host-security": "node scripts/run-tests.mjs src/release/preflight/hostSecurityPatches.test.ts",
     "check:native-release": "tsx src/release/preflight/nativeReleasePreflightCli.ts",
     "release:evidence:seed": "tsx src/release/evidence/releaseEvidenceSeedCli.ts",
     "release:evidence:verify": "tsx src/release/evidence/releaseEvidenceVerifierCli.ts",

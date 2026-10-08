@@ -5,6 +5,11 @@ prepares a build and integration sequence. It does not authorize a merge,
 production migration, store submission, APK publication, or feature activation.
 The committed candidate source is `985f999ad2c4f9354ff2c856174e4542410c6554`. Build and acceptance evidence are recorded separately below.
 
+This retained 1.3.5/41 AAB has the Cash feature **OFF** and predates the later
+host dependency patches. See the [activation conditions](kfood-pr299-feature-activation-20261008.md)
+for a later ON candidate and the [remaining native cases](kfood-pr299-native-remaining-20261008.md).
+Neither the source patches nor publishing this OFF artifact activates Cash.
+
 ## Source and current distribution
 
 | Item | Read-only observation / prepared value |
@@ -190,8 +195,9 @@ separate release decision and does not submit the AAB to Play.
 
 These are future execution steps, not actions performed by this document.
 
-1. Resolve the remaining dependency-audit and designated-device acceptance gates.
-   Preserve failed audit results; source/unit success does not waive them.
+1. Resolve the remaining dependency-audit gate. The three remaining designated-device
+   cases passed in the linked native record. Preserve failed audit results;
+   source/unit or native success does not waive them.
 2. Reconcile the canonical service statements below in the context repository.
    Keep that foreign repository read-only in this task.
 3. Integrate server PR486, then PR489 onto the server release branch. Revalidate
@@ -220,8 +226,11 @@ These are future execution steps, not actions performed by this document.
    after backend migration, server deployment and app adoption are proven. This
    preparation does not turn the QA opt-in into an operational setting.
 
-For rollback, disable the app opt-in before an old backend can accept and ignore
-its new field. Retain the additive receipt table and accepted immutable records.
+For rollback, stop v1 submissions from installed ON clients before an old backend
+can accept and ignore the new field. This bundled opt-in has no remote OFF switch;
+changing EAS environment values does not disable installed binaries. Keep the
+compatible backend until the client-disable/adoption plan is verified, as detailed
+in the activation record. Retain the additive receipt table and accepted immutable records.
 Do not downgrade stored money to legacy events, drop receipt records, or replay
 collection with new event IDs. Build success is not evidence of activation.
 
@@ -269,7 +278,9 @@ Add after that replacement:
 > server permits it; changed stops and obsolete assignments remain blocked.
 >
 > Backend receipt schema and contract deployment precede client activation.
-> Rollback disables the client opt-in first and preserves accepted receipts.
+> The current bundled opt-in has no remote OFF switch. Rollback must stop installed
+> ON clients from making v1 submissions before backend compatibility is removed,
+> and must preserve accepted receipts.
 > Native acceptance, dependency audit, signing and publication remain separate
 > release evidence outside this context pointer.
 
@@ -341,7 +352,7 @@ verification does not replace exact-artifact Play internal testing or authorize
 installation over the operating app. No derived APK was installed.
 
 The release remains blocked by the dependency audit and the documented server,
-app-integration and store-acceptance sequence. The focused QA pass does not
-replace the supplemental account/reassignment/Dispatch native checks listed in
-the native acceptance record. Canonical service-context edits are prepared above
+app-integration and store-acceptance sequence. The supplemental account-switch,
+reassignment and Dispatch/Apply cases passed in the [remaining native record](kfood-pr299-native-remaining-20261008.md).
+Canonical service-context edits are prepared above
 and remain outside this repository's write scope.

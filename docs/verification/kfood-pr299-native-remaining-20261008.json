@@ -1,0 +1,474 @@
+{
+  "schemaVersion": 1,
+  "status": "PASS",
+  "scope": "Only Dispatch/Apply, account switch with pending Cash, and reassignment preservation",
+  "date": "2026-10-08",
+  "timeZone": "UTC",
+  "device": "R3CN80SCYPL",
+  "artifactRoot": "/Users/jiin/.codex/artifacts/kfood-pr299-remaining-20261008",
+  "app": {
+    "package": "com.evnsolution.clever.routes.cashqa",
+    "versionName": "1.3.5",
+    "versionCode": 41,
+    "apkSha256": "ce8a8b1e6ebbe76c80a54e1879e73282025dd924dbbe9ac31cf9bf30a25c8ec6",
+    "artifactSourceCommit": "985f999ad2c4f9354ff2c856174e4542410c6554",
+    "currentReviewBaseCommit": "757baefff29f3e7afef800d0fd080df1fad721d8",
+    "newBuild": false,
+    "coreCashMatrixRepeated": false
+  },
+  "fixture": {
+    "serverSourceCommit": "bd132f199c2a058d8e14fe33d97497307a51af45",
+    "shopifySourceCommit": "e3f5a2a9819cb0ddd58766912b8ff31de2c759ae",
+    "serverProductSourceModified": false,
+    "shopifyProductSourceModified": false,
+    "reviewedHelperSha256": "3aca622c44937b8e8e9350ae18e1597b9d3bba3c320dfe17c9437a14232ff536",
+    "observedHelperSha256": "f06fd2e1ff90922783c71c2d898bf21767d0791f9b2724ad05617a2d011c70a0",
+    "privateHelperChange": "Observation only: whitelist STOP_DELIVERED v1 identity and exact Cash before existing fault injection; actual response/server behavior unchanged",
+    "observationHookChecks": {
+      "passed": true,
+      "exactIdentityAndCashRetained": true,
+      "authGpsContactNoteAndExtraFieldsExcluded": true,
+      "invalidAndUnrelatedEventsIgnored": true,
+      "serverOrDeviceCallsPerformed": false
+    },
+    "existing63EvidenceModified": false
+  },
+  "occupancy": {
+    "initialBlockedAt": "2026-10-08T12:30:24.082537+00:00",
+    "initialForeignForeground": "com.evnsolution.clever.routes.diagnosticqa",
+    "initialDeviceMutationsPerformed": false,
+    "recheckedAt": "2026-10-08T12:32:15.700522+00:00",
+    "recheckForeground": "com.sec.android.app.launcher",
+    "foreignServicesAbsent": true,
+    "reverseMappingsAbsent": true,
+    "otherControllersAbsent": true,
+    "deviceLaunchPerformedInSeparateCall": true
+  },
+  "cases": {
+    "dispatch": {
+      "status": "PASS",
+      "currentStopIndexBefore": 1,
+      "currentStopIndexAfter": 1,
+      "futureStopIndex": 13,
+      "oldAddressRetainedBeforeApply": true,
+      "newAddressVisibleAfterApply": true,
+      "retainedCashDraft": "17.25",
+      "optionalNoteRetained": true,
+      "publicationVersionId": "b6f19a98-4f0f-45da-bb9c-4042a2690784",
+      "assignmentGeneration": "2",
+      "appliedAt": "2026-10-08T12:42:56.704Z",
+      "appliedHttpStatus": 200,
+      "appliedExactPublication": true,
+      "completionEventCount": 0,
+      "receiptCount": 0,
+      "fixtureStopIndex": 12
+    },
+    "accountSwitch": {
+      "status": "PASS",
+      "originalBeforeSwitch": {
+        "clientEventId": "739f7863-ed2d-48b6-8263-e0111a27201d",
+        "occurredAt": "2026-10-08T12:45:35.607Z",
+        "assignmentGeneration": "2",
+        "expectedRouteVersionId": "b6f19a98-4f0f-45da-bb9c-4042a2690784",
+        "completion": {
+          "version": 1,
+          "cashReceived": {
+            "amount": "23.45",
+            "currency": "CAD"
+          }
+        },
+        "stopIndex": 12,
+        "observedAt": "2026-10-08T12:45:35.946Z",
+        "initialTransportStatus": 503,
+        "fixtureStopIndex": 11
+      },
+      "serverCompletionEventCountBeforeSwitch": 0,
+      "serverReceiptCountBeforeSwitch": 0,
+      "signedOutPreservedItemCount": 1,
+      "otherAccountRouteListEmpty": true,
+      "otherAccountCashHidden": true,
+      "observedAttemptCountWhileOtherAccountActive": 1,
+      "serverCompletionEventCountWhileOtherAccountActive": 0,
+      "serverReceiptCountWhileOtherAccountActive": 0,
+      "otherAccountCheckpointAt": "2026-10-08T12:48:36.271Z"
+    },
+    "reassignment": {
+      "status": "PASS",
+      "previousAssignmentGeneration": "2",
+      "currentAssignmentGeneration": "3",
+      "originalIdentityAndAmountUnchanged": true,
+      "originalStopIndex": 12,
+      "preservedAmount": "23.45",
+      "reviewRequiredOnDevice": true,
+      "originalPreservedCopyVisible": true,
+      "newCompletionAttemptCount": 0,
+      "serverCompletionEventCount": 0,
+      "serverReceiptCount": 0,
+      "checkpointAt": "2026-10-08T12:57:47.693Z",
+      "completeDeliveryButtonEnabled": false,
+      "originalFixtureStopIndex": 11,
+      "queuedItemCountPreserved": 1
+    }
+  },
+  "cleanup": {
+    "status": "PASS",
+    "checkedAt": "2026-10-08T12:59:02.342315+00:00",
+    "cashQaStopped": true,
+    "ownedReverseRemoved": true,
+    "ownedHttpsListenerStopped": true,
+    "ownedFixtureAndLogReaderStopped": true,
+    "temporaryPostgresAndSyntheticProofFilesRemoved": true,
+    "serverCleanup": "HTTPS/Fastify/Prisma closed; temporary PostgreSQL and local synthetic proof files stopped/removed",
+    "installedPackageCountUnchanged": 4,
+    "versionAndInstallMetadataUnchanged": true,
+    "appDataPreserved": true,
+    "unresolvedOriginalRetained": true,
+    "appDataCleared": false,
+    "packageUninstalled": false
+  },
+  "artifactManifest": [
+    {
+      "path": "checks/source-provenance.json",
+      "sha256": "c98e8346ecb027494a592542217f96fa9093acd636ece15c0f439093af6bce77",
+      "sizeBytes": 2012
+    },
+    {
+      "path": "checks/observation-hook-check.json",
+      "sha256": "f5c41d521052a4ab387bb4c5c5834db1efc59d5d6b187cbb448ae4ca9aba3884",
+      "sizeBytes": 198
+    },
+    {
+      "path": "checks/private-fixture-observation.diff",
+      "sha256": "a4f67801e96147f97facdaf98232971aaf6965b0a5f14bd103c034c7bb72a067",
+      "sizeBytes": 3060
+    },
+    {
+      "path": "helpers/kfood-native-qa-server.reviewed.mjs",
+      "sha256": "3aca622c44937b8e8e9350ae18e1597b9d3bba3c320dfe17c9437a14232ff536",
+      "sizeBytes": 43534
+    },
+    {
+      "path": "helpers/kfood-native-qa-server.mjs",
+      "sha256": "f06fd2e1ff90922783c71c2d898bf21767d0791f9b2724ad05617a2d011c70a0",
+      "sizeBytes": 44915
+    },
+    {
+      "path": "device-occupancy-initial.json",
+      "sha256": "fa1481794c5b4fd4c51cfc5f6d2e2947f498533ab3b4bff9aa96ce96fa11aa21",
+      "sizeBytes": 1089
+    },
+    {
+      "path": "device-occupancy-recheck.json",
+      "sha256": "29a44f5911ac59c69720d890a15fcebc2456bb2367939077b3f5275fd2624800",
+      "sizeBytes": 1435
+    },
+    {
+      "path": "native-process.json",
+      "sha256": "9431aabb98b6f52912fdf78ed4d3ccdc588cf39b302acb619040242c556b7b22",
+      "sizeBytes": 182
+    },
+    {
+      "path": "packages-before.json",
+      "sha256": "f0008d918cc51388a8798528d7f7740e4c294f98cf5a1c825e1f7ad437fd01eb",
+      "sizeBytes": 1172
+    },
+    {
+      "path": "fixture-baseline-summary.json",
+      "sha256": "4511cfe1748346e0ffb6d5b5ae7315af455d3bc760606f7a499247531d1c8984",
+      "sizeBytes": 400
+    },
+    {
+      "path": "dispatch-publication.json",
+      "sha256": "c7e31a785082a6a8425a9919d4a66ff889eba14637f33a89f6b1bc696ca97c0e",
+      "sizeBytes": 10736
+    },
+    {
+      "path": "dispatch-server-published.json",
+      "sha256": "cbd4d6f502984523a87174afc8cada367be014fd16d0025797ba22e7e66f203b",
+      "sizeBytes": 629
+    },
+    {
+      "path": "dispatch-server-applied.json",
+      "sha256": "27fd142f5b290f87f7a5a4726c711f8fccca6815c37bf6dc6ad497f6e9f5d87c",
+      "sizeBytes": 839
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-note-before.png",
+      "sha256": "f7b911880086c8e710728ad340bb03a9af8987d63366fc495a4a37352eb506b1",
+      "sizeBytes": 149411,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-note-before.xml",
+      "sha256": "d18ea9e62611ea9ea47b05a51b1a15f3ba018fc10183fefbb5dd453b5f9fb4b9",
+      "sizeBytes": 15954
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-cash-draft-stable.png",
+      "sha256": "6eba05a2fd245216eb8c481abed4416ba38725a04c835a265c297db1cf6bd609",
+      "sizeBytes": 147778,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-cash-draft-stable.xml",
+      "sha256": "fff800f0d041e96336248788145b44c6de5a668a140f63bf11f5f6ca923585b4",
+      "sizeBytes": 6476
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-staged.png",
+      "sha256": "36e536ed17f39f1eb97c6af38fe745c5a82754b2c72e8bb9ab24b54677f9c71a",
+      "sizeBytes": 203595,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-staged.xml",
+      "sha256": "4cc78d937951c94dd3ce6ca66adf4952e00ad6e7f5ceca3e2a6f89257387140a",
+      "sizeBytes": 16906
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-old-address-staged.png",
+      "sha256": "48d77f47d8aa3158758d7198692b7c64c11f55de30e2a1867277ad75578c9d6e",
+      "sizeBytes": 249846,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-old-address-staged.xml",
+      "sha256": "aa7fe3ecbe44d084e9097a61bb451da0ed9a989a5162dcfde0fa1e50fc71327e",
+      "sizeBytes": 41422
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-applied.png",
+      "sha256": "006543a5d39af99095ecfdbc4644d5b9c32b0844fdce231939945b45cc2795a4",
+      "sizeBytes": 248545,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-applied.xml",
+      "sha256": "52646c9b4e680665fa95e0a8f909139d8f77333de8f1f7ef1ed39382933355a2",
+      "sizeBytes": 39252
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-note-retained.png",
+      "sha256": "7031dd8d62eddb9328fcf7ad4987e8aea650f3cc2b1081f5317295e85bcf755d",
+      "sizeBytes": 149944,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-note-retained.xml",
+      "sha256": "7a9ee03d3551de24a3ed0eb096ed0104f8c7f8bc27b1568c074d6f371fd188bf",
+      "sizeBytes": 15955
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-cash-draft-retained.png",
+      "sha256": "f33c63d6462dc1822680579c26ab2fd63cf809111ec089570f9eeabf5635127f",
+      "sizeBytes": 193033,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-dispatch-cash-draft-retained.xml",
+      "sha256": "fff800f0d041e96336248788145b44c6de5a668a140f63bf11f5f6ca923585b4",
+      "sizeBytes": 6476
+    },
+    {
+      "path": "account-server-before-switch.json",
+      "sha256": "bb0390f81f4c0868deedb7d0bc62e82aed02a34540fe4f6e30e679de291cc78b",
+      "sizeBytes": 1468
+    },
+    {
+      "path": "account-b-server.json",
+      "sha256": "7361a71d1bd6e9fd00c4abb7e1a743658b52ab067196fd7584816858baaaa8ca",
+      "sizeBytes": 1468
+    },
+    {
+      "path": "qa-state-summary.py",
+      "sha256": "5d5d40394c41b655011e2bee7b74e02989cc0f543a340301b41ff5a31b76a894",
+      "sizeBytes": 2280
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-account-a-signed-out.png",
+      "sha256": "334fead44edd34e94015a4b03ee202a56a66ea23f017202242787212baa18637",
+      "sizeBytes": 99930,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-account-a-signed-out.xml",
+      "sha256": "07f65954833a7b13296545b2f9c6c4c043e2ac21b6d6cef050ddbb60db0987f3",
+      "sizeBytes": 11146
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-account-b-isolated.png",
+      "sha256": "cdf5b219de3ee8760d466b4fe4d3513ee810739772ca08b5f9293bd579eb8ae5",
+      "sizeBytes": 66876,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-account-b-isolated.xml",
+      "sha256": "0fe6b020177ec2e3839d0f69efc848472c51055d010d402e2d7b1cfda60cbc3b",
+      "sizeBytes": 7841
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-account-cash-pending-details.png",
+      "sha256": "bccb6c8d90410b356fb8df6219999ec1cb5a87fc5eff1c1783a6e8822dad8eee",
+      "sizeBytes": 207846,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-account-cash-pending-details.xml",
+      "sha256": "3daa1e5988931f03b0e1c567ecf1d121d02df906d5e847db5ab02c86cb71d982",
+      "sizeBytes": 18503
+    },
+    {
+      "path": "reassignment-before-relogin.json",
+      "sha256": "d17f5ef0b97c97a8d72681c0fd7352adf46c877b8de77d6f7a1a9014c459b240",
+      "sizeBytes": 1468
+    },
+    {
+      "path": "reassignment-after-login.json",
+      "sha256": "1b87a7a904c7808c3c32b1f83f652e167e7af95ec4f81ec7493b694ee10c36fe",
+      "sizeBytes": 1468
+    },
+    {
+      "path": "reassignment-after-route-open.json",
+      "sha256": "110b42fabeb6dc40be3b408967ff8566c4dbfed58efb9b0710b309abd44d6434",
+      "sizeBytes": 1468
+    },
+    {
+      "path": "reassignment-generation-change.json",
+      "sha256": "4602bd85788b90e0bdd577fd48115577ff0f15053ce18507f2fbc0ae21da9e97",
+      "sizeBytes": 144
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-reassignment-a-restored.png",
+      "sha256": "540ca2a266877083ed5d6a41dfb3c510f4dc11f5ef1b4f653e7ecf40eab10e3a",
+      "sizeBytes": 110096,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-reassignment-a-restored.xml",
+      "sha256": "48985514c19a5999fbffdaf4391d0b6373409ee21e545089693c74376a6d13e3",
+      "sizeBytes": 10758
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-reassignment-route-open.png",
+      "sha256": "c20eb805cc054ce9d78a4dcb944c11437b3b2f6134fc6432c51dd7cf3802cc89",
+      "sizeBytes": 163756,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-reassignment-route-open.xml",
+      "sha256": "7c1ea67987731bed1d7cbc79746fa2d44849cd76f6418c27cf75f741cf2b5e02",
+      "sizeBytes": 16824
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-reassignment-stop-status.png",
+      "sha256": "296a9c731418fb0a7f462637ad3e77573535b987be7336f2206bf491badec69d",
+      "sizeBytes": 247966,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-reassignment-stop-status.xml",
+      "sha256": "66e75739bc09f8a606d8cf70abf485a0195b11cbb9c3066166dc581b70e6a11c",
+      "sizeBytes": 39252
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-reassignment-cash-details.png",
+      "sha256": "29d522cfbb79a6d5d63ee4af89dff11d20be3fedd3b1d8e4ebe4a513800aa533",
+      "sizeBytes": 185399,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-reassignment-cash-details.xml",
+      "sha256": "3ecb4ae30bf9fae5894ab00ca968fdddebf74cc6244848240ea7b63826afb315",
+      "sizeBytes": 18763
+    },
+    {
+      "path": "reassignment-final-server.json",
+      "sha256": "8263874e6e0cacadb3ebb79e95e898efcc0710eb1593565fe97f364951b514db",
+      "sizeBytes": 1468
+    },
+    {
+      "path": "cleanup-actions.json",
+      "sha256": "7f528f164e020bb9a80c64e20ce4d4a554aa5c1611d23cb6f4ca8e9cf9d96e6e",
+      "sizeBytes": 283
+    },
+    {
+      "path": "cleanup-verification.json",
+      "sha256": "54236b2412183fa73b1dc659ca29a7260aaa575dd8adca8d97d775a66b72e3d0",
+      "sizeBytes": 227
+    },
+    {
+      "path": "cleanup-final-server.json",
+      "sha256": "320c30796e6b1c03e904fc8b537a847773d5947815501765db4e342fc172c896",
+      "sizeBytes": 1541
+    },
+    {
+      "path": "packages-after.json",
+      "sha256": "03418ab97d4f1b59dd6187bb212d19ceb8ec36d0e1b630c04c609be80921ba42",
+      "sizeBytes": 1172
+    },
+    {
+      "path": "native-shutdown.json",
+      "sha256": "09e9ec5d879eca59dc808c984e49524f95dc726298921aa9d90b22860b60c44a",
+      "sizeBytes": 26
+    },
+    {
+      "path": "occupancy-before-cleanup.json",
+      "sha256": "cbe6ac104c3a0fe4c8b9c38110af0f009b4208f0a113b6d355a246118ffa0264",
+      "sizeBytes": 367
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-account-b-identity.xml",
+      "sha256": "6993aecccf82657c967810ace3224bb02a31b99005f5b288ac085552f9825ea2",
+      "sizeBytes": 19523
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-account-b-identity.png",
+      "sha256": "dcdc6af9b416cb691fa088b333baf1016c367eb42ab29bd2522d3f84827a8375",
+      "sizeBytes": 185552,
+      "width": 1080,
+      "height": 2400
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-account-b-signed-out.xml",
+      "sha256": "056909587d1b97cbc48ec4b4eee14bee58db14869f5e66347942e2c3554b8535",
+      "sizeBytes": 11090
+    },
+    {
+      "path": "screenshots/R3CN80SCYPL-account-b-signed-out.png",
+      "sha256": "0e51b7ac360462e23904e4251078e18a415b282a8e93ae747d6916a6201b3922",
+      "sizeBytes": 102660,
+      "width": 1080,
+      "height": 2400
+    }
+  ],
+  "completedAt": "2026-10-08T12:59:02.342315+00:00",
+  "summary": {
+    "passedCaseCount": 3,
+    "completionAttemptCount": 1,
+    "originalAttemptStatus": 503,
+    "completionEventCount": 0,
+    "receiptCount": 0,
+    "retainedUnresolvedItemCount": 1
+  },
+  "limitations": [
+    "Evidence covers exactly three supplemental cases on the existing Cash QA artifact. The completed core Cash matrix and process-kill cases were not repeated.",
+    "The 503 fault is intentional. PASS means the unresolved original is isolated and preserved for review, not acknowledged or discarded.",
+    "No raw database or key extraction was performed. Local preservation is established by the restored amount/review UI, disabled completion action, retained-item notice, and unchanged network identity.",
+    "The helper-only observation hook captures a whitelist before fault injection. Product server and Shopify sources and actual responses are unchanged.",
+    "This evidence does not certify a later dependency-patched artifact, turn ON the signed OFF candidate, authorize production activation, or imply merge/deployment/store publication."
+  ]
+}

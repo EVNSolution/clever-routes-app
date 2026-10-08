@@ -145,11 +145,16 @@ That run immediately stopped Cash QA and removed its own reverse. This follow-up
 keeps occupancy checking separate and makes no device mutations. The prior
 operating and QA packages remain outside this work.
 
-**Still required on the designated device:** single-button/details/Cash/difference/
+**Historical outstanding list at this review:** single-button/details/Cash/difference/
 eTransfer/missing-phone screens; zero, cancellation and optional-input behavior;
 offline/restart/account/assignment recovery; server commit followed by native
 process kill before response or retry, then original receipt recovery; relevant
 PR297 Dispatch/input/GPS and SQLCipher lifecycle acceptance.
+
+The later [core native pass](kfood-pr299-native-acceptance-20261008.md) and
+[remaining native pass](kfood-pr299-native-remaining-20261008.md) supersede this
+Cash acceptance list. They preserve the original records and distinguish the
+isolated QA package from exact-artifact store acceptance and wider PR297 gates.
 
 Owned local fixture, temporary database and reverse port were stopped/removed.
 APK, TLS files, logs, reusable build caches and recovery scripts remain private at
@@ -182,5 +187,6 @@ wiki or imply deployment. Validate documentation links and affected statements.
 ```
 
 No production migration, feature activation, deployment, store upload or operating
-app replacement occurred. Native acceptance, dependency audit and canonical
-context remain open before any integration or release decision.
+app replacement occurred. The subsequent QA native passes are linked above.
+Dependency audit, canonical context, integration and exact-artifact store
+acceptance remain prerequisites for a release decision.
