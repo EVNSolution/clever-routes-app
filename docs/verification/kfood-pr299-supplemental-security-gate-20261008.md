@@ -1,8 +1,8 @@
-# PR299 supplemental host-security verification proposal — 2026-10-08
+# PR299 applied supplemental host-security CI policy — 2026-10-08
 
-**The existing raw npm audit gate remains unchanged.** This document proposes a separate acceptance rule for the two pinned host-source patches. It does not modify `.github/workflows/ci.yml`, approve an exception, or authorize deployment. Implementation commit: **recorded by PR**.
+**CI now requires the bounded supplemental verifier.** The [workflow](../../.github/workflows/ci.yml) replaces its audit-only step with `npm run verify:host-security`. The verifier retains the raw `npm audit --audit-level=moderate --json` output and exit code, independently checks the pinned patches, and supplies a separate acceptance result. This is an applied CI policy change, not an audit suppression or deployment approval. Implementation commit: **recorded by PR**.
 
-The current CI step runs `npm audit --audit-level=moderate`. The recorded report fails with exit 1. A supplemental verifier may return 0 only when its independent patch and regression checks pass. That result means **the bounded patch policy passed**, not that npm audit passed or all release gates passed.
+The historical [CI run 37785180770](https://github.com/EVNSolution/clever-routes-app/actions/runs/37785180770) failed at the raw audit gate. Its 20 High findings and exit 1 remain valid evidence. A supplemental result `verified` / exit 0 means the bounded patch policy passed; it does not change raw audit `failed` / exit 1. `releaseApproved` remains `false`. New CI success is claimed only when the final source's run and uploaded evidence are verified.
 
 ## Bounded scope and command
 
@@ -17,11 +17,11 @@ The verifier interface is:
 
 ```sh
 npm run verify:host-security -- \
-  --source-sha "$(git rev-parse HEAD)" \
+  --source-sha "$GITHUB_SHA" \
   --output "$RUNNER_TEMP/host-security-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
 ```
 
-`--source-sha` must resolve to the exact current 40-character commit. The working source must be clean. The output must be a new evidence directory outside the repository. Do not reuse stale evidence or substitute a prior commit's successful regressions.
+`--source-sha` must match the exact current 40-character checkout commit and `GITHUB_SHA`. CI uses Node **20.19.4** from [`.nvmrc`](../../.nvmrc). The working source must be clean. The output must be a new evidence directory outside the repository. Do not reuse stale evidence or substitute a prior commit's successful regressions.
 
 Acceptance requires all of the following:
 
@@ -38,39 +38,29 @@ Do not change dependency names or versions only to hide detection. Do not add au
 
 The verifier tests pass **24/24** with zero skips. Cases include the current two-root graph, zero/one-root reports, supported cycles, unknown or forged advisory/dependency/effect paths, incorrect counts/exit codes, missing or partial patches, nested/aliased copies, lock/manifest/integrity drift, source SHA and hidden tracked-file drift, collection errors, failed or incomplete regressions, and mutation during regression execution.
 
-The existing 13 security tests remain unchanged. The verifier requests the TAP reporter explicitly because Node versions have different default reporters. A successful process without the exact complete test summary is insufficient. Scoped lint and TypeScript checks passed. Exact committed-source execution and final CI results are recorded in PR299 and the external evidence directory; neither result changes the active CI audit policy.
+The CI evidence reporter tests pass **10/10**. They check raw exit 1 alongside verified patches, empty versus missing stderr, malformed/partial records, exact audit command, source/hash/Node/regression drift, all artifact file hashes, and rejection of a claimed release approval.
+
+The existing 13 security tests remain unchanged. The verifier requests the TAP reporter explicitly because Node versions have different default reporters. A successful process without the exact complete test summary is insufficient. Scoped lint and TypeScript checks passed. Exact committed-source execution and final CI results are bound to the uploaded evidence and [PR299](https://github.com/EVNSolution/clever-routes-app/pull/299). Prior verifier tests establish implementation coverage; they do not substitute for a successful final-source CI run.
 
 Output files are `audit.stdout.json`, `audit.stderr.log`, `audit-process.json`, `regressions.stdout.log`, `regressions.stderr.log`, and `summary.json`. Collection/verification failures preserve available evidence. A regression is not run after an earlier validation failure. Output directories must be new, and existing evidence files are never overwritten.
 
-## Not-applied CI proposal
+## Applied CI evidence contract
 
-The diff below is a **proposal for later explicit review**. The repository's current audit step stays in place until that policy decision. If approved, the verifier would run the unchanged raw audit command internally and use a distinct supplemental acceptance result for the CI step. That is an acceptance-policy change, not a green raw audit.
+The [workflow](../../.github/workflows/ci.yml) runs the mandatory verifier with exact `GITHUB_SHA` and the new outside-repository directory `RUNNER_TEMP/host-security-<runId>-<attempt>`. Install, workspace, lint, build, Expo alignment, and whitespace checks remain mandatory. No `continue-on-error`, audit ignore, threshold reduction, branch-protection change, or release waiver is part of this policy.
 
-Only the audit step and unconditional evidence upload would change; install, workspace, lint, build, Expo alignment, and whitespace checks remain as they are:
+An **always-run evidence/summary step** checks the mandatory raw audit files and `summary.json`. When the supplemental result is verified, it also requires complete regression stdout/stderr evidence. It copies the original audit policy and patch manifest into the evidence directory and writes `ci-context.json`. Missing or invalid evidence fails this step, including when the verifier failed earlier. The artifact upload also runs with `if: always()` and `if-no-files-found: error`.
 
-```diff
---- a/.github/workflows/ci.yml
-+++ b/.github/workflows/ci.yml
-@@
--      - name: Audit npm dependencies
--        run: npm audit --audit-level=moderate
-+      - name: Verify bounded host-security patches and preserve raw audit
-+        run: |
-+          npm run verify:host-security -- \
-+            --source-sha "$(git rev-parse HEAD)" \
-+            --output "$RUNNER_TEMP/host-security-${{ github.run_id }}-${{ github.run_attempt }}"
-+
-+      - name: Upload host-security evidence
-+        if: always()
-+        uses: actions/upload-artifact@v4
-+        with:
-+          name: host-security-${{ github.sha }}-${{ github.run_attempt }}
-+          path: ${{ runner.temp }}/host-security-${{ github.run_id }}-${{ github.run_attempt }}/
-+          if-no-files-found: error
-       - name: Check Expo dependency alignment against installed SDK
-```
+The uploaded record must expose both decisions clearly:
 
-The upload runs even when verification fails. Missing evidence is a failure, not an empty success. The artifact must contain the raw audit output/exit and the separate supplemental decision. A later reviewer must be able to see a failed raw audit without reconstructing it from a summary.
+| Evidence | Meaning |
+| --- | --- |
+| `audit.stdout.json`, `audit.stderr.log`, `audit-process.json` | Untouched scanner output and actual process exit; the known affected report is raw `failed`, exit 1, 20 High. |
+| `summary.json` | Exact source/policy/hash/installed-copy/advisory/regression assessment. Supplemental `verified`, exit 0 is distinct from raw audit success; `releaseApproved=false`. |
+| `regressions.stdout.log`, `regressions.stderr.log` | Current-source execution evidence for all 13 regressions when verification succeeds. |
+| Original audit policy and patch manifest copies | The exact bounded acceptance policy and source patches evaluated by this run. |
+| `ci-context.json` | `checkoutSha`, `workflowSha`, CI URL, and artifact name bind the evidence to the actual checkout, workflow, and run. |
+
+The final commit SHA, CI URL, and artifact identifiers are not self-embedded in this document. Read them from the uploaded `ci-context.json` / `summary.json` and the final verification record on [PR299](https://github.com/EVNSolution/clever-routes-app/pull/299). The [workflow run list](https://github.com/EVNSolution/clever-routes-app/actions/workflows/ci.yml) supplies the original run and downloadable artifact. Review must match those identities; a prior run or local pass is insufficient. The private final manifest may record the same verified binding after CI finishes.
 
 ## Transition and maintenance
 

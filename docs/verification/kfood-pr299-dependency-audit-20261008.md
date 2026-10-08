@@ -2,9 +2,9 @@
 
 ## Decision
 
-**The audit gate remains blocked with 20 High findings.** Pinned source patches now reject the tested brace-depth and malformed DigestAlgorithm inputs. The security and normal-operation regressions pass. These results do not make the unchanged npm audit gate green.
+**Raw npm audit still reports 20 High findings and exit 1.** CI now applies the [bounded supplemental verification policy](kfood-pr299-supplemental-security-gate-20261008.md) to the two pinned host-source patches. A verified supplemental result may pass that CI step while preserving the raw failure. It is not a green npm audit or release approval. Final-source CI success must be verified from its uploaded evidence.
 
-The patches preserve dependency versions, resolved packages, the lockfile, audit thresholds, and ignore rules. `package.json` adds the security installer to `postinstall` and a focused test command. No app runtime or release identity changed in this security follow-up. No compatible published fix was available when checked on 2026-10-08.
+The patches preserve dependency versions, resolved packages, the lockfile, audit thresholds, and ignore rules. `package.json` adds the security installer to `postinstall`, the focused regression command, and `verify:host-security`. No app runtime or release identity changed in this security follow-up. No compatible published fix was available when checked on 2026-10-08.
 
 - App baseline reviewed: `4c7f3cc57e28c263e484f2c44fa01b329faca79e`. QA41 includes the 1.3.5/41 release identity changes committed as `985f999ad2c4f9354ff2c856174e4542410c6554`.
 - Checkout: `/Users/jiin/.codex/worktrees/kfood-app-single-completion-cash/clever-routes-app`.
@@ -101,20 +101,20 @@ The subsequent EAS production build used source `985f999ad2c4f9354ff2c856174e454
 - No package-name/path marker for `braces`, `node-forge`, `micromatch`, or `@expo/code-signing-certificates` appeared in ZIP entries or the UTF-8/UTF-16LE bundle scan.
 - No production JavaScript source map or module inventory was available in the inspected artifacts. The production and QA bundles differ. The QA map cannot establish production module absence.
 
-The exact AAB probe found no direct package-marker evidence; it does **not** prove that vulnerable code is absent. Production signing and endpoint checks are recorded separately in the [candidate record](kfood-pr299-release-candidate-20261008.md). Build-host exposure and the 20 High audit failure remain. Probe details: private `checks/eas-candidate-dependency-exposure.json`.
+The exact AAB probe found no direct package-marker evidence; it does **not** prove that vulnerable code is absent. Production signing and endpoint checks are recorded separately in the [candidate record](kfood-pr299-release-candidate-20261008.md). The historical build-host exposure and raw 20 High audit failure remain; the new CI verifier evaluates only the current pinned, patched host installation. Probe details: private `checks/eas-candidate-dependency-exposure.json`.
 
 ## Checks and retained evidence
 
 | Check | Result |
 | --- | --- |
-| `npm audit --audit-level=moderate` — unchanged CI command | **FAIL**, exit 1; 20 High, 0 other findings |
+| Historical audit-only CI command: `npm audit --audit-level=moderate` | **FAIL**, exit 1; 20 High, 0 other findings |
 | `npm audit --audit-level=high --json` | **FAIL**, exit 1; same two advisory roots and 20 High findings |
 | `npm audit --audit-level=high --omit=dev --json` | **FAIL**, exit 1; 20 High findings |
 | `npm ls braces node-forge --all`, installed manifests, lockfile edge inspection | Dependency paths confirmed |
 | Registry versions and upstream advisory/PR status | No published fixed leaf versions |
 | Final QA41 bundle/source-map inspection and APK manifest read | Scope and limitations above |
 | Historical QA41 comparison against baseline package/lock JSON, excluding package and root-lock `version` | PASS at QA41 creation; only release identity changed then |
-| Security follow-up package/lock changes | `package.json` adds installer/test commands; lockfile and dependency identities unchanged |
+| Security follow-up package/lock changes | `package.json` adds installer/test/verifier commands; lockfile and dependency identities unchanged |
 | `npm run test:host-security` | PASS, 13/13; security rejection, actual Metro/Expo signing, and install integrity |
 | `npm run postinstall` | PASS; security patches verify without further changes; existing Expo patch chain completes |
 | Scoped ESLint, TypeScript diagnostics, `git diff --check` | PASS |
@@ -133,13 +133,14 @@ Private raw audit records:
 
 No red-to-green audit result exists. npm reports affected package identities; it does not attest local source patches. The executable host sources changed and the listed regressions pass. No app runtime changed, and this security follow-up did not repeat F01/F02 device cases or trigger a native build.
 
-## Concrete next options
+## Applied CI policy and remaining release gates
 
-The [supplemental verifier and CI proposal](kfood-pr299-supplemental-security-gate-20261008.md)
-now provide an executable assessment of these pinned backports. Raw npm audit
-output and its failing exit code remain separate evidence. The existing CI gate
-is unchanged; supplemental verification is not a release approval.
+The [applied supplemental policy](kfood-pr299-supplemental-security-gate-20261008.md) is now the mandatory CI security step. The historical [CI run 37785180770](https://github.com/EVNSolution/clever-routes-app/actions/runs/37785180770) failed at the audit-only gate; that result is preserved. Policy approval is no longer a pending blocker. A new run must prove the final-source verifier and evidence checks pass.
 
-1. Review the implemented pinned patches and final CI clean-install/export evidence. The source-level regression results support this bounded backport; they do not authorize an audit exception.
-2. To clear the existing audit gate, adopt a compatible published fixed dependency or a reviewed dependency-path replacement that removes the affected code and passes the unchanged scanner. Verify advisory coverage and rerun the security, Metro, signing, and required build checks. Changing only a package name/version to evade detection is not a fix.
-3. Until the unchanged gate passes, retain the release block. No SDK downgrade, threshold reduction, advisory suppression, or host-only exposure waiver is included.
+The verifier runs the moderate-threshold audit unchanged, preserves stdout/stderr/exit, and checks the exact source, lock/policy/patch hashes, every installed target copy, allowed advisory graph, and all 13 security regressions. New or changed advisories, versions, paths, hashes, partial patches, collection errors, and regression failures fail. Finding/root counts come from the actual report; 20 is not an acceptance rule. Supplemental `verified` / exit 0 can coexist with raw audit `failed` / exit 1. `releaseApproved=false` remains explicit.
+
+CI uses Node 20.19.4, exact `GITHUB_SHA`, and a fresh external evidence directory. Always-run summary and artifact steps require the raw evidence and summary, plus complete regression evidence when verified. They preserve the original policy/patch manifest and bind checkout SHA, workflow SHA, CI URL, and artifact name in `ci-context.json`. Read the final binding from that file, `summary.json`, and [PR299](https://github.com/EVNSolution/clever-routes-app/pull/299); no unverified final run or self-referential commit is recorded here.
+
+A compatible upstream fixed release or reviewed path replacement remains the route to a clean raw audit. Refresh pins and policy deliberately, verify advisory coverage, and rerun security, Metro, signing, clean-install, and affected build checks. Do not disguise package identities, suppress findings, lower thresholds, or broaden this bounded policy silently.
+
+Server486 → 489 integration, receipt migration/deployment proof, app297 → 299 integration, canonical context reconciliation, and a separately reviewed exact-source ON candidate remain independent gates in [feature activation conditions](kfood-pr299-feature-activation-20261008.md). This CI change does not establish those facts or authorize deployment. The signed 1.3.5/41 OFF AAB remains unchanged; no app runtime, native package, lockfile, server, or Shopify product change follows from this policy.
