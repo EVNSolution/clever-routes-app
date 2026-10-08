@@ -816,6 +816,7 @@ describe('encrypted driver evidence store', () => {
     const queued = queue.enqueueProofMediaUpload(request, { assignmentGeneration: '2' });
     await queue.whenPersisted();
     assert.equal(queued.assignmentGeneration, '2');
+    assert.match(queued.idempotencyKey ?? '', /^proof-media-v1:[0-9a-f]{32}$/u);
     let beforeRestartKey: string | undefined;
     await retryOfflineSubmissions({
       driverEventService: { recordDriverEvent: async () => { throw new Error('unused'); } },
@@ -844,6 +845,7 @@ describe('encrypted driver evidence store', () => {
     assert.equal(restored?.kind, 'proof_media');
     assert.equal(restored?.kind === 'proof_media' ? restored.request.uri : null, request.uri);
     assert.equal(restored?.kind === 'proof_media' ? restored.assignmentGeneration : null, '2');
+    assert.equal(restored?.kind === 'proof_media' ? restored.idempotencyKey : null, queued.idempotencyKey);
     let afterRestartKey: string | undefined;
     const replay = await retryOfflineSubmissions({
       driverEventService: { recordDriverEvent: async () => { throw new Error('unused'); } },

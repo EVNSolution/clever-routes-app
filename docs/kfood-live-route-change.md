@@ -33,6 +33,12 @@ and stop ID. A late camera or upload result cannot update a different account or
 assignment. Selecting a replacement photo clears the previous upload result before
 saving the new photo. Unsent proof media from an unknown or superseded V2 assignment
 is quarantined before upload. Its original queue identity remains available.
+New scoped photo queue identities include assignment generation. Identical route,
+stop and filename values from a new assignment do not reuse a retained old item.
+Same-assignment duplicates retain the original item. The encrypted replay envelope
+stores the upload key. Initial upload and retry reuse that key, including the
+legacy unscoped v1 key of an existing item. Fresh scoped keys retain the server's
+`proof-media-v1:<32hex>` wire format and distinguish assignment generations.
 
 When account lookup fails because the connection is unavailable, the app can restore
 an active KFood route from the encrypted applied snapshot. The saved account, active
@@ -42,6 +48,15 @@ evidence. Reopening a route hydrates its saved input. While this cache is unvali
 queue replay and publication acknowledgement remain paused. Foreground connection
 recovery validates the account and assignment with the server before restoring tracking.
 The retry uses the existing polling cadence and preserves the applied list and draft.
+An offline-to-online transition defers account lookup and route hydration during
+camera, photo selection and photo processing. One pending refresh runs when the
+protected action ends. It does not replace the draft while that action is active.
+Cached recovery also pauses an already-running native location task. The pause
+checks the current account lease and durable route, assignment and session identity
+inside the serialized stop operation. It preserves the active session and queued
+GPS events. Actual stop failure does not count as a successful pause. Authoritative
+validation of the same assignment permits tracking to resume. This cache gate does
+not change GPS collection for a normally validated active route while offline.
 
 The encrypted database serializes operations on each native connection. An exclusive
 transaction uses a separate operation queue. The queue drains before rollback or

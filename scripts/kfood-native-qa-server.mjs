@@ -28,6 +28,7 @@ const temp = await mkdtemp(join(tmpdir(), 'kfood-native-qa-'));
 const proofStorageRoot = join(temp, 'synthetic-proof-media');
 const controlToken = randomUUID();
 const requests = [];
+const requestAttempts = [];
 const controls = [];
 const extraFixtures = [];
 let pgStarted = false;
@@ -39,6 +40,8 @@ let fixture;
 let stopped = false;
 let offline = false;
 let proofStorageUnavailable = false;
+let nextProofResponseHoldMs = 0;
+let heldProofResponse = null;
 let nextPublicationOnAck = null;
 let lostAckResponses = 0;
 let lostEventResponses = 0;
@@ -48,6 +51,7 @@ let adminSave;
 let adminDispatch;
 let publicInfo;
 let controlQueue = Promise.resolve();
+let evidenceQueue = Promise.resolve();
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: 'utf8', env: childEnv, ...options });
@@ -93,10 +97,15 @@ const proofStorage = {
     catch (error) { if (error.code === 'ENOENT') return 'missing'; throw error; }
   },
 };
-async function evidence(reason) {
+function evidence(reason) {
+  const pending = evidenceQueue.then(() => writeEvidence(reason));
+  evidenceQueue = pending.catch(() => undefined);
+  return pending;
+}
+async function writeEvidence(reason) {
   if (!prisma || !fixture) return;
   const routeIds = [fixture.route.id, ...extraFixtures.map((item) => item.routePlanId)];
-  const [route, state, publications, events, attempts, consents, proofMedia] = await Promise.all([
+  const [route, state, publications, events, attempts, consents, proofMedia, runtimeDiagnostics] = await Promise.all([
     prisma.routePlan.findUnique({ where: { id: fixture.route.id }, select: { id: true, driverId: true, assignmentGeneration: true, status: true } }),
     prisma.routeLiveChangeState.findUnique({ where: { routePlanId: fixture.route.id } }),
     prisma.routeLiveChangePublication.findMany({ where: { routePlanId: fixture.route.id }, orderBy: { publishedAt: 'asc' } }),
@@ -104,6 +113,7 @@ async function evidence(reason) {
     prisma.driverEventAttempt.findMany({ where: { routePlanId: { in: routeIds } }, orderBy: { createdAt: 'asc' } }),
     prisma.driverConsentRecord.findMany({ where: { routeContext: { in: routeIds } } }),
     prisma.driverProofMedia.findMany({ where: { routePlanId: { in: routeIds } }, orderBy: { uploadedAt: 'asc' } }),
+    prisma.driverRuntimeDiagnosticRecord.findMany({ where: { routePlanId: { in: routeIds } }, orderBy: { observedAt: 'asc' }, select: { diagnosticId: true, routePlanId: true, bootId: true, sequence: true, kind: true, observedAt: true, receivedAt: true, context: true, snapshot: true } }),
   ]);
   const localProofFiles = await Promise.all(proofMedia.filter((media) => media.uploadStatus === 'READY' && media.deletedAt === null).map(async (media) => {
     try {
@@ -113,14 +123,17 @@ async function evidence(reason) {
     } catch (error) { if (error.code === 'ENOENT') return { mediaId: media.id, missing: true }; throw error; }
   }));
   await mkdir(dirname(evidencePath), { recursive: true });
-  await writeFile(evidencePath, `${json({ recordedAt: new Date().toISOString(), reason, environment: publicInfo, extraFixtures, route, state, publications, events, attempts, consents, proofMedia, localProofFiles, requests, controls, limits: ['Synthetic local office session; no live Shopify authentication.', 'Proof bytes use temporary local synthetic storage; cloud storage and physical camera provider are not exercised.', 'No real push, GPS hardware or OS background proof.', 'Reassignment control changes only synthetic fixture database rows.'], cleanup: stopped ? 'Shutdown requested; cleanup in progress' : 'Running isolated fixture' })}\n`);
+  await writeFile(evidencePath, `${json({ recordedAt: new Date().toISOString(), reason, environment: publicInfo, extraFixtures, route, state, publications, events, attempts, consents, proofMedia, localProofFiles, runtimeDiagnostics, requestAttempts, requests, controls, limits: ['Synthetic local office session; no live Shopify authentication.', 'Proof bytes use temporary local synthetic storage; cloud storage and physical camera provider are not exercised.', 'No real push; this fixture alone does not establish GPS hardware or OS background behavior.', 'Reassignment control changes only synthetic fixture database rows.'], cleanup: stopped ? 'Shutdown requested; cleanup in progress' : 'Running isolated fixture' })}\n`);
 }
 async function close() {
   if (stopped) return;
   stopped = true;
+  nextProofResponseHoldMs = 0;
+  heldProofResponse?.release('shutdown');
   try {
     await evidence('shutdown');
     if (proxy) await new Promise((accept) => { proxy.close(accept); proxy.closeAllConnections(); });
+    await evidenceQueue;
     const closed = await Promise.allSettled([app?.close(), prisma?.$disconnect()]);
     await unregister?.();
     const failure = closed.find((result) => result.status === 'rejected');
@@ -149,11 +162,40 @@ function sendJson(response, status, value) {
   response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   response.end(json(value));
 }
+function readAttemptedLocationEvent(body) {
+  let input;
+  try { input = JSON.parse(body.toString('utf8')); } catch { return null; }
+  if (!input || Array.isArray(input) || input.eventType !== 'LOCATION_UPDATED') return null;
+  const fields = ['clientEventId', 'eventType', 'occurredAt', 'routePlanId', 'assignmentGeneration', 'expectedRouteVersionId'];
+  return Object.fromEntries(fields.filter((field) => typeof input[field] === 'string' && input[field].length <= 160)
+    .map((field) => [field, input[field]]));
+}
+async function holdProofResponse(attempt, durationMs) {
+  let release;
+  const waiting = new Promise((accept) => {
+    const timer = setTimeout(() => release('timeout'), durationMs);
+    release = (reason) => {
+      if (heldProofResponse?.attempt !== attempt) return false;
+      clearTimeout(timer);
+      Object.assign(attempt, { proofResponseReleasedAt: new Date().toISOString(), proofResponseReleaseReason: reason });
+      heldProofResponse = null;
+      accept();
+      return true;
+    };
+    Object.assign(attempt, { proofResponseHeldAt: new Date().toISOString(), proofResponseHoldTimeoutMs: durationMs });
+    heldProofResponse = { attempt, release };
+  });
+  try { await evidence('proof-response-held'); await waiting; }
+  finally { release('response-handler-ended'); }
+}
 async function control(command) {
   assert.ok(command && typeof command === 'object' && !Array.isArray(command));
   let result;
   switch (command.action) {
-    case 'status': result = { ...publicInfo, extraFixtures, offline, proofStorageUnavailable, nextPublicationOnAck, lostAckResponses, lostEventResponses, office: await adminRead() }; break;
+    case 'status': result = { ...publicInfo, extraFixtures, offline, proofStorageUnavailable, nextProofResponseHoldMs,
+      heldProofResponse: heldProofResponse === null ? null : { heldAt: heldProofResponse.attempt.proofResponseHeldAt, timeoutMs: heldProofResponse.attempt.proofResponseHoldTimeoutMs,
+        status: heldProofResponse.attempt.status, proofCommit: heldProofResponse.attempt.proofCommit },
+      nextPublicationOnAck, lostAckResponses, lostEventResponses, office: await adminRead() }; break;
     case 'save': result = await adminSave(command); break;
     case 'dispatch': result = await adminDispatch(); break;
     case 'publish': await adminSave(command); result = await adminDispatch(); break;
@@ -165,6 +207,19 @@ async function control(command) {
       result = { armed: true, eventType: lostEventType }; break;
     case 'offline': offline = command.enabled !== false; result = { offline }; break;
     case 'proof-storage-unavailable': proofStorageUnavailable = command.enabled !== false; result = { proofStorageUnavailable }; break;
+    case 'hold-next-proof-response': {
+      assert.equal(heldProofResponse, null, 'A synthetic proof response is already held');
+      assert.equal(nextProofResponseHoldMs, 0, 'The next synthetic proof response is already armed');
+      const durationMs = command.durationMs ?? 30_000;
+      assert.ok(Number.isInteger(durationMs) && durationMs >= 1 && durationMs <= 30_000);
+      nextProofResponseHoldMs = durationMs;
+      result = { armed: true, durationMs: nextProofResponseHoldMs, onlyStatus: 201, requiresReadyLocalFile: true }; break;
+    }
+    case 'release-proof-response': {
+      const canceledArmedResponse = nextProofResponseHoldMs > 0;
+      nextProofResponseHoldMs = 0;
+      result = { released: heldProofResponse?.release('control') ?? false, canceledArmedResponse }; break;
+    }
     case 'set-route-status': {
       assert.ok(['READY', 'IN_PROGRESS'].includes(command.status));
       const routePlanId = command.routePlanId ?? fixture.route.id;
@@ -270,6 +325,7 @@ try {
   adminDispatch = async () => data(await runKfoodLiveChangeCommand(request(), fixture.route.id, 'liveChangeDispatch', json(command(await adminRead())), adminOptions));
   publicInfo = { serverSourceSha: expectedServerSha, shopifySourceSha: expectedShopifySha, sourceSnapshots: { server: serverRoot, shopify: shopifyRoot }, baseUrl: `https://localhost:${httpsPort}`, transport: 'Loopback TLS proxy → real Fastify HTTP → isolated PostgreSQL', routePlanId: fixture.route.id, baselineVersionId: fixture.version.id, assignmentGeneration: '2', stopIds: fixture.stops.map((stop) => stop.id), credentials: [{ account: 'first', phone: '+15195550101', pin: '246810' }, { account: 'second', phone: '+15195550102', pin: '135790' }], proofStorage: 'Actual reviewed Prisma proof service with temporary local synthetic filesystem storage; no cloud provider or remote read access', providers: 'No external provider dependencies, notification workers or production environment files loaded' };
   proxy = createHttpsServer({ cert: await readFile(resolve(certificateArg)), key: await readFile(resolve(keyArg)) }, async (incoming, outgoing) => {
+    let attempt;
     try {
       const path = new URL(incoming.url, publicInfo.baseUrl).pathname;
       const body = await readBody(incoming);
@@ -287,7 +343,18 @@ try {
         return;
       }
       if (!path.startsWith('/driver/') && !path.startsWith('/api/driver/') && path !== '/health') return sendJson(outgoing, 404, { error: 'Only native driver QA APIs are exposed' });
-      if (offline) return outgoing.destroy();
+      const proofIdempotencyKey = path === '/driver/proof-media' ? incoming.headers['idempotency-key'] : undefined;
+      const locationEvent = path === '/driver/events' && incoming.method === 'POST'
+        && incoming.headers['content-type']?.includes('application/json') ? readAttemptedLocationEvent(body) : null;
+      // Count before fault injection. Retain only the GPS identity whitelist; never authentication or raw bodies.
+      attempt = { startedAt: new Date().toISOString(), method: incoming.method, path, status: null, category: 'received',
+        ...(locationEvent === null ? {} : { locationEvent }),
+        ...(typeof proofIdempotencyKey === 'string' && /^proof-media-v1:[0-9a-f]{32}$/u.test(proofIdempotencyKey) ? { proofIdempotencyKey } : {}) };
+      requestAttempts.push(attempt);
+      if (offline) {
+        Object.assign(attempt, { completedAt: new Date().toISOString(), category: 'offline_transport_rejected' });
+        return outgoing.destroy();
+      }
       let input = null;
       if (incoming.headers['content-type']?.includes('application/json') && body.length) input = JSON.parse(body.toString('utf8'));
       if (path.endsWith('/live-change/applied') && nextPublicationOnAck) {
@@ -299,10 +366,33 @@ try {
       delete headers.host;
       delete headers.connection;
       delete headers['transfer-encoding'];
+      Object.assign(attempt, { forwardedAt: new Date().toISOString(), category: 'forwarding' });
       const response = await fetch(`${apiUrl}${incoming.url}`, { method: incoming.method, headers, ...(body.length ? { body } : {}) });
       const bytes = Buffer.from(await response.arrayBuffer());
+      Object.assign(attempt, { completedAt: new Date().toISOString(), status: response.status, category: 'server_response' });
       let result;
       try { result = JSON.parse(bytes.toString('utf8')); } catch { result = null; }
+      if (path === '/driver/proof-media' && incoming.method === 'POST' && response.status === 201 && nextProofResponseHoldMs > 0) {
+        let proofCommit = null;
+        try {
+          const media = typeof result?.data?.mediaId === 'string'
+            ? await prisma.driverProofMedia.findUnique({ where: { id: result.data.mediaId }, select: { id: true, uploadStatus: true, deletedAt: true, storageKey: true, sizeBytes: true, sha256: true } }) : null;
+          if (media?.uploadStatus === 'READY' && media.deletedAt === null) {
+            const savedBytes = await readFile(proofFilePath(media.storageKey));
+            const sha256 = createHash('sha256').update(savedBytes).digest('hex');
+            if (savedBytes.length === media.sizeBytes && sha256 === media.sha256) {
+              proofCommit = { mediaId: media.id, uploadStatus: 'READY', sizeBytes: savedBytes.length, sha256, localFileVerified: true };
+            }
+          }
+        } catch { /* A failed observation must not change the actual server response or consume the armed hold. */ }
+        attempt.proofCommitVerified = proofCommit !== null;
+        if (proofCommit !== null) {
+          attempt.proofCommit = proofCommit;
+          const durationMs = nextProofResponseHoldMs;
+          nextProofResponseHoldMs = 0;
+          await holdProofResponse(attempt, durationMs);
+        }
+      }
       const trackedInput = (path === '/driver/events' || path.endsWith('/live-change/applied')) ? input : null;
       requests.push({ at: new Date().toISOString(), method: incoming.method, path: incoming.url, status: response.status, ...(trackedInput ? { input: trackedInput, result } : { errorCode: result?.error?.code ?? null }) });
       const loseAckResponse = path.endsWith('/live-change/applied') && response.ok && lostAckResponses > 0;
@@ -312,14 +402,19 @@ try {
       if (loseEventResponse) lostEventResponses -= 1;
       const loseResponse = loseAckResponse || loseEventResponse;
       if (loseResponse) {
+        attempt.category = 'post_commit_response_lost';
         requests.at(-1).responseIntentionallyLostAfterCommit = true;
         await evidence('committed-response-lost');
         return outgoing.destroy();
       }
       outgoing.writeHead(response.status, Object.fromEntries([...response.headers].filter(([name]) => !['content-encoding', 'content-length', 'transfer-encoding', 'connection'].includes(name))));
       outgoing.end(bytes);
+      attempt.deliveredAt = new Date().toISOString();
       if (trackedInput || path === '/driver/proof-media') await evidence('driver-write');
     } catch (error) {
+      if (attempt && (attempt.category === 'received' || attempt.category === 'forwarding')) {
+        Object.assign(attempt, { completedAt: new Date().toISOString(), status: 500, category: 'fixture_transport_error' });
+      }
       if (!outgoing.headersSent) sendJson(outgoing, 500, { error: error.message });
       else outgoing.destroy(error);
     }

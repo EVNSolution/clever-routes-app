@@ -1080,6 +1080,7 @@ function redactReplayPayload(item: Record<string, unknown>) {
     return {
       ...identity,
       ...(item.assignmentGeneration === undefined ? {} : { assignmentGeneration: item.assignmentGeneration }),
+      ...(item.idempotencyKey === undefined ? {} : { idempotencyKey: item.idempotencyKey }),
       request: {
         deliveryStopId: request.deliveryStopId,
         routePlanId: request.routePlanId,

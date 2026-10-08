@@ -116,6 +116,8 @@ export type OfflineProofMediaQueueItem = OfflineEvidenceIdentity & {
   attempts: number;
   enqueuedAt: string;
   firstErrorCode?: string;
+  /** Retained retry key. Older records without this field use their original v1 photo key. */
+  idempotencyKey?: string;
   kind: 'proof_media';
   lastErrorCode?: string;
   queueItemId: string;
@@ -137,6 +139,7 @@ export type OfflineSubmissionQueue = {
   enqueueDriverEvent(event: DriverEventInput): OfflineDriverEventQueueItem;
   enqueueDriverEvents(events: DriverEventInput[]): OfflineDriverEventQueueItem[];
   enqueueProofMediaUpload(request: ProofMediaUploadRequest, scope?: { assignmentGeneration: string }): OfflineProofMediaQueueItem;
+  findProofMediaUpload(request: ProofMediaUploadRequest, scope?: { assignmentGeneration: string }): OfflineProofMediaQueueItem | undefined;
   getAccountOwnerHash(): string | null;
   getCompletionClearTelemetry(entry: OfflineCompletionClearOutboxEntry): OfflineRouteCompletionTelemetry | null;
   getRouteCompletionTelemetry(routePlanId: string): OfflineRouteCompletionTelemetry;
@@ -278,6 +281,21 @@ export function hasPendingPickupCompletion(queue: Pick<OfflineSubmissionQueue, '
   return getPickupCompletionQueueState(queue, routePlanId) === 'pending';
 }
 
+export function resolveProofMediaUploadIdempotencyKey(input: {
+  accountOwnerHash: string | null;
+  queue: Pick<OfflineSubmissionQueue, 'findProofMediaUpload' | 'getAccountOwnerHash'> | null;
+  request: ProofMediaUploadRequest;
+  scope?: { assignmentGeneration: string };
+}): string {
+  const retained = input.accountOwnerHash !== null && input.queue?.getAccountOwnerHash() === input.accountOwnerHash
+    ? input.queue.findProofMediaUpload(input.request, input.scope)
+    : undefined;
+  if (retained !== undefined && retained.accountOwnerHash === input.accountOwnerHash) {
+    return retained.idempotencyKey ?? getProofMediaUploadIdempotencyKey(retained.request);
+  }
+  return getProofMediaUploadIdempotencyKey(input.request, input.scope);
+}
+
 export function createInMemoryOfflineSubmissionQueue(input?: {
   accountOwnerHash?: string | null;
   initialItems?: OfflineSubmissionQueueItem[];
@@ -316,6 +334,16 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
 
   function findActiveItem(queueItemId: string) {
     return activeItems().find((item) => item.queueItemId === queueItemId);
+  }
+
+  function findProofMediaUpload(request: ProofMediaUploadRequest, scope?: { assignmentGeneration: string }) {
+    return activeItems().find((item): item is OfflineProofMediaQueueItem => (
+      item.kind === 'proof_media'
+      && item.assignmentGeneration === scope?.assignmentGeneration
+      && item.request.routePlanId === request.routePlanId
+      && item.request.deliveryStopId === request.deliveryStopId
+      && item.request.fileName === request.fileName
+    ));
   }
 
   function appendJournal(item: OfflineSubmissionQueueItem, kind: OfflineEvidenceJournalEntry['kind'], code: string) {
@@ -524,17 +552,18 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       if (scope !== undefined && !isCanonicalAssignmentGeneration(scope.assignmentGeneration)) {
         throw new Error('Proof-media evidence requires a canonical assignment generation.');
       }
-      const queueItemId = getProofMediaQueueItemId(request);
-      const existing = findActiveItem(queueItemId);
-      if (existing?.kind === 'proof_media') {
+      const existing = findProofMediaUpload(request, scope);
+      if (existing !== undefined) {
         return existing;
       }
+      const queueItemId = getProofMediaQueueItemId(request, scope);
 
       const item: OfflineProofMediaQueueItem = {
         accountOwnerHash: activeAccountOwnerHash!,
         ...(scope === undefined ? {} : { assignmentGeneration: scope.assignmentGeneration }),
         attempts: 0,
         enqueuedAt: now().toISOString(),
+        ...(scope === undefined ? {} : { idempotencyKey: getProofMediaUploadIdempotencyKey(request, scope) }),
         journal: [{ at: now().toISOString(), code: 'ENQUEUED', kind: 'ENQUEUED' }],
         kind: 'proof_media',
         queueSequence: nextQueueSequence,
@@ -548,6 +577,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       emitChange();
       return item;
     },
+    findProofMediaUpload,
     getAccountOwnerHash: () => activeAccountOwnerHash,
     getCompletionClearTelemetry: (entry) => {
       const completion = activeItems().find((item): item is OfflineDriverEventQueueItem => (
@@ -988,7 +1018,7 @@ export async function retryOfflineSubmissions(input: {
           continue;
         }
         await runAttempt((signal) => input.proofMediaUploadService.uploadProofMedia(item.request, {
-          idempotencyKey: getProofMediaUploadIdempotencyKey(item.request),
+          idempotencyKey: item.idempotencyKey ?? getProofMediaUploadIdempotencyKey(item.request),
           signal,
         }));
       }
@@ -1230,8 +1260,9 @@ function hasCompatibleOrderedEventAccessIdentity(
     ));
 }
 
-function getProofMediaQueueItemId(request: ProofMediaUploadRequest): string {
-  return `proof-media:${request.routePlanId}:${request.deliveryStopId}:${request.fileName}`;
+function getProofMediaQueueItemId(request: ProofMediaUploadRequest, scope?: { assignmentGeneration: string }): string {
+  const prefix = scope === undefined ? 'proof-media' : `proof-media-assignment:${scope.assignmentGeneration}`;
+  return `${prefix}:${request.routePlanId}:${request.deliveryStopId}:${request.fileName}`;
 }
 
 function getQueueItemRoutePlanId(item: OfflineSubmissionQueueItem): string | undefined {
@@ -1341,6 +1372,7 @@ function toPersistedQueueItem(item: OfflineSubmissionQueueItem): Record<string, 
   return {
     ...base,
     ...(item.assignmentGeneration === undefined ? {} : { assignmentGeneration: item.assignmentGeneration }),
+    ...(item.idempotencyKey === undefined ? {} : { idempotencyKey: item.idempotencyKey }),
     request: item.request,
   };
 }
@@ -1434,7 +1466,9 @@ function readPersistedQueueItem(
   if (data.kind === 'proof_media') {
     const request = readPersistedProofMediaRequest(data.request);
     const assignmentGeneration = data.assignmentGeneration;
-    if (request === null || (assignmentGeneration !== undefined && !isCanonicalAssignmentGeneration(assignmentGeneration))) {
+    const idempotencyKey = readOptionalString(data.idempotencyKey);
+    if (request === null || (assignmentGeneration !== undefined && !isCanonicalAssignmentGeneration(assignmentGeneration))
+      || idempotencyKey === null || (idempotencyKey !== undefined && !/^proof-media-v1:[a-f0-9]{32}$/u.test(idempotencyKey))) {
       return null;
     }
 
@@ -1444,6 +1478,7 @@ function readPersistedQueueItem(
       attempts,
       enqueuedAt,
       ...(firstErrorCode === undefined ? {} : { firstErrorCode }),
+      ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
       journal,
       kind: 'proof_media',
       ...(lastErrorCode === undefined ? {} : { lastErrorCode }),

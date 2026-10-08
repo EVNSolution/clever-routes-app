@@ -1,4 +1,5 @@
-import type { PersistedActiveRouteSession, PersistedDriverAccess } from '../domain/driver/driverAccessTokenStore';
+import type { DriverAccessTokenStore, PersistedActiveRouteSession, PersistedDriverAccess } from '../domain/driver/driverAccessTokenStore';
+import { CONTINUOUS_LOCATION_TASK_NAME, type ContinuousLocationStreamService, type ContinuousLocationSessionCleanupResult } from '../domain/location/continuousLocationStream';
 import type { AssignedRoute } from '../domain/route/assignedRoute';
 import type { LiveRouteChangeState, LiveRouteChangeStore } from '../domain/route/liveRouteChangeStore';
 import { RouteAccessTransportError, type RouteAccessRouteChoice, type RouteAccessSubmissionResult } from '../domain/routeAccess/routeAccess';
@@ -13,6 +14,40 @@ export type CachedLiveRouteValidation = {
   assignmentGeneration: string;
   routePlanId: string;
 };
+
+export async function pauseCachedLiveRouteTracking(input: {
+  activeRouteSession: PersistedActiveRouteSession;
+  driverAccessTokenStore: Pick<DriverAccessTokenStore, 'loadActiveDriverAccess'>;
+  isCurrent(): boolean;
+  session: CachedLiveRouteSession;
+  streamService: ContinuousLocationStreamService;
+}): Promise<ContinuousLocationSessionCleanupResult> {
+  const taskName = CONTINUOUS_LOCATION_TASK_NAME;
+  const sessionInstanceId = input.activeRouteSession.startedAt ?? input.activeRouteSession.updatedAt;
+  const isSessionCurrent = async () => {
+    if (!input.isCurrent() || input.activeRouteSession.status !== 'active'
+      || input.activeRouteSession.routePlanId !== input.session.route.id) return false;
+    const persisted = await input.driverAccessTokenStore.loadActiveDriverAccess();
+    if (!input.isCurrent() || (persisted.kind !== 'active' && persisted.kind !== 'refresh_required')) return false;
+    const active = persisted.activeRouteSession;
+    return active?.status === 'active' && active.routePlanId === input.session.route.id
+      && persisted.routeAccess?.routePlanId === input.session.route.id
+      && persisted.routeAccess.assignmentGeneration === input.session.routeAccess.assignmentGeneration
+      && (active.startedAt ?? active.updatedAt) === sessionInstanceId;
+  };
+  const unchanged = { kind: 'unchanged' as const, taskName };
+  if (input.streamService.stopLocationUpdatesIfCurrent !== undefined) {
+    if (!(await input.streamService.stopLocationUpdatesIfCurrent(taskName, isSessionCurrent))) return unchanged;
+  } else {
+    if (!(await isSessionCurrent())) return unchanged;
+    await input.streamService.stopLocationUpdates(taskName);
+  }
+  if (!(await isSessionCurrent())) return unchanged;
+  if (await input.streamService.hasStartedLocationUpdates(taskName)) {
+    throw new Error('Cached route tracking could not be paused. Preserve the active session and retry.');
+  }
+  return { kind: 'stopped', taskName };
+}
 
 export function canRefreshCachedLiveRoute(input: {
   cached: CachedLiveRouteValidation | null;
