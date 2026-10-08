@@ -5418,7 +5418,7 @@ function DriverApp() {
     void handleCapturePhoto(source);
   }
 
-  async function handleRequestStopCompletion(stop: AssignedRouteStop, switchToRoutePlanId?: string) {
+  async function handleRequestStopCompletion(stop: AssignedRouteStop, switchToRoutePlanId?: string, orderConfirmed = false) {
     if (completionSubmissionRunningRef.current || isCompletingStop || isRefreshingRoutes || isCapturingPhoto || isStartingRoute) return;
     setIsStopDetailsInputFocused(false);
     if (!usesSingleCompletion(stop)) { await handleTerminalStop(stop, 'delivered'); return; }
@@ -5429,6 +5429,16 @@ function DriverApp() {
     const action = getSingleCompletionAction({ payment: stop.payment!, completion: getStopReceipt(stop), pending: getPendingStopCompletion(stop) !== null });
     if (action === 'recorded' || action === 'pending') {
       setMessage(action === 'recorded' ? 'This delivery already has a server receipt.' : 'The original completion is saved and awaits server confirmation. Do not collect again.'); return;
+    }
+    if (!orderConfirmed && buildOutOfOrderStopArrivalWarning({
+      completedStopIds, navigationStepIndex, route: selectedRoute, selectedStopId: stop.deliveryStopId,
+    }) !== null) {
+      showOperationalDialog('Complete out of order?',
+        `Stop ${stop.sequence} is not the current planned stop. Complete only this stop now? Other incomplete stops will stay in your route.`, [
+          { style: 'cancel', text: 'Cancel' },
+          { text: 'Complete', onPress: () => handleRequestStopCompletion(stop, switchToRoutePlanId, true) },
+        ], { cancelable: true });
+      return;
     }
     if (action === 'cash') {
       const access = selectedRouteSession.routeAccess;
@@ -5643,7 +5653,10 @@ function DriverApp() {
         return;
       }
 
-      const nextNavigationStepIndex = getNextIncompleteRouteStepIndex({
+      // Completing a previewed stop must not move past the still-incomplete current stop.
+      const keepCurrentStop = options?.completion !== undefined && currentStop !== null
+        && !isStopCompleted(currentStop, nextCompletedStopIds);
+      const nextNavigationStepIndex = keepCurrentStop ? navigationStepIndex : getNextIncompleteRouteStepIndex({
         completedStopIds: nextCompletedStopIds,
         currentStopId: stop.deliveryStopId,
         route: selectedRoute,

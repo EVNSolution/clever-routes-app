@@ -21,16 +21,38 @@ also remains failed. This work is a Draft and is not ready for integration or re
 The app-local [service contract](../kfood-single-completion-cash.md) describes the
 default-OFF opt-in, exact decimal money, receipt semantics and rollback boundary.
 
+## PR299 review fixes
+
+The review baseline was `89145807d1b02ba1c6e84cb9c39b24ed175babda`.
+This follow-up keeps the same branch and Draft PR299.
+
+- **F01:** ordered-event blocking no longer blocks independent GPS and another
+  stop's photo after Cash input errors, legacy quarantine or transient failure.
+  Receipt lookup still runs first. Route-end and assignment blocks survive
+  retry and persistence; authoritative replacement assignments can send their
+  own evidence. Old-generation GPS and photos remain quarantined.
+  The original reproduction now sends both independent items, matching PR297:
+  `succeeded=2, pending=1`, versus the reviewed regression's `0, 3`.
+- **F02:** a different stop requires the existing order confirmation before
+  collection or completion. Cancel has no event, Cash popup or progress write.
+  Confirming B leaves incomplete A next. Current eTransfer completes directly;
+  current Cash needs only its amount popup. No arrival event is added.
+- Added 14 queue regressions and 5 actual-handler behavioral tests. The UI tests
+  execute the extracted request, Cash-confirm and terminal handlers and the Cash
+  cancel callback; they do not claim rendered-screen evidence.
+- Focused queue/proof checks: 119 passed. Focused UI regressions: 103 passed.
+  Independent final diff review found no remaining actionable F01/F02 issue.
+
 ## Local checks
 
 | Check | Result |
 | --- | --- |
-| `npm run check:workspace` | Passed: source layout, TypeScript, 1,123 tests / 118 suites, 0 skipped |
+| `npm run check:workspace` | Passed: source layout, TypeScript, 1,142 tests / 119 suites, 0 skipped |
 | `npm run lint` | Passed: 0 errors, 3 pre-existing `resetRouteProgress` hook warnings |
 | `npm run check:native-release` | Passed: all 7 checks |
 | `npm run build` | Android and iOS Hermes exports passed with production default opt-in OFF |
 | `EXPO_OFFLINE=1 npx expo install --check` | Installed SDK alignment passed; remote registry validation excluded |
-| Isolated arm64 QA APK | `app:assembleQa` passed, 834 tasks, 192 seconds on final runtime source |
+| Isolated arm64 QA APK | `app:assembleQa` passed, 834 tasks (24 executed / 810 reused), 34 seconds on final runtime source |
 | Actual HTTP and PostgreSQL | 12 checks passed; 11 exact committed receipts; no `STOP_ARRIVED` |
 | Android artifact endpoint guard | 5 tests passed, including rejection of mixed production/Cash QA origins |
 | Script syntax / `git diff --check` | Passed |
@@ -93,27 +115,32 @@ ON/OFF settings UI is implemented or claimed.
 | ABI / debuggable | arm64-v8a / false |
 | API | `https://localhost:8445`, supplied public QA CA |
 | Embedded production API occurrences | 0 |
-| APK SHA256 | `3beb17172e97833376680367d76b7f5d53c1224cf413c08dfd5b0e5aae84ea1f` |
+| APK SHA256 | `31a4f4c0a6b5ab3193720f15778a955ac8a727273295710f49178f1e16253d66` |
+| Embedded bundle SHA256 | `c360be2922e71908ca3d6db4a9dc5ada20a699e448c111580677a021a9cd9a60` |
 | Android Debug signer SHA256 | `fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c` |
-| Runtime source SHA256 | `a44ab18514d9dbd332b6b778dfd7313a279ce9a6d9a91998818e738137a43ff8` |
+| Runtime source SHA256 | `63d801dace92294a283deafa4efa5d53bae535930ee583648182f55c946685a6` |
 
 The runtime digest hashes sorted `src` paths and file hashes, excluding test
 files. The external final-HEAD manifest binds the commit, source and APK after
 commit; a commit cannot contain its own hash.
 
-Only the designated physical device was queried. No emulator, image installation
-or AVD creation occurred. Initial foreground checks showed no active integration
-app. The last check, immediately before installation, showed another integration
-app in the foreground. The already submitted compound command continued through
-Cash QA installation and launch before that output was acted upon. Cash QA was
-immediately force-stopped; the owned 8445 reverse was removed. The prior
-integration app returned to the foreground. No further device interaction or
-functional verification followed.
+This review run queried only `R3CN80SCYPL`, using read-only ADB calls.
+At `2026-10-08T10:58:01Z`, the foreground activity was
+`com.evnsolution.clever.driver.integration/.MainActivity` (PID 6533).
+The device was therefore unavailable. No install, launch, force-stop, reverse
+change, screenshot, UI interaction or app-data change was performed in this run.
+No emulator or AVD was used. The new APK is built locally and is **not installed**.
 
-Operating package 1.3.3/39 and previous `.qa` package 1.3.4/40 retained their
-version and installation timestamps. Neither package was replaced, cleared,
-uninstalled or force-stopped. Cash QA remains separately installed and stopped.
-No customer call or message was sent. No screen images are presented as evidence.
+The existing Cash QA package remains 1.3.4/40 with installation/update time
+`2026-10-08 18:15:57` on the device. It belongs to the previous reviewed build.
+The read-only occupancy evidence is in the private review artifact directory as
+`device-occupancy.json`; it is not functional screen evidence.
+
+Historical boundary: the original implementation run briefly installed/launched
+Cash QA after a compound preinstall command revealed another foreground app.
+That run immediately stopped Cash QA and removed its own reverse. This follow-up
+keeps occupancy checking separate and makes no device mutations. The prior
+operating and QA packages remain outside this work.
 
 **Still required on the designated device:** single-button/details/Cash/difference/
 eTransfer/missing-phone screens; zero, cancellation and optional-input behavior;
@@ -123,7 +150,8 @@ PR297 Dispatch/input/GPS and SQLCipher lifecycle acceptance.
 
 Owned local fixture, temporary database and reverse port were stopped/removed.
 APK, TLS files, logs, reusable build caches and recovery scripts remain private at
-`/Users/jiin/.codex/artifacts/kfood-app-cash-20261008`.
+`/Users/jiin/.codex/artifacts/kfood-pr299-review-fixes-20261008`.
+The earlier TLS/recovery assets remain in `kfood-app-cash-20261008`.
 The first build revealed AGP did not honor the CMake parallelism environment
 alone. Final Cash QA uses explicit Ninja compile pools of 2, link pools of 1,
 two Gradle workers and a 2GiB JVM heap. These are per-tool limits, not measured

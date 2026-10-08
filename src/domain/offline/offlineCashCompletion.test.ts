@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import type { DriverEventInput } from '../events/driverEvents';
 import type { StopCompletion } from '../stop/stopCompletion';
+import { createMockProofMediaUploadService } from '../proof/proofMediaUpload';
 import { recordStopProofEventAfterDeliveryStart } from '../stop/stopProofEvents';
 import {
   createInMemoryOfflineSubmissionQueue,
@@ -46,6 +47,145 @@ function receipt(status: 'APPLIED' | 'UNKNOWN', includeCompletion = true) {
 }
 
 describe('durable Cash completion', () => {
+  for (const scenario of ['cash-quarantine', 'legacy-quarantine', 'cash-required', 'cash-invalid', 'cash-conflict', 'receipt-conflict', 'ordered-network-failure'] as const) {
+    it(`continues independent GPS and other-stop proof through ${scenario}`, async () => {
+      const queue = createInMemoryOfflineSubmissionQueue({ now });
+      const legacy = scenario === 'legacy-quarantine' || scenario === 'ordered-network-failure';
+      const head = queue.enqueueDriverEvent(legacy ? { ...event, completion: undefined } : event);
+      if (scenario === 'cash-quarantine') queue.quarantine(head.queueItemId, 'completion_input_invalid');
+      if (scenario === 'legacy-quarantine') queue.quarantine(head.queueItemId, 'retry_policy_exceeded');
+      queue.enqueueDriverEvent({ clientEventId: 'independent-gps', eventType: 'LOCATION_UPDATED',
+        routePlanId: event.routePlanId, occurredAt: now(), latitude: 43, longitude: -79 });
+      queue.enqueueProofMediaUpload({ routePlanId: event.routePlanId!, deliveryStopId: 'other-stop',
+        fileName: 'proof.jpg', uri: 'file:///synthetic-proof.jpg', source: 'camera' }, { assignmentGeneration: '2' });
+      queue.enqueueDriverEvent({ ...event, completion: undefined, clientEventId: 'ordered-next', eventType: 'STOP_FAILED' });
+      const calls: string[] = [];
+      const result = await retryOfflineSubmissions({ queue, now, routePlanId: event.routePlanId!,
+        ...(scenario === 'receipt-conflict' ? { driverEventReceiptService: { lookupReceipt: async () => {
+          calls.push('receipt'); return { ...receipt('APPLIED'), status: 'REJECTED' as const, completion: null };
+        } } } : {}),
+        orderedEventAccessIdentity: { assignmentGeneration: '2', driverContractVersion: 2,
+          expectedRouteVersionId: event.expectedRouteVersionId!, routePlanId: event.routePlanId! },
+        driverEventService: { recordDriverEvent: async submitted => {
+          calls.push(submitted.clientEventId);
+          if (submitted.clientEventId === event.clientEventId) {
+            if (scenario === 'ordered-network-failure') throw new Error('network offline');
+            const code = scenario === 'cash-required' ? 'CASH_RECEIVED_REQUIRED'
+              : scenario === 'cash-conflict' ? 'CASH_COMPLETION_CONFLICT' : 'CASH_COMPLETION_INVALID';
+            throw createDriverApiHttpError({ code, endpoint: 'events', status: scenario === 'cash-conflict' ? 409 : 400 });
+          }
+          return { status: 'recorded', eventId: submitted.clientEventId, duplicate: false };
+        } }, proofMediaUploadService: { uploadProofMedia: async (request, options) => {
+          calls.push('other-stop-proof');
+          return createMockProofMediaUploadService().uploadProofMedia(request, options);
+        } },
+      });
+      assert.deepEqual(calls, [
+        ...(scenario === 'cash-quarantine' || scenario === 'legacy-quarantine' ? []
+          : scenario === 'receipt-conflict' ? ['receipt'] : [event.clientEventId]),
+        'independent-gps', 'other-stop-proof',
+      ]);
+      if (scenario === 'cash-required' || scenario === 'cash-invalid' || scenario === 'cash-conflict' || scenario === 'receipt-conflict') {
+        assert.deepEqual(result.reconciliationRoutePlanIds, [event.routePlanId]);
+      }
+      assert.equal(result.succeeded, 2);
+      assert.equal(queue.listPending().length, 2);
+      const retained = queue.listPending()[0];
+      assert.deepEqual(retained?.kind === 'driver_event' ? retained.event : null, head.event);
+      assert.equal(queue.listPending()[1]?.queueItemId, 'driver-event:ordered-next');
+    });
+  }
+
+  it('recovers an APPLIED Cash receipt behind a failed ordered event while independent evidence continues', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue({ now });
+    queue.enqueueDriverEvent({ ...event, completion: undefined, eventType: 'PICKUP_COMPLETED', clientEventId: 'pickup-first' });
+    queue.enqueueDriverEvent(event);
+    queue.enqueueDriverEvent({ clientEventId: 'independent-gps', eventType: 'LOCATION_UPDATED', routePlanId: event.routePlanId, occurredAt: now() });
+    queue.enqueueProofMediaUpload({ routePlanId: event.routePlanId!, deliveryStopId: 'other-stop', fileName: 'proof.jpg', uri: 'file:///proof.jpg', source: 'camera' });
+    const calls: string[] = [];
+    const result = await retryOfflineSubmissions({ queue, now,
+      driverEventReceiptService: { lookupReceipt: async () => { calls.push('receipt'); return receipt('APPLIED'); } },
+      driverEventService: { recordDriverEvent: async submitted => {
+        calls.push(submitted.clientEventId);
+        if (submitted.clientEventId === 'pickup-first') throw new Error('network offline');
+        return { status: 'recorded', eventId: submitted.clientEventId, duplicate: false };
+      } }, proofMediaUploadService: { uploadProofMedia: async (request, options) => {
+        calls.push('proof'); return createMockProofMediaUploadService().uploadProofMedia(request, options);
+      } },
+    });
+    assert.deepEqual(calls, ['pickup-first', 'receipt', 'independent-gps', 'proof']);
+    assert.equal(result.succeeded, 3);
+    assert.deepEqual(queue.getStopCompletion(event.routePlanId!, event.deliveryStopId!), completion);
+    assert.equal(queue.listPending()[0]?.queueItemId, 'driver-event:pickup-first');
+  });
+
+  for (const code of ['ROUTE_NOT_IN_PROGRESS', 'ROUTE_ASSIGNMENT_CHANGED', 'ROUTE_VERSION_MISMATCH'] as const) {
+    it(`retains route-wide transmission blocking for ${code}`, async () => {
+      const durable = storage();
+      const queue = await createPersistentOfflineSubmissionQueue({ storage: durable, now });
+      queue.enqueueDriverEvent(event);
+      queue.enqueueDriverEvent({ clientEventId: 'independent-gps', eventType: 'LOCATION_UPDATED', routePlanId: event.routePlanId, occurredAt: now() });
+      queue.enqueueProofMediaUpload({ routePlanId: event.routePlanId!, deliveryStopId: 'other-stop', fileName: 'proof.jpg', uri: 'file:///proof.jpg', source: 'camera' });
+      const calls: string[] = [];
+      const services = {
+        driverEventService: { recordDriverEvent: async submitted => {
+          calls.push(submitted.clientEventId); throw createDriverApiHttpError({ code, status: 409, endpoint: 'events' });
+        } }, proofMediaUploadService: { uploadProofMedia: async () => { calls.push('proof'); throw new Error('unexpected'); } },
+      } satisfies Pick<Parameters<typeof retryOfflineSubmissions>[0], 'driverEventService' | 'proofMediaUploadService'>;
+      await retryOfflineSubmissions({ queue, now, ...services });
+      await retryOfflineSubmissions({ queue, now, ...services });
+      await queue.whenPersisted();
+      const restarted = await createPersistentOfflineSubmissionQueue({ storage: durable, now });
+      restarted.enqueueDriverEvent({ clientEventId: 'later-gps', eventType: 'LOCATION_UPDATED', routePlanId: event.routePlanId, occurredAt: now() });
+      restarted.enqueueProofMediaUpload({ routePlanId: event.routePlanId!, deliveryStopId: 'other-stop', fileName: 'later-proof.jpg', uri: 'file:///later-proof.jpg', source: 'camera' });
+      await retryOfflineSubmissions({ queue: restarted, now, ...services });
+      assert.deepEqual(calls, [event.clientEventId]);
+      assert.equal(queue.listPending()[0]?.state, 'QUARANTINED');
+    });
+  }
+
+  for (const storedRejection of [false, true]) {
+    it(`allows authoritative new-assignment GPS/proof while preserving old evidence (stored=${storedRejection})`, async () => {
+      const durable = storage();
+      const queue = await createPersistentOfflineSubmissionQueue({ storage: durable, now });
+      const queued = queue.enqueueDriverEvent(event);
+      if (storedRejection) queue.quarantine(queued.queueItemId, 'assignment_changed');
+      queue.enqueueDriverEvent({ clientEventId: 'old-gps', eventType: 'LOCATION_UPDATED', assignmentGeneration: '2', routePlanId: event.routePlanId, occurredAt: now() });
+      queue.enqueueProofMediaUpload({ routePlanId: event.routePlanId!, deliveryStopId: 'other-stop', fileName: 'proof.jpg', uri: 'file:///proof.jpg', source: 'camera' }, { assignmentGeneration: '2' });
+      await queue.whenPersisted();
+      const restarted = await createPersistentOfflineSubmissionQueue({ storage: durable, now });
+      restarted.enqueueDriverEvent({ clientEventId: 'new-gps', eventType: 'LOCATION_UPDATED', assignmentGeneration: '3', routePlanId: event.routePlanId, occurredAt: now() });
+      restarted.enqueueProofMediaUpload({ routePlanId: event.routePlanId!, deliveryStopId: 'other-stop', fileName: 'proof.jpg', uri: 'file:///proof.jpg', source: 'camera' }, { assignmentGeneration: '3' });
+      const calls: string[] = [];
+      await retryOfflineSubmissions({ queue: restarted, now,
+        orderedEventAccessIdentity: { assignmentGeneration: '3', driverContractVersion: 2, expectedRouteVersionId: 'new-publication', routePlanId: event.routePlanId! },
+        driverEventService: { recordDriverEvent: async submitted => {
+          calls.push(submitted.clientEventId); return { duplicate: false, eventId: submitted.clientEventId, status: 'recorded' };
+        } }, proofMediaUploadService: { uploadProofMedia: async (request, options) => {
+          calls.push('new-proof'); return createMockProofMediaUploadService().uploadProofMedia(request, options);
+        } },
+      });
+      assert.deepEqual(calls, ['new-gps', 'new-proof']);
+      const retained = restarted.listPending()[0];
+      assert.deepEqual(retained?.kind === 'driver_event' ? retained.event : null, event);
+      assert.equal(restarted.listPending().find(item => item.queueItemId === 'driver-event:old-gps')?.reconciliation?.reason, 'assignment_changed');
+    });
+  }
+
+  it('blocks independent transmission after a local same-assignment contract mismatch', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue({ now });
+    queue.enqueueDriverEvent(event);
+    queue.enqueueDriverEvent({ clientEventId: 'gps', eventType: 'LOCATION_UPDATED', routePlanId: event.routePlanId, occurredAt: now() });
+    queue.enqueueProofMediaUpload({ routePlanId: event.routePlanId!, deliveryStopId: 'other-stop', fileName: 'proof.jpg', uri: 'file:///proof.jpg', source: 'camera' }, { assignmentGeneration: '2' });
+    const calls: string[] = [];
+    await retryOfflineSubmissions({ queue, now,
+      orderedEventAccessIdentity: { assignmentGeneration: '2', driverContractVersion: 2, expectedRouteVersionId: 'mismatched-publication', routePlanId: event.routePlanId! },
+      driverEventService: { recordDriverEvent: async submitted => { calls.push(submitted.clientEventId); throw new Error('unexpected'); } },
+      proofMediaUploadService: { uploadProofMedia: async () => { calls.push('proof'); throw new Error('unexpected'); } },
+    });
+    assert.deepEqual(calls, []);
+  });
+
   it('does not post unknown Cash out of order after an earlier route event fails', async () => {
     const queue = createInMemoryOfflineSubmissionQueue({ now });
     queue.enqueueDriverEvent({ ...event, completion: undefined, eventType: 'PICKUP_COMPLETED', clientEventId: 'pickup-first' });

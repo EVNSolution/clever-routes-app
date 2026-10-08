@@ -1,8 +1,8 @@
 {
-  "mobileBaseSha": "e2236e67efb8ece0bddfe5af503deb7fa77d4e6f",
-  "mobileSourceSha256": "b3360281b69a794ad5f97ed1b05536c611f001010e079067ab79db1b97698821",
+  "mobileBaseSha": "89145807d1b02ba1c6e84cb9c39b24ed175babda",
+  "mobileSourceSha256": "06cdd72ad8a8be260f4aacafacd2ce65666d3e91ad9534690f4fd77fa6d48c82",
   "status": "pass",
-  "verifiedAt": "2026-10-08T09:07:10.627Z",
+  "verifiedAt": "2026-10-08T11:03:21.746Z",
   "serverSourceSha": "bd132f199c2a058d8e14fe33d97497307a51af45",
   "shopifySourceSha": "e3f5a2a9819cb0ddd58766912b8ff31de2c759ae",
   "transport": "Loopback TLS proxy \u2192 real Fastify HTTP \u2192 isolated PostgreSQL",
@@ -58,77 +58,77 @@
   ],
   "cashReceipts": [
     {
-      "clientEventId": "62c6f7cb-1967-46fc-9fd1-1bf4ae8e91dd",
+      "clientEventId": "bc0dd4c0-e14f-4120-8f9c-a8e778fdee44",
       "expectedAmount": "122.25",
       "actualAmount": "122.00",
       "differenceAmount": "-0.25",
       "currencyCode": "CAD"
     },
     {
-      "clientEventId": "09c1cc33-678f-4951-9ebd-37d1e0c4ac80",
+      "clientEventId": "a79d079a-99ea-43ea-ae54-2375cf7aee46",
       "expectedAmount": "122.25",
       "actualAmount": "122.25",
       "differenceAmount": "0.00",
       "currencyCode": "CAD"
     },
     {
-      "clientEventId": "ae3c5454-f910-4ca1-8c12-af083253cfc2",
+      "clientEventId": "8c360818-3c34-45f3-892e-aa436b0f95dc",
       "expectedAmount": "122.25",
       "actualAmount": "123.00",
       "differenceAmount": "0.75",
       "currencyCode": "CAD"
     },
     {
-      "clientEventId": "efad8b18-3934-4aa5-85d2-32ae1851a7ad",
+      "clientEventId": "4917028b-7765-4fcb-a932-71660587f6a0",
       "expectedAmount": "122.25",
       "actualAmount": "0.00",
       "differenceAmount": "-122.25",
       "currencyCode": "CAD"
     },
     {
-      "clientEventId": "05da432a-571e-4949-be8a-a7e887372eab",
+      "clientEventId": "06dd9b0c-f333-47fe-b694-b643d2292564",
       "expectedAmount": "122.25",
       "actualAmount": null,
       "differenceAmount": null,
       "currencyCode": "CAD"
     },
     {
-      "clientEventId": "18fa1821-dac8-445d-8e59-6598fa6a26f2",
+      "clientEventId": "a36c0bdc-64e6-4ec1-a395-5cd0f8e9ebc3",
       "expectedAmount": "0.00",
       "actualAmount": null,
       "differenceAmount": null,
       "currencyCode": "CAD"
     },
     {
-      "clientEventId": "e1804c96-46a2-480b-9312-f476e6f689b1",
+      "clientEventId": "67d678cc-2292-4621-a19b-cf08eb2899e0",
       "expectedAmount": "122.25",
       "actualAmount": null,
       "differenceAmount": null,
       "currencyCode": "CAD"
     },
     {
-      "clientEventId": "662874f7-7107-4296-beda-d9d4ae35c538",
+      "clientEventId": "d55f682a-efce-46c4-96e3-0a2d812b4916",
       "expectedAmount": "122.25",
       "actualAmount": null,
       "differenceAmount": null,
       "currencyCode": "CAD"
     },
     {
-      "clientEventId": "a7706784-59aa-431b-9650-87b913930ed8",
+      "clientEventId": "22d9ea20-eee8-4a6d-ae42-303f099bd579",
       "expectedAmount": null,
       "actualAmount": "22.00",
       "differenceAmount": null,
       "currencyCode": "CAD"
     },
     {
-      "clientEventId": "a9432bca-9c17-4785-b94f-b5fb64b88a5d",
+      "clientEventId": "51ac8990-cc83-44a6-99e8-e9579258eb76",
       "expectedAmount": "122.25",
       "actualAmount": "123.00",
       "differenceAmount": "0.75",
       "currencyCode": "CAD"
     },
     {
-      "clientEventId": "e52f9449-5e32-4171-9ad8-98f4f2fe89ba",
+      "clientEventId": "ad87bfd6-720e-4104-b476-fd90cbdf6531",
       "expectedAmount": "122.25",
       "actualAmount": "122.00",
       "differenceAmount": "-0.25",
@@ -140,12 +140,12 @@
     "No external providers, real customers or production deployment."
   ],
   "heldResponse": {
-    "heldAt": "2026-10-08T09:07:09.599Z",
+    "heldAt": "2026-10-08T11:03:21.450Z",
     "responseDelivered": false,
     "originalRequest": {
       "appVersion": "1.3.4-cashqa",
       "assignmentGeneration": "2",
-      "clientEventId": "e52f9449-5e32-4171-9ad8-98f4f2fe89ba",
+      "clientEventId": "ad87bfd6-720e-4104-b476-fd90cbdf6531",
       "completion": {
         "version": 1,
         "cashReceived": {
@@ -153,17 +153,18 @@
           "currency": "CAD"
         }
       },
-      "deliveryStopId": "8497d321-8ead-4531-84de-96d9b4239a57",
+      "deliveryStopId": "7431d842-6cc8-438c-af22-652ae43eff98",
       "driverContractVersion": 2,
       "eventType": "STOP_DELIVERED",
-      "expectedRouteVersionId": "8aeb52af-fc80-49f2-865a-60916b530597",
-      "occurredAt": "2026-10-08T09:07:09.471Z",
-      "routePlanId": "a956b595-3bb5-4af2-8e1c-5bc66c6412cd",
+      "expectedRouteVersionId": "9aca81f0-8d28-4405-b017-10bc0f063abc",
+      "occurredAt": "2026-10-08T11:03:21.424Z",
+      "routePlanId": "33909342-6159-47ae-804c-0bff8577a6ab",
       "versionCode": 40
     },
-    "counts": null,
+    "eventCount": 1,
+    "receiptCount": 1,
     "receipt": {
-      "clientEventId": "e52f9449-5e32-4171-9ad8-98f4f2fe89ba",
+      "clientEventId": "ad87bfd6-720e-4104-b476-fd90cbdf6531",
       "expectedAmount": "122.25",
       "actualAmount": "122.00",
       "differenceAmount": "-0.25",
