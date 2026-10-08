@@ -1,5 +1,15 @@
 # PR299 Android release candidate preparation — 2026-10-08
 
+## Authorized ON successor
+
+This record retains the historical **1.3.5/41 OFF** artifact below. The owner later authorized deployment and Play upload/publication after validation. The successor source declares **1.3.6/42** and a candidate-only `production-kfood-on` EAS profile. It must pass the [activation conditions](kfood-pr299-feature-activation-20261008.md), final-source CI, signed-artifact checks and Play internal acceptance before the same AAB reaches production. A source declaration or configuration is not a built or published artifact.
+
+The reviewed app changes are integrated at `ddb724e2b9f2eb3737b5a443b6c61c2c4c54be3f`, with the same file tree as reviewed `08a84098`. The general EAS production environment remains unchanged. Current product API and app contract documents provide the rollout contract; HQ canonical-document migration remains pending as separate work and does not block this rollout.
+
+The old audit-only gate statements below describe the OFF candidate's history. Current CI requires the [reviewed bounded source-patch verifier](kfood-pr299-supplemental-security-gate-20261008.md), preserving raw audit High20/exit1 separately. Exact final build/CI SHA, artifact digest, server readiness and Play status belong in the external release record and release PR.
+
+## Historical OFF candidate
+
 Status: signed candidate AAB built and statically verified; publication remains blocked. This document
 prepares a build and integration sequence. It does not authorize a merge,
 production migration, store submission, APK publication, or feature activation.
