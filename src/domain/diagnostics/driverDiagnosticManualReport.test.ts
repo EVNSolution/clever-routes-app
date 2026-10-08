@@ -107,6 +107,7 @@ function createHarness(input?: {
   const outbox = createDriverDiagnosticOutbox({
     accountOwnerHash: 'account-a',
     maxRecords: input?.maxRecords,
+    now: () => new Date('2026-10-01T14:05:00.000Z'),
     reportStatusCapacity: input?.reportStatusCapacity,
     storage,
   });
