@@ -173,6 +173,9 @@ export async function createEncryptedEvidenceStore(input: {
         const sensitive = sensitiveByKey.get(row.recordKey);
         const parsedSensitive = sensitive === undefined ? undefined : parseJsonObject(sensitive);
         if (sensitive !== undefined && parsedSensitive === null) {
+          if (envelope.completionContractVersion === 1) {
+            throw new Error('STORAGE_DEGRADED: encrypted completion input is malformed. Preserve evidence for recovery.');
+          }
           invalidRows.push(row);
           continue;
         }
@@ -181,6 +184,9 @@ export async function createEncryptedEvidenceStore(input: {
           : hydrateSensitiveReplay(normalizedEnvelope, parsedSensitive) as Record<string, unknown>;
         const normalizedItem = normalizeEvidenceRow(hydrated, row, readAt);
         if (normalizedItem === null) {
+          if (envelope.completionContractVersion === 1) {
+            throw new Error('STORAGE_DEGRADED: encrypted completion evidence is invalid. Preserve evidence for recovery.');
+          }
           invalidRows.push(row);
           continue;
         }
@@ -617,7 +623,7 @@ async function replaceQueueRows(database: EvidenceDatabase, items: Record<string
     const existingSensitiveRows = await transaction.getAllAsync<StoredRow>(
       'SELECT record_key AS recordKey, payload FROM sensitive_evidence;',
     );
-    const existingSensitiveRecordKeys = new Set(existingSensitiveRows.map((row) => row.recordKey));
+    const existingSensitivePayloads = new Map(existingSensitiveRows.map((row) => [row.recordKey, row.payload]));
     const existingJournalRows = await transaction.getAllAsync<StoredRow>(
       'SELECT record_key AS recordKey, payload FROM evidence_journal;',
     );
@@ -644,14 +650,14 @@ async function replaceQueueRows(database: EvidenceDatabase, items: Record<string
       if (existingRecordRows.get(`${row.table}:${row.recordKey}`)?.payload !== row.payload) {
         await writeQueueRecord(transaction, row);
       }
-      if (row.sensitivePayload !== null && !existingSensitiveRecordKeys.has(row.recordKey)) {
+      if (row.sensitivePayload !== null && existingSensitivePayloads.get(row.recordKey) !== row.sensitivePayload) {
         await transaction.runAsync(
-          'INSERT OR IGNORE INTO sensitive_evidence (record_key, account_owner_hash, queue_sequence, payload, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?);',
+          'INSERT OR REPLACE INTO sensitive_evidence (record_key, account_owner_hash, queue_sequence, payload, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?);',
           row.recordKey,
           row.ownerHash,
           row.sequence,
           row.sensitivePayload,
-          new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+          row.sensitiveExpiresAt,
           row.createdAt,
         );
       }
@@ -681,12 +687,12 @@ async function writeQueueRows(database: EvidenceDatabase, items: Record<string, 
     await writeQueueRecord(database, row);
     if (row.sensitivePayload !== null) {
       await database.runAsync(
-        'INSERT OR IGNORE INTO sensitive_evidence (record_key, account_owner_hash, queue_sequence, payload, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?);',
+        'INSERT OR REPLACE INTO sensitive_evidence (record_key, account_owner_hash, queue_sequence, payload, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?);',
         row.recordKey,
         row.ownerHash,
         row.sequence,
         row.sensitivePayload,
-        new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        row.sensitiveExpiresAt,
         row.createdAt,
       );
     }
@@ -710,6 +716,7 @@ type SerializedQueueRow = {
   payload: string;
   recordKey: string;
   sensitivePayload: string | null;
+  sensitiveExpiresAt: string;
   sequence: number;
   table: (typeof RECORD_TABLES)[number];
 };
@@ -735,6 +742,7 @@ function serializeQueueRow(item: Record<string, unknown>, now: Date): Serialized
     ownerHash,
     payload: JSON.stringify(redactReplayPayload(normalizedItem)),
     recordKey,
+    sensitiveExpiresAt: getSensitiveReplayExpiry(normalizedItem, now),
     sensitivePayload: hasSensitiveReplayPayload(normalizedItem)
       ? JSON.stringify(extractSensitiveReplay(normalizedItem))
       : null,
@@ -1108,7 +1116,8 @@ function redactReplayPayload(item: Record<string, unknown>) {
       ...(event.routePlanId === undefined ? {} : { routePlanId: event.routePlanId }),
       ...(event.versionCode === undefined ? {} : { versionCode: event.versionCode }),
     },
-    ...(event.payload === undefined ? {} : { sensitiveReplay: true }),
+    ...(hasSensitiveReplayPayload(item) ? { sensitiveReplay: true } : {}),
+    ...(event.completion === undefined && item.completionContractVersion !== 1 ? {} : { completionContractVersion: 1 }),
   };
 }
 
@@ -1131,7 +1140,7 @@ function pickEvidenceIdentity(item: Record<string, unknown>) {
 function hasSensitiveReplayPayload(item: Record<string, unknown>) {
   if (item.kind === 'proof_media') return true;
   const event = typeof item.event === 'object' && item.event !== null ? item.event as Record<string, unknown> : null;
-  return event?.payload !== undefined;
+  return event?.payload !== undefined || event?.completion !== undefined || item.completionReceipt !== undefined;
 }
 
 function extractSensitiveReplay(item: Record<string, unknown>) {
@@ -1140,7 +1149,19 @@ function extractSensitiveReplay(item: Record<string, unknown>) {
     return { fileName: request.fileName, kind: 'proof_media', uri: request.uri };
   }
   const event = typeof item.event === 'object' && item.event !== null ? item.event as Record<string, unknown> : {};
-  return { kind: 'driver_event', payload: event.payload };
+  return { kind: 'driver_event', ...(event.payload === undefined ? {} : { payload: event.payload }),
+    ...(event.completion === undefined ? {} : { completion: event.completion }),
+    ...(item.completionReceipt === undefined ? {} : { completionReceipt: item.completionReceipt }) };
+}
+
+function getSensitiveReplayExpiry(item: Record<string, unknown>, now: Date): string {
+  const event = typeof item.event === 'object' && item.event !== null ? item.event as Record<string, unknown> : {};
+  if (event.completion !== undefined) {
+    if (item.state === 'PENDING' || item.state === 'QUARANTINED') return '9999-12-31T23:59:59.999Z';
+    const terminal = [...readJournalEntries(item.journal)].reverse().find(entry => entry.kind === 'ACK' || entry.kind === 'DISCARD');
+    return new Date(Date.parse(terminal?.at ?? String(item.enqueuedAt)) + OFFLINE_EVIDENCE_AUDIT_RETENTION_MS).toISOString();
+  }
+  return new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
 }
 
 function hydrateSensitiveReplay(envelope: Record<string, unknown>, sensitiveValue: unknown) {
@@ -1153,15 +1174,24 @@ function hydrateSensitiveReplay(envelope: Record<string, unknown>, sensitiveValu
     return { ...envelope, request: { ...request, fileName: sensitive.fileName, uri: sensitive.uri } };
   }
   if (sensitive.kind === 'driver_event') {
+    if (envelope.completionContractVersion === 1 && sensitive.completion === undefined) {
+      throw new Error('STORAGE_DEGRADED: original completion input is unavailable. Preserve encrypted evidence for recovery.');
+    }
     const event = typeof envelope.event === 'object' && envelope.event !== null
       ? envelope.event as Record<string, unknown>
       : {};
-    return { ...envelope, event: { ...event, payload: sensitive.payload } };
+    return { ...envelope,
+      ...(sensitive.completionReceipt === undefined ? {} : { completionReceipt: sensitive.completionReceipt }),
+      event: { ...event, ...(sensitive.payload === undefined ? {} : { payload: sensitive.payload }),
+        ...(sensitive.completion === undefined ? {} : { completion: sensitive.completion }) } };
   }
   return envelope;
 }
 
 function expireMissingSensitiveReplay(envelope: Record<string, unknown>) {
+  if (envelope.completionContractVersion === 1) {
+    throw new Error('STORAGE_DEGRADED: original completion input is unavailable. Preserve encrypted evidence for recovery.');
+  }
   if (envelope.sensitiveReplay !== true) return envelope;
   const request = typeof envelope.request === 'object' && envelope.request !== null
     ? envelope.request as Record<string, unknown>

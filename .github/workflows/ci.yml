@@ -45,8 +45,23 @@ jobs:
       - name: Build exported app bundles
         run: npm run build
 
-      - name: Audit npm dependencies
-        run: npm audit --audit-level=moderate
+      - name: Verify bounded host-security patches and preserve raw audit
+        run: |
+          npm run verify:host-security -- \
+            --source-sha "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/host-security-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+
+      - name: Validate and summarize host-security evidence
+        if: always()
+        run: node scripts/report-host-security.mjs "$RUNNER_TEMP/host-security-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+
+      - name: Upload host-security evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-security-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/host-security-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
 
       - name: Check Expo dependency alignment against installed SDK
         run: EXPO_OFFLINE=1 npx expo install --check

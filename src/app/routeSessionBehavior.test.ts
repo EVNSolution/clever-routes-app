@@ -130,7 +130,7 @@ describe('route session current task behavior', () => {
 
     assert.match(componentSource, /<View style=\{styles\.routeSessionMap\}>[\s\S]*<MapOverview[\s\S]*routeStatus === 'ready' && pendingRouteEnd === undefined \? \([\s\S]*<View style=\{styles\.routeSessionPrestartOverlay\}>[\s\S]*<Text style=\{styles\.sectionTitle\}>Store Pickup<\/Text>[\s\S]*company\?\.pickupGuidance[\s\S]*Estimated time[\s\S]*formatAssignedRouteDuration\(route\.routeMetrics\)[\s\S]*Distance[\s\S]*formatAssignedRouteDistance\(route\.routeMetrics\)[\s\S]*label="Start"[\s\S]*onPress=\{onStartRoute\}/u);
     assert.match(appSource, /routeSessionPrestartOverlay:[\s\S]*backgroundColor: 'rgba\(245, 247, 250, 0\.94\)'[\s\S]*position: 'absolute'/u);
-    assert.match(componentSource, /routeStatus === 'active' && !allStopsCompleted \? \([\s\S]*<View style=\{styles\.currentTaskTitleRow\}>[\s\S]*<Text style=\{styles\.sectionTitle\}>\{currentTaskTitle\}<\/Text>[\s\S]*<StatusChip compact label=\{currentTaskPayment\.status\.label\} tone=\{currentTaskPayment\.status\.tone\} \/>[\s\S]*<\/View>/u);
+    assert.match(componentSource, /routeStatus === 'active' && !allStopsCompleted \? \([\s\S]*<View style=\{styles\.currentTaskTitleRow\}>[\s\S]*<Text style=\{styles\.sectionTitle\}>\{currentTaskTitle\}<\/Text>[\s\S]*<StatusChip compact label=\{currentTaskPaymentLabel \?\? 'Payment method unknown'\} tone=\{currentTaskPayment\.status\.tone\} \/>[\s\S]*<\/View>/u);
     assert.match(componentSource, /const currentTaskTitle = isPickupTask \? 'Store Pickup' : stop === null \? 'Next Stop' : `Stop \$\{stop\.sequence\}`/u);
     assert.match(componentSource, /const currentTaskAddress = stop === null \? null : formatStopSearchAddress\(stop\)/u);
     assert.doesNotMatch(componentSource, /company\?\.companyDisplayName/u);
@@ -140,7 +140,7 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const currentTaskPayment = stop === null \? null : formatAssignedRoutePaymentSummary\(stop\)/u);
     assert.match(componentSource, /const currentTaskPaymentAmount = stop === null[\s\S]*\? null[\s\S]*: formatAssignedRouteCompactPaymentAmount\(stop\.totalPriceAmount, stop\.currencyCode\)/u);
     assert.match(componentSource, /<View style=\{styles\.currentTaskMetaRow\}>[\s\S]*currentTaskAddress !== null \? \([\s\S]*<Text style=\{styles\.currentTaskAddressText\}>\{currentTaskAddress\}<\/Text>[\s\S]*\) : null[\s\S]*<Text style=\{styles\.currentTaskPaymentAmount\}>\{currentTaskPaymentAmount\}<\/Text>/u);
-    assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*<PrimaryButton compact disabled=\{isRefreshingRoutes \|\| isStartingRoute \|\| isRecordingArrival\} label="Arrive" loading=\{isRefreshingRoutes \|\| isStartingRoute \|\| isRecordingArrival\} onPress=\{onArrived\} \/>[\s\S]*<SecondaryButton compact label="Navigate" onPress=\{onOpenNavigation\} \/>[\s\S]*<\/View>/u);
+    assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*<PrimaryButton compact disabled=\{isRefreshingRoutes \|\| isStartingRoute \|\| isRecordingArrival \|\| isCompletingStop\} label=\{singleCompletion \? "Complete Delivery" : "Arrive"\} loading=\{isRefreshingRoutes \|\| isStartingRoute \|\| isRecordingArrival \|\| isCompletingStop\} onPress=\{onArrived\} \/>[\s\S]*<SecondaryButton compact label="Navigate" onPress=\{onOpenNavigation\} \/>[\s\S]*<\/View>/u);
     assert.match(componentSource, /const etaSnapshot = route\.etaSnapshot \?\? null/u);
     assert.match(componentSource, /const nextStopEta = etaSnapshot\?\.nextStopEta \?\? null/u);
     assert.match(componentSource, /const remainingRouteEta = etaSnapshot\?\.remainingRouteEta \?\? null/u);
@@ -148,7 +148,7 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const currentTaskRouteCompletionEta = remainingRouteEta === null[\s\S]*formatAssignedRouteEta\(remainingRouteEta\.estimatedCompletionAt, route\.timezone\)/u);
     assert.match(componentSource, /const currentTaskEtaFailure = etaSnapshot\?\.status === 'FAILED'[\s\S]*ETA unavailable/u);
     assert.match(componentSource, /const showRouteEtaRows = !isPickupTask[\s\S]*etaSnapshot !== null[\s\S]*etaSnapshot\.status === 'READY' \|\| etaSnapshot\.status === 'FAILED'/u);
-    assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*label="Arrive"[\s\S]*label="Navigate"[\s\S]*<\/View>[\s\S]*showRouteEtaRows \? \(/u);
+    assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*label=\{singleCompletion \? "Complete Delivery" : "Arrive"\}[\s\S]*label="Navigate"[\s\S]*<\/View>[\s\S]*showRouteEtaRows \? \(/u);
     assert.match(componentSource, /currentTaskEtaFailure !== null \? \([\s\S]*currentTaskEtaWarningText[\s\S]*\) : \(\s*<>[\s\S]*currentTaskNextStopEta !== null/u);
     assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Estimated arrival time at next stop: \{currentTaskNextStopEta\}<\/Text>/u);
     assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Estimated completion time: \{currentTaskRouteCompletionEta\}<\/Text>/u);
@@ -178,7 +178,7 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const isPickupTask = routeStatus === 'active' && currentNavigationStepIndex === COMPANY_STEP_INDEX/u);
     assert.match(componentSource, /const currentTaskTitle = isPickupTask \? 'Store Pickup' : stop === null \? 'Next Stop'/u);
     assert.match(componentSource, /const currentTaskAddress = stop === null \? null : formatStopSearchAddress\(stop\)/u);
-    assert.match(componentSource, /isPickupTask \? \([\s\S]*<PrimaryButton disabled=\{isRefreshingRoutes\} label="Pickup & Start Route" loading=\{isRefreshingRoutes\} onPress=\{onArrived\} \/>[\s\S]*\) : \([\s\S]*label="Arrive"[\s\S]*label="Navigate"/u);
+    assert.match(componentSource, /isPickupTask \? \([\s\S]*<PrimaryButton disabled=\{isRefreshingRoutes\} label="Pickup & Start Route" loading=\{isRefreshingRoutes\} onPress=\{onArrived\} \/>[\s\S]*\) : \([\s\S]*label=\{singleCompletion \? "Complete Delivery" : "Arrive"\}[\s\S]*label="Navigate"/u);
     assert.match(componentSource, /const pickupTiming = formatAssignedRoutePickupTiming\(route, pickupTimingNow\)/u);
     assert.match(componentSource, /const initialTimer = setTimeout\(\(\) => setPickupTimingNow\(Date\.now\(\)\), 0\)[\s\S]*const minuteTimer = setInterval\(\(\) => setPickupTimingNow\(Date\.now\(\)\), 60_000\)[\s\S]*clearTimeout\(initialTimer\)[\s\S]*clearInterval\(minuteTimer\)/u);
     assert.match(componentSource, /isPickupTask \? \([\s\S]*styles\.pickupTimingGrid[\s\S]*label="Leave" value=\{pickupTiming\.leave\}[\s\S]*label="Route time" value=\{pickupTiming\.routeTime\}[\s\S]*label="Est\. finish" value=\{pickupTiming\.finish\}[\s\S]*<PrimaryButton disabled=\{isRefreshingRoutes\} label="Pickup & Start Route"/u);
@@ -203,11 +203,11 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(arrivedSource, /setMessage\('Store Pickup queued[\s\S]*setMessage\('Store Pickup completed/u);
   });
 
-  it('keeps Arrive on the route session without a redundant live tracking page', () => {
+  it('keeps the legacy Arrive action and gates single completion without another tracking page', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const routeSessionSource = getRouteSessionComponentSource();
 
-    assert.match(routeSessionSource, /label="Arrive"/u);
+    assert.match(routeSessionSource, /label=\{singleCompletion \? "Complete Delivery" : "Arrive"\}/u);
     assert.doesNotMatch(appSource, /liveTracking|LiveTrackingScreen|Live Tracking/u);
   });
 
@@ -412,7 +412,7 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /setArrivalCheckReturnScreen\(returnScreen\);[\s\S]*setScreen\('arrivalCheck'\)/u);
     assert.match(appSource, /handleStopArrivalNotificationPress[\s\S]*recordStopArrival\(stop, 'routeSession', requestScreen, action, routeSession\)/u);
     assert.match(backHandlerSource, /case 'arrivalCheck':[\s\S]*setScreen\(arrivalCheckReturnScreen\);[\s\S]*return true/u);
-    assert.match(appSource, /\[accountName, arrivalCheckReturnScreen, isPhotoActionSheetVisible, screen, setScreen, stopDetailsReturnScreen\]/u);
+    assert.match(appSource, /\[accountName, arrivalCheckReturnScreen, cashInput, isPhotoActionSheetVisible, screen, setScreen, stopDetailsReturnScreen\]/u);
     assert.match(appSource, /screen === 'arrivalCheck' \? \([\s\S]*<FixedScreenHeader onBack=\{handleAppBack\}/u);
     assert.doesNotMatch(backHandlerSource, /setScreen\('stopDetails'\)/u);
   });
@@ -426,7 +426,7 @@ describe('route session current task behavior', () => {
     assert.notEqual(backHandlerStart, -1);
     assert.notEqual(backHandlerEnd, -1);
     assert.match(backHandlerSource, /if \(isPhotoActionSheetVisible\) \{[\s\S]*setIsPhotoActionSheetVisible\(false\);[\s\S]*return true;[\s\S]*\}[\s\S]*switch \(screen\)/u);
-    assert.match(appSource, /\[accountName, arrivalCheckReturnScreen, isPhotoActionSheetVisible, screen, setScreen, stopDetailsReturnScreen\]/u);
+    assert.match(appSource, /\[accountName, arrivalCheckReturnScreen, cashInput, isPhotoActionSheetVisible, screen, setScreen, stopDetailsReturnScreen\]/u);
   });
 
   it('does not let a completed async Arrive request pull the user forward after Back', () => {
@@ -467,7 +467,7 @@ describe('route session current task behavior', () => {
 
     assert.notEqual(deepLinkEffectStart, -1);
     assert.notEqual(deepLinkEffectEnd, -1);
-    assert.match(appSource, /const isNavigationInterruptionProtected = screen === 'arrivalCheck'[\s\S]*\|\| screen === 'proofCamera'[\s\S]*\|\| isPhotoActionSheetVisible[\s\S]*\|\| isCapturingPhoto[\s\S]*\|\| isCompletingStop/u);
+    assert.match(appSource, /const isNavigationInterruptionProtected = cashInput !== null \|\| isStopDetailsInputFocused \|\| screen === 'arrivalCheck'[\s\S]*\|\| screen === 'proofCamera'[\s\S]*\|\| isPhotoActionSheetVisible[\s\S]*\|\| isCapturingPhoto[\s\S]*\|\| isCompletingStop/u);
     assert.match(deepLinkEffectSource, /pendingActiveRouteNotificationTarget === null[\s\S]*\|\| isNavigationInterruptionProtected/u);
     assert.match(deepLinkEffectSource, /isNavigationInterruptionProtected,[\s\S]*navigationStepIndex/u);
   });

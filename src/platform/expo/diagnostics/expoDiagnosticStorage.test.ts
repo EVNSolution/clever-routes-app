@@ -200,6 +200,7 @@ describe('Expo diagnostic storage', () => {
     const db = createDatabase();
     const storage = await createDiagnosticStorage({
       keyStore: { getItemAsync: async () => '33'.repeat(32), setItemAsync: async () => undefined },
+      now: () => new Date('2026-10-01T14:05:03.000Z'),
       openDatabaseAsync: async () => db.database,
       randomBytes: async () => new Uint8Array(32),
     });
@@ -252,6 +253,7 @@ describe('Expo diagnostic storage', () => {
     const db = createDatabase();
     const storage = await createDiagnosticStorage({
       keyStore: { getItemAsync: async () => '77'.repeat(32), setItemAsync: async () => undefined },
+      now: () => new Date('2026-10-01T14:05:03.000Z'),
       openDatabaseAsync: async () => db.database,
       randomBytes: async () => new Uint8Array(32),
     });

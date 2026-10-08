@@ -20,7 +20,9 @@ describe('cached active route connection wiring', () => {
   it('pauses offline evidence replay until fresh route hydration clears the cached marker', () => {
     const retry = source.slice(source.indexOf('const retryOfflineSubmissionsForSessions ='), source.indexOf('const selectedRouteSession ='));
     assert.match(retry, /if \(cachedLiveRouteValidationRef\.current !== null\) return false;/u);
-    assert.ok(retry.indexOf('cachedLiveRouteValidationRef') < retry.indexOf('getExpoOfflineSubmissionQueue'));
+    const guardIndex = retry.indexOf('if (cachedLiveRouteValidationRef.current !== null) return false;');
+    assert.ok(retry.indexOf('recoverPendingStopCompletionReceipts({') < guardIndex, 'read-only account receipts can recover before cached-route validation');
+    assert.ok(guardIndex < retry.indexOf('const result = await retryOfflineSubmissions({'), 'cached route still blocks all event replay');
     const load = source.slice(source.indexOf('const handleLoginAndLoadRoutes ='), source.indexOf('const handleRefreshRoutes ='));
     assert.match(load, /cachedLiveRouteValidationRef\.current = cachedActiveSession === null \? null : \{/u);
     assert.ok(load.indexOf('cachedLiveRouteValidationRef.current =') < load.indexOf('void retryOfflineSubmissionsForSessions(loadedSessionsWithPendingEnds)'));

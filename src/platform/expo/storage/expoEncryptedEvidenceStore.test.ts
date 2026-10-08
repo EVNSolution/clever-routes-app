@@ -121,6 +121,57 @@ function createDatabase(input?: {
 }
 
 describe('encrypted driver evidence store', () => {
+  it('keeps exact Cash request and accepted receipt in SQLCipher through restart and sign-out', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    let currentTime = new Date('2026-10-08T07:00:00.000Z');
+    const now = () => currentTime;
+    const store = await createEncryptedEvidenceStore({
+      keyStore: { getItemAsync: async () => '10'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database, randomBytes: async () => new Uint8Array(32), now,
+    });
+    const queue = await createPersistentOfflineSubmissionQueue({ storage: store, now });
+    const event = { appVersion: '1.3.4', assignmentGeneration: '2', clientEventId: 'cash-event',
+      completion: { version: 1 as const, cashReceived: { amount: '9999999999999999.25', currency: 'CAD' } },
+      deliveryStopId: 'cash-stop', driverContractVersion: 2 as const, eventType: 'STOP_DELIVERED' as const,
+      expectedRouteVersionId: 'original-publication', occurredAt: now(), payload: { proof: { note: 'Original note' } }, routePlanId: 'cash-route', versionCode: 40 };
+    const queued = queue.enqueueDriverEvent(event);
+    await queue.whenPersisted();
+    const pendingWrite = db.runCalls.find(call => call.sql.includes('INTO sensitive_evidence'));
+    assert.equal(pendingWrite?.params[4], '9999-12-31T23:59:59.999Z');
+    currentTime = new Date('2026-10-20T07:00:00.000Z');
+    const restarted = await createPersistentOfflineSubmissionQueue({ storage: store, now });
+    const saved = restarted.listPending()[0];
+    assert.deepEqual(saved?.kind === 'driver_event' ? saved.event : null, event);
+    const completion = { id: 'cash-receipt', eventId: 'server-event', deliveryStopId: 'cash-stop', routePlanId: 'cash-route', driverId: 'driver',
+      assignmentGeneration: '2', expectedRouteVersionId: 'original-publication', method: 'CASH' as const,
+      payment: { method: 'CASH' as const, methodTitle: 'Cash', gatewayNames: ['Cash'], financialStatus: 'PENDING', expectedAmount: '9999999999999999.50', currencyCode: 'CAD', expectedAmountSource: 'SHOPIFY_OUTSTANDING' as const, requiresCashInput: true },
+      expectedAmount: '9999999999999999.50', actualAmount: '9999999999999999.25', differenceAmount: '-0.25', currencyCode: 'CAD', occurredAt: event.occurredAt.toISOString(), recordedAt: now().toISOString() };
+    assert.equal(restarted.acknowledge(queued.queueItemId, completion), true);
+    await restarted.whenPersisted();
+    const afterAck = await createPersistentOfflineSubmissionQueue({ storage: store, now });
+    assert.deepEqual(afterAck.getStopCompletion('cash-route', 'cash-stop'), completion);
+    assert.equal(afterAck.listPending().length, 0);
+    afterAck.bindAccountOwnerHash('b'.repeat(64));
+    assert.equal(afterAck.getStopCompletion('cash-route', 'cash-stop'), null);
+    const publicRows = [...(db.tables.get('workflow_evidence')?.values() ?? [])].join('');
+    assert.equal(publicRows.includes('9999999999999999'), false);
+    assert.equal((await store.exportDiagnostics()).includes('9999999999999999'), false);
+    const sensitiveKey = `${queued.accountOwnerHash}:${queued.queueItemId}`;
+    const savedSensitive = db.tables.get('sensitive_evidence')!.get(sensitiveKey)!;
+    for (const corrupted of [
+      '{malformed',
+      JSON.stringify({ ...JSON.parse(savedSensitive), completion: { version: 1, cashReceived: { amount: 12, currency: 'CAD' } } }),
+    ]) {
+      db.tables.get('sensitive_evidence')!.set(sensitiveKey, corrupted);
+      await assert.rejects(createPersistentOfflineSubmissionQueue({ storage: store, now }), /STORAGE_DEGRADED/u);
+      assert.equal(db.tables.get('workflow_evidence')?.size, 1);
+      assert.equal(db.tables.get('sensitive_evidence')?.get(sensitiveKey), corrupted);
+    }
+    db.tables.get('sensitive_evidence')?.clear();
+    await assert.rejects(createPersistentOfflineSubmissionQueue({ storage: store, now }), /STORAGE_DEGRADED: original completion input/u);
+    assert.equal(db.tables.get('workflow_evidence')?.size, 1, 'missing sensitive input must not delete the original envelope');
+  });
+
   it('serializes cold-start queue hydration reads and live-route reads on the shared native handle', async () => {
     const db = createDatabase({ userVersion: 2 });
     const store = await createEncryptedEvidenceStore({
