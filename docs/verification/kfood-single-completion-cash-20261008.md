@@ -1,8 +1,11 @@
 # KFood single completion and Cash verification — 2026-10-08
 
-Implementation and local checks passed. Physical acceptance is incomplete because
-the designated device was in use by another integration task. Dependency audit
-also remains failed. This work is a Draft and is not ready for integration or release.
+This file preserves the implementation and F01/F02 review record. The later
+release-readiness run completed the designated-device core acceptance; see the
+[native evidence](kfood-pr299-native-acceptance-20261008.md),
+[dependency findings](kfood-pr299-dependency-audit-20261008.md) and
+[candidate/integration record](kfood-pr299-release-candidate-20261008.md).
+The dependency audit remains failed. This Draft is not ready for release.
 
 ## Source and scope
 

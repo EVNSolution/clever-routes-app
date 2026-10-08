@@ -1,9 +1,9 @@
 # PR299 Android release candidate preparation — 2026-10-08
 
-Status: candidate identity prepared; publication remains blocked. This document
+Status: signed candidate AAB built and statically verified; publication remains blocked. This document
 prepares a build and integration sequence. It does not authorize a merge,
 production migration, store submission, APK publication, or feature activation.
-The root task must add the final commit, candidate artifact and check results.
+The committed candidate source is `985f999ad2c4f9354ff2c856174e4542410c6554`. Build and acceptance evidence are recorded separately below.
 
 ## Source and current distribution
 
@@ -22,8 +22,10 @@ The root task must add the final commit, candidate artifact and check results.
 | Authenticated Play Console snapshot | All App Bundles: 13 versions, descending order; highest `40` (`1.3.4`), no `41`, observed 2026-10-08 |
 | Play release tracks | Production `40`, internal `39`, open testing `36`; dashboard shows no unpublished changes |
 | Active install destination | Google Play: `https://play.google.com/store/apps/details?id=com.evnsolution.clever.routes` |
-| Final candidate source SHA | Pending root finalization after checks and commit |
-| Candidate AAB / checksum / signing verification | Pending candidate build; the Cash QA APK cannot fill this row |
+| Candidate source SHA | `985f999ad2c4f9354ff2c856174e4542410c6554` |
+| Candidate AAB | `clever-routes-1.3.5-41-985f999.aab`, 112,132,349 bytes |
+| AAB SHA256 | `3c620a406c54e7bf8af0b9d1f1c2b0bbd7a682daa0252d30fa1986e67313b789` |
+| EAS build | [0fcfbb4c-1c55-4a82-a113-a3ecc6dfbf5b](https://expo.dev/accounts/evandsolution/projects/clever-routes-app/builds/0fcfbb4c-1c55-4a82-a113-a3ecc6dfbf5b), FINISHED at `2026-10-08T12:04:27Z` |
 
 Both public GETs returned HTTP200 with the same release on 2026-10-08:
 [`/routes-app/release/android`](https://clever-route.cleversystem.ai/routes-app/release/android)
@@ -42,10 +44,10 @@ versions sorted descending, with `40` (`1.3.4`) highest and no `41`. The latest
 releases were production `40`, internal `39` and open testing `36`. The dashboard
 showed no unpublished changes.
 
-These observations support `41` as the next candidate code. No reservation or
-upload has occurred during this preparation. Recheck EAS and Play before the
-controlled build in case another release task allocates a code. Do not reuse an
-already submitted or reserved number without its recovery record.
+These observations supported `41` as the next candidate code before the build.
+The subsequent controlled `production` build reserved **41**, used the existing
+remote upload key, and finished successfully. Do not allocate or submit a second
+artifact with this reserved number. This task did not upload to Play Console.
 
 Only identity values changed: Expo, package/root lock metadata, Android Gradle,
 iOS marketing version, and the matching version assertions. Dependency versions,
@@ -121,12 +123,12 @@ npx eas-cli env:get production --variable-name EXPO_PUBLIC_DELIVERY_SERVER_BASE_
 npx eas-cli env:get production --variable-name EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA --non-interactive
 ```
 
-After the root task selects the clean candidate and confirms remote version40,
-this existing command creates a signed AAB candidate and reserves the next code.
-It builds only; it does not submit to Google Play:
+After selecting the clean candidate and confirming remote version40, the task
+ran this existing build command. It reserved41 and produced the AAB listed above.
+It did not submit to Google Play. Do not repeat it for this candidate:
 
 ```sh
-npx eas-cli build -p android --profile production --non-interactive
+npx eas-cli build -p android --profile production --non-interactive --no-wait
 ```
 
 The configured production environment supplies the cloud runtime and Firebase
@@ -285,19 +287,61 @@ No foreign file was changed and no other chat was contacted.
 
 - Identity declaration diff contains only version updates; dependency entries remain unchanged.
 - Native release preflight: seven checks passed after version preparation.
-- Root-reported native response-loss acceptance: the app was killed after the
-  real commit with `responseDelivered=false`, one event and one receipt. Restart
-  recovered the receipt and advanced to stop 2. Final evidence paths remain for
-  root finalization.
-- Release profile tests: eight passed initially; the documentation-version check
-  requires the root task's `release-readiness.md` source-version update.
+- [Designated-device native acceptance](kfood-pr299-native-acceptance-20261008.md):
+  current/future completion, Cash amounts, eTransfer, native process loss after
+  server commit and offline SQLCipher persistence passed. Supplemental cases and
+  the later device-occupation interruption are listed separately.
+- Source version and documentation assertions: passed within the complete
+  workspace run after the release-readiness source version was updated.
+- `npm run check:workspace`: 1,142 tests / 119 suites passed, 0 skipped; source
+  layout and TypeScript checks passed. Log: `checks/workspace-candidate41.log`.
 - `git diff --check`: passed for the identity changes.
 - Fresh `npm run lint`: passed with zero errors and three existing
   `react-hooks/exhaustive-deps` warnings in `AppRoot.tsx` at lines 2788, 3435 and
   3533. Log: release-ready artifact `checks/candidate-preparation-lint.log`.
 - Fresh `git diff --check`: passed for the working-tree diff. Log: release-ready
   artifact `checks/candidate-preparation-diff-check.log`.
-- Remote version/signing/Firebase metadata and public release reads made no
-  build reservation, credential download, upload or server mutation.
-- Final source SHA, candidate AAB checks and remaining release-gate results must
-  be filled by the root task. Keep the dependency audit's actual failure visible.
+- Initial version/signing/Firebase inspection was read-only. The subsequent
+  EAS production build reserved versionCode 41 and uploaded the committed source
+  for a build only. No store/APK publication or server mutation occurred.
+- The final PR-head CI result is recorded in PR299 and the private final manifest.
+  The dependency audit remains failed; native/unit/build success does not waive it.
+
+## Built candidate verification
+
+The AAB was built from committed source `985f999ad2c4f9354ff2c856174e4542410c6554`
+using the existing EAS `production` profile (`STORE`, remote credentials).
+Subsequent evidence-only commits do not change its build source identity.
+The binary is retained under the private release-ready artifact directory.
+
+| Check | Result |
+| --- | --- |
+| Package / version / debuggable | `com.evnsolution.clever.routes` / `1.3.5` / `41` / `false` |
+| Bundle structure | `bundletool validate` passed |
+| Upload certificate | SHA256 `55c14543e167a55efe4f0153c9fee0e52d2fd3ae567a255356c40aee8893ee48`; matches EAS and Play Console |
+| Signed entries | JAR integrity verified; Java JarFile verified all 1,421 content entries, with zero unsigned or mismatched-signer entries |
+| Embedded runtime endpoint guard | Passed: canonical production origin occurs once; localhost8443/8445 forbidden origins absent |
+| Embedded JS bundle SHA256 | `2f7f4a08653b1db8157c860ab0a83a1e5172e89c80c60e4608eebd1b353c3187` |
+| Cash opt-in configuration | Configuration evidence passed: production profile and queried EAS production environment omit the flag; exact `true` is required by source and the embedded check |
+| Physical acceptance | Isolated `.cashqa` package only; operating package retained |
+
+JAR verification also reports a self-signed certificate, no signing timestamp,
+unprotected POSIX metadata, and a JarInputStream manifest-order warning. These messages are retained in
+`checks/eas-candidate-signing.json`; certificate matching, JAR integrity and
+bundle structure are separate observations. No warning was suppressed.
+
+The serialized flag initializer was not independently decoded. The production
+AAB was not executed on a device, so this is not an observed operating-device
+flag state.
+
+Evidence files: `checks/eas-candidate-summary.json`, `checks/eas-candidate-manifest.json`,
+`checks/eas-candidate-runtime.json`, `checks/eas-candidate-signing.json`,
+`checks/eas-candidate-default-off.json`, and the EAS build record. This static
+verification does not replace exact-artifact Play internal testing or authorize
+installation over the operating app. No derived APK was installed.
+
+The release remains blocked by the dependency audit and the documented server,
+app-integration and store-acceptance sequence. The focused QA pass does not
+replace the supplemental account/reassignment/Dispatch native checks listed in
+the native acceptance record. Canonical service-context edits are prepared above
+and remain outside this repository's write scope.

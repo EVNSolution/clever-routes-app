@@ -4,7 +4,7 @@
 
 **Blocked: 20 High findings remain.** These findings propagate from two direct advisories. No compatible published fix was available when checked on 2026-10-08. No dependency version, resolved package, audit threshold, or ignore rule changed. Package and root-lock versions changed only for the 1.3.5 release identity. Host-tool exposure does not mean the vulnerabilities are fixed.
 
-- App baseline reviewed: `4c7f3cc57e28c263e484f2c44fa01b329faca79e`. QA41 includes the subsequent 1.3.5/41 release identity changes; final source SHA is pending.
+- App baseline reviewed: `4c7f3cc57e28c263e484f2c44fa01b329faca79e`. QA41 includes the 1.3.5/41 release identity changes committed as `985f999ad2c4f9354ff2c856174e4542410c6554`.
 - Checkout: `/Users/jiin/.codex/worktrees/kfood-app-single-completion-cash/clever-routes-app`.
 - Baseline audit `package.json` SHA-256: `cfce1406e23b9f5aeb08989afc1bb248ac28d2a1764dcf5974d381ce23d6e335`.
 - Baseline audit `package-lock.json` SHA-256: `8ceaca60f6f4dd82a5334ac2594f3b948c25e42c033121c58cc8ceded6d1af45`.
@@ -70,7 +70,18 @@ Inspected immutable APK copy:
 - The Metro runtime file `@expo/cli/build/metro-require/require.js` is present. This evidence must not be described as excluding all Expo CLI files.
 - No package-named ZIP entry matches those four packages. Source-map inspection supplies the stronger JavaScript module evidence.
 
-This is the final QA41 APK for device acceptance, not a distribution candidate. It does not certify production signing, the production endpoint, or a final distribution bundle. When a production candidate is built, record its SHA and inspect its exact bundle/source map separately. Even an absent runtime module does not clear a vulnerable build dependency or the CI gate.
+This is the final QA41 APK for device acceptance, not a distribution candidate. It does not certify production signing, the production endpoint, or a final distribution bundle. Even an absent runtime module does not clear a vulnerable build dependency or the CI gate.
+
+## Signed production AAB exposure evidence and limits
+
+The subsequent EAS production build used source `985f999ad2c4f9354ff2c856174e4542410c6554` and produced the 1.3.5/41 operating-package candidate.
+
+- AAB SHA-256: `3c620a406c54e7bf8af0b9d1f1c2b0bbd7a682daa0252d30fa1986e67313b789`.
+- Exact embedded `base/assets/index.android.bundle` SHA-256: `2f7f4a08653b1db8157c860ab0a83a1e5172e89c80c60e4608eebd1b353c3187`.
+- No package-name/path marker for `braces`, `node-forge`, `micromatch`, or `@expo/code-signing-certificates` appeared in ZIP entries or the UTF-8/UTF-16LE bundle scan.
+- No production JavaScript source map or module inventory was available in the inspected artifacts. The production and QA bundles differ. The QA map cannot establish production module absence.
+
+The exact AAB probe found no direct package-marker evidence; it does **not** prove that vulnerable code is absent. Production signing and endpoint checks are recorded separately in the [candidate record](kfood-pr299-release-candidate-20261008.md). Build-host exposure and the 20 High audit failure remain. Probe details: private `checks/eas-candidate-dependency-exposure.json`.
 
 ## Checks and retained evidence
 
