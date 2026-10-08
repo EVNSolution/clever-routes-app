@@ -1,0 +1,173 @@
+{
+  "mobileBaseSha": "e2236e67efb8ece0bddfe5af503deb7fa77d4e6f",
+  "mobileSourceSha256": "b3360281b69a794ad5f97ed1b05536c611f001010e079067ab79db1b97698821",
+  "status": "pass",
+  "verifiedAt": "2026-10-08T09:07:10.627Z",
+  "serverSourceSha": "bd132f199c2a058d8e14fe33d97497307a51af45",
+  "shopifySourceSha": "e3f5a2a9819cb0ddd58766912b8ff31de2c759ae",
+  "transport": "Loopback TLS proxy \u2192 real Fastify HTTP \u2192 isolated PostgreSQL",
+  "checks": [
+    {
+      "name": "Actual assigned-route DTO preserves Cash, eTransfer, paid, unknown method/balance/currency and missing phone",
+      "result": "pass"
+    },
+    {
+      "name": "Missing Cash actual amount gets authoritative400 without a receipt",
+      "result": "pass"
+    },
+    {
+      "name": "Actual122/122.25/123/0 persist exact results; double-tap and identical retries create one receipt each",
+      "result": "pass"
+    },
+    {
+      "name": "Successful POST without completion and APPLIED receipt without completion cannot acknowledge or erase opt-in request",
+      "result": "pass"
+    },
+    {
+      "name": "eTransfer/paid/unknown methods complete without Cash; unknown expected amount stays null",
+      "result": "pass"
+    },
+    {
+      "name": "Current source changes cannot rewrite completion; account receipt restores immutable result and rejects other accounts",
+      "result": "pass"
+    },
+    {
+      "name": "Offline and503 preserve original durable request; recreated queue sends same identity/time/version/amount",
+      "result": "pass"
+    },
+    {
+      "name": "Authoritative400 currency mismatch quarantines original money; no infinite retry or legacy fallback",
+      "result": "pass"
+    },
+    {
+      "name": "Post-DB response hold confirms one receipt; socket interruption and queue recreation recover via receipt without another POST",
+      "result": "pass"
+    },
+    {
+      "name": "PR486 Dispatch remains pending until explicit Apply; retained inputs and immutable completion survive",
+      "result": "pass"
+    },
+    {
+      "name": "Account switch hides other owner queue; assignment conflict retains original pending money and original driver receipt remains recoverable",
+      "result": "pass"
+    },
+    {
+      "name": "No STOP_ARRIVED generated; all opt-in completion fields stay top-level and database stores exactly11 receipts",
+      "result": "pass"
+    }
+  ],
+  "cashReceipts": [
+    {
+      "clientEventId": "62c6f7cb-1967-46fc-9fd1-1bf4ae8e91dd",
+      "expectedAmount": "122.25",
+      "actualAmount": "122.00",
+      "differenceAmount": "-0.25",
+      "currencyCode": "CAD"
+    },
+    {
+      "clientEventId": "09c1cc33-678f-4951-9ebd-37d1e0c4ac80",
+      "expectedAmount": "122.25",
+      "actualAmount": "122.25",
+      "differenceAmount": "0.00",
+      "currencyCode": "CAD"
+    },
+    {
+      "clientEventId": "ae3c5454-f910-4ca1-8c12-af083253cfc2",
+      "expectedAmount": "122.25",
+      "actualAmount": "123.00",
+      "differenceAmount": "0.75",
+      "currencyCode": "CAD"
+    },
+    {
+      "clientEventId": "efad8b18-3934-4aa5-85d2-32ae1851a7ad",
+      "expectedAmount": "122.25",
+      "actualAmount": "0.00",
+      "differenceAmount": "-122.25",
+      "currencyCode": "CAD"
+    },
+    {
+      "clientEventId": "05da432a-571e-4949-be8a-a7e887372eab",
+      "expectedAmount": "122.25",
+      "actualAmount": null,
+      "differenceAmount": null,
+      "currencyCode": "CAD"
+    },
+    {
+      "clientEventId": "18fa1821-dac8-445d-8e59-6598fa6a26f2",
+      "expectedAmount": "0.00",
+      "actualAmount": null,
+      "differenceAmount": null,
+      "currencyCode": "CAD"
+    },
+    {
+      "clientEventId": "e1804c96-46a2-480b-9312-f476e6f689b1",
+      "expectedAmount": "122.25",
+      "actualAmount": null,
+      "differenceAmount": null,
+      "currencyCode": "CAD"
+    },
+    {
+      "clientEventId": "662874f7-7107-4296-beda-d9d4ae35c538",
+      "expectedAmount": "122.25",
+      "actualAmount": null,
+      "differenceAmount": null,
+      "currencyCode": "CAD"
+    },
+    {
+      "clientEventId": "a7706784-59aa-431b-9650-87b913930ed8",
+      "expectedAmount": null,
+      "actualAmount": "22.00",
+      "differenceAmount": null,
+      "currencyCode": "CAD"
+    },
+    {
+      "clientEventId": "a9432bca-9c17-4785-b94f-b5fb64b88a5d",
+      "expectedAmount": "122.25",
+      "actualAmount": "123.00",
+      "differenceAmount": "0.75",
+      "currencyCode": "CAD"
+    },
+    {
+      "clientEventId": "e52f9449-5e32-4171-9ad8-98f4f2fe89ba",
+      "expectedAmount": "122.25",
+      "actualAmount": "122.00",
+      "differenceAmount": "-0.25",
+      "currencyCode": "CAD"
+    }
+  ],
+  "limitations": [
+    "Real app API/parser/queue with temporary file persistence; native SQLCipher and app-process termination require separate physical-device evidence.",
+    "No external providers, real customers or production deployment."
+  ],
+  "heldResponse": {
+    "heldAt": "2026-10-08T09:07:09.599Z",
+    "responseDelivered": false,
+    "originalRequest": {
+      "appVersion": "1.3.4-cashqa",
+      "assignmentGeneration": "2",
+      "clientEventId": "e52f9449-5e32-4171-9ad8-98f4f2fe89ba",
+      "completion": {
+        "version": 1,
+        "cashReceived": {
+          "amount": "122",
+          "currency": "CAD"
+        }
+      },
+      "deliveryStopId": "8497d321-8ead-4531-84de-96d9b4239a57",
+      "driverContractVersion": 2,
+      "eventType": "STOP_DELIVERED",
+      "expectedRouteVersionId": "8aeb52af-fc80-49f2-865a-60916b530597",
+      "occurredAt": "2026-10-08T09:07:09.471Z",
+      "routePlanId": "a956b595-3bb5-4af2-8e1c-5bc66c6412cd",
+      "versionCode": 40
+    },
+    "counts": null,
+    "receipt": {
+      "clientEventId": "e52f9449-5e32-4171-9ad8-98f4f2fe89ba",
+      "expectedAmount": "122.25",
+      "actualAmount": "122.00",
+      "differenceAmount": "-0.25",
+      "currencyCode": "CAD"
+    }
+  }
+}

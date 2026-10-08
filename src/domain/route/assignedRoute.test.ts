@@ -20,6 +20,53 @@ import {
 } from './assignedRoute';
 import { assignedRouteValidationScenarios } from './assignedRouteValidationScenarios';
 
+describe('assigned route completion capability', () => {
+  const payment = { method: 'CASH', methodTitle: 'Cash', gatewayNames: ['Cash'], financialStatus: 'PENDING',
+    expectedAmount: '122.25', currencyCode: 'CAD', expectedAmountSource: 'SHOPIFY_OUTSTANDING', requiresCashInput: true };
+  const completion = {
+    id: 'receipt-1', eventId: 'event-1', deliveryStopId: 'stop-1', routePlanId: 'route-1', driverId: 'driver-1',
+    assignmentGeneration: '2', expectedRouteVersionId: 'version-1', method: 'CASH', payment,
+    expectedAmount: '122.25', actualAmount: '122.00', differenceAmount: '-0.25', currencyCode: 'CAD',
+    occurredAt: '2026-10-08T07:00:00.000Z', recordedAt: '2026-10-08T07:00:02.000Z',
+  };
+  const getRoute = async (fields: Record<string, unknown>) => {
+    const client = createAssignedRouteApiClient({
+      accessToken: 'fixture-token', baseUrl: 'https://delivery.example.com',
+      fetchImpl: async () => ({ ok: true, json: async () => ({ data: {
+        status: 'ASSIGNED_ROUTE', route: { ...sampleAssignedRoute,
+          stops: [{ ...sampleAssignedRoute.stops[0], ...fields }] },
+      } }) }),
+    });
+    const result = await client.getAssignedRoute({ routeContext: sampleAssignedRoute.id });
+    assert.equal(result.status, 'ASSIGNED_ROUTE');
+    if (result.status !== 'ASSIGNED_ROUTE') throw new Error('Expected assigned route');
+    return result.route.stops[0]!;
+  };
+
+  it('preserves omission in old responses and explicit null in the new contract', async () => {
+    const legacy = await getRoute({});
+    assert.equal(Object.hasOwn(legacy, 'payment'), false);
+    assert.equal(Object.hasOwn(legacy, 'completion'), false);
+    const supported = await getRoute({ payment, completion: null });
+    assert.deepEqual(supported.payment, payment);
+    assert.equal(supported.completion, null);
+    assert.equal(Object.hasOwn(supported, 'completion'), true);
+  });
+
+  it('preserves the immutable historical receipt separately from changed current payment', async () => {
+    const current = { ...payment, expectedAmount: '999.00' };
+    const stop = await getRoute({ payment: current, completion });
+    assert.equal(stop.payment?.expectedAmount, '999.00');
+    assert.equal(stop.completion?.expectedAmount, '122.25');
+    assert.equal(Object.isFrozen(stop.completion), true);
+  });
+
+  it('rejects malformed supplied fields instead of treating them as an older contract', async () => {
+    await assert.rejects(getRoute({ payment: { ...payment, expectedAmount: 122.25 }, completion: null }), /Invalid assigned route/u);
+    await assert.rejects(getRoute({ payment, completion: { ...completion, actualAmount: 0 } }), /Invalid assigned route/u);
+  });
+});
+
 describe('driver assigned route UX flow', () => {
   it('blocks route reads before consent is recorded', async () => {
     let calls = 0;

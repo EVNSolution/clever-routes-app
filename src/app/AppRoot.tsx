@@ -1,6 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
+import * as Crypto from 'expo-crypto';
 import * as Speech from 'expo-speech';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Network from 'expo-network';
@@ -36,6 +37,9 @@ import {
   type OperationalDialogButton,
   type OperationalDialogState,
 } from './OperationalDialog';
+import { CashCompletionModal, StopCompletionPanel } from './StopCompletionPanel';
+import { buildCashCompletion, formatCompletionAmount, getSingleCompletionAction, supportsSingleCompletion } from './kfoodSingleCompletion';
+import type { StopCompletion, StopCompletionInput } from '../domain/stop/stopCompletion';
 import { LiveRouteChangeBanner } from './liveRouteChangeBanner';
 import { applyLiveRouteChange, getLiveRouteRecoveryProgress, hasPendingLiveRouteChange, observeLiveRoutePublication, preserveLiveRouteStep, retryLiveRouteAcknowledgement, stageLiveRouteRefresh, supportsLiveRouteChanges, shouldCheckLiveRouteChange } from './liveRouteChangeController';
 import { emptyLiveRouteChangeState, type LiveRouteChangeState, type LiveRouteChangeUiDraft } from '../domain/route/liveRouteChangeStore';
@@ -150,6 +154,7 @@ import {
   getOfflineSubmissionQueueSummary,
   getPendingRouteEnd,
   recoverPendingRouteEndReceipt,
+  recoverPendingStopCompletionReceipts,
   resolveProofMediaUploadIdempotencyKey,
   retryOfflineSubmissions,
   type OfflineCompletionClearOutboxEntry,
@@ -500,8 +505,14 @@ function DriverApp() {
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [isPhotoActionSheetVisible, setIsPhotoActionSheetVisible] = useState(false);
   const [isCompletingStop, setIsCompletingStop] = useState(false);
+  const completionSubmissionRunningRef = useRef(false);
+  const [cashInput, setCashInput] = useState<{ key: string; stop: AssignedRouteStop; routePlanId: string; owner: string | null; generation: string; version: string; switchToRoutePlanId?: string } | null>(null);
+  const [cashDrafts, setCashDrafts] = useState<Record<string, string>>({});
+  const [cashInputError, setCashInputError] = useState<string | null>(null);
+  const [isStopDetailsInputFocused, setIsStopDetailsInputFocused] = useState(false);
+  const proofReturnScreenRef = useRef<'arrivalCheck' | 'stopDetails'>('arrivalCheck');
   const [isFinishingRoute, setIsFinishingRoute] = useState(false);
-  const isNavigationInterruptionProtected = screen === 'arrivalCheck'
+  const isNavigationInterruptionProtected = cashInput !== null || isStopDetailsInputFocused || screen === 'arrivalCheck'
     || screen === 'proofCamera'
     || isPhotoActionSheetVisible
     || isCapturingPhoto
@@ -809,6 +820,7 @@ function DriverApp() {
     () => readDriverRuntimeConfig({
       EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: process.env.EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL,
       EXPO_PUBLIC_DRIVER_RUNTIME_MODE: process.env.EXPO_PUBLIC_DRIVER_RUNTIME_MODE,
+      EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA: process.env.EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA,
     }),
     [],
   );
@@ -1684,8 +1696,7 @@ function DriverApp() {
   ]);
 
   const retryOfflineSubmissionsForSessions = useCallback(async (sessions: RouteSession[]): Promise<boolean> => {
-    if (cachedLiveRouteValidationRef.current !== null) return false;
-    if (retryingOfflineSubmissionsEpochRef.current !== null || sessions.length === 0) {
+    if (retryingOfflineSubmissionsEpochRef.current !== null) {
       return true;
     }
 
@@ -1720,6 +1731,14 @@ function DriverApp() {
       if (runtimeConfig.mode === 'live' && receiptAccountAccess === null) {
         throw new Error('Account access is required before completion receipt recovery.');
       }
+      if (runtimeConfig.mode === 'live' && receiptAccountAccess !== null) {
+        const recovered = await recoverPendingStopCompletionReceipts({ queue, isCurrent, lifecycleSignal,
+          driverEventReceiptService: createDriverEventReceiptApiClient({ accountAccessToken: receiptAccountAccess.accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl }) });
+        if (!isCurrent()) return false;
+        setServerConfirmedStopIds(current => [...new Set([...current, ...recovered.acknowledgedStopIds])]);
+        syncOfflineQueueState(queue);
+      }
+      if (cachedLiveRouteValidationRef.current !== null) return false;
       for (const session of sessions) {
         if (liveRouteStatesRef.current[liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration)]?.appliedRoute === null) {
           completedWithoutRetainedFailures = false;
@@ -1993,6 +2012,25 @@ function DriverApp() {
     && navigationStepIndex !== COMPANY_STEP_INDEX
     && stopDetailsStop !== null
     && !isStopCompleted(stopDetailsStop, completedStopIds);
+  function usesSingleCompletion(stop: AssignedRouteStop | null): boolean {
+    return stop !== null && !isAssignedRoutePickupStop(stop) && supportsSingleCompletion({
+      enabled: runtimeConfig.kfoodSingleCompletionQaEnabled, mode: runtimeConfig.mode,
+      shopDomain: selectedRoute?.shopDomain, driverContractVersion: selectedRouteSession?.routeAccess.driverContractVersion,
+      payment: stop.payment,
+    });
+  }
+  function getStopReceipt(stop: AssignedRouteStop): StopCompletion | null {
+    const durable = selectedRoute === null ? null : offlineSubmissionQueue?.getStopCompletion(selectedRoute.id, stop.deliveryStopId);
+    return stop.completion ?? durable ?? null;
+  }
+  function getPendingStopCompletion(stop: AssignedRouteStop) {
+    const pending = offlineSubmissionQueue?.listPending().find(item => item.kind === 'driver_event'
+      && item.event.routePlanId === selectedRoute?.id && item.event.deliveryStopId === stop.deliveryStopId && item.event.completion !== undefined);
+    return pending?.kind === 'driver_event' && pending.event.completion !== undefined
+      ? { completion: pending.event.completion, blocked: pending.state === 'QUARANTINED' || pending.reconciliation !== undefined } : null;
+  }
+  const currentUsesSingleCompletion = usesSingleCompletion(currentStop);
+  const detailsUsesSingleCompletion = usesSingleCompletion(stopDetailsStop);
   const canSkipFromStopDetails = canArriveFromStopDetails
     && currentStop?.deliveryStopId === stopDetailsStop?.deliveryStopId
     && !isCompletingStop
@@ -2283,6 +2321,14 @@ function DriverApp() {
       setMessage('The active route could not be confirmed. Refresh the route and try again.');
       return false;
     }
+    if (!isAssignedRoutePickupStop(stop) && supportsSingleCompletion({ enabled: runtimeConfig.kfoodSingleCompletionQaEnabled,
+      mode: runtimeConfig.mode, shopDomain: routeSession.route.shopDomain, driverContractVersion: routeSession.routeAccess.driverContractVersion, payment: stop.payment })) {
+      setSelectedStopDetailsId(stop.deliveryStopId);
+      setStopDetailsReturnScreen('routeSession');
+      setScreen('stopDetails');
+      if (action === 'next_stop') setPendingStopArrivalCompletion({ deliveryStopId: stop.deliveryStopId, routePlanId: routeSession.route.id, type: STOP_ARRIVAL_NOTIFICATION_TYPE });
+      return true;
+    }
     if (isRecordingArrivalRef.current) {
       setMessage('Arrival is already being recorded. The extra action was ignored.');
       return false;
@@ -2377,7 +2423,7 @@ function DriverApp() {
       setIsRecordingArrival(false);
       releaseProgressMutation();
     }
-  }, [foregroundLocationSnapshotService, isStartingRoute, routeStartRecoveryState, selectedRouteSession, setScreen, submitStopArrivalForRouteStop]);
+  }, [foregroundLocationSnapshotService, isStartingRoute, routeStartRecoveryState, runtimeConfig, selectedRouteSession, setScreen, submitStopArrivalForRouteStop]);
 
   const handleStopArrivalNotificationPress = useCallback(async (response: StopArrivalNotificationResponse) => {
     const { action, data } = response;
@@ -2813,6 +2859,22 @@ function DriverApp() {
       setOfflineSubmissionQueue(accountQueue);
       syncOfflineQueueState(accountQueue);
       if (!isLoginAccountCurrent()) return;
+      if (runtimeConfig.mode === 'live' && accountQueue.listPending().some(item => item.kind === 'driver_event' && item.event.completion !== undefined)) {
+        // Account receipts remain readable when the original route token/assignment is gone.
+        retryingOfflineSubmissionsEpochRef.current = loginEpoch;
+        try {
+          const recovered = await recoverPendingStopCompletionReceipts({ queue: accountQueue, isCurrent: isLoginOwnerCurrent, lifecycleSignal: loginLifecycleSignal,
+            driverEventReceiptService: createDriverEventReceiptApiClient({ accountAccessToken: accountAccess.accessToken, baseUrl: runtimeConfig.deliveryServerBaseUrl }) });
+          if (!isLoginAccountCurrent()) return;
+          setServerConfirmedStopIds(current => [...new Set([...current, ...recovered.acknowledgedStopIds])]);
+          syncOfflineQueueState(accountQueue);
+        } catch {
+          if (isLoginOwnerCurrent()) setMessage('Saved completion receipts are waiting for server confirmation. Original cash submissions are preserved.');
+        } finally {
+          if (retryingOfflineSubmissionsEpochRef.current === loginEpoch) retryingOfflineSubmissionsEpochRef.current = null;
+        }
+        if (!isLoginAccountCurrent()) return;
+      }
       const restorePendingRuntime = (identity: CompletionPendingRestoreIdentity): void => {
         setCompletionPendingRestoreIdentity(identity);
         setActiveRoutePlanId(identity.activeRouteSession.routePlanId);
@@ -3927,7 +3989,6 @@ function DriverApp() {
     previousNetworkReachabilityRef.current = networkReachability;
     if (
       !isDriverRestoreComplete
-      || routeSessions.length === 0
       || !shouldRetryOfflineSubmissionsAfterNetworkChange({
         current: networkReachability,
         hasPendingSubmissions: offlineQueueCount > 0,
@@ -3949,14 +4010,13 @@ function DriverApp() {
   useEffect(() => {
     if (
       !isDriverRestoreComplete
-      || routeSessions.length === 0
       || offlineStorageState === 'STORAGE_DEGRADED'
     ) return;
 
     const scheduler = createOfflineRetryScheduler({
       cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
       hasPendingSubmissions: () => offlineSubmissionQueue?.listPending().some(
-        (item) => item.reconciliation === undefined,
+        (item) => item.reconciliation === undefined || (item.kind === 'driver_event' && item.event.completion !== undefined),
       ) === true,
       isForeground: () => AppState.currentState === 'active',
       isOnline: () => networkReachability === 'online',
@@ -4572,6 +4632,7 @@ function DriverApp() {
             return;
           }
           setPendingRoutePlanId(targetRoutePlanId);
+          if (usesSingleCompletion(currentStop)) { void handleRequestStopCompletion(currentStop, targetRoutePlanId); return; }
           void (async () => {
             const arrivalOpened = await recordStopArrival(currentStop, 'mainTabs');
             if (!arrivalOpened) {
@@ -4898,6 +4959,11 @@ function DriverApp() {
       return;
     }
 
+    if (!isCompanyStep && currentStop !== null && usesSingleCompletion(currentStop)) {
+      await handleRequestStopCompletion(currentStop);
+      return;
+    }
+
     if (isCompanyStep) {
       if (deliveryStartResult === null) {
         setMessage('Start the route before confirming pickup.');
@@ -5180,9 +5246,11 @@ function DriverApp() {
   }
 
   function createProofPhotoScope(): ProofPhotoScope | null {
-    if (currentStop === null || selectedRoute === null) return null;
+    const proofStop = screenRef.current === 'stopDetails' ? stopDetailsStop : currentStop;
+    if (proofStop === null || selectedRoute === null) return null;
+    proofReturnScreenRef.current = screenRef.current === 'stopDetails' ? 'stopDetails' : 'arrivalCheck';
     const route = selectedRoute;
-    const stop = currentStop;
+    const stop = proofStop;
     const session = liveRouteSessionsRef.current.find(candidate => candidate.route.id === route.id);
     const owner = driverSyncBoundAccountOwnerHashRef.current;
     const epoch = driverSyncAccountEpochRef.current;
@@ -5316,7 +5384,7 @@ function DriverApp() {
 
   async function handleCapturedCameraPhoto(uri: string, scope: ProofPhotoScope | null) {
     if (scope === null) return;
-    if (scope.isCurrent()) { setScreen('arrivalCheck'); setIsCapturingPhoto(true); setMessage(null); }
+    if (scope.isCurrent()) { setScreen(proofReturnScreenRef.current); setIsCapturingPhoto(true); setMessage(null); }
 
     try {
       await handleProofPhotoResult({
@@ -5350,23 +5418,59 @@ function DriverApp() {
     void handleCapturePhoto(source);
   }
 
-  async function handleCompleteCurrentStop() {
-    if (currentStop === null) {
+  async function handleRequestStopCompletion(stop: AssignedRouteStop, switchToRoutePlanId?: string) {
+    if (completionSubmissionRunningRef.current || isCompletingStop || isRefreshingRoutes || isCapturingPhoto || isStartingRoute) return;
+    setIsStopDetailsInputFocused(false);
+    if (!usesSingleCompletion(stop)) { await handleTerminalStop(stop, 'delivered'); return; }
+    if (selectedRoute === null || selectedRouteSession === null || routeStatus !== 'active' || isCompanyStep || routeStartRecoveryState !== 'idle') {
+      setMessage('Complete Store Pickup and start the route before completing a delivery.'); return;
+    }
+    if (isStopCompleted(stop, completedStopIds)) { setMessage('This delivery is already complete. Do not collect again.'); return; }
+    const action = getSingleCompletionAction({ payment: stop.payment!, completion: getStopReceipt(stop), pending: getPendingStopCompletion(stop) !== null });
+    if (action === 'recorded' || action === 'pending') {
+      setMessage(action === 'recorded' ? 'This delivery already has a server receipt.' : 'The original completion is saved and awaits server confirmation. Do not collect again.'); return;
+    }
+    if (action === 'cash') {
+      const access = selectedRouteSession.routeAccess;
+      const owner = driverSyncBoundAccountOwnerHashRef.current;
+      const key = [owner, selectedRoute.id, access.assignmentGeneration, stop.deliveryStopId].join(':');
+      setCashInput({ key, stop, routePlanId: selectedRoute.id, owner, generation: access.assignmentGeneration, version: access.expectedRouteVersionId, switchToRoutePlanId });
+      setCashInputError(null);
       return;
     }
-    await handleTerminalStop(currentStop, 'delivered');
+    await handleTerminalStop(stop, 'delivered', { completion: { version: 1 }, switchToRoutePlanId });
+  }
+
+  async function handleConfirmCashCompletion() {
+    if (cashInput === null || completionSubmissionRunningRef.current || cashInput.stop.payment == null) return;
+    if (cashInput.owner !== driverSyncBoundAccountOwnerHashRef.current || cashInput.routePlanId !== selectedRoute?.id
+      || cashInput.generation !== selectedRouteSession?.routeAccess.assignmentGeneration || cashInput.version !== selectedRouteSession?.routeAccess.expectedRouteVersionId) {
+      setCashInputError('The account or route assignment changed. Reopen this delivery before submitting.'); return;
+    }
+    let completion: StopCompletionInput;
+    try { completion = buildCashCompletion(cashDrafts[cashInput.key] ?? '', cashInput.stop.payment); }
+    catch (error) { setCashInputError(error instanceof Error ? error.message : 'Check the cash amount.'); return; }
+    await handleTerminalStop(cashInput.stop, 'delivered', { completion, switchToRoutePlanId: cashInput.switchToRoutePlanId });
+  }
+
+  async function handleCompleteCurrentStop() {
+    if (currentStop !== null) await handleRequestStopCompletion(currentStop);
   }
 
   async function handleTerminalStop(
     stop: AssignedRouteStop,
     action: 'delivered' | 'failed',
     options?: {
+      completion?: StopCompletionInput;
       failureNote?: string;
       failureReason?: StopProofFailureReason;
       switchToRoutePlanId?: string;
     },
   ) {
-    if (blockMutationWhileStorageDegraded()) return;
+    if (blockMutationWhileStorageDegraded() || completionSubmissionRunningRef.current) return;
+    if (action === 'delivered' && (getStopReceipt(stop) !== null || getPendingStopCompletion(stop) !== null)) {
+      setMessage('The original completion is already saved. Do not collect again.'); return;
+    }
     const routeSwitchPlanId = options?.switchToRoutePlanId ?? pendingRoutePlanId;
     if (selectedRoute === null || deliveryStartResult === null) {
       if (routeSwitchPlanId !== null) {
@@ -5380,6 +5484,14 @@ function DriverApp() {
       return;
     }
 
+    completionSubmissionRunningRef.current = true;
+    const completionEpoch = driverSyncAccountEpochRef.current;
+    const completionOwner = driverSyncBoundAccountOwnerHashRef.current;
+    const completionGeneration = selectedRouteSession?.routeAccess.assignmentGeneration;
+    const isCompletionScopeCurrent = () => completionEpoch === driverSyncAccountEpochRef.current
+      && completionOwner === driverSyncBoundAccountOwnerHashRef.current
+      && selectedRouteIdRef.current === selectedRoute.id
+      && liveRouteSessionsRef.current.find(session => session.route.id === selectedRoute.id)?.routeAccess.assignmentGeneration === completionGeneration;
     const isRouteSwitch = routeSwitchPlanId !== null;
     const isSkipped = action === 'failed' && !isRouteSwitch;
     const photoResult = proofPhotoResults[stop.deliveryStopId];
@@ -5392,6 +5504,9 @@ function DriverApp() {
 
     try {
       const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+      if (options?.completion !== undefined && (!isCompletionScopeCurrent() || queue.getAccountOwnerHash() !== completionOwner)) {
+        setMessage('The account or route assignment changed before submission. Reopen the delivery.'); return;
+      }
       queueForStateSync = queue;
       if (offlineSubmissionQueue === null) {
         setOfflineSubmissionQueue(queue);
@@ -5411,6 +5526,7 @@ function DriverApp() {
         }),
         input: {
           action,
+          ...(options?.completion === undefined ? {} : { completion: options.completion, clientEventId: Crypto.randomUUID() }),
           deliveryStopId: stop.deliveryStopId,
           media: mediaResult?.kind === 'uploaded' ? [mediaResult.media] : [],
           note: options?.failureNote ?? (isSkipped
@@ -5426,7 +5542,9 @@ function DriverApp() {
         },
         offlineQueue: queue,
       });
+      if (completionEpoch !== driverSyncAccountEpochRef.current || (options?.completion !== undefined && !isCompletionScopeCurrent())) return;
       setStopProofResults((current) => ({ ...current, [stop.deliveryStopId]: result }));
+      if (result.kind !== 'blocked') setCashInput(null);
 
       if (result.kind === 'blocked') {
         if (isRouteSwitch) {
@@ -5454,7 +5572,7 @@ function DriverApp() {
         });
         setScreen('mainTabs');
         setRouteRecoveryRefreshReason('route_not_in_progress');
-        setMessage('Route ended or released on server. Unsynced delivery results were preserved for reconciliation.');
+        setMessage(options?.completion === undefined ? 'Route ended or released on server. Unsynced delivery results were preserved for reconciliation.' : result.message);
         return;
       }
       if (result.kind === 'queued' && result.requiresRouteLookup === true) {
@@ -5478,7 +5596,7 @@ function DriverApp() {
 
       setRouteSessions(sessions => sessions.map(session => session.route.id === selectedRoute.id ? {
         ...session, route: { ...session.route, stops: session.route.stops.map(candidate => candidate.deliveryStopId === stop.deliveryStopId
-          ? { ...candidate, status: action === 'delivered' ? 'DELIVERED' : 'FAILED' } : candidate) },
+          ? { ...candidate, status: action === 'delivered' ? 'DELIVERED' : 'FAILED', ...(result.kind === 'recorded' && result.completion !== undefined ? { completion: result.completion } : {}) } : candidate) },
       } : session));
       const nextCompletedStopIds = [...new Set([...completedStopIds, stop.deliveryStopId])];
       setCompletedStopIds(nextCompletedStopIds);
@@ -5563,7 +5681,7 @@ function DriverApp() {
       setMessage(
         isSkipped
           ? 'Stop skipped and reported to the administrator. Next stop is ready.'
-          : 'Stop completed. Next stop is ready.',
+          : result.kind === 'queued' ? 'Completion saved on this device. Awaiting server confirmation. Next stop is ready.' : 'Stop completed. Next stop is ready.',
       );
     } catch (error) {
       if (isRouteSwitch) {
@@ -5572,6 +5690,7 @@ function DriverApp() {
       const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
       setMessage(`${isSkipped ? 'Stop skip' : 'Stop completion'} could not be saved: ${errorMessage}`);
     } finally {
+      completionSubmissionRunningRef.current = false;
       setIsCompletingStop(false);
       syncOfflineQueueState(queueForStateSync);
       releaseProgressMutation();
@@ -5587,7 +5706,7 @@ function DriverApp() {
       setMessage('The arrival alert is no longer for the current stop. No stop was completed.');
       return;
     }
-    await handleTerminalStop(currentStop, 'delivered');
+    await handleRequestStopCompletion(currentStop);
   };
 
   async function captureTrustedRouteEventLocation(
@@ -5896,20 +6015,24 @@ function DriverApp() {
   }
 
   function updateCurrentStopDraft(patch: Partial<StopProofDraft>) {
-    if (currentStop === null) {
+    const proofStop = screenRef.current === 'stopDetails' ? stopDetailsStop : currentStop;
+    if (proofStop === null) {
       return;
     }
 
     setProofDrafts((current) => ({
       ...current,
-      [currentStop.deliveryStopId]: {
-        ...getProofDraft(current[currentStop.deliveryStopId]),
+      [proofStop.deliveryStopId]: {
+        ...getProofDraft(current[proofStop.deliveryStopId]),
         ...patch,
       },
     }));
   }
 
   function resetActiveRouteProgress() {
+    setCashInput(null);
+    setCashInputError(null);
+    setIsStopDetailsInputFocused(false);
     cachedLiveRouteValidationRef.current = null;
     lastCachedLiveRouteRefreshAtRef.current = 0;
     setDeliveryStartResult(null);
@@ -6040,6 +6163,8 @@ function DriverApp() {
   }
 
   const handleAppBack = useCallback((): boolean => {
+    if (cashInput !== null) { if (!completionSubmissionRunningRef.current) { setCashInput(null); setPendingRoutePlanId(null); } return true; }
+    setIsStopDetailsInputFocused(false);
     if (isPhotoActionSheetVisible) {
       setIsPhotoActionSheetVisible(false);
       return true;
@@ -6071,7 +6196,7 @@ function DriverApp() {
         setScreen('mainTabs');
         return true;
       case 'proofCamera':
-        setScreen('arrivalCheck');
+        setScreen(proofReturnScreenRef.current);
         return true;
       case 'stopDetails':
         setSelectedStopDetailsId(null);
@@ -6086,7 +6211,7 @@ function DriverApp() {
         setScreen('mainTabs');
         return true;
     }
-  }, [accountName, arrivalCheckReturnScreen, isPhotoActionSheetVisible, screen, setScreen, stopDetailsReturnScreen]);
+  }, [accountName, arrivalCheckReturnScreen, cashInput, isPhotoActionSheetVisible, screen, setScreen, stopDetailsReturnScreen]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
@@ -6238,12 +6363,12 @@ function DriverApp() {
         ) : isProofCameraScreen ? (
           <ProofCameraScreen
             disabled={isCapturingPhoto}
-            onCancel={() => setScreen('arrivalCheck')}
+            onCancel={() => setScreen(proofReturnScreenRef.current)}
             onCaptured={(uri) => {
               void handleCapturedCameraPhoto(uri, proofCameraScope);
             }}
             onOpenGallery={() => {
-              setScreen('arrivalCheck');
+              setScreen(proofReturnScreenRef.current);
               void handleCapturePhoto('library');
             }}
           />
@@ -6471,6 +6596,8 @@ function DriverApp() {
                 isStartingRoute={isStartingRoute}
                 mapStyleUrl={driverMapStyleUrl}
                 onArrived={handleArrivedAtStep}
+                singleCompletion={currentUsesSingleCompletion}
+                isCompletingStop={isCompletingStop}
                 onCopyAddress={(address) => { void handleCopyAddress(address); }}
                 onFinishRoute={handleManualFinishRoute}
                 onOpenDepotNavigation={() => { void handleOpenDepotNavigation(); }}
@@ -6495,12 +6622,22 @@ function DriverApp() {
               stops={selectedRoute?.stops} stopId={stopDetailsStop.deliveryStopId}
               onReview={() => setScreen('completionAssistance')} />
             <StopDetailsScreen
-              canArrive={canArriveFromStopDetails}
+              canArrive={canArriveFromStopDetails && getStopReceipt(stopDetailsStop) === null && getPendingStopCompletion(stopDetailsStop) === null}
+              singleCompletion={detailsUsesSingleCompletion}
+              receipt={getStopReceipt(stopDetailsStop)}
+              pendingCompletion={getPendingStopCompletion(stopDetailsStop)}
+              draft={getProofDraft(proofDrafts[stopDetailsStop.deliveryStopId])}
+              onDraftChange={updateCurrentStopDraft}
+              onInputFocus={() => setIsStopDetailsInputFocused(true)}
+              onInputBlur={() => setIsStopDetailsInputFocused(false)}
+              onAddPhoto={handleAddDeliveryPhoto}
+              isCapturingPhoto={isCapturingPhoto}
+              photoUri={proofPhotoResults[stopDetailsStop.deliveryStopId]?.kind === 'captured' ? (proofPhotoResults[stopDetailsStop.deliveryStopId] as Extract<ProofPhotoCaptureResult, { kind: 'captured' }>).uri : undefined}
               canSkip={canSkipFromStopDetails}
-              isArriving={isRecordingArrival || isRefreshingRoutes}
+              isArriving={isRecordingArrival || isRefreshingRoutes || isCompletingStop}
               isSkipping={isCompletingStop || isRefreshingRoutes}
               isReadOnly={stopDetailsReturnScreen === 'completedDeliveries'}
-              onArrive={handleArriveFromStopDetails}
+              onArrive={detailsUsesSingleCompletion ? () => { void handleRequestStopCompletion(stopDetailsStop); } : handleArriveFromStopDetails}
               onCall={() => handleCallStop(stopDetailsStop)}
               onCopyAddress={() => { void handleCopyAddress(formatStopStreetAddress(stopDetailsStop)); }}
               onMessage={() => handleMessageStop(stopDetailsStop)}
@@ -6558,6 +6695,15 @@ function DriverApp() {
           {message !== null ? <TransientToast text={message} /> : null}
         </>
       )}
+      <CashCompletionModal
+        payment={cashInput?.stop.payment ?? null}
+        amount={cashInput === null ? '' : cashDrafts[cashInput.key] ?? ''}
+        busy={isCompletingStop}
+        error={cashInputError}
+        onChangeAmount={value => { if (cashInput !== null) setCashDrafts(current => ({ ...current, [cashInput.key]: value })); setCashInputError(null); }}
+        onCancel={() => { if (!completionSubmissionRunningRef.current) { setCashInput(null); setCashInputError(null); setPendingRoutePlanId(null); } }}
+        onConfirm={() => { void handleConfirmCashCompletion(); }}
+      />
       <OperationalDialog
         dialog={operationalDialog}
         onDismiss={dismissOperationalDialog}
@@ -7288,6 +7434,8 @@ function AccountNamePage({
 }
 
 function RouteSessionScreen({
+  singleCompletion,
+  isCompletingStop,
   allStopsCompleted,
   company,
   companyReturnCopy,
@@ -7318,6 +7466,8 @@ function RouteSessionScreen({
   routeStatus,
   stop,
 }: {
+  singleCompletion: boolean;
+  isCompletingStop: boolean;
   allStopsCompleted: boolean;
   company: RouteAccessCompanyGuidance | null;
   companyReturnCopy: ReturnType<typeof getCompanyReturnCopy>;
@@ -7372,9 +7522,11 @@ function RouteSessionScreen({
     ? company.pickupGuidance
     : null;
   const currentTaskPayment = stop === null ? null : formatAssignedRoutePaymentSummary(stop);
-  const currentTaskPaymentAmount = stop === null
-    ? null
-    : formatAssignedRouteCompactPaymentAmount(stop.totalPriceAmount, stop.currencyCode);
+  const currentTaskPaymentAmount = stop === null ? null
+    : stop.completion != null ? formatCompletionAmount(stop.completion.actualAmount, stop.completion.currencyCode)
+      : stop.payment != null ? formatCompletionAmount(stop.payment.expectedAmount, stop.payment.currencyCode, 'Amount unknown')
+        : formatAssignedRouteCompactPaymentAmount(stop.totalPriceAmount, stop.currencyCode);
+  const currentTaskPaymentLabel = stop?.completion?.payment.methodTitle ?? stop?.payment?.methodTitle ?? currentTaskPayment?.status.label;
   const etaSnapshot = route.etaSnapshot ?? null;
   const nextStopEta = etaSnapshot?.nextStopEta ?? null;
   const remainingRouteEta = etaSnapshot?.remainingRouteEta ?? null;
@@ -7461,7 +7613,7 @@ function RouteSessionScreen({
           <View style={styles.currentTaskTitleRow}>
             <Text style={styles.sectionTitle}>{currentTaskTitle}</Text>
             {currentTaskPayment !== null ? (
-              <StatusChip compact label={currentTaskPayment.status.label} tone={currentTaskPayment.status.tone} />
+              <StatusChip compact label={currentTaskPaymentLabel ?? 'Payment method unknown'} tone={currentTaskPayment.status.tone} />
             ) : null}
           </View>
           <View style={styles.currentTaskMetaRow}>
@@ -7489,7 +7641,7 @@ function RouteSessionScreen({
           ) : (
             <View style={styles.routeActionRow}>
               <View style={styles.routeActionButton}>
-                <PrimaryButton compact disabled={isRefreshingRoutes || isStartingRoute || isRecordingArrival} label="Arrive" loading={isRefreshingRoutes || isStartingRoute || isRecordingArrival} onPress={onArrived} />
+                <PrimaryButton compact disabled={isRefreshingRoutes || isStartingRoute || isRecordingArrival || isCompletingStop} label={singleCompletion ? "Complete Delivery" : "Arrive"} loading={isRefreshingRoutes || isStartingRoute || isRecordingArrival || isCompletingStop} onPress={onArrived} />
               </View>
               <View style={styles.routeActionButton}>
                 <SecondaryButton compact label="Navigate" onPress={onOpenNavigation} />
@@ -7652,6 +7804,7 @@ function RouteSessionScreen({
 }
 
 function StopDetailsScreen({
+  singleCompletion, receipt, pendingCompletion, draft, onDraftChange, onInputFocus, onInputBlur, onAddPhoto, photoUri, isCapturingPhoto,
   canArrive,
   canSkip,
   isArriving,
@@ -7665,6 +7818,16 @@ function StopDetailsScreen({
   onSkip,
   stop,
 }: {
+  singleCompletion: boolean;
+  receipt: StopCompletion | null;
+  pendingCompletion: { completion: StopCompletionInput; blocked: boolean } | null;
+  draft: StopProofDraft;
+  onDraftChange(patch: Partial<StopProofDraft>): void;
+  onInputFocus(): void;
+  onInputBlur(): void;
+  onAddPhoto(): void;
+  photoUri?: string;
+  isCapturingPhoto: boolean;
   canArrive: boolean;
   canSkip: boolean;
   isArriving: boolean;
@@ -7727,7 +7890,7 @@ function StopDetailsScreen({
 
       <View style={[styles.stopDetailsSection, styles.stopDetailsPaymentSection]}>
         <Text style={styles.stopDetailsSectionTitle}>{isPickupStop ? 'Order Type' : 'Payment'}</Text>
-        {isPickupStop ? (
+        {receipt !== null || pendingCompletion !== null || stop.payment != null ? <StopCompletionPanel payment={stop.payment} completion={receipt} pending={pendingCompletion} /> : isPickupStop ? (
           <View style={styles.stopDetailsPaymentRow}>
             <StatusChip compact label="Pickup" tone="warning" />
           </View>
@@ -7777,12 +7940,20 @@ function StopDetailsScreen({
         <Text style={styles.stopDetailsSectionTitle}>Customer Note</Text>
         <Text style={styles.stopDetailsNote}>{stop.customerNote?.trim() || 'No delivery instructions provided.'}</Text>
       </View>
+      {singleCompletion && !isReadOnly && receipt === null && pendingCompletion === null ? <View style={styles.stopDetailsSection}>
+        <Text style={styles.stopDetailsSectionTitle}>Delivery details (optional)</Text>
+        <LabeledInput label="Delivery Result" onFocus={onInputFocus} onBlur={onInputBlur} onChangeText={value => onDraftChange({ todayNote: value })} value={draft.todayNote} placeholder="e.g. Left at front door" />
+        <LabeledInput label="Location Tip" onFocus={onInputFocus} onBlur={onInputBlur} onChangeText={value => onDraftChange({ locationTip: value })} value={draft.locationTip} placeholder="e.g. Side entrance" />
+        <LabeledInput label="Other Notes" multiline onFocus={onInputFocus} onBlur={onInputBlur} onChangeText={value => onDraftChange({ additionalNotes: value })} value={draft.additionalNotes} placeholder="Anything else for this stop" />
+        {photoUri === undefined ? null : <Image accessibilityLabel="Selected delivery photo" source={{ uri: photoUri }} style={styles.proofPhotoPreview} />}
+        <SecondaryButton compact disabled={isCapturingPhoto || isArriving} label={photoUri === undefined ? 'Add Photo (Optional)' : 'Change Photo'} loading={isCapturingPhoto} onPress={onAddPhoto} />
+      </View> : null}
       {isReadOnly ? null : (
         <View style={styles.stopDetailsActionStack}>
           <View style={[styles.buttonRow, styles.stopDetailsActions]}>
             <StopDetailsActionButton
               disabled={!canArrive || isArriving}
-              label="Arrive"
+              label={singleCompletion ? "Complete Delivery" : "Arrive"}
               loading={isArriving}
               onPress={onArrive}
               tone="arrive"
@@ -8217,6 +8388,7 @@ function LabeledInput({
   multiline,
   onChangeText,
   onFocus,
+  onBlur,
   onRightAction,
   onSubmitEditing,
   placeholder,
@@ -8235,6 +8407,7 @@ function LabeledInput({
   multiline?: boolean;
   onChangeText(value: string): void;
   onFocus?(): void;
+  onBlur?(): void;
   onRightAction?(): void;
   onSubmitEditing?(): void;
   placeholder: string;
@@ -8257,6 +8430,7 @@ function LabeledInput({
           multiline={multiline}
           onChangeText={onChangeText}
           onFocus={onFocus}
+          onBlur={onBlur}
           onSubmitEditing={onSubmitEditing}
           placeholder={placeholder}
           placeholderTextColor="#8a94a6"

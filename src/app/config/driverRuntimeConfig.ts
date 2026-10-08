@@ -4,10 +4,12 @@ import { createDriverAuthApiClient, createMockDriverAuthService, type DriverAuth
 export type DriverRuntimeConfig =
   | {
       mode: 'mock';
+      kfoodSingleCompletionQaEnabled?: boolean;
     }
   | {
       deliveryServerBaseUrl: string;
       mode: 'live';
+      kfoodSingleCompletionQaEnabled?: boolean;
     };
 
 export type DriverRuntimeServices = {
@@ -16,7 +18,7 @@ export type DriverRuntimeServices = {
 };
 
 type DriverRuntimeEnv = Partial<Record<
-  'EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL' | 'EXPO_PUBLIC_DRIVER_RUNTIME_MODE',
+  'EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL' | 'EXPO_PUBLIC_DRIVER_RUNTIME_MODE' | 'EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA',
   string
 >>;
 
@@ -32,7 +34,7 @@ export function readDriverRuntimeConfig(env: DriverRuntimeEnv): DriverRuntimeCon
     if (deliveryServerBaseUrl !== undefined && deliveryServerBaseUrl !== '') {
       throw new Error('Mock mode cannot include EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL.');
     }
-    return { mode: 'mock' };
+    return { mode: 'mock', kfoodSingleCompletionQaEnabled: false };
   }
 
   if (deliveryServerBaseUrl === undefined || deliveryServerBaseUrl === '') {
@@ -45,6 +47,7 @@ export function readDriverRuntimeConfig(env: DriverRuntimeEnv): DriverRuntimeCon
   return {
     deliveryServerBaseUrl,
     mode: 'live',
+    kfoodSingleCompletionQaEnabled: env.EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA === 'true',
   };
 }
 

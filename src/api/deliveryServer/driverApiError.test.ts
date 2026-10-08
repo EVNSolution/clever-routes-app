@@ -11,6 +11,17 @@ import {
 } from './driverApiError';
 
 describe('driver API recovery classification', () => {
+  it('distinguishes Cash input errors, conflicts, and retryable transport failures', () => {
+    const error = (code: string, status: number) => createDriverApiHttpError({ code, status, endpoint: 'Driver event record' });
+    assert.match(formatDriverApiErrorForDriver(error('CASH_RECEIVED_REQUIRED', 400)), /actual Cash amount/u);
+    assert.match(formatDriverApiErrorForDriver(error('CASH_COMPLETION_INVALID', 400)), /amount or currency/u);
+    assert.match(formatDriverApiErrorForDriver(error('CASH_COMPLETION_CONFLICT', 409)), /Dispatch must review/u);
+    assert.match(formatDriverApiErrorForDriver(error('ROUTE_ASSIGNMENT_CHANGED', 409)), /assignment changed/u);
+    assert.match(formatDriverApiErrorForDriver(error('ROUTE_VERSION_MISMATCH', 409)), /route version changed/u);
+    assert.match(formatDriverApiErrorForDriver(error('SERVER_ERROR', 503)), /HTTP 503/u);
+    assert.equal(formatDriverApiErrorForDriver(new Error('offline')), 'offline');
+  });
+
   it('keeps 401 access refresh separate from 409 terminal route reconciliation', () => {
     const unauthorized = createDriverApiHttpError({ endpoint: 'Driver event record', status: 401 });
     const routeEnded = createDriverApiHttpError({

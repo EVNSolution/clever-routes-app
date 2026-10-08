@@ -136,7 +136,7 @@ android {
         if (isKfoodQaBuild) {
             qa {
                 initWith release
-                applicationIdSuffix '.qa'
+                applicationIdSuffix project.hasProperty('kfoodCashQa') ? '.cashqa' : '.qa'
                 matchingFallbacks = ['release']
             }
         }

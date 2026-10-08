@@ -5,6 +5,7 @@ import {
   isDriverApiUnauthorizedError,
 } from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
+import { readStopCompletion, readStopPayment, type StopCompletion, type StopPayment } from '../stop/stopCompletion';
 
 export type AssignedRouteAddress = {
   address1: string;
@@ -102,6 +103,7 @@ export type AssignedRoutePaymentSummary = {
 
 export type AssignedRouteStop = {
   address: AssignedRouteAddress;
+  completion?: StopCompletion | null;
   coordinates: AssignedRouteCoordinates | null;
   currencyCode?: string | null;
   customerNote?: string | null;
@@ -114,6 +116,7 @@ export type AssignedRouteStop = {
   navigationTarget?: AssignedRouteNavigationTarget;
   normalizedPaymentStatus: NormalizedPaymentStatus | null;
   orderName: string;
+  payment?: StopPayment | null;
   paymentMethodTitle?: string | null;
   phone: string | null;
   recipientName: string | null;
@@ -647,6 +650,9 @@ function normalizeAssignedRoute(route: AssignedRoute): AssignedRoute {
 function normalizeAssignedRouteStop(stop: AssignedRouteStop): AssignedRouteStop {
   return {
     ...stop,
+    // Omission identifies an older contract. Null means the field is supported but unrecorded.
+    ...(stop.payment === undefined ? {} : { payment: readStopPayment(stop.payment) }),
+    ...(stop.completion === undefined ? {} : { completion: readStopCompletion(stop.completion) }),
     coordinates: normalizeAssignedRouteCoordinates(stop.coordinates),
     customerNote: stop.customerNote ?? null,
     distanceFromPreviousMeters: stop.distanceFromPreviousMeters ?? null,
@@ -803,6 +809,7 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
   const stop = value as Record<string, unknown>;
   return (
     isAssignedRouteAddress(stop.address) &&
+    (stop.completion === undefined || stop.completion === null || readStopCompletion(stop.completion) !== null) &&
     (stop.coordinates === null || isNullableAssignedRouteCoordinates(stop.coordinates)) &&
     (stop.currencyCode === undefined || nullableString(stop.currencyCode)) &&
     (stop.customerNote === undefined || nullableString(stop.customerNote)) &&
@@ -816,6 +823,7 @@ function isAssignedRouteStop(value: unknown): value is AssignedRouteStop {
     (stop.navigationTarget === undefined || isAssignedRouteNavigationTarget(stop.navigationTarget)) &&
     isNormalizedPaymentStatus(stop.normalizedPaymentStatus) &&
     typeof stop.orderName === 'string' &&
+    (stop.payment === undefined || stop.payment === null || readStopPayment(stop.payment) !== null) &&
     (stop.paymentMethodTitle === undefined || nullableString(stop.paymentMethodTitle)) &&
     nullableString(stop.phone) &&
     nullableString(stop.recipientName) &&

@@ -42,7 +42,7 @@ describe('Completed Deliveries behavior', () => {
     assert.match(source, /setStopDetailsReturnScreen\('completedDeliveries'\);[\s\S]*setScreen\('stopDetails'\)/u);
     assert.match(source, /case 'stopDetails':[\s\S]*setScreen\(stopDetailsReturnScreen\)/u);
     assert.match(source, /isReadOnly=\{stopDetailsReturnScreen === 'completedDeliveries'\}/u);
-    assert.match(source, /\{isReadOnly \? null : \([\s\S]*label="Arrive"/u);
+    assert.match(source, /\{isReadOnly \? null : \([\s\S]*label=\{singleCompletion \? "Complete Delivery" : "Arrive"\}/u);
     assert.match(source, /screen === 'completedDeliveries'[\s\S]*stopDetailsReturnScreen === 'completedDeliveries'[\s\S]*\? selectedRouteId/u);
   });
 

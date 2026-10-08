@@ -23,3 +23,19 @@ allprojects {
 
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
+
+// AGP invokes Ninja directly, so CMAKE_BUILD_PARALLEL_LEVEL alone does not bound it.
+// Keep the isolated Cash QA build within two native compilation jobs per task.
+if (project.hasProperty('kfoodCashQa')) {
+  subprojects { child ->
+    ['com.android.application', 'com.android.library'].each { pluginId ->
+      child.plugins.withId(pluginId) {
+        child.extensions.getByName('android').defaultConfig.externalNativeBuild.cmake.arguments(
+          '-DCMAKE_JOB_POOLS=cash_qa_compile=2;cash_qa_link=1',
+          '-DCMAKE_JOB_POOL_COMPILE=cash_qa_compile',
+          '-DCMAKE_JOB_POOL_LINK=cash_qa_link'
+        )
+      }
+    }
+  }
+}

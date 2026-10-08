@@ -116,8 +116,9 @@ describe('reviewed cached route recovery boundaries', () => {
     let signalLookup!: () => void;
     const lookupStarted = new Promise<void>(resolve => { signalLookup = resolve; });
     const lookupWait = new Promise<void>(resolve => { releaseLookup = resolve; });
-    const queue = { getAccountOwnerHash: () => 'owner' };
+    const queue = { getAccountOwnerHash: () => 'owner', listPending: () => [] };
     const context = {
+      runtimeConfig: { mode: 'live' },
       driverSyncBoundAccountOwnerHashRef: { current: 'owner' },
       driverSyncLifecycleAbortControllerRef: { current: new AbortController() }, driverSyncRouteAbortControllerRef: { current: new AbortController() },
       driverSyncHeartbeatSchedulerRef: { current: null }, completionClearRetrySchedulerRef: { current: null }, driverSyncAccountEpochRef: { current: 1 },
@@ -187,7 +188,7 @@ describe('reviewed cached route recovery boundaries', () => {
     assert.equal(photoHydration, 0, 'a late session read must not reset an open proof form');
   });
 
-  for (const protectedAction of ['camera', 'photo selection', 'capture processing']) {
+  for (const protectedAction of ['camera', 'photo selection', 'capture processing', 'cash input', 'delivery notes']) {
     it(`defers reconnect hydration during ${protectedAction}, then refreshes once`, async () => {
       let refreshCount = 0;
       const context = {
@@ -200,6 +201,8 @@ describe('reviewed cached route recovery boundaries', () => {
         verifiedDriverPhoneE164: '+15195550101',
         networkReachability: 'online',
         screen: protectedAction === 'camera' ? 'proofCamera' : 'mainTabs',
+        cashInput: protectedAction === 'cash input' ? { key: 'original-draft' } : null,
+        isStopDetailsInputFocused: protectedAction === 'delivery notes',
         isPhotoActionSheetVisible: protectedAction === 'photo selection',
         isCapturingPhoto: protectedAction === 'capture processing',
         isCompletingStop: false, isRecordingArrival: false, isStartingRoute: false, isFinishingRoute: false, isApplyingLiveRoute: false,
@@ -214,6 +217,7 @@ describe('reviewed cached route recovery boundaries', () => {
       await Promise.resolve();
       assert.equal(refreshCount, 0, 'route lookup/hydration must wait until the protected action closes');
       context.screen = 'mainTabs'; context.isPhotoActionSheetVisible = false; context.isCapturingPhoto = false;
+      context.cashInput = null; context.isStopDetailsInputFocused = false;
       render();
       await Promise.resolve();
       assert.equal(refreshCount, 1, 'the online transition must remain pending while the action is open');

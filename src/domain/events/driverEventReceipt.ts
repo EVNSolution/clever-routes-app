@@ -1,10 +1,12 @@
 import { createDriverApiHttpError, readDriverApiErrorCode } from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
 import type { DriverEventInput } from './driverEvents';
+import { matchesStopCompletionEvent, readStopCompletion, type StopCompletion } from '../stop/stopCompletion';
 
 export type DriverEventReceipt = {
   assignmentGeneration: string | null;
   clientEventId: string;
+  completion?: StopCompletion | null;
   errorCode: string | null;
   expectedRouteVersionId: string | null;
   routePlanId: string;
@@ -66,15 +68,26 @@ export function resolveCompletionReceipt(
   event: DriverEventInput,
   receipt: DriverEventReceipt,
 ): CompletionReceiptResolution {
-  const lineageMatches = receipt.routePlanId === event.routePlanId
-    && receipt.clientEventId === event.clientEventId
-    && receipt.assignmentGeneration === (event.assignmentGeneration ?? null)
+  const requestMatches = receipt.routePlanId === event.routePlanId
+    && receipt.clientEventId === event.clientEventId;
+  if (!requestMatches || receipt.status === 'REJECTED') return { kind: 'reconcile', receipt };
+  if (receipt.status === 'UNKNOWN') {
+    // A request that never reached the server has no attempt lineage. Null does not contradict it.
+    const lineageConflicts = (receipt.assignmentGeneration !== null
+      && receipt.assignmentGeneration !== (event.assignmentGeneration ?? null))
+      || (receipt.expectedRouteVersionId !== null
+        && receipt.expectedRouteVersionId !== (event.expectedRouteVersionId ?? null));
+    if (lineageConflicts) return { kind: 'reconcile', receipt };
+    // UNKNOWN is not rejection or permission to rewrite Cash against a newer route.
+    return event.completion !== undefined || receipt.routeStatus === 'IN_PROGRESS'
+      ? { kind: 'retry', receipt }
+      : { kind: 'reconcile', receipt };
+  }
+  const lineageMatches = receipt.assignmentGeneration === (event.assignmentGeneration ?? null)
     && receipt.expectedRouteVersionId === (event.expectedRouteVersionId ?? null);
-  if (!lineageMatches || receipt.status === 'REJECTED') return { kind: 'reconcile', receipt };
-  if (receipt.status === 'APPLIED') return { kind: 'acknowledge', receipt };
-  return receipt.routeStatus === 'IN_PROGRESS'
-    ? { kind: 'retry', receipt }
-    : { kind: 'reconcile', receipt };
+  if (!lineageMatches || (event.completion !== undefined && (receipt.completion == null
+    || !matchesStopCompletionEvent(receipt.completion, event)))) return { kind: 'reconcile', receipt };
+  return { kind: 'acknowledge', receipt };
 }
 
 function readDriverEventReceiptEnvelope(payload: unknown): DriverEventReceipt {
@@ -86,6 +99,7 @@ function readDriverEventReceiptEnvelope(payload: unknown): DriverEventReceipt {
     throw new Error('Invalid driver event receipt response');
   }
   const receipt = data as Record<string, unknown>;
+  const completion = readStopCompletion(receipt.completion);
   if (
     !isNullableString(receipt.assignmentGeneration)
     || typeof receipt.clientEventId !== 'string'
@@ -94,8 +108,12 @@ function readDriverEventReceiptEnvelope(payload: unknown): DriverEventReceipt {
     || typeof receipt.routePlanId !== 'string'
     || typeof receipt.routeStatus !== 'string'
     || !['APPLIED', 'REJECTED', 'UNKNOWN'].includes(String(receipt.status))
+    || (receipt.completion !== undefined && receipt.completion !== null && completion === null)
   ) throw new Error('Invalid driver event receipt response');
-  return receipt as DriverEventReceipt;
+  return {
+    ...receipt,
+    ...(receipt.completion === undefined ? {} : { completion }),
+  } as DriverEventReceipt;
 }
 
 function isNullableString(value: unknown): value is string | null {

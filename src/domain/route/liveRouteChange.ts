@@ -230,11 +230,18 @@ export function mergeLiveRouteExecutionState(appliedRoute: AssignedRoute, refres
   return {
     ...appliedRoute,
     stops: appliedRoute.stops.map((stop) => {
-      const refreshedStatus = refreshedStops.get(stop.deliveryStopId)!.status;
+      const refreshed = refreshedStops.get(stop.deliveryStopId)!;
+      const refreshedStatus = refreshed.status;
       // A queued completion can reach the device before it reaches the server.
       const status = terminalStatuses.has(stop.status) && !terminalStatuses.has(refreshedStatus)
         ? stop.status : refreshedStatus;
-      return { ...stop, status };
+      return {
+        ...stop, status,
+        // Payment and receipts are execution data, independent of explicit address/order Apply.
+        // A missing payment contract must not inherit support from an old cached response.
+        payment: refreshed.payment,
+        completion: stop.completion ?? refreshed.completion,
+      };
     }),
   };
 }

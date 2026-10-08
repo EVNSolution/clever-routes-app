@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 // Disposable native QA fixture. Reviewed product sources and real authentication stay unchanged.
+// --cash pins PR489, seeds all Cash/other/missing-value cases, and defaults to TLS port8445.
+// POST /__qa/control with the ready-file controlToken: hold-next-completion-response,
+// completion-status, release-completion-response, offline, service-unavailable,
+// omit-completion-responses, set-stop-payment(index/scenario), publish(stopIndex/address),
+// reassign(account). Holds have no timer and require a committed real PostgreSQL receipt.
+// The ready secret and raw device GPS evidence are local artifacts; publish sanitized summaries only.
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { createHash, createHmac, randomUUID, scryptSync } from 'node:crypto';
@@ -11,9 +17,10 @@ import { tmpdir, userInfo } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const [serverArg, shopifyArg, certificateArg, keyArg, evidenceArg, portArg = '8443', pgBin = '/opt/homebrew/opt/postgresql@17/bin'] = process.argv.slice(2);
+const cashMode = process.argv.includes('--cash');
+const [serverArg, shopifyArg, certificateArg, keyArg, evidenceArg, portArg = cashMode ? '8445' : '8443', pgBin = '/opt/homebrew/opt/postgresql@17/bin'] = process.argv.slice(2).filter((arg) => arg !== '--cash');
 if (!serverArg || !shopifyArg || !certificateArg || !keyArg || !evidenceArg) {
-  throw new Error('Usage: node scripts/kfood-native-qa-server.mjs <server snapshot> <Shopify snapshot> <TLS certificate> <TLS key> <evidence.json> [HTTPS port] [PostgreSQL bin]');
+  throw new Error('Usage: node scripts/kfood-native-qa-server.mjs <server snapshot> <Shopify snapshot> <TLS certificate> <TLS key> <evidence.json> [HTTPS port] [PostgreSQL bin] [--cash]');
 }
 const serverRoot = resolve(serverArg);
 const shopifyRoot = resolve(shopifyArg);
@@ -21,7 +28,7 @@ const apiDir = join(serverRoot, 'apps/delivery-api');
 const evidencePath = resolve(evidenceArg);
 const httpsPort = Number(portArg);
 assert.ok(Number.isInteger(httpsPort) && httpsPort > 0 && httpsPort <= 65535);
-const expectedServerSha = '9bd6e7b8408508c83b1e4255a62c37ee9b983bf0';
+const expectedServerSha = cashMode ? 'bd132f199c2a058d8e14fe33d97497307a51af45' : '9bd6e7b8408508c83b1e4255a62c37ee9b983bf0';
 const expectedShopifySha = 'e3f5a2a9819cb0ddd58766912b8ff31de2c759ae';
 const childEnv = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C' };
 const temp = await mkdtemp(join(tmpdir(), 'kfood-native-qa-'));
@@ -39,6 +46,11 @@ let proxy;
 let fixture;
 let stopped = false;
 let offline = false;
+let serviceUnavailable = false;
+let omitCompletionResponses = false;
+let nextCompletionResponseHold = false;
+let heldCompletionResponse = null;
+let lastHeldCompletion = null;
 let proofStorageUnavailable = false;
 let nextProofResponseHoldMs = 0;
 let heldProofResponse = null;
@@ -105,7 +117,7 @@ function evidence(reason) {
 async function writeEvidence(reason) {
   if (!prisma || !fixture) return;
   const routeIds = [fixture.route.id, ...extraFixtures.map((item) => item.routePlanId)];
-  const [route, state, publications, events, attempts, consents, proofMedia, runtimeDiagnostics] = await Promise.all([
+  const [route, state, publications, events, attempts, consents, proofMedia, runtimeDiagnostics, completionReceipts] = await Promise.all([
     prisma.routePlan.findUnique({ where: { id: fixture.route.id }, select: { id: true, driverId: true, assignmentGeneration: true, status: true } }),
     prisma.routeLiveChangeState.findUnique({ where: { routePlanId: fixture.route.id } }),
     prisma.routeLiveChangePublication.findMany({ where: { routePlanId: fixture.route.id }, orderBy: { publishedAt: 'asc' } }),
@@ -114,6 +126,7 @@ async function writeEvidence(reason) {
     prisma.driverConsentRecord.findMany({ where: { routeContext: { in: routeIds } } }),
     prisma.driverProofMedia.findMany({ where: { routePlanId: { in: routeIds } }, orderBy: { uploadedAt: 'asc' } }),
     prisma.driverRuntimeDiagnosticRecord.findMany({ where: { routePlanId: { in: routeIds } }, orderBy: { observedAt: 'asc' }, select: { diagnosticId: true, routePlanId: true, bootId: true, sequence: true, kind: true, observedAt: true, receivedAt: true, context: true, snapshot: true } }),
+    cashMode ? prisma.driverStopCompletionReceipt.findMany({ where: { routePlanId: { in: routeIds } }, orderBy: { recordedAt: 'asc' } }) : [],
   ]);
   const localProofFiles = await Promise.all(proofMedia.filter((media) => media.uploadStatus === 'READY' && media.deletedAt === null).map(async (media) => {
     try {
@@ -123,13 +136,14 @@ async function writeEvidence(reason) {
     } catch (error) { if (error.code === 'ENOENT') return { mediaId: media.id, missing: true }; throw error; }
   }));
   await mkdir(dirname(evidencePath), { recursive: true });
-  await writeFile(evidencePath, `${json({ recordedAt: new Date().toISOString(), reason, environment: publicInfo, extraFixtures, route, state, publications, events, attempts, consents, proofMedia, localProofFiles, runtimeDiagnostics, requestAttempts, requests, controls, limits: ['Synthetic local office session; no live Shopify authentication.', 'Proof bytes use temporary local synthetic storage; cloud storage and physical camera provider are not exercised.', 'No real push; this fixture alone does not establish GPS hardware or OS background behavior.', 'Reassignment control changes only synthetic fixture database rows.'], cleanup: stopped ? 'Shutdown requested; cleanup in progress' : 'Running isolated fixture' })}\n`);
+  await writeFile(evidencePath, `${json({ recordedAt: new Date().toISOString(), reason, environment: publicInfo, extraFixtures, route, state, publications, events, attempts, completionReceipts: completionReceipts.map(exactReceipt), heldCompletion: lastHeldCompletion, consents, proofMedia, localProofFiles, runtimeDiagnostics, requestAttempts, requests, controls, limits: ['Synthetic local office session; no live Shopify authentication.', 'Proof bytes use temporary local synthetic storage; cloud storage and physical camera provider are not exercised.', 'No real push; this fixture alone does not establish GPS hardware or OS background behavior.', 'Reassignment control changes only synthetic fixture database rows.'], cleanup: stopped ? 'Shutdown requested; cleanup in progress' : 'Running isolated fixture' })}\n`);
 }
 async function close() {
   if (stopped) return;
   stopped = true;
   nextProofResponseHoldMs = 0;
   heldProofResponse?.release('shutdown');
+  heldCompletionResponse?.release('shutdown');
   try {
     await evidence('shutdown');
     if (proxy) await new Promise((accept) => { proxy.close(accept); proxy.closeAllConnections(); });
@@ -188,11 +202,50 @@ async function holdProofResponse(attempt, durationMs) {
   try { await evidence('proof-response-held'); await waiting; }
   finally { release('response-handler-ended'); }
 }
+function exactReceipt(receipt) {
+  return { ...receipt, expectedAmount: receipt.expectedAmount?.toFixed(2) ?? null,
+    actualAmount: receipt.actualAmount?.toFixed(2) ?? null, differenceAmount: receipt.differenceAmount?.toFixed(2) ?? null };
+}
+async function completionStatus() {
+  if (!cashMode) return {};
+  const receipts = await prisma.driverStopCompletionReceipt.findMany({ where: { routePlanId: fixture.route.id }, orderBy: { recordedAt: 'asc' } });
+  return { nextCompletionResponseHold, heldCompletionResponse: heldCompletionResponse?.evidence ?? null,
+    lastHeldCompletion, receiptCount: receipts.length, receipts: receipts.map(exactReceipt) };
+}
+async function holdCompletionResponse(attempt, input, result, outgoing) {
+  const receipt = await prisma.driverStopCompletionReceipt.findUnique({ where: { clientEventId: input.clientEventId } });
+  assert.ok(receipt && receipt.eventId === result.data.eventId, 'Hold requires the actual committed completion receipt');
+  const event = await prisma.driverEvent.findUnique({ where: { id: receipt.eventId } });
+  assert.ok(event && event.clientEventId === input.clientEventId);
+  const committed = { heldAt: new Date().toISOString(), responseDelivered: false, originalRequest: input,
+    committedEvent: event, receipt: exactReceipt(receipt), eventCount: await prisma.driverEvent.count({ where: { clientEventId: input.clientEventId } }),
+    receiptCount: await prisma.driverStopCompletionReceipt.count({ where: { clientEventId: input.clientEventId } }) };
+  lastHeldCompletion = committed;
+  attempt.category = 'completion_committed_response_held';
+  attempt.completionCommit = { clientEventId: input.clientEventId, eventId: event.id, receiptId: receipt.id, actualAmount: committed.receipt.actualAmount };
+  let release;
+  const pending = new Promise((accept) => {
+    release = (reason) => {
+      if (heldCompletionResponse?.evidence !== committed) return false;
+      committed.releasedAt = new Date().toISOString();
+      committed.releaseReason = reason;
+      heldCompletionResponse = null;
+      accept();
+      return true;
+    };
+    heldCompletionResponse = { evidence: committed, release };
+  });
+  const onClose = () => release('client_connection_closed');
+  outgoing.once('close', onClose);
+  await evidence('completion-committed-response-held');
+  await pending;
+  outgoing.off('close', onClose);
+}
 async function control(command) {
   assert.ok(command && typeof command === 'object' && !Array.isArray(command));
   let result;
   switch (command.action) {
-    case 'status': result = { ...publicInfo, extraFixtures, offline, proofStorageUnavailable, nextProofResponseHoldMs,
+    case 'status': result = { ...publicInfo, extraFixtures, offline, serviceUnavailable, omitCompletionResponses, ...await completionStatus(), proofStorageUnavailable, nextProofResponseHoldMs,
       heldProofResponse: heldProofResponse === null ? null : { heldAt: heldProofResponse.attempt.proofResponseHeldAt, timeoutMs: heldProofResponse.attempt.proofResponseHoldTimeoutMs,
         status: heldProofResponse.attempt.status, proofCommit: heldProofResponse.attempt.proofCommit },
       nextPublicationOnAck, lostAckResponses, lostEventResponses, office: await adminRead() }; break;
@@ -205,6 +258,23 @@ async function control(command) {
       assert.ok(command.eventType === undefined || ['STOP_ARRIVED', 'STOP_DELIVERED', 'LOCATION_UPDATED'].includes(command.eventType));
       lostEventResponses = 1; lostEventType = command.eventType ?? null;
       result = { armed: true, eventType: lostEventType }; break;
+    case 'hold-next-completion-response':
+      assert.ok(cashMode, 'Completion response controls require --cash');
+      assert.equal(heldCompletionResponse, null);
+      nextCompletionResponseHold = true; result = { armed: true, timeout: null, requiresCommittedReceipt: true }; break;
+    case 'release-completion-response':
+      nextCompletionResponseHold = false; result = { released: heldCompletionResponse?.release('control') ?? false }; break;
+    case 'completion-status': result = await completionStatus(); break;
+    case 'set-stop-payment': {
+      assert.ok(cashMode);
+      assert.ok(Number.isInteger(command.index) && command.index >= 0 && command.index < fixture.stops.length);
+      const shape = cashPaymentFixture(command.scenario);
+      const stop = fixture.stops[command.index];
+      await prisma.order.update({ where: { id: stop.orderId }, data: shape });
+      result = { deliveryStopId: stop.id, scenario: command.scenario }; break;
+    }
+    case 'omit-completion-responses': omitCompletionResponses = command.enabled !== false; result = { omitCompletionResponses }; break;
+    case 'service-unavailable': serviceUnavailable = command.enabled !== false; result = { serviceUnavailable }; break;
     case 'offline': offline = command.enabled !== false; result = { offline }; break;
     case 'proof-storage-unavailable': proofStorageUnavailable = command.enabled !== false; result = { proofStorageUnavailable }; break;
     case 'hold-next-proof-response': {
@@ -259,6 +329,20 @@ async function control(command) {
   return result;
 }
 
+// All identities, contacts and balances below are synthetic. No live orders are loaded.
+const CASH_SCENARIOS = ['cash-122', 'cash-equal', 'cash-123', 'cash-zero', 'etransfer', 'paid',
+  'unknown-method', 'phone-missing', 'unknown-expected', 'cash-503', 'cash-400', 'cash-assignment', 'cash-dispatch', 'unknown-currency'];
+function cashPaymentFixture(scenario) {
+  assert.ok(CASH_SCENARIOS.includes(scenario) || scenario === 'currency-usd');
+  const method = ['etransfer', 'phone-missing'].includes(scenario) ? 'eTransfer' : scenario === 'unknown-method' ? 'Manual' : 'Cash';
+  const financialStatus = scenario === 'paid' ? 'PAID' : scenario === 'unknown-expected' ? 'PARTIALLY_PAID' : 'PENDING';
+  const currencyCode = scenario === 'unknown-currency' ? null : scenario === 'currency-usd' ? 'USD' : 'CAD';
+  return { financialStatus, currencyCode, totalPriceAmount: '122.25', rawPayload: {
+    source: 'synthetic-cash-qa', paymentGatewayNames: [method], displayFinancialStatus: financialStatus,
+    ...(scenario === 'unknown-expected' || currencyCode === null ? {} : { totalOutstandingSet: { shopMoney: { amount: '122.25', currencyCode } } }),
+  } };
+}
+
 try {
   for (const root of [serverRoot, shopifyRoot]) {
     assert.equal(resolve(run('git', ['rev-parse', '--show-toplevel'], { cwd: root })), root, 'Supply the exact fixture repository root');
@@ -295,7 +379,7 @@ try {
   const { PrismaCompletionAssistanceService } = await source('modules/driver/completion-assistance.service.ts');
   const { PrismaDriverProofMediaRepository } = await source('modules/driver/driver-proof-media.repository.ts');
   const { KFOOD_DELIVERY_APP_ID: appId, KFOOD_DELIVERY_SHOP_DOMAIN: shopDomain } = await source('modules/route-plans/kfood-delivery-completion.ts');
-  fixture = await seedFixture(prisma, appId, shopDomain);
+  fixture = await seedFixture(prisma, appId, shopDomain, { cash: cashMode });
   const clientId = 'synthetic-native-qa-shopify-client';
   const clientSecret = randomUUID();
   const driverSecret = randomUUID();
@@ -317,13 +401,14 @@ try {
   const adminOptions = { session, scopeKey: getKfoodLiveChangeContext(session).liveChangeScopeKey, routePlanId: fixture.route.id, routeGroupId: fixture.group.id, fetch: (url, init) => { assert.equal(new URL(url).origin, apiUrl); return fetch(url, init); } };
   adminRead = async () => data(await fetchKfoodLiveChange(request(), fixture.route.id, adminOptions));
   const command = (draft, extra = {}) => ({ commandId: randomUUID(), expectedAssignmentGeneration: draft.assignmentGeneration, expectedRouteVersionId: draft.expectedRouteVersionId, expectedRevision: draft.revision, ...extra });
-  adminSave = async ({ address = '700 First Synthetic Avenue', reorder = false } = {}) => {
+  adminSave = async ({ address = '700 First Synthetic Avenue', reorder = false, stopIndex = cashMode ? 12 : 6 } = {}) => {
+    assert.ok(Number.isInteger(stopIndex) && stopIndex >= 0 && stopIndex < fixture.stops.length);
     assert.equal(typeof address, 'string');
     assert.ok(address.length > 0 && address.length < 120);
-    return data(await runKfoodLiveChangeCommand(request(), fixture.route.id, 'liveChangeSave', json(command(await adminRead(), { stopOverrides: [{ deliveryStopId: fixture.stops[6].id, address1: address, latitude: 43.57, longitude: -80.57 }], ...(reorder ? { futureStopOrder: [2, 6, 3, 4, 5].map((index) => fixture.stops[index].id) } : {}) })), adminOptions));
+    return data(await runKfoodLiveChangeCommand(request(), fixture.route.id, 'liveChangeSave', json(command(await adminRead(), { stopOverrides: [{ deliveryStopId: fixture.stops[stopIndex].id, address1: address, latitude: 43.57, longitude: -80.57 }], ...(reorder ? { futureStopOrder: (cashMode ? [0, 1, 2, 3, 4, 5, 7, 6, ...Array.from({ length: fixture.stops.length - 8 }, (_unused, index) => index + 8)] : [2, 6, 3, 4, 5]).map((index) => fixture.stops[index].id) } : {}) })), adminOptions));
   };
   adminDispatch = async () => data(await runKfoodLiveChangeCommand(request(), fixture.route.id, 'liveChangeDispatch', json(command(await adminRead())), adminOptions));
-  publicInfo = { serverSourceSha: expectedServerSha, shopifySourceSha: expectedShopifySha, sourceSnapshots: { server: serverRoot, shopify: shopifyRoot }, baseUrl: `https://localhost:${httpsPort}`, transport: 'Loopback TLS proxy → real Fastify HTTP → isolated PostgreSQL', routePlanId: fixture.route.id, baselineVersionId: fixture.version.id, assignmentGeneration: '2', stopIds: fixture.stops.map((stop) => stop.id), credentials: [{ account: 'first', phone: '+15195550101', pin: '246810' }, { account: 'second', phone: '+15195550102', pin: '135790' }], proofStorage: 'Actual reviewed Prisma proof service with temporary local synthetic filesystem storage; no cloud provider or remote read access', providers: 'No external provider dependencies, notification workers or production environment files loaded' };
+  publicInfo = { serverSourceSha: expectedServerSha, shopifySourceSha: expectedShopifySha, sourceSnapshots: { server: serverRoot, shopify: shopifyRoot }, baseUrl: `https://localhost:${httpsPort}`, transport: 'Loopback TLS proxy → real Fastify HTTP → isolated PostgreSQL', routePlanId: fixture.route.id, baselineVersionId: fixture.version.id, assignmentGeneration: '2', ...(cashMode ? { cashScenarios: CASH_SCENARIOS.map((scenario, index) => ({ index, scenario, deliveryStopId: fixture.stops[index].id })) } : {}), stopIds: fixture.stops.map((stop) => stop.id), credentials: [{ account: 'first', phone: '+15195550101', pin: '246810' }, { account: 'second', phone: '+15195550102', pin: '135790' }], proofStorage: 'Actual reviewed Prisma proof service with temporary local synthetic filesystem storage; no cloud provider or remote read access', providers: 'No external provider dependencies, notification workers or production environment files loaded' };
   proxy = createHttpsServer({ cert: await readFile(resolve(certificateArg)), key: await readFile(resolve(keyArg)) }, async (incoming, outgoing) => {
     let attempt;
     try {
@@ -354,6 +439,10 @@ try {
       if (offline) {
         Object.assign(attempt, { completedAt: new Date().toISOString(), category: 'offline_transport_rejected' });
         return outgoing.destroy();
+      }
+      if (serviceUnavailable) {
+        Object.assign(attempt, { completedAt: new Date().toISOString(), status: 503, category: 'synthetic_503' });
+        return sendJson(outgoing, 503, { data: null, error: { code: 'QA_SERVICE_UNAVAILABLE', message: 'Synthetic retryable outage' } });
       }
       let input = null;
       if (incoming.headers['content-type']?.includes('application/json') && body.length) input = JSON.parse(body.toString('utf8'));
@@ -395,6 +484,11 @@ try {
       }
       const trackedInput = (path === '/driver/events' || path.endsWith('/live-change/applied')) ? input : null;
       requests.push({ at: new Date().toISOString(), method: incoming.method, path: incoming.url, status: response.status, ...(trackedInput ? { input: trackedInput, result } : { errorCode: result?.error?.code ?? null }) });
+      if (cashMode && path === '/driver/events' && response.ok && input?.completion?.version === 1 && nextCompletionResponseHold) {
+        nextCompletionResponseHold = false;
+        await holdCompletionResponse(attempt, input, result, outgoing);
+        if (outgoing.destroyed) return;
+      }
       const loseAckResponse = path.endsWith('/live-change/applied') && response.ok && lostAckResponses > 0;
       const loseEventResponse = path === '/driver/events' && response.ok && lostEventResponses > 0
         && (lostEventType === null || input?.eventType === lostEventType);
@@ -408,8 +502,14 @@ try {
         return outgoing.destroy();
       }
       outgoing.writeHead(response.status, Object.fromEntries([...response.headers].filter(([name]) => !['content-encoding', 'content-length', 'transfer-encoding', 'connection'].includes(name))));
-      outgoing.end(bytes);
+      if (omitCompletionResponses && result?.data?.completion !== undefined && (path === '/driver/events' || path.startsWith('/driver/event-receipts/'))) {
+        const incomplete = structuredClone(result);
+        delete incomplete.data.completion;
+        attempt.omittedCompletion = true;
+        outgoing.end(json(incomplete));
+      } else outgoing.end(bytes);
       attempt.deliveredAt = new Date().toISOString();
+      if (lastHeldCompletion !== null && lastHeldCompletion.originalRequest.clientEventId === input?.clientEventId) lastHeldCompletion.responseDelivered = true;
       if (trackedInput || path === '/driver/proof-media') await evidence('driver-write');
     } catch (error) {
       if (attempt && (attempt.category === 'received' || attempt.category === 'forwarding')) {
@@ -447,17 +547,17 @@ async function seedFixture(database, appId, shopDomain, options = {}) {
   const parent = await database.routeGroupingVersion.create({ data: { shopId: shop.id, groupingId: group.id, version: 1 } });
   const version = await database.routeGroupingChildVersion.create({ data: { shopId: shop.id, groupingId: group.id, groupingVersionId: parent.id, routePlanId: route.id, driverId: drivers[0].id, version: 1, snapshot: {}, publishedAt: now } });
   const stops = [];
-  for (let index = 0; index < 7; index += 1) {
+  for (let index = 0; index < (options.cash ? CASH_SCENARIOS.length : 7); index += 1) {
     const sourceOrderId = `gid://shopify/Order/synthetic-${index + 1}`;
     const destination = options.dsv ? await database.deliveryCustomerProfile.create({ data: { shopId: shop.id, addressFingerprint: `synthetic-qa-${randomUUID()}`, canonicalName: `Synthetic DSV destination ${index + 1}`, normalizedAddress: { address1: `${index + 1} Integration Road` } } }) : null;
-    const order = await database.order.create({ data: { shopId: shop.id, name: `#synthetic-${index + 1}`, rawPayload: { shippingAddress: { address1: `${index + 1} Integration Road` }, source: 'immutable-test-source', normalizedPaymentStatus: 'CASH_COLLECT_REQUIRED', paymentMethodTitle: 'Cash on delivery', ...(destination ? { dsv: { normalized: { destinationId: destination.id, sellerOrderKey: `synthetic-dsv-${index + 1}`, shippedBoxes: 2 } } } : {}) }, totalPriceAmount: '122.25', currencyCode: 'CAD', shopifyOrderGid: `${sourceOrderId}-${route.id}`, currentRouteVersionId: version.id, ...(destination ? { destinationId: destination.id, sellerOrderSourceKind: 'DSV', sellerOrderKey: `synthetic-dsv-${index + 1}`, serviceDate: now } : {}) } });
+    const order = await database.order.create({ data: { shopId: shop.id, name: `#synthetic-${index + 1}`, rawPayload: { shippingAddress: { address1: `${index + 1} Integration Road` }, source: 'immutable-test-source', normalizedPaymentStatus: 'CASH_COLLECT_REQUIRED', paymentMethodTitle: 'Cash on delivery', ...(destination ? { dsv: { normalized: { destinationId: destination.id, sellerOrderKey: `synthetic-dsv-${index + 1}`, shippedBoxes: 2 } } } : {}) }, totalPriceAmount: '122.25', currencyCode: 'CAD', ...(options.cash ? cashPaymentFixture(CASH_SCENARIOS[index]) : {}), shopifyOrderGid: `${sourceOrderId}-${route.id}`, currentRouteVersionId: version.id, ...(destination ? { destinationId: destination.id, sellerOrderSourceKind: 'DSV', sellerOrderKey: `synthetic-dsv-${index + 1}`, serviceDate: now } : {}) } });
     await database.orderItem.create({ data: { shopId: shop.id, orderId: order.id, productId: index + 1, lineIndex: 0, name: 'Synthetic groceries', quantity: 2, options: [], sku: 'SYNTHETIC' } });
-    const stop = await database.deliveryStop.create({ data: { shopId: shop.id, orderId: order.id, address1: `${index + 1} Integration Road`, city: 'Synthetic City', province: 'ON', postalCode: 'N2G 1A1', countryCode: 'CA', latitude: 43.4 + index / 100, longitude: -80.4 - index / 100, status: status === 'IN_PROGRESS' ? (index === 0 ? 'DELIVERED' : index === 1 ? 'ARRIVED' : 'ASSIGNED') : 'ASSIGNED' } });
+    const stop = await database.deliveryStop.create({ data: { shopId: shop.id, orderId: order.id, address1: `${index + 1} Integration Road`, ...(options.cash ? { recipientName: `Synthetic ${CASH_SCENARIOS[index]}`, phone: CASH_SCENARIOS[index] === 'phone-missing' ? null : '+15195550199' } : {}), city: 'Synthetic City', province: 'ON', postalCode: 'N2G 1A1', countryCode: 'CA', latitude: 43.4 + index / 100, longitude: -80.4 - index / 100, status: !options.cash && status === 'IN_PROGRESS' ? (index === 0 ? 'DELIVERED' : index === 1 ? 'ARRIVED' : 'ASSIGNED') : 'ASSIGNED' } });
     await database.routePlanStop.create({ data: { shopId: shop.id, routePlanId: route.id, deliveryStopId: stop.id, sequence: index + 1, estimatedArrivalAt: new Date(now.getTime() + index * 60_000), durationFromPreviousSeconds: 60, distanceFromPreviousMeters: 1000, etaInputRouteVersionId: version.id, etaStatus: 'READY', etaCalculatedAt: now, etaSource: 'SYNTHETIC' } });
     stops.push(stop);
   }
   await database.routeGroupingChildVersion.update({ where: { id: version.id }, data: { snapshot: { membershipSchemaVersion: 1, stops: stops.map((stop, index) => ({ sequence: index + 1, deliveryStopId: stop.id, orderId: stop.orderId, sourceOrderId: `gid://shopify/Order/synthetic-${index + 1}-${route.id}`, address1: stop.address1, latitude: stop.latitude.toString(), longitude: stop.longitude.toString() })) } } });
-  for (const [eventType, stopIndex] of status === 'IN_PROGRESS' ? [['ROUTE_STARTED', null], ['PICKUP_COMPLETED', null], ['STOP_DELIVERED', 0], ['STOP_ARRIVED', 1]] : []) {
+  for (const [eventType, stopIndex] of status === 'IN_PROGRESS' ? [['ROUTE_STARTED', null], ['PICKUP_COMPLETED', null], ...(!options.cash ? [['STOP_DELIVERED', 0], ['STOP_ARRIVED', 1]] : [])] : []) {
     await database.driverEvent.create({ data: { shopId: shop.id, driverId: drivers[0].id, routePlanId: route.id, routeVersionId: version.id, assignmentGeneration: 2n, expectedRouteVersionId: version.id, driverContractVersion: 2, clientEventId: randomUUID(), eventType, occurredAt: new Date(now.getTime() - 60_000), payload: { source: 'synthetic-seed' }, ...(stopIndex === null ? {} : { deliveryStopId: stops[stopIndex].id }) } });
   }
   return { shop, account: accounts[0], secondAccount: accounts[1], driver: drivers[0], secondDriver: drivers[1], route, version, group, stops };

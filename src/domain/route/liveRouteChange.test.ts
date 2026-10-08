@@ -10,6 +10,7 @@ import {
   type LiveRoutePublication,
 } from './liveRouteChange';
 import { DriverApiHttpError } from '../../api/deliveryServer/driverApiError';
+import type { StopCompletion, StopPayment } from '../stop/stopCompletion';
 
 const publicationId = '90000000-0000-4000-8000-000000000001';
 
@@ -153,6 +154,30 @@ describe('live route publication contract', () => {
       fresh.stops[0]!.status = 'DELIVERED';
       assert.equal(mergeLiveRouteExecutionState(applied, fresh).stops[0]?.status, 'DELIVERED');
     }
+  });
+
+  it('refreshes payment and first receipt while retaining explicitly applied delivery content', () => {
+    const applied = applyLiveRoutePublication(sampleAssignedRoute, publication());
+    const fresh = structuredClone(sampleAssignedRoute);
+    const payment: StopPayment = { method: 'CASH', methodTitle: 'Cash', gatewayNames: ['Cash'], financialStatus: 'PENDING',
+      expectedAmount: '122.25', currencyCode: 'CAD', expectedAmountSource: 'SHOPIFY_OUTSTANDING', requiresCashInput: true };
+    const receipt: StopCompletion = { id: 'receipt', eventId: 'event', deliveryStopId: fresh.stops[0]!.deliveryStopId,
+      routePlanId: fresh.id, driverId: 'driver', assignmentGeneration: '2', expectedRouteVersionId: publicationId,
+      method: 'CASH', payment, expectedAmount: '122.25', actualAmount: '0.00', differenceAmount: '-122.25',
+      currencyCode: 'CAD', occurredAt: '2026-10-08T07:00:00.000Z', recordedAt: '2026-10-08T07:00:01.000Z' };
+    fresh.stops[0]!.payment = { ...payment, expectedAmount: '999.00' };
+    fresh.stops[0]!.completion = receipt;
+    fresh.stops[0]!.address.address1 = 'Not yet applied';
+    const merged = mergeLiveRouteExecutionState(applied, fresh);
+    assert.equal(merged.stops[0]?.payment?.expectedAmount, '999.00');
+    assert.deepEqual(merged.stops[0]?.completion, receipt);
+    assert.equal(merged.stops[0]?.address.address1, applied.stops[0]?.address.address1);
+    // A legacy response must not enable the new contract, or erase an accepted receipt.
+    delete fresh.stops[0]!.payment;
+    fresh.stops[0]!.completion = null;
+    const legacy = mergeLiveRouteExecutionState(merged, fresh);
+    assert.equal(legacy.stops[0]?.payment, undefined);
+    assert.deepEqual(legacy.stops[0]?.completion, receipt);
   });
 });
 
