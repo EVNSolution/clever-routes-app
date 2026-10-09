@@ -1,4 +1,6 @@
-import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { DeliverySignaturePad } from './DeliverySignaturePad';
+import type { DeliveryProofPolicy } from '../domain/proof/deliveryProofPolicy';
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View, ScrollView } from 'react-native';
 import type { StopCompletion, StopCompletionInput, StopPayment } from '../domain/stop/stopCompletion';
 import { formatCompletionAmount } from './kfoodSingleCompletion';
 
@@ -37,7 +39,13 @@ export function StopCompletionPanel({ payment, completion, pending }: {
   </View>;
 }
 
-export function CashCompletionModal({ payment, amount, error, busy, onChangeAmount, onCancel, onConfirm }: {
+export function CashCompletionModal({ payment, amount, error, busy, onChangeAmount, onCancel, onConfirm, recovery, proofPolicy, photoUri, signatureUri, onPhoto, onSignature }: {
+  recovery?: boolean;
+  proofPolicy?: DeliveryProofPolicy;
+  photoUri?: string;
+  signatureUri?: string;
+  onPhoto?(): void;
+  onSignature?(uri: string): Promise<void>;
   payment: StopPayment | null;
   amount: string;
   error: string | null;
@@ -48,22 +56,26 @@ export function CashCompletionModal({ payment, amount, error, busy, onChangeAmou
 }) {
   return <Modal transparent animationType="fade" visible={payment !== null} onRequestClose={busy ? undefined : onCancel}>
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.overlay}>
-      <View style={styles.dialog} accessibilityViewIsModal>
-        <Text accessibilityRole="header" style={styles.heading}>Cash received</Text>
+      <ScrollView style={styles.dialog} contentContainerStyle={{ gap: 12 }} keyboardShouldPersistTaps="handled" accessibilityViewIsModal>
+        <Text accessibilityRole="header" style={styles.heading}>{payment?.requiresCashInput ? 'Cash received' : 'Complete delivery'}</Text>
+        {payment?.requiresCashInput ? <>
         <Text style={styles.label}>Expected: {payment === null ? '' : formatCompletionAmount(payment.expectedAmount, payment.currencyCode, 'Amount unknown')}</Text>
         <Text style={styles.hint}>{payment?.currencyCode ?? 'Currency unknown. Ask dispatch to correct it.'}</Text>
-        <TextInput accessibilityLabel="Actual cash received" autoFocus editable={!busy} keyboardType="decimal-pad" onChangeText={onChangeAmount}
+        <TextInput accessibilityLabel="Actual cash received" autoFocus={!recovery} editable={!busy && !recovery} keyboardType="decimal-pad" onChangeText={onChangeAmount}
           placeholder="Enter amount, including 0" style={styles.input} value={amount} />
+        </> : null}
+        {proofPolicy?.photoRequired ? <Pressable accessibilityRole="button" disabled={busy} onPress={onPhoto} style={styles.photo}><Text style={styles.cancelText}>{photoUri ? '✓ Delivery photo saved · Retake' : 'Take required delivery photo'}</Text></Pressable> : null}
+        {proofPolicy?.signatureRequired && onSignature !== undefined ? <DeliverySignaturePad disabled={busy} savedUri={signatureUri} onSave={onSignature} /> : null}
         {error === null ? null : <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
-        <Text style={styles.hint}>Confirm once to save the amount and complete this delivery.</Text>
+        <Text style={styles.hint}>{recovery ? 'Replace rejected proof only. The saved cash amount will not change.' : 'Confirm once to save and complete this delivery.'}</Text>
         <View style={styles.actions}>
           <Pressable accessibilityRole="button" disabled={busy} onPress={onCancel} style={styles.cancel}><Text style={styles.cancelText}>Cancel</Text></Pressable>
-          <Pressable accessibilityRole="button" disabled={busy || payment?.currencyCode == null} onPress={onConfirm}
-            style={[styles.confirm, (busy || payment?.currencyCode == null) && styles.disabled]}>
-            {busy ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.confirmText}>Confirm & Complete</Text>}
+          <Pressable accessibilityRole="button" disabled={busy || (payment?.requiresCashInput === true && payment.currencyCode == null)} onPress={onConfirm}
+            style={[styles.confirm, (busy || (payment?.requiresCashInput === true && payment.currencyCode == null)) && styles.disabled]}>
+            {busy ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.confirmText}>{recovery ? 'Resume saved completion' : 'Confirm & Complete'}</Text>}
           </Pressable>
         </View>
-      </View>
+      </ScrollView>
     </KeyboardAvoidingView>
   </Modal>;
 }
@@ -72,7 +84,8 @@ const styles = StyleSheet.create({
   label: { fontSize: 15, color: '#42566c' }, amount: { fontSize: 22, fontWeight: '600', color: '#152e48' }, actual: { fontSize: 26, fontWeight: '700', color: '#146238' },
   strike: { textDecorationLine: 'line-through', color: '#68788b' }, hint: { fontSize: 13, color: '#586c82', lineHeight: 19 },
   recorded: { color: '#146238', fontSize: 14, fontWeight: '600' }, pending: { color: '#926200', fontSize: 15, fontWeight: '600' },
-  overlay: { flex: 1, backgroundColor: '#00000080', justifyContent: 'center', padding: 22 }, dialog: { padding: 22, gap: 12, backgroundColor: 'white', borderRadius: 20 },
+  overlay: { flex: 1, backgroundColor: '#00000080', justifyContent: 'center', padding: 22 }, dialog: { maxHeight: '90%', padding: 22, backgroundColor: 'white', borderRadius: 20 },
+  photo: { padding: 12, borderWidth: 1, borderColor: '#829bb7', borderRadius: 8 },
   input: { borderWidth: 1, borderColor: '#829bb7', borderRadius: 10, fontSize: 24, padding: 14, color: '#152e48' }, error: { color: '#b42318', fontSize: 14 },
   actions: { flexDirection: 'row', gap: 10, marginTop: 6 }, cancel: { paddingVertical: 16, paddingHorizontal: 14, justifyContent: 'center' }, cancelText: { color: '#315b88', fontWeight: '600' },
   confirm: { flex: 1, borderRadius: 10, backgroundColor: '#0b57d0', padding: 16, alignItems: 'center', justifyContent: 'center' }, confirmText: { color: 'white', fontWeight: '700' }, disabled: { opacity: 0.5 },

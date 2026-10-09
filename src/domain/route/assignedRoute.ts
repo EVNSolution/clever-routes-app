@@ -1,3 +1,4 @@
+import { isDeliveryProofPolicy, type DeliveryProofPolicy, type TollPolicy } from '../proof/deliveryProofPolicy';
 import type { DriverFlowState } from '../driverFlow/driverFlow';
 import {
   createDriverApiHttpError,
@@ -152,6 +153,8 @@ export type AssignedRouteStopPoint = {
 const DEFAULT_ASSIGNED_ROUTE_TIMEZONE = 'America/Toronto';
 
 export type AssignedRoute = {
+  deliveryProof?: DeliveryProofPolicy;
+  tollPolicy?: TollPolicy;
   deliveryDate: string;
   depot: AssignedRouteCoordinates | null;
   id: string;
@@ -615,6 +618,8 @@ export function isAssignedRoute(value: unknown): value is AssignedRoute {
   const route = value as Record<string, unknown>;
   return (
     typeof route.deliveryDate === 'string' &&
+    (route.deliveryProof === undefined || isDeliveryProofPolicy(route.deliveryProof)) &&
+    (route.tollPolicy === undefined || route.tollPolicy === 'ALLOW_TOLLS' || route.tollPolicy === 'AVOID_TOLLS') &&
     (route.depot === undefined || route.depot === null || isNullableAssignedRouteCoordinates(route.depot)) &&
     typeof route.id === 'string' &&
     typeof route.name === 'string' &&

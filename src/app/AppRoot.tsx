@@ -1,3 +1,7 @@
+import type { DriverEventInput } from '../domain/events/driverEvents';
+import { createDeliveryProofCapabilityReporter } from '../domain/driverAuth/deliveryProofCapability';
+import { deliveryProofRequirements, validateDeliveryProof } from '../domain/proof/deliveryProofPolicy';
+import { retainProofFile } from '../platform/expo/proof/durableProofFile';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
@@ -190,6 +194,7 @@ import { getExpoDriverSyncIdentity } from '../platform/expo/secureStore/expoDriv
 import { buildDriverOperationalPillValues } from '../ui/components/operationalPillModel';
 import { captureProofPhoto, type ProofPhotoCaptureResult, type ProofPhotoCaptureSource } from '../domain/proof/proofPhotoCapture';
 import {
+  isProofMediaRejectedError,
   createMockProofMediaUploadService,
   shouldQueueFailedProofMediaUpload,
   uploadCapturedProofPhoto,
@@ -437,7 +442,7 @@ function DriverApp() {
   const liveRouteAccessBlockedRef = useRef(new Set<string>());
   const liveRouteSessionsRef = useRef<RouteSession[]>([]);
   const liveRouteInputRef = useRef({ currentStopId: null as string | null, selectedStopDetailsId: null as string | null, navigationStepIndex: 0,
-    proofDrafts: {} as Record<string, StopProofDraft>, proofPhotoResults: {} as Record<string, ProofPhotoCaptureResult>, proofMediaResults: {} as Record<string, ProofMediaUploadResult> });
+    cashDrafts: {} as Record<string, string>, signatureUris: {} as Record<string, string>, proofDrafts: {} as Record<string, StopProofDraft>, proofPhotoResults: {} as Record<string, ProofPhotoCaptureResult>, proofMediaResults: {} as Record<string, ProofMediaUploadResult> });
   const proofCameraScopeRef = useRef<ProofPhotoScope | null>(null);
   const proofPhotoActivityIdRef = useRef(0);
 
@@ -452,6 +457,7 @@ function DriverApp() {
   const [, setContinuousLocationResult] = useState<ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null>(null);
   const [stopProofResults, setStopProofResults] = useState<Record<string, StopProofEventResult>>({});
   const [proofDrafts, setProofDrafts] = useState<Record<string, StopProofDraft>>({});
+  const [signatureUris, setSignatureUris] = useState<Record<string, string>>({});
   const [proofPhotoResults, setProofPhotoResults] = useState<Record<string, ProofPhotoCaptureResult>>({});
   const [proofMediaResults, setProofMediaResults] = useState<Record<string, ProofMediaUploadResult>>({});
   const [completedStopIds, setCompletedStopIds] = useState<string[]>([]);
@@ -506,7 +512,7 @@ function DriverApp() {
   const [isPhotoActionSheetVisible, setIsPhotoActionSheetVisible] = useState(false);
   const [isCompletingStop, setIsCompletingStop] = useState(false);
   const completionSubmissionRunningRef = useRef(false);
-  const [cashInput, setCashInput] = useState<{ key: string; stop: AssignedRouteStop; routePlanId: string; owner: string | null; generation: string; version: string; switchToRoutePlanId?: string } | null>(null);
+  const [cashInput, setCashInput] = useState<{ key: string; stop: AssignedRouteStop; routePlanId: string; owner: string | null; generation: string; version: string; switchToRoutePlanId?: string; recovery?: { event: DriverEventInput; photoUri?: string; signatureUri?: string } } | null>(null);
   const [cashDrafts, setCashDrafts] = useState<Record<string, string>>({});
   const [cashInputError, setCashInputError] = useState<string | null>(null);
   const [isStopDetailsInputFocused, setIsStopDetailsInputFocused] = useState(false);
@@ -941,10 +947,17 @@ function DriverApp() {
     onOpen: () => setScreen('completionAssistance'),
   });
 
+  const reportDeliveryProofCapability = useMemo(() => createDeliveryProofCapabilityReporter({
+    baseUrl: runtimeConfig.mode === 'live' ? runtimeConfig.deliveryServerBaseUrl : '',
+    enabled: runtimeConfig.mode === 'live' && runtimeConfig.kfoodSingleCompletionQaEnabled === true,
+    installed: installedDriverAppVersion,
+  }), [installedDriverAppVersion, runtimeConfig]);
+
   const submitAccountRouteAccess = useCallback(async (
     accountAccess: DriverAccountAccessToken,
   ): Promise<RouteAccessSubmissionResult> => {
     try {
+      await reportDeliveryProofCapability(accountAccess);
       return await submitRouteAccess({
         accountAccessToken: accountAccess.accessToken,
       }, routeAccessService);
@@ -967,11 +980,12 @@ function DriverApp() {
         phoneE164: expectedAccess.driverProfile.phoneE164,
         refreshToken: expectedAccess.accountAccess.refreshToken,
       });
+      await reportDeliveryProofCapability(refreshed.accountAccess);
       return submitRouteAccess({
         accountAccessToken: refreshed.accountAccess.accessToken,
       }, routeAccessService);
     }
-  }, [driverAccessTokenStore, driverAuthService, routeAccessService]);
+  }, [driverAccessTokenStore, driverAuthService, reportDeliveryProofCapability, routeAccessService]);
 
   const sendCompletionAcknowledgedHeartbeatBeforeCleanup = useCallback(async (input: {
     access: {
@@ -1987,8 +2001,8 @@ function DriverApp() {
   useEffect(() => {
     liveRouteSessionsRef.current = routeSessions;
     liveRouteInputRef.current = { currentStopId: currentStop?.deliveryStopId ?? null, selectedStopDetailsId, navigationStepIndex,
-      proofDrafts, proofPhotoResults, proofMediaResults };
-  }, [currentStop, navigationStepIndex, proofDrafts, proofMediaResults, proofPhotoResults, routeSessions, selectedStopDetailsId]);
+      cashDrafts, signatureUris, proofDrafts, proofPhotoResults, proofMediaResults };
+  }, [currentStop, navigationStepIndex, cashDrafts, signatureUris, proofDrafts, proofMediaResults, proofPhotoResults, routeSessions, selectedStopDetailsId]);
   const selectedLiveRouteKey = selectedRouteSession === null ? null : liveRouteStateKey(selectedRouteSession.route.id, selectedRouteSession.routeAccess.assignmentGeneration);
   const selectedLiveRouteState = selectedLiveRouteKey === null ? undefined : liveRouteStates[selectedLiveRouteKey];
   const selectedLiveRouteRecovery = selectedLiveRouteState?.appliedRoute === null;
@@ -2027,7 +2041,7 @@ function DriverApp() {
     const pending = offlineSubmissionQueue?.listPending().find(item => item.kind === 'driver_event'
       && item.event.routePlanId === selectedRoute?.id && item.event.deliveryStopId === stop.deliveryStopId && item.event.completion !== undefined);
     return pending?.kind === 'driver_event' && pending.event.completion !== undefined
-      ? { completion: pending.event.completion, blocked: pending.state === 'QUARANTINED' || pending.reconciliation !== undefined } : null;
+      ? { event: pending.event, rejectedProof: offlineSubmissionQueue?.rejectedProofForCompletion(pending.event) ?? [], completion: pending.event.completion, blocked: pending.state === 'QUARANTINED' || pending.reconciliation !== undefined } : null;
   }
   const currentUsesSingleCompletion = usesSingleCompletion(currentStop);
   const detailsUsesSingleCompletion = usesSingleCompletion(stopDetailsStop);
@@ -3029,7 +3043,8 @@ function DriverApp() {
           const filter = <T,>(values: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(values).filter(([id]) => ids.has(id)));
           const draft: LiveRouteChangeUiDraft = { currentStopId: ids.has(latest.currentStopId ?? '') ? latest.currentStopId : null,
             selectedStopDetailsId: ids.has(latest.selectedStopDetailsId ?? '') ? latest.selectedStopDetailsId : null,
-            proofDrafts: filter(latest.proofDrafts), proofPhotoResults: filter(latest.proofPhotoResults), proofMediaResults: filter(latest.proofMediaResults) };
+            cashDrafts: Object.fromEntries(Object.entries(latest.cashDrafts).filter(([key]) => key.startsWith([accountOwnerHash, previousRouteId, previousAccess.assignmentGeneration].join(':') + ':'))),
+            signatureUris: filter(latest.signatureUris), proofDrafts: filter(latest.proofDrafts), proofPhotoResults: filter(latest.proofPhotoResults), proofMediaResults: filter(latest.proofMediaResults) };
           await (await createExpoLiveRouteChangeStore()).update(accountOwnerHash, previousRouteId, previousAccess.assignmentGeneration,
             current => {
               if (!isLoginAccountCurrent()) throw new Error('Driver assignment changed before saving its draft.');
@@ -3288,6 +3303,8 @@ function DriverApp() {
               );
         if (hydrateLiveInputs && liveState?.uiDraft != null) {
           setProofDrafts(liveState.uiDraft.proofDrafts);
+          setCashDrafts(current => ({ ...current, ...liveState.uiDraft?.cashDrafts }));
+          setSignatureUris(liveState.uiDraft.signatureUris ?? {});
           setProofPhotoResults(liveState.uiDraft.proofPhotoResults);
           setProofMediaResults(liveState.uiDraft.proofMediaResults);
           setSelectedStopDetailsId(liveState.uiDraft.selectedStopDetailsId);
@@ -3637,11 +3654,14 @@ function DriverApp() {
 
   const buildLiveRouteUiDraft = useCallback((route: AssignedRoute): LiveRouteChangeUiDraft => {
     const latest = liveRouteInputRef.current;
+    const generation = liveRouteSessionsRef.current.find(session => session.route.id === route.id)?.routeAccess.assignmentGeneration;
+    const cashPrefix = [driverSyncBoundAccountOwnerHashRef.current, route.id, generation].join(':') + ':';
     const ids = new Set(route.stops.map(stop => stop.deliveryStopId));
     const filter = <T,>(values: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(values).filter(([id]) => ids.has(id)));
     return { currentStopId: ids.has(latest.currentStopId ?? '') ? latest.currentStopId : null,
       selectedStopDetailsId: ids.has(latest.selectedStopDetailsId ?? '') ? latest.selectedStopDetailsId : null,
-      proofDrafts: filter(latest.proofDrafts), proofPhotoResults: filter(latest.proofPhotoResults), proofMediaResults: filter(latest.proofMediaResults) };
+      cashDrafts: Object.fromEntries(Object.entries(latest.cashDrafts).filter(([key]) => key.startsWith(cashPrefix))),
+      signatureUris: filter(latest.signatureUris), proofDrafts: filter(latest.proofDrafts), proofPhotoResults: filter(latest.proofPhotoResults), proofMediaResults: filter(latest.proofMediaResults) };
   }, []);
 
   useEffect(() => {
@@ -3664,7 +3684,7 @@ function DriverApp() {
       if (isCurrent()) setLiveRouteErrors(current => ({ ...current, [key]: 'Delivery notes could not be saved. Keep the app open and retry.' }));
     });
   }, [activeRoutePlanId, buildLiveRouteUiDraft, isInitialRouteRestoreComplete, isLoggingIn, navigationStepIndex, proofDrafts,
-    proofMediaResults, proofPhotoResults, publishLiveRouteState, routeSessions, selectedStopDetailsId]);
+    proofMediaResults, proofPhotoResults, cashDrafts, signatureUris, publishLiveRouteState, routeSessions, selectedStopDetailsId]);
 
   const liveBannerSession = routeSessions.find(session => {
     const key = liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration);
@@ -3733,6 +3753,8 @@ function DriverApp() {
               if (uiDraft !== undefined) {
                 setSelectedStopDetailsId(liveRouteInputRef.current.selectedStopDetailsId ?? uiDraft.selectedStopDetailsId);
                 setProofDrafts(previous => ({ ...previous, ...uiDraft.proofDrafts }));
+                setCashDrafts(previous => ({ ...previous, ...uiDraft.cashDrafts }));
+                setSignatureUris(previous => ({ ...previous, ...uiDraft.signatureUris }));
                 setProofPhotoResults(previous => ({ ...previous, ...uiDraft.proofPhotoResults }));
                 setProofMediaResults(previous => ({ ...previous, ...uiDraft.proofMediaResults }));
               }
@@ -5221,6 +5243,7 @@ function DriverApp() {
     }
     const result = await openDepotNavigation({
       depot: selectedRoute.depot,
+      tollPolicy: selectedRoute.tollPolicy,
       linking: stopNavigationLinking,
       platform: Platform.OS,
     });
@@ -5240,13 +5263,14 @@ function DriverApp() {
     const result = await openStopNavigation({
       linking: stopNavigationLinking,
       platform: Platform.OS,
+      tollPolicy: selectedRoute.tollPolicy,
       stop,
     });
     setMessage(result.message);
   }
 
-  function createProofPhotoScope(): ProofPhotoScope | null {
-    const proofStop = screenRef.current === 'stopDetails' ? stopDetailsStop : currentStop;
+  function createProofPhotoScope(stopOverride?: AssignedRouteStop): ProofPhotoScope | null {
+    const proofStop = stopOverride ?? (screenRef.current === 'stopDetails' ? stopDetailsStop : currentStop);
     if (proofStop === null || selectedRoute === null) return null;
     proofReturnScreenRef.current = screenRef.current === 'stopDetails' ? 'stopDetails' : 'arrivalCheck';
     const route = selectedRoute;
@@ -5270,14 +5294,17 @@ function DriverApp() {
   }
 
   async function handleProofPhotoResult(input: { captureResult: ProofPhotoCaptureResult; scope: ProofPhotoScope }) {
-    const { captureResult, scope } = input;
+    const { scope } = input;
+    const originalCapture = input.captureResult;
     const { route, stop } = scope;
-    if (captureResult.kind !== 'captured') {
-      if (scope.isCurrent() && captureResult.kind === 'permission_denied') {
-        setMessage(captureResult.message);
+    if (originalCapture.kind !== 'captured') {
+      if (scope.isCurrent() && originalCapture.kind === 'permission_denied') {
+        setMessage(originalCapture.message);
       }
       return;
     }
+    const captureResult = { ...originalCapture, uri: await retainProofFile(originalCapture.uri, 'photo') };
+    if (!scope.isCurrent()) return;
     const projectCapturedPhoto = () => {
       setProofPhotoResults(current => ({ ...current, [stop.deliveryStopId]: captureResult }));
       const previous = scope.uiDraft.proofPhotoResults[stop.deliveryStopId];
@@ -5302,6 +5329,12 @@ function DriverApp() {
       const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
       if (!scope.isCurrent()) return;
       if (scope.accountOwnerHash !== null && queue.getAccountOwnerHash() !== scope.accountOwnerHash) return;
+      const durableRequest = { ...uploadRequest, source: captureResult.source, uri: captureResult.uri };
+      const rejectedUri = cashInput?.stop.deliveryStopId === stop.deliveryStopId ? cashInput.recovery?.photoUri : undefined;
+      const queuedMedia = rejectedUri !== undefined && scope.assignmentGeneration !== undefined
+        ? queue.replaceRejectedProofMedia(rejectedUri, durableRequest, { assignmentGeneration: scope.assignmentGeneration })
+        : queue.enqueueProofMediaUpload(durableRequest, scope.assignmentGeneration === undefined ? undefined : { assignmentGeneration: scope.assignmentGeneration });
+      await queue.whenPersisted();
       const idempotencyKey = resolveProofMediaUploadIdempotencyKey({
         accountOwnerHash: scope.accountOwnerHash, queue, request: { ...uploadRequest, source: captureResult.source, uri: captureResult.uri },
         scope: scope.assignmentGeneration === undefined ? undefined : { assignmentGeneration: scope.assignmentGeneration },
@@ -5330,6 +5363,12 @@ function DriverApp() {
           await waitForOfflineQueuePersistence(queue);
         },
       });
+      if (scope.isCurrent() && uploadResult?.kind === 'upload_failed' && uploadResult.reason === 'proof_media_rejected') { queue.rejectProofMedia(queuedMedia.queueItemId); await queue.whenPersisted(); }
+      if (scope.isCurrent() && uploadResult?.kind === 'uploaded') {
+        queue.recordProofMediaUpload(queuedMedia.queueItemId, uploadResult.media);
+        queue.acknowledge(queuedMedia.queueItemId);
+        await queue.whenPersisted();
+      }
     } catch {
       if (scope.isCurrent()) {
         projectCapturedPhoto();
@@ -5366,9 +5405,9 @@ function DriverApp() {
     }
   }
 
-  async function handleCapturePhoto(source: ProofPhotoCaptureSource) {
+  async function handleCapturePhoto(source: ProofPhotoCaptureSource, stopOverride?: AssignedRouteStop) {
     if (blockMutationWhileStorageDegraded() || isCapturingPhoto) return;
-    const scope = createProofPhotoScope();
+    const scope = createProofPhotoScope(stopOverride);
     if (scope === null) return;
     setIsCapturingPhoto(true);
     setMessage(null);
@@ -5376,7 +5415,7 @@ function DriverApp() {
     try {
       const captureResult = await captureProofPhoto({ captureService: proofPhotoCaptureService, source });
       await handleProofPhotoResult({ captureResult, scope });
-    } finally {
+    } catch { if (scope.isCurrent()) setMessage('Photo could not be saved. Please try again.'); } finally {
       if (scope.activityId === proofPhotoActivityIdRef.current) setIsCapturingPhoto(false);
       if (scope.isCurrent()) refreshOfflineQueueCount();
     }
@@ -5391,7 +5430,7 @@ function DriverApp() {
         captureResult: { kind: 'captured', source: 'camera', uri },
         scope,
       });
-    } finally {
+    } catch { if (scope.isCurrent()) setMessage('Photo could not be saved. Please try again.'); } finally {
       if (scope.activityId === proofPhotoActivityIdRef.current) setIsCapturingPhoto(false);
       if (scope.isCurrent()) refreshOfflineQueueCount();
     }
@@ -5421,7 +5460,10 @@ function DriverApp() {
   async function handleRequestStopCompletion(stop: AssignedRouteStop, switchToRoutePlanId?: string, orderConfirmed = false) {
     if (completionSubmissionRunningRef.current || isCompletingStop || isRefreshingRoutes || isCapturingPhoto || isStartingRoute) return;
     setIsStopDetailsInputFocused(false);
-    if (!usesSingleCompletion(stop)) { await handleTerminalStop(stop, 'delivered'); return; }
+    if (!usesSingleCompletion(stop)) {
+      if (selectedRoute?.deliveryProof?.photoRequired || selectedRoute?.deliveryProof?.signatureRequired) { setMessage('This route requires the current delivery completion contract. Refresh the route or update the app.'); return; }
+      await handleTerminalStop(stop, 'delivered'); return;
+    }
     if (selectedRoute === null || selectedRouteSession === null || routeStatus !== 'active' || isCompanyStep || routeStartRecoveryState !== 'idle') {
       setMessage('Complete Store Pickup and start the route before completing a delivery.'); return;
     }
@@ -5440,7 +5482,8 @@ function DriverApp() {
         ], { cancelable: true });
       return;
     }
-    if (action === 'cash') {
+    const requiredProof = deliveryProofRequirements(selectedRoute);
+    if (action === 'cash' || requiredProof.photoRequired || requiredProof.signatureRequired) {
       const access = selectedRouteSession.routeAccess;
       const owner = driverSyncBoundAccountOwnerHashRef.current;
       const key = [owner, selectedRoute.id, access.assignmentGeneration, stop.deliveryStopId].join(':');
@@ -5451,16 +5494,78 @@ function DriverApp() {
     await handleTerminalStop(stop, 'delivered', { completion: { version: 1 }, switchToRoutePlanId });
   }
 
+  function handleRecoverCompletionProof(stop: AssignedRouteStop) {
+    const pending = getPendingStopCompletion(stop);
+    if (pending === null || pending.rejectedProof.length === 0 || selectedRoute === null || selectedRouteSession === null || getStopReceipt(stop) !== null) return;
+    const owner = driverSyncBoundAccountOwnerHashRef.current;
+    const access = selectedRouteSession.routeAccess;
+    if (pending.event.assignmentGeneration !== access.assignmentGeneration || pending.event.expectedRouteVersionId !== access.expectedRouteVersionId) return;
+    const key = [owner, selectedRoute.id, access.assignmentGeneration, stop.deliveryStopId].join(':');
+    setCashInput({ key, stop, routePlanId: selectedRoute.id, owner, generation: access.assignmentGeneration, version: access.expectedRouteVersionId,
+      recovery: { event: pending.event, photoUri: pending.rejectedProof.find(media => media.kind === 'photo')?.uri,
+        signatureUri: pending.rejectedProof.find(media => media.kind === 'signature')?.uri } });
+    if (pending.rejectedProof.some(media => media.kind === 'signature')) setSignatureUris(current => { const next = { ...current }; delete next[stop.deliveryStopId]; return next; });
+    setCashInputError(null);
+  }
+
   async function handleConfirmCashCompletion() {
     if (cashInput === null || completionSubmissionRunningRef.current || cashInput.stop.payment == null) return;
     if (cashInput.owner !== driverSyncBoundAccountOwnerHashRef.current || cashInput.routePlanId !== selectedRoute?.id
       || cashInput.generation !== selectedRouteSession?.routeAccess.assignmentGeneration || cashInput.version !== selectedRouteSession?.routeAccess.expectedRouteVersionId) {
       setCashInputError('The account or route assignment changed. Reopen this delivery before submitting.'); return;
     }
+    if (cashInput.recovery !== undefined) {
+      if ((offlineSubmissionQueue?.rejectedProofForCompletion(cashInput.recovery.event).length ?? 1) > 0) {
+        setCashInputError('Replace the rejected proof before resuming. The original cash amount stays saved.'); return;
+      }
+      await offlineSubmissionQueue?.whenPersisted();
+      setCashInput(null); refreshOfflineQueueCount(); setMessage('Replacement proof saved. The original completion will retry without collecting again.'); return;
+    }
     let completion: StopCompletionInput;
-    try { completion = buildCashCompletion(cashDrafts[cashInput.key] ?? '', cashInput.stop.payment); }
+    const photo = proofPhotoResults[cashInput.stop.deliveryStopId];
+    if (proofMediaResults[cashInput.stop.deliveryStopId]?.kind === 'upload_failed' && (proofMediaResults[cashInput.stop.deliveryStopId] as Extract<ProofMediaUploadResult, {kind: 'upload_failed'}>).reason === 'proof_media_rejected') { setCashInputError('The photo was rejected. Take another delivery photo.'); return; }
+    const proofError = validateDeliveryProof(selectedRoute!, { photoUri: photo?.kind === 'captured' ? photo.uri : undefined, signatureUri: signatureUris[cashInput.stop.deliveryStopId] });
+    if (proofError !== null) { setCashInputError(proofError); return; }
+    try { completion = cashInput.stop.payment.requiresCashInput ? buildCashCompletion(cashDrafts[cashInput.key] ?? '', cashInput.stop.payment) : { version: 1 }; }
     catch (error) { setCashInputError(error instanceof Error ? error.message : 'Check the cash amount.'); return; }
     await handleTerminalStop(cashInput.stop, 'delivered', { completion, switchToRoutePlanId: cashInput.switchToRoutePlanId });
+  }
+
+  async function handleSaveCompletionSignature(uri: string) {
+    if (cashInput === null || blockMutationWhileStorageDegraded()) throw new Error('Completion is unavailable.');
+    const scope = createProofPhotoScope(cashInput.stop);
+    if (scope === null || scope.accountOwnerHash === null || scope.assignmentGeneration === undefined || scope.initialLiveState === undefined) throw new Error('Route proof scope is unavailable.');
+    const queue = offlineSubmissionQueue ?? await getExpoOfflineSubmissionQueue();
+    if (!scope.isCurrent() || queue.getAccountOwnerHash() !== scope.accountOwnerHash) throw new Error('Route changed.');
+    const request = { kind: 'signature' as const, source: 'signature' as const, uri,
+      fileName: getFileNameFromUri(uri, scope.stop.deliveryStopId), routePlanId: scope.route.id, deliveryStopId: scope.stop.deliveryStopId };
+    const queued = cashInput.recovery?.signatureUri === undefined ? queue.enqueueProofMediaUpload(request, { assignmentGeneration: scope.assignmentGeneration })
+      : queue.replaceRejectedProofMedia(cashInput.recovery.signatureUri, request, { assignmentGeneration: scope.assignmentGeneration });
+    await queue.whenPersisted();
+    const store = await createExpoLiveRouteChangeStore();
+    await store.update(scope.accountOwnerHash, scope.route.id, scope.assignmentGeneration, current => ({
+      ...(current ?? scope.initialLiveState!), uiDraft: { ...(current?.uiDraft ?? scope.uiDraft),
+        signatureUris: { ...(current?.uiDraft?.signatureUris ?? scope.uiDraft.signatureUris), [scope.stop.deliveryStopId]: uri } },
+    }));
+    if (!scope.isCurrent()) return;
+    setSignatureUris(current => ({ ...current, [scope.stop.deliveryStopId]: uri }));
+    if (offlineSubmissionQueue === null) setOfflineSubmissionQueue(queue);
+    const service = getProofMediaUploadServiceForCurrentSubmission({ fallback: mockProofMediaUploadService,
+      refreshDriverAccess: buildDriverAccessRefresh(scope.submission, { isCurrent: scope.isCurrent, lifecycleSignal: scope.lifecycleSignal }), runtimeConfig, submission: scope.submission });
+    try {
+      const media = await service.uploadProofMedia(queued.request, { idempotencyKey: queued.idempotencyKey, signal: scope.lifecycleSignal });
+      if (!scope.isCurrent()) return;
+      queue.recordProofMediaUpload(queued.queueItemId, media); queue.acknowledge(queued.queueItemId);
+      await queue.whenPersisted();
+    } catch (error) {
+      if (scope.isCurrent() && isProofMediaRejectedError(error)) {
+        queue.rejectProofMedia(queued.queueItemId); await queue.whenPersisted();
+        setSignatureUris(current => { const next = { ...current }; delete next[scope.stop.deliveryStopId]; return next; });
+        throw new Error('The signature was rejected. Draw it again.');
+      }
+      if (scope.isCurrent()) setMessage('Signature saved on this device. It will upload when connected.');
+    }
+    if (scope.isCurrent()) refreshOfflineQueueCount();
   }
 
   async function handleCompleteCurrentStop() {
@@ -5506,6 +5611,7 @@ function DriverApp() {
     const isSkipped = action === 'failed' && !isRouteSwitch;
     const photoResult = proofPhotoResults[stop.deliveryStopId];
     const mediaResult = proofMediaResults[stop.deliveryStopId];
+    const signatureUri = signatureUris[stop.deliveryStopId];
     const requestScreen = screenRef.current;
 
     setIsCompletingStop(true);
@@ -5542,7 +5648,11 @@ function DriverApp() {
           note: options?.failureNote ?? (isSkipped
             ? 'Pickup order was incorrectly included in the delivery route.'
             : formatStopProofNote(draft)),
-          photoUris: photoResult?.kind === 'captured' ? [photoResult.uri] : [],
+          photoUris: options?.completion === undefined && photoResult?.kind === 'captured' ? [photoResult.uri] : [],
+          localMedia: options?.completion === undefined ? [] : [
+            ...(photoResult?.kind === 'captured' ? [{ kind: 'photo' as const, uri: photoResult.uri }] : []),
+            ...(signatureUri === undefined ? [] : [{ kind: 'signature' as const, uri: signatureUri }]),
+          ],
           ...(action !== 'failed'
             ? {}
             : isRouteSwitch
@@ -6064,6 +6174,8 @@ function DriverApp() {
     setStopArrivalProximityByStopId({});
     setStopProofResults({});
     setProofDrafts({});
+    setCashDrafts({});
+    setSignatureUris({});
     setProofPhotoResults({});
     setProofMediaResults({});
     setIsCapturingPhoto(false);
@@ -6639,6 +6751,7 @@ function DriverApp() {
               singleCompletion={detailsUsesSingleCompletion}
               receipt={getStopReceipt(stopDetailsStop)}
               pendingCompletion={getPendingStopCompletion(stopDetailsStop)}
+              onRecoverProof={() => handleRecoverCompletionProof(stopDetailsStop)}
               draft={getProofDraft(proofDrafts[stopDetailsStop.deliveryStopId])}
               onDraftChange={updateCurrentStopDraft}
               onInputFocus={() => setIsStopDetailsInputFocused(true)}
@@ -6709,9 +6822,16 @@ function DriverApp() {
         </>
       )}
       <CashCompletionModal
+        key={cashInput?.key ?? 'no-completion'}
         payment={cashInput?.stop.payment ?? null}
-        amount={cashInput === null ? '' : cashDrafts[cashInput.key] ?? ''}
-        busy={isCompletingStop}
+        recovery={cashInput?.recovery !== undefined}
+        amount={cashInput?.recovery !== undefined ? cashInput.recovery.event.completion?.cashReceived?.amount ?? '' : cashInput === null ? '' : cashDrafts[cashInput.key] ?? ''}
+        busy={isCompletingStop || isCapturingPhoto}
+        proofPolicy={cashInput?.recovery !== undefined ? { photoRequired: cashInput.recovery.photoUri !== undefined, signatureRequired: cashInput.recovery.signatureUri !== undefined } : selectedRoute === null ? undefined : deliveryProofRequirements(selectedRoute)}
+        photoUri={cashInput !== null && proofPhotoResults[cashInput.stop.deliveryStopId]?.kind === 'captured' ? (proofPhotoResults[cashInput.stop.deliveryStopId] as Extract<ProofPhotoCaptureResult, {kind: 'captured'}>).uri : undefined}
+        signatureUri={cashInput === null || cashInput.recovery?.signatureUri === signatureUris[cashInput.stop.deliveryStopId] ? undefined : signatureUris[cashInput.stop.deliveryStopId]}
+        onPhoto={() => { if (cashInput !== null) void handleCapturePhoto('camera', cashInput.stop); }}
+        onSignature={handleSaveCompletionSignature}
         error={cashInputError}
         onChangeAmount={value => { if (cashInput !== null) setCashDrafts(current => ({ ...current, [cashInput.key]: value })); setCashInputError(null); }}
         onCancel={() => { if (!completionSubmissionRunningRef.current) { setCashInput(null); setCashInputError(null); setPendingRoutePlanId(null); } }}
@@ -7817,7 +7937,7 @@ function RouteSessionScreen({
 }
 
 function StopDetailsScreen({
-  singleCompletion, receipt, pendingCompletion, draft, onDraftChange, onInputFocus, onInputBlur, onAddPhoto, photoUri, isCapturingPhoto,
+  singleCompletion, receipt, pendingCompletion, onRecoverProof, draft, onDraftChange, onInputFocus, onInputBlur, onAddPhoto, photoUri, isCapturingPhoto,
   canArrive,
   canSkip,
   isArriving,
@@ -7833,7 +7953,8 @@ function StopDetailsScreen({
 }: {
   singleCompletion: boolean;
   receipt: StopCompletion | null;
-  pendingCompletion: { completion: StopCompletionInput; blocked: boolean } | null;
+  pendingCompletion: { completion: StopCompletionInput; blocked: boolean; rejectedProof: {kind: 'photo' | 'signature'; uri: string}[] } | null;
+  onRecoverProof(): void;
   draft: StopProofDraft;
   onDraftChange(patch: Partial<StopProofDraft>): void;
   onInputFocus(): void;
@@ -7953,6 +8074,7 @@ function StopDetailsScreen({
         <Text style={styles.stopDetailsSectionTitle}>Customer Note</Text>
         <Text style={styles.stopDetailsNote}>{stop.customerNote?.trim() || 'No delivery instructions provided.'}</Text>
       </View>
+      {pendingCompletion !== null && pendingCompletion.rejectedProof.length > 0 && receipt === null ? <SecondaryButton label="Replace rejected delivery proof" onPress={onRecoverProof} /> : null}
       {singleCompletion && !isReadOnly && receipt === null && pendingCompletion === null ? <View style={styles.stopDetailsSection}>
         <Text style={styles.stopDetailsSectionTitle}>Delivery details (optional)</Text>
         <LabeledInput label="Delivery Result" onFocus={onInputFocus} onBlur={onInputBlur} onChangeText={value => onDraftChange({ todayNote: value })} value={draft.todayNote} placeholder="e.g. Left at front door" />
@@ -8902,6 +9024,7 @@ function getDriverEventServiceForCurrentSubmission(input: {
 
   const installedVersion = readInstalledDriverAppVersion();
   return createDriverApiClientsFromRouteAccess({
+    ...(input.runtimeConfig.kfoodSingleCompletionQaEnabled === true ? { deliveryProofCapability: 'delivery-proof-v1' as const } : {}),
     ...(installedVersion === null ? {} : {
       appVersion: installedVersion.versionName,
       versionCode: installedVersion.versionCode,

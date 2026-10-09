@@ -787,6 +787,7 @@ function isExpiredTerminalEvidence(item: Record<string, unknown>, now: Date) {
     ...(typeof event?.eventType === 'string' ? { event: { eventType: event.eventType as DriverEventType } } : {}),
     journal: readJournalEntries(item.journal),
     ...(item.kind === 'driver_event' || item.kind === 'proof_media' ? { kind: item.kind } : {}),
+    ...(item.proofCompletionPending === true ? { proofCompletionPending: true } : {}),
     state: item.state as OfflineEvidenceState,
   }, now);
 }
@@ -1089,7 +1090,10 @@ function redactReplayPayload(item: Record<string, unknown>) {
       ...identity,
       ...(item.assignmentGeneration === undefined ? {} : { assignmentGeneration: item.assignmentGeneration }),
       ...(item.idempotencyKey === undefined ? {} : { idempotencyKey: item.idempotencyKey }),
+      ...(item.proofRejected === true ? { proofRejected: true } : {}),
+      ...(item.proofCompletionPending === undefined ? {} : { proofCompletionPending: item.proofCompletionPending }),
       request: {
+        ...(request.kind === undefined ? {} : { kind: request.kind }),
         deliveryStopId: request.deliveryStopId,
         routePlanId: request.routePlanId,
         source: request.source,
@@ -1104,6 +1108,7 @@ function redactReplayPayload(item: Record<string, unknown>) {
     event: {
       ...(event.accuracyMeters === undefined ? {} : { accuracyMeters: event.accuracyMeters }),
       ...(event.appVersion === undefined ? {} : { appVersion: event.appVersion }),
+      ...(event.deliveryProofCapability === undefined ? {} : { deliveryProofCapability: event.deliveryProofCapability }),
       ...(event.assignmentGeneration === undefined ? {} : { assignmentGeneration: event.assignmentGeneration }),
       clientEventId: event.clientEventId,
       ...(event.deliveryStopId === undefined ? {} : { deliveryStopId: event.deliveryStopId }),
@@ -1146,7 +1151,9 @@ function hasSensitiveReplayPayload(item: Record<string, unknown>) {
 function extractSensitiveReplay(item: Record<string, unknown>) {
   if (item.kind === 'proof_media') {
     const request = typeof item.request === 'object' && item.request !== null ? item.request as Record<string, unknown> : {};
-    return { fileName: request.fileName, kind: 'proof_media', uri: request.uri };
+    return { fileName: request.fileName, kind: 'proof_media', uri: request.uri,
+      ...(item.uploadedMedia === undefined ? {} : { uploadedMedia: item.uploadedMedia }),
+      ...(item.replacesRejectedUri === undefined ? {} : { replacesRejectedUri: item.replacesRejectedUri }) };
   }
   const event = typeof item.event === 'object' && item.event !== null ? item.event as Record<string, unknown> : {};
   return { kind: 'driver_event', ...(event.payload === undefined ? {} : { payload: event.payload }),
@@ -1156,8 +1163,8 @@ function extractSensitiveReplay(item: Record<string, unknown>) {
 
 function getSensitiveReplayExpiry(item: Record<string, unknown>, now: Date): string {
   const event = typeof item.event === 'object' && item.event !== null ? item.event as Record<string, unknown> : {};
-  if (event.completion !== undefined) {
-    if (item.state === 'PENDING' || item.state === 'QUARANTINED') return '9999-12-31T23:59:59.999Z';
+  if (event.completion !== undefined || item.kind === 'proof_media') {
+    if (item.proofCompletionPending === true || item.state === 'PENDING' || item.state === 'QUARANTINED') return '9999-12-31T23:59:59.999Z';
     const terminal = [...readJournalEntries(item.journal)].reverse().find(entry => entry.kind === 'ACK' || entry.kind === 'DISCARD');
     return new Date(Date.parse(terminal?.at ?? String(item.enqueuedAt)) + OFFLINE_EVIDENCE_AUDIT_RETENTION_MS).toISOString();
   }
@@ -1171,7 +1178,9 @@ function hydrateSensitiveReplay(envelope: Record<string, unknown>, sensitiveValu
     const request = typeof envelope.request === 'object' && envelope.request !== null
       ? envelope.request as Record<string, unknown>
       : {};
-    return { ...envelope, request: { ...request, fileName: sensitive.fileName, uri: sensitive.uri } };
+    return { ...envelope, request: { ...request, fileName: sensitive.fileName, uri: sensitive.uri },
+      ...(sensitive.uploadedMedia === undefined ? {} : { uploadedMedia: sensitive.uploadedMedia }),
+      ...(sensitive.replacesRejectedUri === undefined ? {} : { replacesRejectedUri: sensitive.replacesRejectedUri }) };
   }
   if (sensitive.kind === 'driver_event') {
     if (envelope.completionContractVersion === 1 && sensitive.completion === undefined) {

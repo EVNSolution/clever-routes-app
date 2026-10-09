@@ -7,9 +7,10 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const certificate = process.argv[2];
-const cashQa = process.argv[3] === '--cash';
+const proofQa = process.argv[3] === '--proof';
+const cashQa = process.argv[3] === '--cash' || proofQa;
 if (!certificate || certificate === '--help' || (process.argv.length !== 3 && !(cashQa && process.argv.length === 4))) {
-  console.log('Usage: node scripts/build-kfood-native-qa.mjs <local HTTPS public CA certificate.pem> [--cash]');
+  console.log('Usage: node scripts/build-kfood-native-qa.mjs <local HTTPS public CA certificate.pem> [--cash|--proof]');
   process.exit(certificate === '--help' ? 0 : 1);
 }
 const verify = spawnSync('openssl', ['x509', '-in', resolve(certificate), '-noout', '-checkend', '3600'], { stdio: 'inherit' });
@@ -24,6 +25,7 @@ const buildEnvironment = Object.fromEntries(Object.entries(process.env)
 const result = spawnSync('./gradlew', [
   'app:assembleQa', '-PreactNativeArchitectures=arm64-v8a',
   ...(cashQa ? ['-PkfoodCashQa=true'] : []),
+  ...(proofQa ? ['-PkfoodProofQa=true'] : []),
   '--max-workers=2', '--no-parallel', '--no-daemon', '--build-cache',
 ], {
   cwd: resolve(root, 'android'), stdio: 'inherit',

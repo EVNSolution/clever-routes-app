@@ -10,7 +10,8 @@ import {
   observeDriverDiagnosticOperation,
 } from '../diagnostics/driverDiagnosticObservation';
 
-export type ProofMediaKind = 'photo';
+export type ProofMediaKind = 'photo' | 'signature';
+export type ProofMediaSource = ProofPhotoCaptureSource | 'signature';
 
 export type ProofMediaReference = {
   contentType: string;
@@ -18,16 +19,17 @@ export type ProofMediaReference = {
   mediaId: string;
   sha256?: string;
   sizeBytes?: number;
-  source: ProofPhotoCaptureSource;
+  source: ProofMediaSource;
   storageKey: string;
   uploadedAt: string;
 };
 
 export type ProofMediaUploadRequest = {
+  kind?: ProofMediaKind;
   deliveryStopId: string;
   fileName: string;
   routePlanId: string;
-  source: ProofPhotoCaptureSource;
+  source: ProofMediaSource;
   uri: string;
 };
 
@@ -114,7 +116,7 @@ export function createMockProofMediaUploadService(input?: {
 function createMockProofMediaReference(input: ProofMediaUploadRequest): ProofMediaReference {
   return {
     contentType: getContentTypeFromFileName(input.fileName),
-    kind: 'photo',
+    kind: input.kind ?? 'photo',
     mediaId: `mock-media-${input.deliveryStopId}`,
     source: input.source,
     storageKey: `mock-driver-proof/${input.routePlanId}/${input.deliveryStopId}/${input.fileName}`,
@@ -333,6 +335,7 @@ function toProofMediaFormData(request: ProofMediaUploadRequest): FormData {
   formData.append('deliveryStopId', request.deliveryStopId);
   formData.append('routePlanId', request.routePlanId);
   formData.append('source', request.source);
+  if (request.kind !== undefined) formData.append('kind', request.kind);
   formData.append('file', {
     name: request.fileName,
     type: getContentTypeFromFileName(request.fileName),
@@ -395,19 +398,19 @@ function readDriverApiError(payload: unknown): { code?: string } {
   };
 }
 
-function isProofMediaReference(value: unknown): value is ProofMediaReference {
+export function isProofMediaReference(value: unknown): value is ProofMediaReference {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }
 
   const data = value as Record<string, unknown>;
   return (
-    data.kind === 'photo'
+    (data.kind === 'photo' || data.kind === 'signature')
     && typeof data.mediaId === 'string'
     && data.mediaId.trim() !== ''
     && typeof data.contentType === 'string'
     && data.contentType.trim() !== ''
-    && (data.source === 'camera' || data.source === 'library')
+    && (data.kind === 'signature' ? data.source === 'signature' : (data.source === 'camera' || data.source === 'library'))
     && typeof data.storageKey === 'string'
     && data.storageKey.trim() !== ''
     && typeof data.uploadedAt === 'string'

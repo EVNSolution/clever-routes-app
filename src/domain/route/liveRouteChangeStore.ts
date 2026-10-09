@@ -5,6 +5,8 @@ import type { ProofMediaUploadResult } from '../proof/proofMediaUpload';
 import { OFFLINE_EVIDENCE_AUDIT_RETENTION_MS } from '../offline/offlineSubmissionQueue';
 
 export type LiveRouteChangeUiDraft = {
+  signatureUris?: Record<string, string>;
+  cashDrafts?: Record<string, string>;
   currentStopId: string | null;
   selectedStopDetailsId: string | null;
   proofDrafts: Record<string, { additionalNotes: string; locationTip: string; todayNote: string }>;
@@ -177,7 +179,7 @@ function parseState(value: unknown): LiveRouteChangeState {
 }
 
 function isUiDraft(value: unknown): value is LiveRouteChangeUiDraft {
-  return isRecord(value) && nullableId(value.currentStopId) && nullableId(value.selectedStopDetailsId)
+  return isRecord(value) && (value.cashDrafts === undefined || (isRecord(value.cashDrafts) && Object.values(value.cashDrafts).every(amount => typeof amount === 'string'))) && (value.signatureUris === undefined || (isRecord(value.signatureUris) && Object.values(value.signatureUris).every(uri => typeof uri === 'string' && uri !== ''))) && nullableId(value.currentStopId) && nullableId(value.selectedStopDetailsId)
     && isRecord(value.proofDrafts) && Object.values(value.proofDrafts).every((draft) => isRecord(draft)
       && typeof draft.additionalNotes === 'string' && typeof draft.locationTip === 'string' && typeof draft.todayNote === 'string')
     && isRecord(value.proofPhotoResults) && Object.values(value.proofPhotoResults).every((photo) => isRecord(photo)
@@ -203,9 +205,9 @@ function isCachedAssignedRoute(value: unknown): value is AssignedRoute {
 }
 
 function isProofMediaReference(media: unknown): boolean {
-  return isRecord(media) && media.kind === 'photo'
+  return isRecord(media) && (media.kind === 'photo' || media.kind === 'signature')
     && ['contentType', 'mediaId', 'storageKey', 'uploadedAt'].every((key) => typeof media[key] === 'string')
-    && (media.source === 'camera' || media.source === 'library')
+    && (media.source === 'camera' || media.source === 'library' || media.source === 'signature')
     && (media.sha256 === undefined || typeof media.sha256 === 'string')
     && (media.sizeBytes === undefined || (typeof media.sizeBytes === 'number' && Number.isFinite(media.sizeBytes)));
 }
@@ -220,6 +222,8 @@ function isResolvedExpiredState(state: LiveRouteChangeState, now: Date): boolean
   )).map((stop) => stop.deliveryStopId));
   return !Object.entries(drafts.proofDrafts).some(([stopId, draft]) => !terminal.has(stopId)
     && Object.values(draft).some((text) => text.trim() !== ''))
+    && !Object.keys(drafts.cashDrafts ?? {}).some(key => !terminal.has(key.split(':').at(-1) ?? ''))
+    && !Object.keys(drafts.signatureUris ?? {}).some(stopId => !terminal.has(stopId))
     && !Object.entries(drafts.proofPhotoResults).some(([stopId, photo]) => !terminal.has(stopId) && photo.kind === 'captured')
     && !Object.entries(drafts.proofMediaResults).some(([stopId, media]) => !terminal.has(stopId) && media.kind === 'upload_failed');
 }
