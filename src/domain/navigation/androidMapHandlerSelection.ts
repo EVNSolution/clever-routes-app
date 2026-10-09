@@ -42,6 +42,7 @@ export async function openWithAndroidMapHandler(input: {
     packageName = await selectAndSave(input.bridge, input.store, input.url);
   }
 
+  requireTollSupport(input.url, packageName);
   try {
     await input.bridge.open(input.url, packageName);
   } catch (error) {
@@ -51,6 +52,7 @@ export async function openWithAndroidMapHandler(input: {
 
     await input.store.clear();
     packageName = await selectAndSave(input.bridge, input.store, input.url);
+    requireTollSupport(input.url, packageName);
     try {
       await input.bridge.open(input.url, packageName);
     } catch (retryError) {
@@ -83,4 +85,10 @@ function isUnavailableMapAppError(error: unknown): boolean {
     && error !== null
     && 'code' in error
     && error.code === 'map_app_unavailable';
+}
+
+function requireTollSupport(url: string, packageName: string): void {
+  if (url.includes('avoidTolls=true') && !['com.google.android.apps.maps', 'com.waze'].includes(packageName)) {
+    throw new Error('This map app cannot receive avoid-toll settings. Choose Google Maps or Waze in Settings.');
+  }
 }

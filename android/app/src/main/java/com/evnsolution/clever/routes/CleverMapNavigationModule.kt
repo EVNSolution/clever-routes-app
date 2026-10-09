@@ -102,7 +102,18 @@ class CleverMapNavigationModule(
       return
     }
 
-    val uri = if (packageName == WAZE_PACKAGE) {
+    if (destination.avoidTolls && packageName != WAZE_PACKAGE && packageName != GOOGLE_MAPS_PACKAGE) {
+      promise.reject("toll_policy_unsupported", "This map app cannot receive avoid-toll settings. Choose Google Maps or Waze.")
+      return
+    }
+    val uri = if (destination.avoidTolls && packageName == GOOGLE_MAPS_PACKAGE) {
+      Uri.parse("https://www.google.com/maps/dir/").buildUpon()
+        .appendQueryParameter("api", "1")
+        .appendQueryParameter("destination", if (destination.target == "address") destination.address ?: destination.coordinatePair() else destination.coordinatePair() ?: destination.address)
+        .appendQueryParameter("travelmode", "driving")
+        .appendQueryParameter("dir_action", "navigate")
+        .appendQueryParameter("avoid", "tolls").build()
+    } else if (packageName == WAZE_PACKAGE) {
       buildWazeUri(destination)
     } else {
       buildGenericMapIntent(destination).data!!
@@ -138,6 +149,7 @@ class CleverMapNavigationModule(
       address = address,
       latitude = latitude?.takeIf { hasCoordinates },
       longitude = longitude?.takeIf { hasCoordinates },
+      avoidTolls = uri.getQueryParameter("avoidTolls") == "true",
       target = uri.getQueryParameter("target")?.takeIf { it == "address" } ?: "coordinates",
     )
   }
@@ -163,6 +175,7 @@ class CleverMapNavigationModule(
     destination.address?.let { builder.appendQueryParameter("q", it) }
     coordinates?.let { builder.appendQueryParameter("ll", it) }
     builder.appendQueryParameter("navigate", "yes")
+    if (destination.avoidTolls) builder.appendQueryParameter("avoid_tolls", "true")
     return builder.build()
   }
 
@@ -187,6 +200,7 @@ class CleverMapNavigationModule(
     val latitude: Double?,
     val longitude: Double?,
     val target: String,
+    val avoidTolls: Boolean,
   ) {
     fun coordinatePair(): String? =
       if (latitude != null && longitude != null) "$latitude,$longitude" else null
@@ -196,6 +210,7 @@ class CleverMapNavigationModule(
     private const val REQUEST_PICK_MAP_APP = 4102
     private const val INTERNAL_SCHEME = "clever-routes-map"
     private const val INTERNAL_HOST = "navigate"
+    private const val GOOGLE_MAPS_PACKAGE = "com.google.android.apps.maps"
     private const val WAZE_PACKAGE = "com.waze"
     private const val WAZE_URL = "https://waze.com/ul"
   }

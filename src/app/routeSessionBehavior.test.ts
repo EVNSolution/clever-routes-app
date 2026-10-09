@@ -963,7 +963,7 @@ describe('stop completion proof copy', () => {
     assert.doesNotMatch(appSource, /mediaResult\?\.kind !== 'uploaded'/u);
     assert.doesNotMatch(appSource, /Photo is not uploaded yet\. Add the photo again\./u);
     assert.match(appSource, /media: mediaResult\?\.kind === 'uploaded' \? \[mediaResult\.media\] : \[\]/u);
-    assert.match(appSource, /photoUris: photoResult\?\.kind === 'captured' \? \[photoResult\.uri\] : \[\]/u);
+    assert.match(appSource, /photoUris: options\?\.completion === undefined && photoResult\?\.kind === 'captured' \? \[photoResult\.uri\] : \[\]/u);
     assert.match(appSource, /queue\.enqueueProofMediaUpload\([\s\S]*?await waitForOfflineQueuePersistence\(queue\)/u);
     assert.match(appSource, /const queue = offlineSubmissionQueue \?\? await getExpoOfflineSubmissionQueue\(\)[\s\S]*?offlineQueue: queue/u);
   });

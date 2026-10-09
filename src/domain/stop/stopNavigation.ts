@@ -1,3 +1,4 @@
+import type { TollPolicy } from '../proof/deliveryProofPolicy';
 import type { AssignedRoute, AssignedRouteAddress, AssignedRouteLngLat, AssignedRouteStop } from '../route/assignedRoute';
 
 export type StopNavigationPlatform = 'android' | 'ios' | string;
@@ -54,6 +55,7 @@ const GOOGLE_MAPS_MAX_WAYPOINTS = 3;
 export function buildDepotNavigationUrl(input: {
   depot: AssignedRoute['depot'];
   platform: StopNavigationPlatform;
+  tollPolicy?: TollPolicy;
 }): string | null {
   const depot = input.depot;
   if (depot === null || !isValidCoordinatePair(depot.latitude, depot.longitude)) {
@@ -61,16 +63,17 @@ export function buildDepotNavigationUrl(input: {
   }
 
   if (input.platform === 'android') {
-    return `${ANDROID_MAP_RESOLVER_URL}?target=coordinates&latitude=${depot.latitude}&longitude=${depot.longitude}`;
+    return `${ANDROID_MAP_RESOLVER_URL}?target=coordinates&latitude=${depot.latitude}&longitude=${depot.longitude}${input.tollPolicy === 'AVOID_TOLLS' ? '&avoidTolls=true' : ''}`;
   }
 
-  return `${GOOGLE_MAPS_DIRECTIONS_URL}?api=1&destination=${encodeURIComponent(formatCoordinatePair(depot.latitude, depot.longitude))}&travelmode=driving&dir_action=navigate`;
+  return `${GOOGLE_MAPS_DIRECTIONS_URL}?api=1&destination=${encodeURIComponent(formatCoordinatePair(depot.latitude, depot.longitude))}&travelmode=driving&dir_action=navigate${input.tollPolicy === 'AVOID_TOLLS' ? '&avoid=tolls' : ''}`;
 }
 
 export async function openDepotNavigation(input: {
   depot: AssignedRoute['depot'];
   linking: StopNavigationLinking;
   platform: StopNavigationPlatform;
+  tollPolicy?: TollPolicy;
 }): Promise<RouteNavigationResult> {
   const url = buildDepotNavigationUrl(input);
   if (url === null) {
@@ -88,10 +91,10 @@ export async function openDepotNavigation(input: {
       message: 'Opened company return navigation in the map app.',
       url,
     };
-  } catch {
+  } catch (error) {
     return {
       kind: 'failed',
-      message: 'Map app could not be opened for company return.',
+      message: error instanceof Error && error.message.includes('toll') ? error.message : 'Map app could not be opened for company return.',
       reason: 'open_failed',
       url,
     };
@@ -116,6 +119,7 @@ export function buildRouteNavigationUrl(input: {
     `destination=${encodeURIComponent(destination.value)}`,
   ];
 
+  if (input.route.tollPolicy === 'AVOID_TOLLS') params.push('avoid=tolls');
   if (waypoints.length > 0) {
     params.push(`waypoints=${waypoints.map((target) => encodeURIComponent(target.value)).join('%7C')}`);
   }
@@ -159,6 +163,7 @@ export async function openRouteNavigation(input: {
 
 export function buildStopNavigationUrl(input: {
   platform: StopNavigationPlatform;
+  tollPolicy?: TollPolicy;
   stop: AssignedRouteStop;
 }): string | null {
   const target = buildStopNavigationTarget(input.stop);
@@ -177,6 +182,7 @@ export function buildStopNavigationUrl(input: {
       params.push(`latitude=${coordinates[1]}`);
       params.push(`longitude=${coordinates[0]}`);
     }
+    if (input.tollPolicy === 'AVOID_TOLLS') params.push('avoidTolls=true');
     return `${ANDROID_MAP_RESOLVER_URL}?${params.join('&')}`;
   }
 
@@ -186,15 +192,17 @@ export function buildStopNavigationUrl(input: {
     'travelmode=driving',
     'dir_action=navigate',
   ];
+  if (input.tollPolicy === 'AVOID_TOLLS') params.push('avoid=tolls');
   return `${GOOGLE_MAPS_DIRECTIONS_URL}?${params.join('&')}`;
 }
 
 export async function openStopNavigation(input: {
   linking: StopNavigationLinking;
   platform: StopNavigationPlatform;
+  tollPolicy?: TollPolicy;
   stop: AssignedRouteStop;
 }): Promise<StopNavigationResult> {
-  const url = buildStopNavigationUrl({ platform: input.platform, stop: input.stop });
+  const url = buildStopNavigationUrl({ platform: input.platform, stop: input.stop, tollPolicy: input.tollPolicy });
   if (url === null) {
     return {
       kind: 'skipped',
@@ -211,10 +219,10 @@ export async function openStopNavigation(input: {
       message: `Map navigation requested for ${destination}.`,
       url,
     };
-  } catch {
+  } catch (error) {
     return {
       kind: 'failed',
-      message: 'Map navigation could not be opened for this stop.',
+      message: error instanceof Error && error.message.includes('toll') ? error.message : 'Map navigation could not be opened for this stop.',
       reason: 'open_failed',
       url,
     };

@@ -17,10 +17,14 @@ import { tmpdir, userInfo } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const cashMode = process.argv.includes('--cash');
-const [serverArg, shopifyArg, certificateArg, keyArg, evidenceArg, portArg = cashMode ? '8445' : '8443', pgBin = '/opt/homebrew/opt/postgresql@17/bin'] = process.argv.slice(2).filter((arg) => arg !== '--cash');
+const proofServerArg = process.argv.find((arg) => arg.startsWith('--proof-server-sha='));
+const proofServerSha = proofServerArg?.split('=')[1];
+if (proofServerArg) assert.match(proofServerSha ?? '', /^[a-f0-9]{40}$/, 'Proof QA requires an exact reviewed server SHA');
+const proofMode = proofServerSha !== undefined;
+const cashMode = proofMode || process.argv.includes('--cash');
+const [serverArg, shopifyArg, certificateArg, keyArg, evidenceArg, portArg = cashMode ? '8445' : '8443', pgBin = '/opt/homebrew/opt/postgresql@17/bin'] = process.argv.slice(2).filter((arg) => arg !== '--cash' && !arg.startsWith('--proof-server-sha='));
 if (!serverArg || !shopifyArg || !certificateArg || !keyArg || !evidenceArg) {
-  throw new Error('Usage: node scripts/kfood-native-qa-server.mjs <server snapshot> <Shopify snapshot> <TLS certificate> <TLS key> <evidence.json> [HTTPS port] [PostgreSQL bin] [--cash]');
+  throw new Error('Usage: node scripts/kfood-native-qa-server.mjs <server snapshot> <Shopify snapshot> <TLS certificate> <TLS key> <evidence.json> [HTTPS port] [PostgreSQL bin] [--cash] [--proof-server-sha=<reviewed 40-character SHA>]');
 }
 const serverRoot = resolve(serverArg);
 const shopifyRoot = resolve(shopifyArg);
@@ -28,7 +32,7 @@ const apiDir = join(serverRoot, 'apps/delivery-api');
 const evidencePath = resolve(evidenceArg);
 const httpsPort = Number(portArg);
 assert.ok(Number.isInteger(httpsPort) && httpsPort > 0 && httpsPort <= 65535);
-const expectedServerSha = cashMode ? 'bd132f199c2a058d8e14fe33d97497307a51af45' : '9bd6e7b8408508c83b1e4255a62c37ee9b983bf0';
+const expectedServerSha = proofServerSha ?? (cashMode ? 'bd132f199c2a058d8e14fe33d97497307a51af45' : '9bd6e7b8408508c83b1e4255a62c37ee9b983bf0');
 const expectedShopifySha = 'e3f5a2a9819cb0ddd58766912b8ff31de2c759ae';
 const childEnv = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C' };
 const temp = await mkdtemp(join(tmpdir(), 'kfood-native-qa-'));
@@ -136,7 +140,7 @@ async function writeEvidence(reason) {
     } catch (error) { if (error.code === 'ENOENT') return { mediaId: media.id, missing: true }; throw error; }
   }));
   await mkdir(dirname(evidencePath), { recursive: true });
-  await writeFile(evidencePath, `${json({ recordedAt: new Date().toISOString(), reason, environment: publicInfo, extraFixtures, route, state, publications, events, attempts, completionReceipts: completionReceipts.map(exactReceipt), heldCompletion: lastHeldCompletion, consents, proofMedia, localProofFiles, runtimeDiagnostics, requestAttempts, requests, controls, limits: ['Synthetic local office session; no live Shopify authentication.', 'Proof bytes use temporary local synthetic storage; cloud storage and physical camera provider are not exercised.', 'No real push; this fixture alone does not establish GPS hardware or OS background behavior.', 'Reassignment control changes only synthetic fixture database rows.'], cleanup: stopped ? 'Shutdown requested; cleanup in progress' : 'Running isolated fixture' })}\n`);
+  await writeFile(evidencePath, `${json({ recordedAt: new Date().toISOString(), reason, environment: publicInfo, extraFixtures, route, state, publications, events, attempts, completionReceipts: completionReceipts.map(exactReceipt), heldCompletion: lastHeldCompletion, consents, proofMedia, localProofFiles, runtimeDiagnostics, requestAttempts, requests, controls, limits: ['Synthetic local office session; no live Shopify authentication.', 'Proof bytes use temporary local synthetic storage; cloud storage is not exercised. Camera input requires separate device evidence.', 'No real push; this fixture alone does not establish GPS hardware or OS background behavior.', 'Reassignment control changes only synthetic fixture database rows.'], cleanup: stopped ? 'Shutdown requested; cleanup in progress' : 'Running isolated fixture' })}\n`);
 }
 async function close() {
   if (stopped) return;
@@ -379,7 +383,7 @@ try {
   const { PrismaCompletionAssistanceService } = await source('modules/driver/completion-assistance.service.ts');
   const { PrismaDriverProofMediaRepository } = await source('modules/driver/driver-proof-media.repository.ts');
   const { KFOOD_DELIVERY_APP_ID: appId, KFOOD_DELIVERY_SHOP_DOMAIN: shopDomain } = await source('modules/route-plans/kfood-delivery-completion.ts');
-  fixture = await seedFixture(prisma, appId, shopDomain, { cash: cashMode });
+  fixture = await seedFixture(prisma, appId, shopDomain, { cash: cashMode, proof: proofMode });
   const clientId = 'synthetic-native-qa-shopify-client';
   const clientSecret = randomUUID();
   const driverSecret = randomUUID();
@@ -408,7 +412,7 @@ try {
     return data(await runKfoodLiveChangeCommand(request(), fixture.route.id, 'liveChangeSave', json(command(await adminRead(), { stopOverrides: [{ deliveryStopId: fixture.stops[stopIndex].id, address1: address, latitude: 43.57, longitude: -80.57 }], ...(reorder ? { futureStopOrder: (cashMode ? [0, 1, 2, 3, 4, 5, 7, 6, ...Array.from({ length: fixture.stops.length - 8 }, (_unused, index) => index + 8)] : [2, 6, 3, 4, 5]).map((index) => fixture.stops[index].id) } : {}) })), adminOptions));
   };
   adminDispatch = async () => data(await runKfoodLiveChangeCommand(request(), fixture.route.id, 'liveChangeDispatch', json(command(await adminRead())), adminOptions));
-  publicInfo = { serverSourceSha: expectedServerSha, shopifySourceSha: expectedShopifySha, sourceSnapshots: { server: serverRoot, shopify: shopifyRoot }, baseUrl: `https://localhost:${httpsPort}`, transport: 'Loopback TLS proxy → real Fastify HTTP → isolated PostgreSQL', routePlanId: fixture.route.id, baselineVersionId: fixture.version.id, assignmentGeneration: '2', ...(cashMode ? { cashScenarios: CASH_SCENARIOS.map((scenario, index) => ({ index, scenario, deliveryStopId: fixture.stops[index].id })) } : {}), stopIds: fixture.stops.map((stop) => stop.id), credentials: [{ account: 'first', phone: '+15195550101', pin: '246810' }, { account: 'second', phone: '+15195550102', pin: '135790' }], proofStorage: 'Actual reviewed Prisma proof service with temporary local synthetic filesystem storage; no cloud provider or remote read access', providers: 'No external provider dependencies, notification workers or production environment files loaded' };
+  publicInfo = { configuredProof: proofMode, qaPackage: 'com.evnsolution.clever.routes.cashqa', productionCapabilityRegistration: false, serverSourceSha: expectedServerSha, shopifySourceSha: expectedShopifySha, sourceSnapshots: { server: serverRoot, shopify: shopifyRoot }, baseUrl: `https://localhost:${httpsPort}`, transport: 'Loopback TLS proxy → real Fastify HTTP → isolated PostgreSQL', routePlanId: fixture.route.id, baselineVersionId: fixture.version.id, assignmentGeneration: '2', ...(cashMode ? { cashScenarios: CASH_SCENARIOS.map((scenario, index) => ({ index, scenario, deliveryStopId: fixture.stops[index].id })) } : {}), stopIds: fixture.stops.map((stop) => stop.id), credentials: [{ account: 'first', phone: '+15195550101', pin: '246810' }, { account: 'second', phone: '+15195550102', pin: '135790' }], proofStorage: 'Actual reviewed Prisma proof service with temporary local synthetic filesystem storage; no cloud provider or remote read access', providers: 'No external provider dependencies, notification workers or production environment files loaded' };
   proxy = createHttpsServer({ cert: await readFile(resolve(certificateArg)), key: await readFile(resolve(keyArg)) }, async (incoming, outgoing) => {
     let attempt;
     try {
@@ -542,7 +546,7 @@ async function seedFixture(database, appId, shopDomain, options = {}) {
     drivers.push(await database.driver.create({ data: { accountId: account.id, phone, authSubject: randomUUID(), displayName: `Synthetic QA Driver ${index}`, shopId: shop.id } }));
   }
   const status = options.status ?? 'IN_PROGRESS';
-  const route = await database.routePlan.create({ data: { shopId: shop.id, driverId: drivers[0].id, name: options.name ?? 'Synthetic seven-stop QA route', planDate: now, constraints: { timezone: options.dsv ? 'Asia/Seoul' : 'America/Toronto' }, metrics: {}, optimizerVersion: 'synthetic-native-qa', status, assignmentGeneration: 2n } });
+  const route = await database.routePlan.create({ data: { shopId: shop.id, driverId: drivers[0].id, name: options.name ?? 'Synthetic seven-stop QA route', planDate: now, constraints: { timezone: options.dsv ? 'Asia/Seoul' : 'America/Toronto', ...(options.proof ? { deliveryProof: { photoRequired: true, signatureRequired: true }, tollPolicy: 'AVOID_TOLLS' } : {}) }, metrics: {}, optimizerVersion: 'synthetic-native-qa', status, assignmentGeneration: 2n } });
   const group = await database.routeGrouping.create({ data: { shopId: shop.id, name: 'Synthetic QA group', planDate: now } });
   const parent = await database.routeGroupingVersion.create({ data: { shopId: shop.id, groupingId: group.id, version: 1 } });
   const version = await database.routeGroupingChildVersion.create({ data: { shopId: shop.id, groupingId: group.id, groupingVersionId: parent.id, routePlanId: route.id, driverId: drivers[0].id, version: 1, snapshot: {}, publishedAt: now } });
@@ -556,7 +560,7 @@ async function seedFixture(database, appId, shopDomain, options = {}) {
     await database.routePlanStop.create({ data: { shopId: shop.id, routePlanId: route.id, deliveryStopId: stop.id, sequence: index + 1, estimatedArrivalAt: new Date(now.getTime() + index * 60_000), durationFromPreviousSeconds: 60, distanceFromPreviousMeters: 1000, etaInputRouteVersionId: version.id, etaStatus: 'READY', etaCalculatedAt: now, etaSource: 'SYNTHETIC' } });
     stops.push(stop);
   }
-  await database.routeGroupingChildVersion.update({ where: { id: version.id }, data: { snapshot: { membershipSchemaVersion: 1, stops: stops.map((stop, index) => ({ sequence: index + 1, deliveryStopId: stop.id, orderId: stop.orderId, sourceOrderId: `gid://shopify/Order/synthetic-${index + 1}-${route.id}`, address1: stop.address1, latitude: stop.latitude.toString(), longitude: stop.longitude.toString() })) } } });
+  await database.routeGroupingChildVersion.update({ where: { id: version.id }, data: { snapshot: { membershipSchemaVersion: 1, ...(options.proof ? { deliveryProof: { photoRequired: true, signatureRequired: true }, tollPolicy: 'AVOID_TOLLS' } : {}), stops: stops.map((stop, index) => ({ sequence: index + 1, deliveryStopId: stop.id, orderId: stop.orderId, sourceOrderId: `gid://shopify/Order/synthetic-${index + 1}-${route.id}`, address1: stop.address1, latitude: stop.latitude.toString(), longitude: stop.longitude.toString() })) } } });
   for (const [eventType, stopIndex] of status === 'IN_PROGRESS' ? [['ROUTE_STARTED', null], ['PICKUP_COMPLETED', null], ...(!options.cash ? [['STOP_DELIVERED', 0], ['STOP_ARRIVED', 1]] : [])] : []) {
     await database.driverEvent.create({ data: { shopId: shop.id, driverId: drivers[0].id, routePlanId: route.id, routeVersionId: version.id, assignmentGeneration: 2n, expectedRouteVersionId: version.id, driverContractVersion: 2, clientEventId: randomUUID(), eventType, occurredAt: new Date(now.getTime() - 60_000), payload: { source: 'synthetic-seed' }, ...(stopIndex === null ? {} : { deliveryStopId: stops[stopIndex].id }) } });
   }

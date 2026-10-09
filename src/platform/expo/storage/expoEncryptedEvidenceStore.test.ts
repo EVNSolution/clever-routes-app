@@ -10,6 +10,7 @@ import {
 } from './expoEncryptedEvidenceStore';
 import {
   createPersistentOfflineSubmissionQueue,
+  resolveEventProofMedia,
   createRouteOrderedDriverEventService,
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
   retryOfflineSubmissions,
@@ -1577,4 +1578,60 @@ describe('encrypted driver evidence store', () => {
     assert.deepEqual(reread.items.map((item) => item.queueItemId), ['driver-event:new-after-retention-cutoff']);
     assert.equal(db.tables.get('workflow_evidence')?.size, 1);
   });
+});
+
+
+describe('configured proof encrypted upgrade replay', () => {
+  it('preserves signature kind, uploaded media IDs and pending completion through cold reopen', async () => {
+    const db = createDatabase({ userVersion: 2 });
+    let currentTime = new Date('2026-10-09T00:00:00Z');
+    const now = () => currentTime;
+    const options = { now, keyStore: { getItemAsync: async () => '71'.repeat(32), setItemAsync: async () => undefined },
+      openDatabaseAsync: async () => db.database, randomBytes: async () => new Uint8Array(32) };
+    const owner = 'a'.repeat(64);
+    const open = async () => createPersistentOfflineSubmissionQueue({ accountOwnerHash: owner, now, storage: await createEncryptedEvidenceStore(options) });
+    const queue = await open();
+    const scope = { assignmentGeneration: '3' };
+    const request = { kind: 'signature' as const, source: 'signature' as const, routePlanId: 'route', deliveryStopId: 'stop', fileName: 'signature.png', uri: 'file:///signature-private.png' };
+    const item = queue.enqueueProofMediaUpload(request, scope);
+    queue.recordProofMediaUpload(item.queueItemId, { kind: 'signature', source: 'signature', mediaId: 'signature-id', contentType: 'image/png', storageKey: 'private-proof-key', uploadedAt: new Date().toISOString() });
+    queue.acknowledge(item.queueItemId);
+    const event = { ...scope, driverContractVersion: 2 as const, expectedRouteVersionId: 'publication', clientEventId: 'proof-upgrade', routePlanId: 'route', deliveryStopId: 'stop', eventType: 'STOP_DELIVERED' as const, occurredAt: new Date(), payload: { proof: { media: [{ kind: 'signature', uri: request.uri, requiresUpload: true }] } } };
+    queue.enqueueDriverEvent(event);
+    await queue.whenPersisted();
+    const reopened = await open();
+    assert.equal(reopened.findProofMediaUpload(request, scope)?.request.kind, 'signature');
+    assert.equal(reopened.findProofMediaUpload(request, scope)?.uploadedMedia?.mediaId, 'signature-id');
+    const pending = reopened.listPending()[0]!;
+    assert.equal(pending.kind, 'driver_event');
+    if (pending.kind !== 'driver_event') throw new Error('Missing pending completion');
+    assert.equal((resolveEventProofMedia(reopened, pending.event).payload?.proof as Record<string, unknown>).signatureMediaId, 'signature-id');
+    assert.doesNotMatch([...db.tables.get('workflow_evidence')!.values()].join(''), /signature-private|private-proof-key/);
+    currentTime = new Date('2026-11-20T00:00:00Z');
+    const delayed = await open();
+    assert.equal(delayed.findProofMediaUpload(request, scope)?.uploadedMedia?.mediaId, 'signature-id');
+    assert.equal((resolveEventProofMedia(delayed, pending.event).payload?.proof as Record<string, unknown>).signatureMediaId, 'signature-id');
+  });
+});
+
+it('retains a rejected proof replacement mapping in encrypted storage without changing saved Cash', async () => {
+  const db = createDatabase({userVersion:2});
+  let time=new Date('2026-10-09T00:00:00Z');
+  const options={now:()=>time,keyStore:{getItemAsync:async()=>'72'.repeat(32),setItemAsync:async()=>undefined},openDatabaseAsync:async()=>db.database,randomBytes:async()=>new Uint8Array(32)};
+  const open=async()=>createPersistentOfflineSubmissionQueue({accountOwnerHash:'a'.repeat(64),now:()=>time,storage:await createEncryptedEvidenceStore(options)});
+  let queue=await open();
+  const scope={assignmentGeneration:'2'};
+  const request={kind:'signature' as const,source:'signature' as const,routePlanId:'route',deliveryStopId:'stop',fileName:'first.png',uri:'file:///rejected-private.png'};
+  const uploaded=queue.enqueueProofMediaUpload(request,scope);
+  const event={...scope,driverContractVersion:2 as const,expectedRouteVersionId:'original-version',versionCode:43,deliveryProofCapability:'delivery-proof-v1' as const,clientEventId:'original-cash',routePlanId:'route',deliveryStopId:'stop',eventType:'STOP_DELIVERED' as const,occurredAt:new Date(),completion:{version:1 as const,cashReceived:{amount:'122.00',currency:'CAD'}},payload:{proof:{media:[{kind:'signature',uri:request.uri,requiresUpload:true}]}}};
+  queue.enqueueDriverEvent(event);queue.rejectProofMedia(uploaded.queueItemId);
+  await queue.whenPersisted();time=new Date('2026-11-10T00:00:00Z');queue=await open();
+  assert.deepEqual(queue.rejectedProofForCompletion(event),[{kind:'signature',uri:request.uri}]);
+  const replacement=queue.replaceRejectedProofMedia(request.uri,{...request,fileName:'next.png',uri:'file:///replacement-private.png'},scope);
+  queue.recordProofMediaUpload(replacement.queueItemId,{kind:'signature',source:'signature',mediaId:'replacement-id',contentType:'image/png',storageKey:'private-key',uploadedAt:new Date().toISOString()});queue.acknowledge(replacement.queueItemId);
+  await queue.whenPersisted();
+  const reopened=await open();const pending=reopened.listPending().find(item=>item.kind==='driver_event');
+  assert.ok(pending?.kind==='driver_event');assert.deepEqual(pending.event,event);
+  assert.equal((resolveEventProofMedia(reopened,pending.event).payload?.proof as Record<string,unknown>).signatureMediaId,'replacement-id');
+  assert.doesNotMatch([...db.tables.get('workflow_evidence')!.values()].join(''),/rejected-private|replacement-private|private-key/);
 });
