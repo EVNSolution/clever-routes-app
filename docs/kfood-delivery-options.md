@@ -57,4 +57,4 @@ Two native dependencies were added: view-shot 5.1.0 and expo-file-system 57.0.7.
 The latter replaces Expo's nested 57.0.6 copy. The reviewed audit graph adds view-shot's peer dependency edge to react-native.
 No new advisory is suppressed. Raw npm audit remains exit 1 with the known host-tool findings; pinned backport checks remain mandatory.
 
-The local `--proof` QA build uses versionCode 43 only for the `.cashqa` package. Production remains version 42 in source until a separately verified release reservation.
+The local `--proof` QA build uses versionCode 43 only for the `.cashqa` package. The reviewed production candidate is 1.3.7/43. EAS and Play were checked at version42 before selecting43; EAS allocation and Play publication still require artifact evidence.

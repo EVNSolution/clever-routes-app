@@ -81,8 +81,8 @@ test('keeps source-controlled Android versions aligned across Expo and Gradle', 
   const versionCode = Number(androidBuildGradle.match(/\bversionCode\s+(\d+)/u)?.[1]);
   const versionName = androidBuildGradle.match(/\bversionName\s+"([^"]+)"/u)?.[1];
 
-  assert.equal(appConfig.expo?.version, '1.3.6');
-  assert.equal(appConfig.expo?.android?.versionCode, 42);
+  assert.equal(appConfig.expo?.version, '1.3.7');
+  assert.equal(appConfig.expo?.android?.versionCode, 43);
   assert.equal(appConfig.expo?.ios?.bundleIdentifier, 'com.evnsolution.clever.routes');
   assert.equal(appConfig.expo?.ios?.buildNumber, '1');
   assert.equal(appConfig.expo?.android?.package, 'com.evnsolution.clever.routes');
