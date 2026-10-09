@@ -47,6 +47,7 @@ export type DriverAccessRefresh = (signal?: AbortSignal) => Promise<DriverAccess
 
 export function createDriverApiClientsFromRouteAccess(input: {
   appVersion?: string;
+  deliveryProofCapability?: 'delivery-proof-v1';
   baseUrl: string;
   fetchImpl?: DriverApiClientsFetchLike;
   refreshDriverAccess?: DriverAccessRefresh;
@@ -58,6 +59,7 @@ export function createDriverApiClientsFromRouteAccess(input: {
     baseUrl: input.baseUrl,
     fetchImpl: input.fetchImpl,
     orderedEventContract: {
+      ...(input.deliveryProofCapability === undefined ? {} : { deliveryProofCapability: input.deliveryProofCapability }),
       appVersion: input.appVersion ?? 'unknown',
       assignmentGeneration: input.routeAccess.routeAccess.assignmentGeneration,
       driverContractVersion: input.routeAccess.routeAccess.driverContractVersion,
@@ -70,6 +72,7 @@ export function createDriverApiClientsFromRouteAccess(input: {
 
 export function createDriverApiClientsFromPersistedDriverAccess(input: {
   appVersion?: string;
+  deliveryProofCapability?: 'delivery-proof-v1';
   baseUrl: string;
   fetchImpl?: DriverApiClientsFetchLike;
   persistedAccess: PersistedDriverAccess & { driverAccess: DriverAccessToken };
@@ -82,7 +85,8 @@ export function createDriverApiClientsFromPersistedDriverAccess(input: {
     fetchImpl: input.fetchImpl,
     ...(!hasDriverOrderedEventLineage(input.persistedAccess.routeAccess) ? {} : {
       orderedEventContract: {
-        appVersion: input.appVersion ?? 'unknown',
+        ...(input.deliveryProofCapability === undefined ? {} : { deliveryProofCapability: input.deliveryProofCapability }),
+      appVersion: input.appVersion ?? 'unknown',
         assignmentGeneration: input.persistedAccess.routeAccess.assignmentGeneration,
         driverContractVersion: input.persistedAccess.routeAccess.driverContractVersion,
         expectedRouteVersionId: input.persistedAccess.routeAccess.expectedRouteVersionId,

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "lockfileSha256": "33d0ac51c628b64cad2ecebc8af85c6f1858485bb0f840962d53c6c304281a6c",
+  "lockfileSha256": "85724f5858f2e3117c77fd12005a733f2be83dc2ae421e94581118eda94668ad",
   "patchManifestSha256": "e37cd2a51e3528c59ba6e2ab7ff22b0e947592c8ebdc28fab33fad6c0cbbb589",
   "advisories": {
     "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm": {
@@ -350,6 +350,21 @@
           "path": "node_modules/react-native-worklets",
           "version": "0.10.1",
           "integrity": "sha512-62mRM19bDpfpdI8HLkEErcdOsrAPDtE9lA/sw+5lLRpzBHNhxaoj9QyY2KjXqUmirelxkX4zuPGTC3VdA0feJA=="
+        }
+      ]
+    },
+    "react-native-view-shot": {
+      "nodes": [
+        "node_modules/react-native-view-shot"
+      ],
+      "via": [
+        "react-native"
+      ],
+      "installations": [
+        {
+          "path": "node_modules/react-native-view-shot",
+          "version": "5.1.0",
+          "integrity": "sha512-JZgElCD82aO+hejIF/leUzI7JufL9mgJ6ChzGWIcdZ2ajpaEvvSnvIcw0qD32XWkrbId8wfSbyz/4u/ulTQzQA=="
         }
       ]
     }

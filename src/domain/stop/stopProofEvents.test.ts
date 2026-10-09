@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
 import { createMockDriverEventService } from '../events/driverEvents';
 import {
+  DeliveryProofUploadPendingError,
   OFFLINE_SUBMISSION_QUEUE_STORAGE_KEY,
   createInMemoryOfflineSubmissionQueue,
   createPersistentOfflineSubmissionQueue,
@@ -190,6 +191,7 @@ describe('stop proof event flow', () => {
           },
         ],
         note: 'Signed and photo uploaded',
+        photoMediaId: 'media-1',
         signatures: [
           {
             kind: 'signature',
@@ -657,4 +659,15 @@ describe('stop proof event flow', () => {
       },
     }]);
   });
+});
+
+it('does not charge the initial Cash completion retry budget while local proof uploads are pending', async () => {
+  const queue=createInMemoryOfflineSubmissionQueue();
+  const result=await recordStopProofEventAfterDeliveryStart({deliveryStart:activeDelivery,offlineQueue:queue,
+    driverEventService:{prepareDriverEvent:event=>({...event,assignmentGeneration:'2',expectedRouteVersionId:'publication',driverContractVersion:2,versionCode:43}),recordDriverEvent:async()=>{throw new DeliveryProofUploadPendingError();}},
+    input:{action:'delivered',note:'',clientEventId:'31700000-0000-4000-8000-000000000001',completion:{version:1,cashReceived:{amount:'122.00',currency:'CAD'}},routePlanId:'route',deliveryStopId:'stop',localMedia:[{kind:'signature',uri:'file:///pending.png'}]}});
+  assert.equal(result.kind,'queued');
+  const pending=queue.listPending()[0];assert.ok(pending?.kind==='driver_event');
+  assert.equal(pending.attempts,0);assert.equal(pending.state,'PENDING');
+  assert.deepEqual(pending.event.completion,{version:1,cashReceived:{amount:'122.00',currency:'CAD'}});
 });

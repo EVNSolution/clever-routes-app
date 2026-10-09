@@ -19,6 +19,8 @@ import { matchesStopCompletionEvent, readStopCompletion, readStopCompletionInput
 import {
   getProofMediaUploadIdempotencyKey,
   isProofMediaRejectedError,
+  isProofMediaReference,
+  type ProofMediaReference,
   type ProofMediaUploadRequest,
   type ProofMediaUploadService,
 } from '../proof/proofMediaUpload';
@@ -71,10 +73,11 @@ export function isOfflineTerminalEvidenceExpired(
     enqueuedAt: string;
     event?: Pick<DriverEventInput, 'eventType'>;
     kind?: OfflineSubmissionQueueItem['kind'];
+    proofCompletionPending?: boolean;
   },
   now: Date,
 ): boolean {
-  if (item.state !== 'ACKNOWLEDGED' && item.state !== 'DISCARDED') return false;
+  if (item.proofCompletionPending === true || (item.state !== 'ACKNOWLEDGED' && item.state !== 'DISCARDED')) return false;
   if (
     item.kind === 'driver_event'
     && item.event?.eventType === 'ROUTE_COMPLETED'
@@ -125,11 +128,20 @@ export type OfflineProofMediaQueueItem = OfflineEvidenceIdentity & {
   queueItemId: string;
   reconciliation?: OfflineSubmissionReconciliation;
   request: ProofMediaUploadRequest;
+  uploadedMedia?: ProofMediaReference;
+  proofCompletionPending?: boolean;
+  replacesRejectedUri?: string;
+  proofRejected?: boolean;
 };
 
 export type OfflineSubmissionQueueItem = OfflineDriverEventQueueItem | OfflineProofMediaQueueItem;
 
 export type OfflineSubmissionQueue = {
+  rejectProofMedia(queueItemId: string): boolean;
+  rejectedProofForCompletion(event: DriverEventInput): {kind: 'photo' | 'signature'; uri: string}[];
+  replaceRejectedProofMedia(uri: string, request: ProofMediaUploadRequest, scope: {assignmentGeneration: string}): OfflineProofMediaQueueItem;
+  recordProofMediaUpload(queueItemId: string, media: ProofMediaReference): boolean;
+  findUploadedProofMedia(routePlanId: string, deliveryStopId: string, uri: string, assignmentGeneration?: string): ProofMediaReference | undefined;
   acknowledge(queueItemId: string, completion?: StopCompletion): boolean;
   bindAccountOwnerHash(accountOwnerHash: string): void;
   blockRouteSubmissionsForReconciliation(routePlanId: string): { blocked: number; discarded: number };
@@ -250,7 +262,7 @@ export function createRouteOrderedDriverEventService(input: {
         throw new Error('Earlier route updates are waiting to sync. This update will be queued in order.');
       }
 
-      return input.driverEventService.recordDriverEvent(preparedEvent, options);
+      return input.driverEventService.recordDriverEvent(resolveEventProofMedia(input.queue, preparedEvent), options);
     },
   };
 }
@@ -365,6 +377,18 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
     input?.onChange?.(Array.from(items.values()));
   }
 
+  function referenceProofUploads(event: DriverEventInput, pending: boolean) {
+    const proof = event.payload?.proof as { media?: {uri?: string; requiresUpload?: boolean}[] } | undefined;
+    const uris = new Set(Array.isArray(proof?.media) ? proof.media.filter(media => media.requiresUpload === true).map(media => media.uri) : []);
+    for (const candidate of activeItems()) {
+      if (candidate.kind !== 'proof_media' || candidate.request.routePlanId !== event.routePlanId
+        || candidate.request.deliveryStopId !== event.deliveryStopId || candidate.assignmentGeneration !== event.assignmentGeneration
+        || (!uris.has(candidate.request.uri) && !uris.has(candidate.replacesRejectedUri))) continue;
+      candidate.proofCompletionPending = pending;
+      if (!pending) appendJournal(candidate, 'ACK', 'REFERENCED_DELIVERY_ACK');
+    }
+  }
+
   function upsertDriverEvent(event: DriverEventInput): {
     changed: boolean;
     inserted: boolean;
@@ -410,6 +434,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       return { changed: false, inserted: false, item: existing };
     }
 
+    referenceProofUploads(event, true);
     const item: OfflineDriverEventQueueItem = {
       accountOwnerHash: activeAccountOwnerHash!,
       attempts: 0,
@@ -427,7 +452,58 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
   }
 
   const initialDiscarded = trimOfflineSubmissionQueue(items, maxItems, activeAccountOwnerHash, now);
+  function rejectedProof(event: DriverEventInput) {
+    const pending = activeItems().find(item => item.kind === 'driver_event' && item.event.clientEventId === event.clientEventId
+      && item.event.routePlanId === event.routePlanId && item.state === 'PENDING' && item.completionReceipt === undefined);
+    if (pending === undefined) return [];
+    const proof = event.payload?.proof as {media?: {kind?: string; uri?: string; requiresUpload?: boolean}[]} | undefined;
+    return (proof?.media ?? []).flatMap(media => {
+      if (media.requiresUpload !== true || typeof media.uri !== 'string' || (media.kind !== 'photo' && media.kind !== 'signature')) return [];
+      const matches = activeItems().filter((item): item is OfflineProofMediaQueueItem => item.kind === 'proof_media'
+        && item.request.routePlanId === event.routePlanId && item.request.deliveryStopId === event.deliveryStopId
+        && item.assignmentGeneration === event.assignmentGeneration && (item.request.uri === media.uri || item.replacesRejectedUri === media.uri));
+      if (matches.some(item => item.uploadedMedia !== undefined || item.state !== 'DISCARDED')) return [];
+      return matches.some(item => item.proofRejected === true) ? [{kind: media.kind, uri: media.uri} as const] : [];
+    });
+  }
   const queue: OfflineSubmissionQueue = {
+    rejectProofMedia: queueItemId => {
+      requireMutable();
+      const item = findActiveItem(queueItemId);
+      if (item?.kind !== 'proof_media' || item.uploadedMedia !== undefined || item.state !== 'PENDING') return false;
+      item.proofRejected = true;
+      transition(item, 'DISCARDED', 'DISCARD', 'PROOF_MEDIA_REJECTED'); emitChange(); return true;
+    },
+    rejectedProofForCompletion: rejectedProof,
+    replaceRejectedProofMedia: (uri, request, scope) => {
+      requireMutable();
+      const completion = activeItems().find((item): item is OfflineDriverEventQueueItem => item.kind === 'driver_event'
+        && item.event.routePlanId === request.routePlanId && item.event.deliveryStopId === request.deliveryStopId
+        && item.event.assignmentGeneration === scope.assignmentGeneration
+        && rejectedProof(item.event).some(media => media.uri === uri && media.kind === (request.kind ?? 'photo')));
+      if (completion === undefined || request.uri === uri) throw new Error('Only rejected uploads for an unsent completion can be replaced.');
+      const replacement = queue.enqueueProofMediaUpload(request, scope);
+      const stored = findActiveItem(replacement.queueItemId);
+      if (stored?.kind !== 'proof_media') throw new Error('Replacement upload was not retained.');
+      stored.replacesRejectedUri = uri; stored.proofCompletionPending = true; emitChange();
+      return cloneQueueItem(stored);
+    },
+    recordProofMediaUpload: (queueItemId, media) => {
+      requireMutable();
+      const item = findActiveItem(queueItemId);
+      if (item?.kind !== 'proof_media' || !isProofMediaReference(media)
+        || media.kind !== (item.request.kind ?? 'photo') || media.source !== item.request.source) return false;
+      if (item.uploadedMedia !== undefined && item.uploadedMedia.mediaId !== media.mediaId) throw new Error('Proof media receipt identity changed.');
+      item.uploadedMedia = { ...media };
+      emitChange();
+      return true;
+    },
+    findUploadedProofMedia: (routePlanId, deliveryStopId, uri, assignmentGeneration) => {
+      const item = activeItems().find((candidate): candidate is OfflineProofMediaQueueItem => candidate.kind === 'proof_media'
+        && candidate.request.routePlanId === routePlanId && candidate.request.deliveryStopId === deliveryStopId
+        && (candidate.request.uri === uri || candidate.replacesRejectedUri === uri) && candidate.assignmentGeneration === assignmentGeneration && candidate.uploadedMedia !== undefined);
+      return item?.uploadedMedia === undefined ? undefined : { ...item.uploadedMedia };
+    },
     acknowledge: (queueItemId, completion) => {
       requireMutable();
       const item = findActiveItem(queueItemId);
@@ -438,6 +514,7 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
         if (parsed === null) return false;
         item.completionReceipt = parsed;
       }
+      if (item.kind === 'driver_event') referenceProofUploads(item.event, false);
       transition(item, 'ACKNOWLEDGED', 'ACK', 'SERVER_ACK');
       emitChange();
       return true;
@@ -1001,7 +1078,8 @@ export async function retryOfflineSubmissions(input: {
   for (const item of pending) {
     if (!isCurrent()) break;
     const routePlanId = getQueueItemRoutePlanId(item);
-    const canLookupStopCompletion = item.kind === 'driver_event' && item.event.completion !== undefined
+    const proofUploadPending = item.kind === 'driver_event' && hasPendingProofUpload(input.queue, item.event);
+    const canLookupStopCompletion = !proofUploadPending && item.kind === 'driver_event' && item.event.completion !== undefined
       && routePlanId !== undefined && input.driverEventReceiptService !== undefined;
     if (!canLookupStopCompletion && routePlanId !== undefined && workflowBlockedRoutePlanIds.has(routePlanId) && isOrderedWorkflowEvidence(item)) {
       continue;
@@ -1045,7 +1123,7 @@ export async function retryOfflineSubmissions(input: {
       if (item.reconciliation !== undefined) continue;
       if (routePlanId !== undefined && (routeBlockedRoutePlanIds.has(routePlanId)
         || (isOrderedWorkflowEvidence(item) && workflowBlockedRoutePlanIds.has(routePlanId)))) continue;
-      if (shouldDiscardOfflineSubmission(item, retryPolicy, now())) {
+      if (!proofUploadPending && shouldDiscardOfflineSubmission(item, retryPolicy, now(), input.queue)) {
         if (isLocationDriverEvent(item)) {
           if (input.queue.discard(item.queueItemId)) discarded += 1;
         } else {
@@ -1110,7 +1188,7 @@ export async function retryOfflineSubmissions(input: {
             continue;
           }
         }
-        const recorded = await runAttempt((signal) => input.driverEventService.recordDriverEvent(item.event, { signal }));
+        const recorded = await runAttempt((signal) => input.driverEventService.recordDriverEvent(resolveEventProofMedia(input.queue, item.event), { signal }));
         if (!isCurrent()) break;
         if (item.event.completion !== undefined) {
           if (recorded.completion === undefined || !matchesStopCompletionEvent(recorded.completion, item.event)) {
@@ -1137,10 +1215,13 @@ export async function retryOfflineSubmissions(input: {
           if (input.queue.quarantine(item.queueItemId, 'assignment_changed')) blocked += 1;
           continue;
         }
-        await runAttempt((signal) => input.proofMediaUploadService.uploadProofMedia(item.request, {
+        const uploadedMedia = await runAttempt((signal) => input.proofMediaUploadService.uploadProofMedia(item.request, {
           idempotencyKey: item.idempotencyKey ?? getProofMediaUploadIdempotencyKey(item.request),
           signal,
         }));
+        if (!isCurrent()) break;
+        if (!input.queue.recordProofMediaUpload(item.queueItemId, uploadedMedia)) throw new Error('Invalid proof media receipt.');
+        await input.queue.whenPersisted();
       }
       if (!isCurrent()) break;
       input.queue.acknowledge(item.queueItemId, completionReceipt);
@@ -1161,6 +1242,10 @@ export async function retryOfflineSubmissions(input: {
       }
     } catch (error) {
       if (!isCurrent()) break;
+      if (error instanceof DeliveryProofUploadPendingError) {
+        if (routePlanId !== undefined) workflowBlockedRoutePlanIds.add(routePlanId);
+        continue;
+      }
       const completionReason = item.kind === 'driver_event' && item.event.completion !== undefined
         ? getStopCompletionReconciliationReason(error) : undefined;
       if (completionReason !== undefined) {
@@ -1197,7 +1282,7 @@ export async function retryOfflineSubmissions(input: {
         continue;
       }
       if (item.kind === 'proof_media' && isProofMediaRejectedError(error)) {
-        if (input.queue.discard(item.queueItemId)) {
+        if (input.queue.rejectProofMedia(item.queueItemId)) {
           discarded += 1;
         }
         continue;
@@ -1220,7 +1305,7 @@ export async function retryOfflineSubmissions(input: {
       }
       input.queue.recordRetryFailure(item.queueItemId, error);
       const updatedItem = input.queue.listPending().find((pendingItem) => pendingItem.queueItemId === item.queueItemId);
-      if (updatedItem !== undefined && shouldDiscardOfflineSubmission(updatedItem, retryPolicy, now())) {
+      if (updatedItem !== undefined && shouldDiscardOfflineSubmission(updatedItem, retryPolicy, now(), input.queue)) {
         if (isLocationDriverEvent(updatedItem)) {
           input.queue.discard(updatedItem.queueItemId);
           discarded += 1;
@@ -1374,7 +1459,8 @@ function hasSameOrderedEventContract(left: DriverEventInput, right: DriverEventI
     && left.assignmentGeneration === right.assignmentGeneration
     && left.driverContractVersion === right.driverContractVersion
     && left.expectedRouteVersionId === right.expectedRouteVersionId
-    && left.versionCode === right.versionCode;
+    && left.versionCode === right.versionCode
+    && left.deliveryProofCapability === right.deliveryProofCapability;
 }
 
 function hasSameImmutableDriverEventIdentity(left: DriverEventInput, right: DriverEventInput): boolean {
@@ -1465,12 +1551,21 @@ function shouldDiscardOfflineSubmission(
   item: OfflineSubmissionQueueItem,
   retryPolicy: OfflineSubmissionQueueRetryPolicy,
   now: Date,
+  queue: OfflineSubmissionQueue,
 ): boolean {
   if (item.attempts >= retryPolicy.maxAttempts) {
     return true;
   }
 
-  const enqueuedAtMs = Date.parse(item.enqueuedAt);
+  let enqueuedAtMs = Date.parse(item.enqueuedAt);
+  if (item.kind === 'driver_event') {
+    const proof = item.event.payload?.proof as {media?: {uri?: string; requiresUpload?: boolean}[]} | undefined;
+    for (const media of proof?.media ?? []) {
+      if (media.requiresUpload !== true || typeof media.uri !== 'string' || item.event.routePlanId == null || item.event.deliveryStopId == null) continue;
+      const receipt = queue.findUploadedProofMedia(item.event.routePlanId, item.event.deliveryStopId, media.uri, item.event.assignmentGeneration);
+      if (receipt !== undefined) enqueuedAtMs = Math.max(enqueuedAtMs, Date.parse(receipt.uploadedAt));
+    }
+  }
   if (Number.isNaN(enqueuedAtMs)) {
     return true;
   }
@@ -1540,6 +1635,10 @@ function toPersistedQueueItem(item: OfflineSubmissionQueueItem): Record<string, 
     ...(item.assignmentGeneration === undefined ? {} : { assignmentGeneration: item.assignmentGeneration }),
     ...(item.idempotencyKey === undefined ? {} : { idempotencyKey: item.idempotencyKey }),
     request: item.request,
+    ...(item.proofRejected === true ? { proofRejected: true } : {}),
+    ...(item.replacesRejectedUri === undefined ? {} : { replacesRejectedUri: item.replacesRejectedUri }),
+    ...(item.uploadedMedia === undefined ? {} : { uploadedMedia: item.uploadedMedia }),
+    ...(item.proofCompletionPending === undefined ? {} : { proofCompletionPending: item.proofCompletionPending }),
   };
 }
 
@@ -1637,7 +1736,7 @@ function readPersistedQueueItem(
     const request = readPersistedProofMediaRequest(data.request);
     const assignmentGeneration = data.assignmentGeneration;
     const idempotencyKey = readOptionalString(data.idempotencyKey);
-    if (request === null || (assignmentGeneration !== undefined && !isCanonicalAssignmentGeneration(assignmentGeneration))
+    if (request === null || (data.uploadedMedia !== undefined && !isProofMediaReference(data.uploadedMedia)) || (assignmentGeneration !== undefined && !isCanonicalAssignmentGeneration(assignmentGeneration))
       || idempotencyKey === null || (idempotencyKey !== undefined && !/^proof-media-v1:[a-f0-9]{32}$/u.test(idempotencyKey))) {
       return null;
     }
@@ -1656,6 +1755,10 @@ function readPersistedQueueItem(
       queueItemId,
       ...(reconciliation === undefined ? {} : { reconciliation }),
       request,
+      ...(data.proofRejected === true ? { proofRejected: true } : {}),
+      ...(typeof data.replacesRejectedUri === 'string' ? { replacesRejectedUri: data.replacesRejectedUri } : {}),
+      ...(data.uploadedMedia === undefined ? {} : { uploadedMedia: data.uploadedMedia as ProofMediaReference }),
+      ...(data.proofCompletionPending === true ? { proofCompletionPending: true } : {}),
       state,
     };
   }
@@ -1718,6 +1821,7 @@ function readPersistedDriverEvent(value: unknown): DriverEventInput | null {
 
   if (
     !isOptionalNullableNumber(data.accuracyMeters)
+    || (data.deliveryProofCapability !== undefined && data.deliveryProofCapability !== 'delivery-proof-v1')
     || appVersion === null
     || assignmentGeneration === null
     || clientEventId === null
@@ -1739,6 +1843,7 @@ function readPersistedDriverEvent(value: unknown): DriverEventInput | null {
   return {
     ...(accuracyMeters === undefined ? {} : { accuracyMeters }),
     ...(appVersion === undefined ? {} : { appVersion }),
+    ...(data.deliveryProofCapability === 'delivery-proof-v1' ? { deliveryProofCapability: 'delivery-proof-v1' as const } : {}),
     ...(assignmentGeneration === undefined ? {} : { assignmentGeneration }),
     clientEventId,
     ...(completion === undefined ? {} : { completion: JSON.parse(JSON.stringify(data.completion)) as NonNullable<DriverEventInput['completion']> }),
@@ -1764,16 +1869,19 @@ function readPersistedProofMediaRequest(value: unknown): ProofMediaUploadRequest
   const deliveryStopId = readRequiredString(data.deliveryStopId);
   const fileName = readRequiredString(data.fileName);
   const routePlanId = readRequiredString(data.routePlanId);
-  const source = data.source === 'camera' || data.source === 'library' ? data.source : null;
+  const source = data.source === 'camera' || data.source === 'library' || data.source === 'signature' ? data.source : null;
+  const kind = data.kind === undefined || data.kind === 'photo' || data.kind === 'signature' ? data.kind : null;
   const uri = readRequiredString(data.uri);
 
-  if (deliveryStopId === null || fileName === null || routePlanId === null || source === null || uri === null) {
+  if (deliveryStopId === null || fileName === null || routePlanId === null || source === null || uri === null || kind === null
+    || (kind === 'signature' ? source !== 'signature' : source === 'signature')) {
     return null;
   }
 
   return {
     deliveryStopId,
     fileName,
+    ...(kind === undefined ? {} : { kind }),
     routePlanId,
     source,
     uri,
@@ -1897,4 +2005,34 @@ function readOptionalRecord(value: unknown): Record<string, unknown> | undefined
   }
 
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+export class DeliveryProofUploadPendingError extends Error {
+  constructor() { super('Delivery proof is waiting to upload. Completion stays saved.'); }
+}
+
+function hasPendingProofUpload(queue: OfflineSubmissionQueue, event: DriverEventInput): boolean {
+  try { resolveEventProofMedia(queue, event); return false; }
+  catch (error) { return error instanceof DeliveryProofUploadPendingError; }
+}
+
+/** Resolve stable upload receipts at the transport boundary. The original queued event stays immutable. */
+export function resolveEventProofMedia(queue: OfflineSubmissionQueue, event: DriverEventInput): DriverEventInput {
+  const proof = event.payload?.proof;
+  if (typeof proof !== 'object' || proof === null || Array.isArray(proof)) return event;
+  const value = proof as Record<string, unknown>;
+  if (!Array.isArray(value.media)) return event;
+  const references: Record<string, string> = {};
+  const media = value.media.map((entry: unknown) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return entry;
+    const local = entry as Record<string, unknown>;
+    if (local.requiresUpload !== true) return entry;
+    if ((local.kind !== 'photo' && local.kind !== 'signature') || typeof local.uri !== 'string'
+      || event.routePlanId == null || event.deliveryStopId == null) throw new Error('Invalid local delivery proof.');
+    const receipt = queue.findUploadedProofMedia(event.routePlanId, event.deliveryStopId, local.uri, event.assignmentGeneration);
+    if (receipt === undefined || receipt.kind !== local.kind) throw new DeliveryProofUploadPendingError();
+    references[local.kind === 'photo' ? 'photoMediaId' : 'signatureMediaId'] = receipt.mediaId;
+    return receipt;
+  });
+  return { ...event, payload: { ...event.payload, proof: { ...value, ...references, media } } };
 }

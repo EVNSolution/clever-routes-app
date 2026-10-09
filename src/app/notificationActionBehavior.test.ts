@@ -92,7 +92,7 @@ describe('notification action behavior', () => {
     assert.match(appRootSource, /action === 'next_stop'/u);
     assert.match(appRootSource, /setPendingStopArrivalCompletion\(\{[\s\S]*deliveryStopId: stop\.deliveryStopId,[\s\S]*routePlanId: routeSession\.route\.id/u);
     assert.match(appRootSource, /await handleRequestStopCompletion\(currentStop\)/u);
-    assert.match(appRootSource, /if \(!usesSingleCompletion\(stop\)\) \{ await handleTerminalStop\(stop, 'delivered'\); return; \}/u);
+    assert.match(appRootSource, /if \(!usesSingleCompletion\(stop\)\) \{[\s\S]*deliveryProof[\s\S]*await handleTerminalStop\(stop, 'delivered'\); return;[\s\S]*\}/u);
     assert.match(appRootSource, /await handleTerminalStop\(stop, 'delivered', \{ completion: \{ version: 1 \}, switchToRoutePlanId \}\)/u);
     assert.match(appRootSource, /completedStopIds: nextCompletedStopIds,[\s\S]*navigationStepIndex: nextNavigationStepIndex/u);
     assert.match(appRootSource, /activeRouteSession\?\.completedStopIds/u);

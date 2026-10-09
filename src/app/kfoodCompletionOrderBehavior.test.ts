@@ -1,3 +1,4 @@
+import { deliveryProofRequirements, validateDeliveryProof } from '../domain/proof/deliveryProofPolicy';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
@@ -27,12 +28,12 @@ findHandlers(tree);
 assert.equal(handlers.length, 3);
 assert.notEqual(cancelCashExpression, '');
 
-function harness(cashStopId?: string) {
+function harness(cashStopId?: string, deliveryProof?: {photoRequired: boolean; signatureRequired: boolean}) {
   const stops = ['A', 'B', 'C'].map((id, index) => ({ ...sampleAssignedRoute.stops[0]!, deliveryStopId: id, sequence: index + 1, status: 'ASSIGNED',
     payment: { method: id === cashStopId ? 'CASH' as const : 'ETRANSFER' as const, methodTitle: id === cashStopId ? 'Cash' : 'eTransfer',
       gatewayNames: [], financialStatus: 'PENDING', expectedAmount: '122.25', currencyCode: 'CAD', expectedAmountSource: 'SHOPIFY_OUTSTANDING' as const, requiresCashInput: id === cashStopId },
   }));
-  const route = { ...sampleAssignedRoute, id: 'route', stops };
+  const route = { ...sampleAssignedRoute, deliveryProof, id: 'route', stops };
   const session = { route, routeAccess: { assignmentGeneration: '2', expectedRouteVersionId: 'version', driverContractVersion: 2 } };
   const dialogs: { title: string; message: string; buttons: OperationalDialogButton[] }[] = [];
   const submissions: StopProofEventInput[] = [];
@@ -49,7 +50,7 @@ function harness(cashStopId?: string) {
     navigationStepIndex: 1, currentStop: stops[0], buildOutOfOrderStopArrivalWarning,
     showOperationalDialog: (title: string, message: string, buttons: OperationalDialogButton[]) => dialogs.push({ title, message, buttons }),
     setCashInput: (value: typeof cash) => { if (value !== null) cashPopupCount += 1; cash = value; context.cashInput = value; }, setCashInputError() {},
-    cashInput: cash, cashDrafts: {} as Record<string, string>, buildCashCompletion,
+    deliveryProofRequirements, validateDeliveryProof, signatureUris: {}, cashInput: cash, cashDrafts: {} as Record<string, string>, buildCashCompletion,
     recordStopArrival: () => { arrivalCount += 1; }, activateAndRecordStopArrival: () => { arrivalCount += 1; },
     blockMutationWhileStorageDegraded: () => false, pendingRoutePlanId: null, setPendingRoutePlanId() {}, deliveryStartResult: { kind: 'delivery_active' },
     routeProgressRefreshGuardRef: { current: { beginMutation: () => () => undefined } },
@@ -124,5 +125,36 @@ describe('single completion preserves the planned stop order boundary', () => {
     await app.confirmCash('122');
     assert.equal(app.submissions[0]?.completion?.cashReceived?.amount, '122.00');
     assert.deepEqual(Array.from(app.context.completedStopIds), ['B']); assert.equal(app.context.navigationStepIndex, 1); assert.equal(app.arrivalCount, 0);
+  });
+});
+
+
+describe('configured proof shares the completion dialog', () => {
+  it('requires photo and signature together with Cash without emitting an Arrived event', async () => {
+    const app = harness('A', { photoRequired: true, signatureRequired: true });
+    await app.request('A');
+    assert.equal(app.cashPopupCount, 1);
+    await app.confirmCash('122');
+    assert.equal(app.submissions.length, 0);
+    app.context.proofPhotoResults.A = { kind: 'captured', source: 'camera', uri: 'file:///photo.jpg' };
+    await app.confirmCash('122');
+    assert.equal(app.submissions.length, 0);
+    app.context.signatureUris.A = 'file:///signature.png';
+    await app.confirmCash('122');
+    assert.equal(app.submissions.length, 1);
+    assert.equal(app.submissions[0]?.completion?.cashReceived?.amount, '122.00');
+    assert.equal(app.submissions[0]?.localMedia?.length, 2);
+    assert.equal(app.arrivalCount, 0);
+  });
+  it('collects only required proof for eTransfer and sends no Cash amount', async () => {
+    const app = harness(undefined, { photoRequired: false, signatureRequired: true });
+    await app.request('A');
+    assert.equal(app.cashPopupCount, 1);
+    app.context.signatureUris.A = 'file:///signature.png';
+    await app.confirmCash('');
+    assert.equal(app.submissions.length, 1);
+    assert.equal(app.submissions[0]?.completion?.cashReceived, undefined);
+    assert.equal(app.submissions[0]?.localMedia?.length, 1);
+    assert.equal(app.arrivalCount, 0);
   });
 });

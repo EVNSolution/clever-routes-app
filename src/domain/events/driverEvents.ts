@@ -41,6 +41,7 @@ export type DriverEventType =
 export type DriverEventInput = {
   accuracyMeters?: number | null;
   appVersion?: string;
+  deliveryProofCapability?: 'delivery-proof-v1';
   assignmentGeneration?: string;
   clientEventId: string;
   completion?: StopCompletionInput;
@@ -57,6 +58,7 @@ export type DriverEventInput = {
 };
 
 export type DriverOrderedEventContract = {
+  deliveryProofCapability?: 'delivery-proof-v1';
   appVersion: string;
   assignmentGeneration: string;
   driverContractVersion: 2;
@@ -461,6 +463,7 @@ function toDriverEventRequestBody(event: DriverEventInput): Record<string, unkno
     ...(event.payload === undefined ? {} : event.payload),
     ...(event.accuracyMeters === undefined ? {} : { accuracyMeters: event.accuracyMeters }),
     ...(event.appVersion === undefined ? {} : { appVersion: event.appVersion }),
+    ...(event.deliveryProofCapability === undefined ? {} : { deliveryProofCapability: event.deliveryProofCapability }),
     ...(event.assignmentGeneration === undefined ? {} : { assignmentGeneration: event.assignmentGeneration }),
     clientEventId: event.clientEventId,
     ...(event.completion === undefined ? {} : { completion: event.completion }),

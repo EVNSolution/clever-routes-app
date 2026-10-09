@@ -11,7 +11,7 @@ import {
   type DriverEventService,
   type DriverEventType,
 } from '../events/driverEvents';
-import { getStopCompletionReconciliationReason, type OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
+import { DeliveryProofUploadPendingError, getStopCompletionReconciliationReason, type OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 import { matchesStopCompletionEvent, readStopCompletionInput, type StopCompletionInput } from './stopCompletion';
 import type { ProofMediaReference } from '../proof/proofMediaUpload';
 import type { ProofSignatureReference } from '../proof/proofSignatureCapture';
@@ -30,6 +30,7 @@ export type StopProofEventInput = {
   completion?: StopCompletionInput;
   deliveryStopId: string;
   media?: ProofMediaReference[];
+  localMedia?: { kind: 'photo' | 'signature'; uri: string }[];
   note: string;
   occurredAt?: Date;
   photoUris?: string[];
@@ -139,7 +140,7 @@ export async function recordStopProofEventAfterDeliveryStart(input: {
     }
     const completionReason = persistedEvent.completion === undefined ? undefined : getStopCompletionReconciliationReason(error);
     const requiresRouteReconciliation = completionReason === undefined ? getDriverApiRequiresRouteReconciliation(error) : true;
-    if (persistedEvent.completion !== undefined) input.offlineQueue.recordRetryFailure(queued.queueItemId, error);
+    if (persistedEvent.completion !== undefined && !(error instanceof DeliveryProofUploadPendingError)) input.offlineQueue.recordRetryFailure(queued.queueItemId, error);
     if (completionReason !== undefined) input.offlineQueue.quarantine(queued.queueItemId, completionReason);
     if (requiresRouteReconciliation === true && completionReason === undefined) {
       input.offlineQueue.blockRouteSubmissionsForReconciliation(input.input.routePlanId);
@@ -180,12 +181,17 @@ function getStopProofPayload(input: StopProofEventInput): Record<string, unknown
   const media = [
     ...getProofMedia(input.photoUris ?? []),
     ...(input.media ?? []),
+    ...(input.localMedia ?? []).map(media => ({ ...media, requiresUpload: true })),
   ];
   const signatures = input.signatures ?? [];
+  const photoMediaId = input.media?.find(item => item.kind === 'photo')?.mediaId;
+  const signatureMediaId = input.media?.find(item => item.kind === 'signature')?.mediaId;
 
   if (input.action === 'delivered') {
     return {
       ...(media.length === 0 ? {} : { media }),
+      ...(photoMediaId === undefined ? {} : { photoMediaId }),
+      ...(signatureMediaId === undefined ? {} : { signatureMediaId }),
       note: input.note,
       ...(signatures.length === 0 ? {} : { signatures }),
       source: 'clever-routes-app',

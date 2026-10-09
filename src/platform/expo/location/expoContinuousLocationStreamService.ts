@@ -343,6 +343,7 @@ async function executeContinuousLocationTask(input: {
         taskResult = await processContinuousLocationTaskBatch({
           createDriverEventService: ({ persistedAccess, refreshDriverAccess }) => (
             createDriverApiClientsFromPersistedDriverAccess({
+              ...(runtimeConfig.kfoodSingleCompletionQaEnabled === true ? { deliveryProofCapability: 'delivery-proof-v1' as const } : {}),
               ...(installedDriverAppVersion === null ? {} : {
                 appVersion: installedDriverAppVersion.versionName,
                 versionCode: installedDriverAppVersion.versionCode,
