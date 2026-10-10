@@ -189,8 +189,10 @@ export function observeLocationTaskResult(
     });
     return;
   }
+  // Tracking before Start ending by age is reported like a route that is no longer in progress; the
+  // diagnostic contract has no third reason and the server rejects unknown ones.
   observe({
-    reason: result.reason === 'route_not_in_progress' ? 'ROUTE_NOT_IN_PROGRESS' : 'ROUTE_REVOKED',
+    reason: result.reason === 'route_revoked' ? 'ROUTE_REVOKED' : 'ROUTE_NOT_IN_PROGRESS',
     routePlanId: result.routePlanId,
     sessionGeneration: result.sessionGeneration,
     type: 'LOCATION_TASK_CONTEXT_BLOCKED',

@@ -8,6 +8,7 @@ import {
   recordContinuousLocationUpdateBatch,
   requestContinuousLocationBackgroundPermission,
   startContinuousLocationUpdatesAfterDeliveryStart,
+  startContinuousLocationUpdatesBeforeDeliveryStart,
   stopContinuousLocationUpdates,
   type ContinuousLocationStreamService,
   sendStoredContinuousLocations,
@@ -112,6 +113,31 @@ describe('continuous location streaming', () => {
     assert.equal(result.kind, 'blocked');
     assert.equal(result.reason, 'background_permission_denied');
     assert.equal(streamService.started.length, 0);
+  });
+
+  it('starts the same background location task before Start when the background permission is already granted', async () => {
+    const streamService = createMockStreamService();
+
+    const result = await startContinuousLocationUpdatesBeforeDeliveryStart({
+      notification: { body: 'Location is shared with the office before the route starts.', title: 'Tuesday AM Route' },
+      routePlanId: 'route-1',
+      streamService,
+    });
+
+    assert.deepEqual(result, {
+      alreadyStarted: false,
+      kind: 'streaming',
+      message: 'Continuous location updates are active.',
+      routePlanId: 'route-1',
+      taskName: 'clever-routes-continuous-location',
+    });
+    assert.equal(streamService.started.length, 1);
+
+    const denied = createMockStreamService({ backgroundPermission: 'denied' });
+    const blocked = await startContinuousLocationUpdatesBeforeDeliveryStart({ routePlanId: 'route-1', streamService: denied });
+    assert.equal(blocked.kind, 'blocked');
+    assert.equal(blocked.kind === 'blocked' ? blocked.reason : null, 'background_permission_denied');
+    assert.equal(denied.started.length, 0);
   });
 
   it('starts a named background location task after delivery_active', async () => {

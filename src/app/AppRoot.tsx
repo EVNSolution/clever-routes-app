@@ -99,10 +99,12 @@ import {
   CONTINUOUS_LOCATION_TASK_NAME,
   requestContinuousLocationBackgroundPermission,
   startContinuousLocationUpdatesAfterDeliveryStart,
+  startContinuousLocationUpdatesBeforeDeliveryStart,
   type BackgroundPermissionResult,
   type ContinuousLocationStopResult,
   type ContinuousLocationStreamStartResult,
 } from '../domain/location/continuousLocationStream';
+import { isDeliveryDateToday } from '../domain/route/deliveryDay';
 import { finishDeliveryAfterActive, type DeliveryFinishResult } from '../domain/delivery/deliveryFinish';
 import {
   resolveRouteStartRefreshRecovery,
@@ -256,6 +258,7 @@ import {
 import { buildAuthFailureMessage, shouldDiscardSavedLoginAfterRefreshFailure } from './authDiagnostics';
 import {
   buildActiveRouteForegroundNotification,
+  buildPreStartForegroundNotification,
   isActiveRouteNotificationTargetCurrent,
   parseActiveRouteNotificationUrl,
   type ActiveRouteNotificationTarget,
@@ -3239,6 +3242,34 @@ function DriverApp() {
         });
       });
       if (!isLoginAccountCurrent()) return;
+      // Tracking before Start (change control #344): today's route gets GPS from the moment the app
+      // shows it, so the drive to the first stop is part of the route's path. It needs the background
+      // permission granted earlier; without it nothing starts and the Start flow asks as before.
+      if (
+        restoredActiveSession === null
+        && effectivePersistedActiveRouteSession === null
+        && cachedActiveSession === null
+        && selectedSession.companyGuidance.executionStatus === 'READY'
+        && selectedSession.pendingRouteEnd === undefined
+        && isDeliveryDateToday(selectedSession.route.deliveryDate, selectedSession.route.timezone)
+        && AppState.currentState === 'active'
+      ) {
+        const preStartSaved = await driverAccessTokenStore.savePreStartTracking({ routePlanId: selectedSession.route.id })
+          .catch(() => false);
+        if (!isLoginAccountCurrent()) return;
+        if (preStartSaved) {
+          const preStartResult = await startContinuousLocationUpdatesBeforeDeliveryStart({
+            notification: buildPreStartForegroundNotification(selectedSession.route),
+            routePlanId: selectedSession.route.id,
+            streamService: continuousLocationStreamService,
+          }).catch(() => null);
+          if (!isLoginAccountCurrent()) return;
+          if (preStartResult === null || preStartResult.kind === 'blocked') {
+            await driverAccessTokenStore.clearPreStartTracking(selectedSession.route.id).catch(() => false);
+            if (!isLoginAccountCurrent()) return;
+          }
+        }
+      }
       if (cachedActiveSession === null) void retryOfflineSubmissionsForSessions(loadedSessionsWithPendingEnds);
       if (restoredActiveSession !== null) {
         routeLoadStage = 'LR05';

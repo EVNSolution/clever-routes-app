@@ -630,6 +630,71 @@ test('invalidates legacy and malformed token payloads', async () => {
   assert.equal(storage.values[DRIVER_ACCESS_TOKEN_STORAGE_KEY], null);
 });
 
+test('keeps tracking before Start only for the saved route without an active session, until Start takes over', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({
+    now: () => new Date('2026-10-11T12:00:00.000Z'),
+    storage,
+  });
+  await saveAccount(store, accountAccess({ expiresAt: '2026-10-11T13:00:00.000Z', refreshTokenExpiresAt: '2026-11-11T07:00:00.000Z' }));
+  const routePlanId = sampleInvitedRouteAccess.routeAccess.routePlanId;
+
+  // No route access yet: nothing to track.
+  assert.equal(await store.savePreStartTracking({ routePlanId }), false);
+
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  assert.equal(await store.savePreStartTracking({ routePlanId: 'another-route' }), false);
+  assert.equal(await store.savePreStartTracking({ routePlanId }), true);
+  const first = await store.loadActiveDriverAccess();
+  assert.deepEqual(first.kind === 'active' ? first.preStartTracking : null, { routePlanId, startedAt: '2026-10-11T12:00:00.000Z' });
+
+  // Saving again keeps the original start; the task uses it as the session generation.
+  const later = createDriverAccessTokenStore({ now: () => new Date('2026-10-11T12:30:00.000Z'), storage });
+  assert.equal(await later.savePreStartTracking({ routePlanId }), true);
+  const again = await later.loadActiveDriverAccess();
+  assert.equal(again.kind === 'active' ? again.preStartTracking?.startedAt : null, '2026-10-11T12:00:00.000Z');
+
+  // Start: the active session replaces the pre-start marker and its own startedAt is the Start time.
+  await later.saveActiveRouteSession({ navigationStepIndex: 0, routePlanId, startedAt: '2026-10-11T12:30:00.000Z' });
+  const started = await later.loadActiveDriverAccess();
+  assert.equal(started.kind === 'active' ? started.preStartTracking : 'kept', undefined);
+  assert.equal(started.kind === 'active' ? started.activeRouteSession?.startedAt : null, '2026-10-11T12:30:00.000Z');
+  assert.equal(await later.savePreStartTracking({ routePlanId }), false);
+});
+
+test('ends tracking before Start when the route access changes or is cleared', async () => {
+  const storage = createMemoryStorage();
+  const store = createDriverAccessTokenStore({ now: () => new Date('2026-10-11T12:00:00.000Z'), storage });
+  await saveAccount(store, accountAccess({ expiresAt: '2026-10-11T13:00:00.000Z', refreshTokenExpiresAt: '2026-11-11T07:00:00.000Z' }));
+  const routePlanId = sampleInvitedRouteAccess.routeAccess.routePlanId;
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  assert.equal(await store.savePreStartTracking({ routePlanId }), true);
+
+  // The same route again keeps it.
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  let restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind === 'active' ? restored.preStartTracking?.routePlanId : null, routePlanId);
+
+  // Another route's access ends it.
+  await store.saveFromInvitedRouteAccess({
+    ...sampleInvitedRouteAccess,
+    routeAccess: { ...sampleInvitedRouteAccess.routeAccess, routePlanId: 'another-route', routeContext: 'another-context' },
+  });
+  restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind === 'active' ? restored.preStartTracking : 'kept', undefined);
+
+  // Explicit clear with a matching or absent route id.
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  assert.equal(await store.savePreStartTracking({ routePlanId }), true);
+  assert.equal(await store.clearPreStartTracking('another-route'), false);
+  assert.equal(await store.clearPreStartTracking(routePlanId), true);
+  assert.equal(await store.clearPreStartTracking(), false);
+  assert.equal(await store.savePreStartTracking({ routePlanId }), true);
+  assert.equal(await store.clearCachedRouteAccess(routePlanId), true);
+  restored = await store.loadActiveDriverAccess();
+  assert.equal(restored.kind === 'active' ? restored.preStartTracking : 'kept', undefined);
+});
+
 test('persists completion_pending across restart until the server receipt is acknowledged', async () => {
   const storage = createMemoryStorage();
   const first = createDriverAccessTokenStore({
