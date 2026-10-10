@@ -10,6 +10,7 @@ import {
   startContinuousLocationUpdatesAfterDeliveryStart,
   stopContinuousLocationUpdates,
   type ContinuousLocationStreamService,
+  sendStoredContinuousLocations,
 } from './continuousLocationStream';
 import { createInMemoryOfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
 
@@ -213,6 +214,133 @@ describe('continuous location streaming', () => {
     }
   });
 
+  it('stores the rest of a batch at once after the first request that fails, instead of waiting on more requests', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    let calls = 0;
+
+    const result = await recordContinuousLocationUpdateBatch({
+      driverEventService: {
+        recordDriverEvent: async () => {
+          calls += 1;
+          throw new Error('network offline');
+        },
+      },
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-05-12T08:45:00.000Z') },
+        { latitude: 43.654, longitude: -79.384, occurredAt: new Date('2026-05-12T08:46:00.000Z') },
+        { latitude: 43.655, longitude: -79.385, occurredAt: new Date('2026-05-12T08:47:00.000Z') },
+      ],
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(calls, 1);
+    assert.deepEqual(result, { kind: 'recorded', queuedCount: 3, recordedCount: 0 });
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+      'driver-event:continuous-location-2026-05-12T08:45:00.000Z-0',
+      'driver-event:continuous-location-2026-05-12T08:46:00.000Z-1',
+      'driver-event:continuous-location-2026-05-12T08:47:00.000Z-2',
+    ]);
+  });
+
+  it('keeps sending the next points live after a rejection that only concerns one point', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    let calls = 0;
+
+    const result = await recordContinuousLocationUpdateBatch({
+      driverEventService: {
+        recordDriverEvent: async (event) => {
+          calls += 1;
+          if (calls === 1) {
+            throw createDriverApiHttpError({ endpoint: 'Driver event record', status: 400 });
+          }
+          return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+        },
+      },
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-05-12T08:45:00.000Z') },
+        { latitude: 43.654, longitude: -79.384, occurredAt: new Date('2026-05-12T08:46:00.000Z') },
+        { latitude: 43.655, longitude: -79.385, occurredAt: new Date('2026-05-12T08:47:00.000Z') },
+      ],
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(calls, 3);
+    assert.deepEqual(result, { kind: 'recorded', queuedCount: 1, recordedCount: 2 });
+    assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+      'driver-event:continuous-location-2026-05-12T08:45:00.000Z-0',
+    ]);
+  });
+
+  it('treats a server error, a rate limit and a timeout status as a reason to stop waiting on live requests', async () => {
+    for (const status of [408, 429, 500, 503]) {
+      const queue = createInMemoryOfflineSubmissionQueue();
+      let calls = 0;
+
+      const result = await recordContinuousLocationUpdateBatch({
+        driverEventService: {
+          recordDriverEvent: async () => {
+            calls += 1;
+            throw createDriverApiHttpError({ endpoint: 'Driver event record', status });
+          },
+        },
+        locations: [
+          { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-05-12T08:45:00.000Z') },
+          { latitude: 43.654, longitude: -79.384, occurredAt: new Date('2026-05-12T08:46:00.000Z') },
+        ],
+        offlineQueue: queue,
+        routePlanId: 'route-1',
+      });
+
+      assert.equal(calls, 1, `HTTP ${status}`);
+      assert.deepEqual(result, { kind: 'recorded', queuedCount: 2, recordedCount: 0 }, `HTTP ${status}`);
+    }
+  });
+
+  it('bounds a live request and stores the batch when the request does not answer in time', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const signals: AbortSignal[] = [];
+    let calls = 0;
+
+    const result = await recordContinuousLocationUpdateBatch({
+      driverEventService: {
+        recordDriverEvent: (_event, options) => {
+          calls += 1;
+          if (options?.signal !== undefined) signals.push(options.signal);
+          return new Promise(() => undefined);
+        },
+      },
+      liveRequestTimeoutMs: 5,
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-05-12T08:45:00.000Z') },
+        { latitude: 43.654, longitude: -79.384, occurredAt: new Date('2026-05-12T08:46:00.000Z') },
+      ],
+      offlineQueue: queue,
+      routePlanId: 'route-1',
+    });
+
+    assert.equal(calls, 1);
+    assert.equal(signals.length, 1);
+    assert.equal(signals[0]?.aborted, true);
+    assert.deepEqual(result, { kind: 'recorded', queuedCount: 2, recordedCount: 0 });
+    assert.equal(queue.listPending().length, 2);
+  });
+
+  it('rethrows the failure when there is no offline queue to hold the points', async () => {
+    await assert.rejects(recordContinuousLocationUpdateBatch({
+      driverEventService: {
+        recordDriverEvent: async () => {
+          throw new Error('network offline');
+        },
+      },
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-05-12T08:45:00.000Z') },
+      ],
+      routePlanId: 'route-1',
+    }), /network offline/u);
+  });
+
   it('does not queue locations after the server says the route is not in progress', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
 
@@ -235,6 +363,128 @@ describe('continuous location streaming', () => {
 
     assert.deepEqual(result, { kind: 'route_not_in_progress', recordedCount: 0 });
     assert.deepEqual(queue.listPending(), []);
+  });
+
+  describe('sending stored GPS points when the connection is back', () => {
+    const stored = (queue: ReturnType<typeof createInMemoryOfflineSubmissionQueue>, id: string, minute: number, routePlanId = 'route-1', eventType: 'LOCATION_UPDATED' | 'ROUTE_STARTED' = 'LOCATION_UPDATED') => {
+      queue.enqueueDriverEvent({
+        clientEventId: id,
+        eventType,
+        latitude: 43.65,
+        longitude: -79.38,
+        occurredAt: new Date(Date.UTC(2026, 9, 10, 9, minute)),
+        routePlanId,
+      });
+    };
+
+    it('sends the stored GPS points of the route oldest first, up to the limit, and acknowledges them', async () => {
+      const queue = createInMemoryOfflineSubmissionQueue();
+      stored(queue, 'gps-1', 1);
+      stored(queue, 'other-route', 2, 'route-2');
+      stored(queue, 'gps-2', 3);
+      stored(queue, 'note', 4, 'route-1', 'ROUTE_STARTED');
+      stored(queue, 'gps-3', 5);
+      const driverEventService = createMockDriverEventService();
+
+      const result = await sendStoredContinuousLocations({
+        driverEventService, maxItems: 2, offlineQueue: queue, routePlanId: 'route-1',
+      });
+
+      assert.deepEqual(result, { sentCount: 2 });
+      assert.deepEqual(driverEventService.recordedEvents.map((event) => event.clientEventId), ['gps-1', 'gps-2']);
+      assert.deepEqual(queue.listPending().map((item) => item.queueItemId), [
+        'driver-event:other-route', 'driver-event:note', 'driver-event:gps-3',
+      ]);
+    });
+
+    it('stops at the first failure and leaves that point stored', async () => {
+      const queue = createInMemoryOfflineSubmissionQueue();
+      for (const [index, id] of ['gps-1', 'gps-2', 'gps-3'].entries()) stored(queue, id, index + 1);
+      const sent: string[] = [];
+
+      const result = await sendStoredContinuousLocations({
+        driverEventService: {
+          recordDriverEvent: async (event) => {
+            sent.push(event.clientEventId);
+            if (event.clientEventId === 'gps-2') throw new Error('network request failed');
+            return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+          },
+        },
+        offlineQueue: queue,
+        routePlanId: 'route-1',
+      });
+
+      assert.deepEqual(result, { sentCount: 1 });
+      assert.deepEqual(sent, ['gps-1', 'gps-2']);
+      assert.deepEqual(queue.listPending().map((item) => item.queueItemId), ['driver-event:gps-2', 'driver-event:gps-3']);
+      assert.equal(queue.listPending()[0]?.attempts, 0);
+    });
+
+    it('stops quietly when the server says the route is not in progress and leaves reconciliation to the retry', async () => {
+      const queue = createInMemoryOfflineSubmissionQueue();
+      stored(queue, 'gps-1', 1);
+      stored(queue, 'gps-2', 2);
+
+      const result = await sendStoredContinuousLocations({
+        driverEventService: {
+          recordDriverEvent: async () => {
+            throw createDriverApiHttpError({ code: 'ROUTE_NOT_IN_PROGRESS', endpoint: 'Driver event record', status: 409 });
+          },
+        },
+        offlineQueue: queue,
+        routePlanId: 'route-1',
+      });
+
+      assert.deepEqual(result, { sentCount: 0 });
+      assert.equal(queue.listPending().length, 2);
+      assert.equal(queue.listPending().every((item) => item.attempts === 0 && item.reconciliation === undefined), true);
+    });
+
+    it('stops when its time budget is used up', async () => {
+      const queue = createInMemoryOfflineSubmissionQueue();
+      for (const [index, id] of ['gps-1', 'gps-2', 'gps-3', 'gps-4'].entries()) stored(queue, id, index + 1);
+      let clock = 0;
+      const driverEventService = createMockDriverEventService();
+      const record = driverEventService.recordDriverEvent;
+      driverEventService.recordDriverEvent = async (event, options) => {
+        clock += 60;
+        return record(event, options);
+      };
+
+      const result = await sendStoredContinuousLocations({
+        driverEventService, now: () => clock, offlineQueue: queue, routePlanId: 'route-1', timeBudgetMs: 100,
+      });
+
+      assert.deepEqual(result, { sentCount: 2 });
+      assert.equal(queue.listPending().length, 2);
+    });
+
+    it('stops when the session ends and when a request does not answer in time', async () => {
+      const queue = createInMemoryOfflineSubmissionQueue();
+      for (const [index, id] of ['gps-1', 'gps-2', 'gps-3'].entries()) stored(queue, id, index + 1);
+      let current = true;
+      const driverEventService = createMockDriverEventService();
+      const record = driverEventService.recordDriverEvent;
+      driverEventService.recordDriverEvent = async (event, options) => {
+        current = false;
+        return record(event, options);
+      };
+      const ended = await sendStoredContinuousLocations({
+        driverEventService, isSessionCurrent: async () => current, offlineQueue: queue, routePlanId: 'route-1',
+      });
+      assert.deepEqual(ended, { sentCount: 1 });
+
+      let calls = 0;
+      const slow = await sendStoredContinuousLocations({
+        driverEventService: { recordDriverEvent: () => { calls += 1; return new Promise(() => undefined); } },
+        liveRequestTimeoutMs: 5,
+        offlineQueue: queue,
+        routePlanId: 'route-1',
+      });
+      assert.deepEqual(slow, { sentCount: 0 });
+      assert.equal(calls, 1);
+      assert.equal(queue.listPending().length, 2);
+    });
   });
 
   it('stops the named continuous location task', async () => {

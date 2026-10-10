@@ -780,7 +780,9 @@ export function createInMemoryOfflineSubmissionQueue(input?: {
       }
 
       const errorCode = getStableRetryErrorCode(lastError);
-      item.attempts += 1;
+      // A stored GPS point is worth as much after the network or the server was down. Only its age (72 hours) and a
+      // refusal that cannot succeed count against it.
+      if (!(isLocationDriverEvent(item) && isTransientRetryFailure(lastError))) item.attempts += 1;
       item.firstErrorCode ??= errorCode;
       item.lastErrorCode = errorCode;
       appendJournal(item, 'ATTEMPT', errorCode);
@@ -1075,8 +1077,12 @@ export async function retryOfflineSubmissions(input: {
     timeoutMs: input.attemptTimeoutMs ?? 15_000,
   });
 
+  // After a stored GPS point failed because of the network or the server, the others would only wait and fail too.
+  let locationRetriesSuspended = false;
+
   for (const item of pending) {
     if (!isCurrent()) break;
+    if (locationRetriesSuspended && isLocationDriverEvent(item)) continue;
     const routePlanId = getQueueItemRoutePlanId(item);
     const proofUploadPending = item.kind === 'driver_event' && hasPendingProofUpload(input.queue, item.event);
     const canLookupStopCompletion = !proofUploadPending && item.kind === 'driver_event' && item.event.completion !== undefined
@@ -1304,6 +1310,7 @@ export async function retryOfflineSubmissions(input: {
         routeLookupReason = 'driver_access_expired';
       }
       input.queue.recordRetryFailure(item.queueItemId, error);
+      if (isLocationDriverEvent(item) && isTransientRetryFailure(error)) locationRetriesSuspended = true;
       const updatedItem = input.queue.listPending().find((pendingItem) => pendingItem.queueItemId === item.queueItemId);
       if (updatedItem !== undefined && shouldDiscardOfflineSubmission(updatedItem, retryPolicy, now(), input.queue)) {
         if (isLocationDriverEvent(updatedItem)) {
@@ -1414,6 +1421,14 @@ export function getStopCompletionReconciliationReason(error: unknown): OfflineSu
 
 function getInternalItemKey(item: Pick<OfflineSubmissionQueueItem, 'accountOwnerHash' | 'queueItemId'>) {
   return `${item.accountOwnerHash}:${item.queueItemId}`;
+}
+
+/** The network, a timeout or the server failed; the same request can succeed later without any change. */
+function isTransientRetryFailure(error: unknown): boolean {
+  if (error instanceof DriverApiHttpError) {
+    return error.status === 'unknown' || error.status >= 500 || error.status === 401 || error.status === 408 || error.status === 429;
+  }
+  return true;
 }
 
 function getStableRetryErrorCode(error: unknown) {

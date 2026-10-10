@@ -156,6 +156,76 @@ describe('continuous location background task', () => {
     }]);
   });
 
+  it('also sends older stored GPS points of the route after a live batch got through', async () => {
+    const store = createTokenStore();
+    await saveActiveRoute(store);
+    const routePlanId = sampleInvitedRouteAccess.routeAccess.routePlanId;
+    const queue = createInMemoryOfflineSubmissionQueue();
+    for (let index = 0; index < 30; index += 1) {
+      queue.enqueueDriverEvent({
+        clientEventId: `stored-${String(index).padStart(2, '0')}`,
+        eventType: 'LOCATION_UPDATED',
+        latitude: 43.65,
+        longitude: -79.38,
+        occurredAt: new Date(Date.UTC(2026, 6, 16, 9, index)),
+        routePlanId,
+      });
+    }
+    queue.enqueueDriverEvent({
+      clientEventId: 'other-route-stored', eventType: 'LOCATION_UPDATED', latitude: 43.7, longitude: -79.4,
+      occurredAt: new Date('2026-07-16T09:00:00.000Z'), routePlanId: 'another-route',
+    });
+    const driverEventService = createMockDriverEventService();
+
+    const result = await processContinuousLocationTaskBatch({
+      createDriverEventService: () => driverEventService,
+      driverAccessTokenStore: store,
+      driverAuthService: createMockDriverAuthService(),
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-07-16T10:01:00.000Z') },
+      ],
+      offlineQueue: queue,
+      routeAccessService: createMockRouteAccessService(),
+    });
+
+    assert.deepEqual(result, { kind: 'processed', recordedCount: 1, routePlanId, storedSentCount: 25 });
+    assert.deepEqual(driverEventService.recordedEvents.slice(0, 3).map((event) => event.clientEventId), [
+      'continuous-location-2026-07-16T10:01:00.000Z-0', 'stored-00', 'stored-01',
+    ]);
+    assert.equal(driverEventService.recordedEvents.length, 26);
+    assert.deepEqual(
+      queue.listPending().map((item) => item.queueItemId),
+      [...Array.from({ length: 5 }, (_, index) => `driver-event:stored-${25 + index}`), 'driver-event:other-route-stored'],
+    );
+  });
+
+  it('does not send stored GPS points when the live batch itself could not be sent', async () => {
+    const store = createTokenStore();
+    await saveActiveRoute(store);
+    const routePlanId = sampleInvitedRouteAccess.routeAccess.routePlanId;
+    const queue = createInMemoryOfflineSubmissionQueue();
+    queue.enqueueDriverEvent({
+      clientEventId: 'stored-1', eventType: 'LOCATION_UPDATED', latitude: 43.65, longitude: -79.38,
+      occurredAt: new Date('2026-07-16T09:00:00.000Z'), routePlanId,
+    });
+    let calls = 0;
+
+    const result = await processContinuousLocationTaskBatch({
+      createDriverEventService: () => ({ recordDriverEvent: async () => { calls += 1; throw new Error('network request failed'); } }),
+      driverAccessTokenStore: store,
+      driverAuthService: createMockDriverAuthService(),
+      locations: [
+        { latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-07-16T10:01:00.000Z') },
+      ],
+      offlineQueue: queue,
+      routeAccessService: createMockRouteAccessService(),
+    });
+
+    assert.equal(calls, 1);
+    assert.deepEqual(result, { kind: 'processed', queuedCount: 1, recordedCount: 0, routePlanId });
+    assert.equal(queue.listPending().length, 2);
+  });
+
   it('stops a captured location batch after route completion becomes pending', async () => {
     const store = createTokenStore();
     await saveActiveRoute(store);
