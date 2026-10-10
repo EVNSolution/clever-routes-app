@@ -13,6 +13,7 @@ describe('route access refresh assignment guard', () => {
     let refreshCount = 0;
     const clients = createDriverApiClientsFromRouteAccess({
       baseUrl: 'https://delivery.example.com', routeAccess: original,
+      now: () => Date.parse('2026-05-12T06:00:00.000Z'),
       fetchImpl: async (_url, init) => {
         authorizations.push(init?.headers?.Authorization);
         return authorizations.length === 1
@@ -51,6 +52,7 @@ describe('route access refresh assignment guard', () => {
     const authorizations: (string | undefined)[] = [];
     const clients = createDriverApiClientsFromRouteAccess({
       baseUrl: 'https://delivery.example.com', routeAccess: original,
+      now: () => Date.parse('2026-05-12T06:00:00.000Z'),
       fetchImpl: async (_url, init) => {
         authorizations.push(init?.headers?.Authorization);
         return authorizations.length === 1
