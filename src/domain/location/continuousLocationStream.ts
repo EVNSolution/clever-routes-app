@@ -1,10 +1,16 @@
 import type { DeliveryStartResult } from '../delivery/deliveryStart';
 import type { DriverAccessTokenStore } from '../driver/driverAccessTokenStore';
 import type { DriverEventInput, DriverEventService } from '../events/driverEvents';
-import type { OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
-import { isDriverRouteNotInProgressError } from '../../api/deliveryServer/driverApiError';
+import type { OfflineDriverEventQueueItem, OfflineSubmissionQueue } from '../offline/offlineSubmissionQueue';
+import { DriverApiHttpError, isDriverRouteNotInProgressError } from '../../api/deliveryServer/driverApiError';
+import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
 
 export const CONTINUOUS_LOCATION_TASK_NAME = 'clever-routes-continuous-location';
+/** A background batch must finish inside the OS job limit (15 seconds), so one live request may not wait longer. */
+export const CONTINUOUS_LOCATION_LIVE_REQUEST_TIMEOUT_MS = 8_000;
+/** Stored GPS points sent after a live batch got through, so a gap fills in without opening the app. */
+export const CONTINUOUS_LOCATION_STORED_SEND_MAX_ITEMS = 25;
+export const CONTINUOUS_LOCATION_STORED_SEND_BUDGET_MS = 5_000;
 
 export type BackgroundPermissionResult = 'denied' | 'granted';
 
@@ -173,12 +179,16 @@ export async function startContinuousLocationUpdatesAfterDeliveryStart(input: {
 export async function recordContinuousLocationUpdateBatch(input: {
   driverEventService: DriverEventService;
   isSessionCurrent?: () => Promise<boolean>;
+  liveRequestTimeoutMs?: number;
   locations: ContinuousLocationBatchItem[];
   offlineQueue?: OfflineSubmissionQueue;
   routePlanId: string | null;
 }): Promise<ContinuousLocationBatchRecordResult> {
   let queuedCount = 0;
   let recordedCount = 0;
+  // After a request that failed because of the network or the server, more live requests would only wait and fail
+  // too. The rest of the batch is stored on the phone at once and sent later.
+  let liveRequestsOpen = true;
   const queuedEvents: DriverEventInput[] = [];
 
   for (const [index, location] of input.locations.entries()) {
@@ -196,8 +206,16 @@ export async function recordContinuousLocationUpdateBatch(input: {
       routePlanId: input.routePlanId,
     };
 
+    if (!liveRequestsOpen && input.offlineQueue !== undefined) {
+      queuedEvents.push(event);
+      continue;
+    }
+
     try {
-      await input.driverEventService.recordDriverEvent(event);
+      await runBoundedAsyncOperation(
+        (signal) => input.driverEventService.recordDriverEvent(event, { signal }),
+        { timeoutMs: input.liveRequestTimeoutMs ?? CONTINUOUS_LOCATION_LIVE_REQUEST_TIMEOUT_MS },
+      );
       recordedCount += 1;
     } catch (error) {
       if (isDriverRouteNotInProgressError(error)) {
@@ -211,6 +229,7 @@ export async function recordContinuousLocationUpdateBatch(input: {
       }
 
       queuedEvents.push(event);
+      if (!isRejectionOfOnePoint(error)) liveRequestsOpen = false;
     }
   }
 
@@ -225,6 +244,63 @@ export async function recordContinuousLocationUpdateBatch(input: {
   return queuedCount > 0
     ? { kind: 'recorded', queuedCount, recordedCount }
     : { kind: 'recorded', recordedCount };
+}
+
+/**
+ * Sends the GPS points that were stored on the phone while the connection was bad, oldest first, after a live
+ * request just got through. It is bounded by an item limit and a time budget (the OS ends a background job after
+ * 15 seconds), stops at the first failure and leaves reconciliation of an ended route to the retry.
+ */
+export async function sendStoredContinuousLocations(input: {
+  driverEventService: DriverEventService;
+  isSessionCurrent?: () => Promise<boolean>;
+  liveRequestTimeoutMs?: number;
+  maxItems?: number;
+  now?: () => number;
+  offlineQueue: OfflineSubmissionQueue;
+  routePlanId: string;
+  timeBudgetMs?: number;
+}): Promise<{ sentCount: number }> {
+  const now = input.now ?? Date.now;
+  const startedAt = now();
+  const budgetMs = input.timeBudgetMs ?? CONTINUOUS_LOCATION_STORED_SEND_BUDGET_MS;
+  const storedPoints = input.offlineQueue.listPending()
+    .filter((item): item is OfflineDriverEventQueueItem => (
+      item.kind === 'driver_event'
+      && item.state === 'PENDING'
+      && item.reconciliation === undefined
+      && item.event.eventType === 'LOCATION_UPDATED'
+      && item.event.routePlanId === input.routePlanId
+    ))
+    .slice(0, input.maxItems ?? CONTINUOUS_LOCATION_STORED_SEND_MAX_ITEMS);
+  let sentCount = 0;
+
+  for (const item of storedPoints) {
+    if (now() - startedAt >= budgetMs) break;
+    if (input.isSessionCurrent !== undefined && !(await input.isSessionCurrent())) break;
+    try {
+      await runBoundedAsyncOperation(
+        (signal) => input.driverEventService.recordDriverEvent(item.event, { signal }),
+        { timeoutMs: input.liveRequestTimeoutMs ?? CONTINUOUS_LOCATION_LIVE_REQUEST_TIMEOUT_MS },
+      );
+    } catch (error) {
+      if (!isDriverRouteNotInProgressError(error)) input.offlineQueue.recordRetryFailure(item.queueItemId, error);
+      break;
+    }
+    if (!input.offlineQueue.acknowledge(item.queueItemId)) break;
+    sentCount += 1;
+  }
+
+  return { sentCount };
+}
+
+/** A 4xx answer that says nothing about the network or the session: only this point is refused. */
+function isRejectionOfOnePoint(error: unknown): boolean {
+  return error instanceof DriverApiHttpError
+    && typeof error.status === 'number'
+    && error.status >= 400
+    && error.status < 500
+    && ![401, 408, 409, 429].includes(error.status);
 }
 
 export async function stopContinuousLocationUpdates(input: {

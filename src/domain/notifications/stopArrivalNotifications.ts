@@ -126,8 +126,11 @@ export function parseDriverRouteNotificationData(
   };
 }
 
+// A standalone redispatch carries a 64-hex hash; a K-food live route change carries the publication id (a UUID).
+const PUBLICATION_VERSION_PATTERN = /^(?:[a-f0-9]{64}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/iu;
+
 function parsePublicationVersion(value: unknown): string | null {
-  return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value)
+  return typeof value === 'string' && PUBLICATION_VERSION_PATTERN.test(value)
     ? value
     : null;
 }

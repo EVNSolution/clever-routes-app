@@ -1,5 +1,8 @@
 import type { DriverEventInput } from '../domain/events/driverEvents';
-import { createDeliveryProofCapabilityReporter } from '../domain/driverAuth/deliveryProofCapability';
+import {
+  createDeliveryProofCapabilityReporter,
+  reportDeliveryProofCapabilityBestEffort,
+} from '../domain/driverAuth/deliveryProofCapability';
 import { deliveryProofRequirements, validateDeliveryProof } from '../domain/proof/deliveryProofPolicy';
 import { retainProofFile } from '../platform/expo/proof/durableProofFile';
 import { StatusBar } from 'expo-status-bar';
@@ -957,7 +960,7 @@ function DriverApp() {
     accountAccess: DriverAccountAccessToken,
   ): Promise<RouteAccessSubmissionResult> => {
     try {
-      await reportDeliveryProofCapability(accountAccess);
+      await reportDeliveryProofCapabilityBestEffort(reportDeliveryProofCapability, accountAccess);
       return await submitRouteAccess({
         accountAccessToken: accountAccess.accessToken,
       }, routeAccessService);
@@ -980,7 +983,7 @@ function DriverApp() {
         phoneE164: expectedAccess.driverProfile.phoneE164,
         refreshToken: expectedAccess.accountAccess.refreshToken,
       });
-      await reportDeliveryProofCapability(refreshed.accountAccess);
+      await reportDeliveryProofCapabilityBestEffort(reportDeliveryProofCapability, refreshed.accountAccess);
       return submitRouteAccess({
         accountAccessToken: refreshed.accountAccess.accessToken,
       }, routeAccessService);

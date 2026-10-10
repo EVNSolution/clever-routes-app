@@ -17,6 +17,7 @@ import type {
 } from '../routeAccess/routeAccess';
 import {
   recordContinuousLocationUpdateBatch,
+  sendStoredContinuousLocations,
   type ContinuousLocationBatchItem,
 } from './continuousLocationStream';
 
@@ -38,6 +39,7 @@ export type ContinuousLocationTaskResult =
       queuedCount?: number;
       recordedCount: number;
       routePlanId: string;
+      storedSentCount?: number;
     };
 
 export async function processContinuousLocationTaskBatch(input: {
@@ -180,6 +182,22 @@ export async function processContinuousLocationTaskBatch(input: {
   })) {
     return { kind: 'ignored', reason: 'completion_pending' };
   }
+  // The live request just got through, so the connection is back: also send the points stored while it was not.
+  const storedSent = routeStartReady && !routeRevoked && recorded.recordedCount > 0 && recorded.queuedCount === undefined
+    ? await sendStoredContinuousLocations({
+        driverEventService,
+        isSessionCurrent: async () => (
+          !routeRevoked
+          && await isPersistedActiveRouteSessionCurrent({
+            driverAccessTokenStore: input.driverAccessTokenStore,
+            routePlanId,
+            sessionGeneration,
+          })
+        ),
+        offlineQueue: input.offlineQueue,
+        routePlanId,
+      })
+    : { sentCount: 0 };
   await input.offlineQueue.whenPersisted();
 
   if (routeRevoked) {
@@ -195,6 +213,7 @@ export async function processContinuousLocationTaskBatch(input: {
     ...(recorded.queuedCount === undefined ? {} : { queuedCount: recorded.queuedCount }),
     recordedCount: recorded.recordedCount,
     routePlanId,
+    ...(storedSent.sentCount === 0 ? {} : { storedSentCount: storedSent.sentCount }),
   };
 }
 
