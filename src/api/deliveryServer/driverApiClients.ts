@@ -45,19 +45,28 @@ export type DriverApiClientsFetchLike = AssignedRouteFetchLike
 
 export type DriverAccessRefresh = (signal?: AbortSignal) => Promise<DriverAccessToken | null>;
 
+/**
+ * The driver access token lives 15 minutes. A request made in its last two minutes refreshes it
+ * first, so the server sees no expired token and the runtime diagnostics record no 401 blocker.
+ */
+export const DRIVER_ACCESS_REFRESH_AHEAD_MS = 2 * 60_000;
+
 export function createDriverApiClientsFromRouteAccess(input: {
   appVersion?: string;
   deliveryProofCapability?: 'delivery-proof-v1';
   baseUrl: string;
   fetchImpl?: DriverApiClientsFetchLike;
+  now?: () => number;
   refreshDriverAccess?: DriverAccessRefresh;
   routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>;
   versionCode?: number;
 }): DriverApiClients {
   return createDriverApiClientsFromAccessToken({
+    accessExpiresAt: input.routeAccess.driverAccess.expiresAt,
     accessToken: input.routeAccess.driverAccess.accessToken,
     baseUrl: input.baseUrl,
     fetchImpl: input.fetchImpl,
+    now: input.now,
     orderedEventContract: {
       ...(input.deliveryProofCapability === undefined ? {} : { deliveryProofCapability: input.deliveryProofCapability }),
       appVersion: input.appVersion ?? 'unknown',
@@ -75,14 +84,17 @@ export function createDriverApiClientsFromPersistedDriverAccess(input: {
   deliveryProofCapability?: 'delivery-proof-v1';
   baseUrl: string;
   fetchImpl?: DriverApiClientsFetchLike;
+  now?: () => number;
   persistedAccess: PersistedDriverAccess & { driverAccess: DriverAccessToken };
   refreshDriverAccess?: DriverAccessRefresh;
   versionCode?: number;
 }): DriverApiClients {
   return createDriverApiClientsFromAccessToken({
+    accessExpiresAt: input.persistedAccess.driverAccess.expiresAt,
     accessToken: input.persistedAccess.driverAccess.accessToken,
     baseUrl: input.baseUrl,
     fetchImpl: input.fetchImpl,
+    now: input.now,
     ...(!hasDriverOrderedEventLineage(input.persistedAccess.routeAccess) ? {} : {
       orderedEventContract: {
         ...(input.deliveryProofCapability === undefined ? {} : { deliveryProofCapability: input.deliveryProofCapability }),
@@ -105,9 +117,11 @@ function hasDriverOrderedEventLineage(value: PersistedDriverAccess['routeAccess'
 }
 
 function createDriverApiClientsFromAccessToken(input: {
+  accessExpiresAt?: string;
   accessToken: string;
   baseUrl: string;
   fetchImpl?: DriverApiClientsFetchLike;
+  now?: () => number;
   orderedEventContract?: DriverOrderedEventContract;
   refreshDriverAccess?: DriverAccessRefresh;
 }): DriverApiClients {
@@ -146,22 +160,57 @@ function createDriverApiClientsFromAccessToken(input: {
 
   return withDriverAccessRefresh({
     buildClients,
+    initialAccessExpiresAt: input.accessExpiresAt,
     initialAccessToken: input.accessToken,
+    now: input.now,
     refreshDriverAccess: input.refreshDriverAccess,
   });
 }
 
 function withDriverAccessRefresh(input: {
   buildClients(accessToken: string): DriverApiClients;
+  initialAccessExpiresAt?: string;
   initialAccessToken: string;
+  now?: () => number;
   refreshDriverAccess: DriverAccessRefresh;
 }): DriverApiClients {
+  const now = input.now ?? Date.now;
   let clients = input.buildClients(input.initialAccessToken);
+  let accessExpiresAtMs = Date.parse(input.initialAccessExpiresAt ?? '');
+  let refreshAhead: Promise<void> | null = null;
+
+  function adoptRefreshedAccess(refreshedAccess: DriverAccessToken): void {
+    clients = input.buildClients(refreshedAccess.accessToken);
+    accessExpiresAtMs = Date.parse(refreshedAccess.expiresAt);
+  }
+
+  /** One refresh serves every request that arrives while it runs; a failure leaves the current token in place. */
+  function refreshAccessAhead(signal?: AbortSignal): Promise<void> {
+    if (refreshAhead === null) {
+      refreshAhead = (async () => {
+        try {
+          const refreshedAccess = await observeDriverDiagnosticOperation(
+            { operation: 'AUTH_REFRESH' },
+            () => input.refreshDriverAccess(signal),
+          );
+          if (refreshedAccess !== null && signal?.aborted !== true) adoptRefreshedAccess(refreshedAccess);
+        } catch {
+          // The request still goes out with the current token; a 401 takes the normal refresh path below.
+        } finally {
+          refreshAhead = null;
+        }
+      })();
+    }
+    return refreshAhead;
+  }
 
   async function runWithRefresh<T>(
     call: (clients: DriverApiClients) => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> {
+    if (Number.isFinite(accessExpiresAtMs) && accessExpiresAtMs - now() <= DRIVER_ACCESS_REFRESH_AHEAD_MS) {
+      await refreshAccessAhead(signal);
+    }
     try {
       return await call(clients);
     } catch (error) {
@@ -177,7 +226,7 @@ function withDriverAccessRefresh(input: {
         throw error;
       }
 
-      clients = input.buildClients(refreshedAccess.accessToken);
+      adoptRefreshedAccess(refreshedAccess);
       return call(clients);
     }
   }
