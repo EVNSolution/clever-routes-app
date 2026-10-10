@@ -1,5 +1,5 @@
 import { runBoundedAsyncOperation } from '../async/boundedAsyncOperation';
-import { createDriverApiHttpError } from '../../api/deliveryServer/driverApiError';
+import { createDriverApiHttpError, isDriverApiUnauthorizedError } from '../../api/deliveryServer/driverApiError';
 import { withNoStoreDriverApiRequest } from '../../api/deliveryServer/driverApiRequestOptions';
 import type { DriverAccountAccessToken, FetchLike } from './driverAuth';
 
@@ -19,4 +19,20 @@ export function createDeliveryProofCapabilityReporter(input: {
     if (payload?.data?.registered !== true || payload.data.capability !== 'delivery-proof-v1') throw new Error('Delivery proof capability was not confirmed.');
     registeredRefreshToken = account.refreshToken;
   };
+}
+
+/**
+ * The capability only lets the server publish routes that need a delivery photo or signature. A failure to register
+ * it (network, timeout, an unexpected answer) must not hide the driver's routes, so the route lookup goes on and the
+ * registration is tried again at the next lookup. An expired session is still reported so it can be refreshed.
+ */
+export async function reportDeliveryProofCapabilityBestEffort(
+  report: (account: Pick<DriverAccountAccessToken, 'accessToken' | 'refreshToken'>) => Promise<void>,
+  account: Pick<DriverAccountAccessToken, 'accessToken' | 'refreshToken'>,
+): Promise<void> {
+  try {
+    await report(account);
+  } catch (error) {
+    if (isDriverApiUnauthorizedError(error)) throw error;
+  }
 }

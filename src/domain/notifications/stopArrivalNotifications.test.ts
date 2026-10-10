@@ -164,6 +164,37 @@ describe('stop arrival notifications', () => {
     }), null);
   });
 
+  it('accepts the UUID publication version the server sends for a live route change', () => {
+    const publicationVersion = '2f1b7c0e-5d3a-4f6b-9a8e-1c2d3e4f5a6b';
+    assert.deepEqual(parseDriverRouteNotificationData({
+      action: 'changed',
+      publicationVersion,
+      routePlanId: 'route-1',
+      type: 'driver_route_changed',
+    }), {
+      action: 'changed',
+      publicationVersion,
+      routePlanId: 'route-1',
+      type: 'driver_route_changed',
+    });
+    for (const rejected of [
+      '2f1b7c0e-5d3a-4f6b-9a8e-1c2d3e4f5a6',
+      '2f1b7c0e5d3a4f6b9a8e1c2d3e4f5a6b',
+      '2f1b7c0e-5d3a-4f6b-9a8e-1c2d3e4f5a6bX',
+      'a'.repeat(63),
+      '',
+      4,
+      null,
+    ]) {
+      assert.equal(parseDriverRouteNotificationData({
+        action: 'changed',
+        publicationVersion: rejected,
+        routePlanId: 'route-1',
+        type: 'driver_route_changed',
+      }), null, String(rejected));
+    }
+  });
+
   it('opens only the refreshed target route and protects a different active route', () => {
     assert.equal(getDriverRouteNotificationNavigation({
       action: 'assigned',

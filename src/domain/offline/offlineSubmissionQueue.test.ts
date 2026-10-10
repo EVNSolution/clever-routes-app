@@ -2528,4 +2528,131 @@ describe('offline submission queue', () => {
     assert.deepEqual(result.completionAcknowledgedRoutePlanIds, ['south-route']);
     assert.deepEqual(queue.listPending(), []);
   });
+
+  describe('stored GPS points and transient failures', () => {
+    const location = (id: string, at: string, routePlanId = 'route-1') => ({
+      clientEventId: id,
+      eventType: 'LOCATION_UPDATED' as const,
+      latitude: 43.65,
+      longitude: -79.38,
+      occurredAt: new Date(at),
+      routePlanId,
+    });
+    const retry = (queue: ReturnType<typeof createInMemoryOfflineSubmissionQueue>, fail: (calls: number) => unknown, nowIso = '2026-10-10T10:00:00.000Z') => {
+      let calls = 0;
+      return {
+        calls: () => calls,
+        run: () => retryOfflineSubmissions({
+          driverEventService: {
+            recordDriverEvent: async (event) => {
+              calls += 1;
+              const failure = fail(calls);
+              if (failure !== undefined) throw failure;
+              return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+            },
+          },
+          now: () => new Date(nowIso),
+          proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+          queue,
+        }),
+      };
+    };
+
+    it('keeps a stored GPS point through repeated network, timeout and server failures', async () => {
+      for (const failure of [
+        new Error('network request failed'),
+        new Error('OPERATION_TIMEOUT'),
+        createDriverApiHttpError({ endpoint: 'Driver event record', status: 503 }),
+        createDriverApiHttpError({ endpoint: 'Driver event record', status: 429 }),
+        createDriverApiHttpError({ endpoint: 'Driver event record', status: 408 }),
+      ]) {
+        const queue = createInMemoryOfflineSubmissionQueue({ now: () => new Date('2026-10-10T09:59:00.000Z') });
+        queue.enqueueDriverEvent(location('gps-1', '2026-10-10T09:58:00.000Z'));
+        const attempts = retry(queue, () => failure);
+
+        let discarded = 0;
+        for (let pass = 0; pass < 8; pass += 1) discarded += (await attempts.run()).discarded;
+
+        assert.equal(discarded, 0, String(failure));
+        assert.equal(queue.listPending().length, 1, String(failure));
+        assert.equal(queue.listPending()[0]?.attempts, 0, String(failure));
+        assert.equal(attempts.calls(), 8, String(failure));
+      }
+    });
+
+    it('still discards a stored GPS point after the usual attempts when the server rejects it for good', async () => {
+      const queue = createInMemoryOfflineSubmissionQueue({ now: () => new Date('2026-10-10T09:59:00.000Z') });
+      queue.enqueueDriverEvent(location('gps-1', '2026-10-10T09:58:00.000Z'));
+      const attempts = retry(queue, () => createDriverApiHttpError({ endpoint: 'Driver event record', status: 400 }));
+
+      let discarded = 0;
+      for (let pass = 0; pass < 6; pass += 1) discarded += (await attempts.run()).discarded;
+
+      assert.equal(discarded, 1);
+      assert.deepEqual(queue.listPending(), []);
+      assert.equal(attempts.calls(), OFFLINE_SUBMISSION_QUEUE_DEFAULT_POLICY.maxAttempts);
+    });
+
+    it('still discards a stored GPS point older than the age limit', async () => {
+      const queue = createInMemoryOfflineSubmissionQueue({ now: () => new Date('2026-10-06T09:00:00.000Z') });
+      queue.enqueueDriverEvent(location('gps-old', '2026-10-06T08:59:00.000Z'));
+      const attempts = retry(queue, () => new Error('network request failed'), '2026-10-10T10:00:00.000Z');
+
+      const result = await attempts.run();
+
+      assert.equal(result.discarded, 1);
+      assert.equal(attempts.calls(), 0);
+      assert.deepEqual(queue.listPending(), []);
+    });
+
+    it('stops trying the other stored GPS points of a pass after one transient failure', async () => {
+      const queue = createInMemoryOfflineSubmissionQueue({ now: () => new Date('2026-10-10T09:59:00.000Z') });
+      for (const index of [1, 2, 3]) queue.enqueueDriverEvent(location(`gps-${index}`, `2026-10-10T09:5${index}:00.000Z`));
+      const attempts = retry(queue, () => new Error('network request failed'));
+
+      const first = await attempts.run();
+
+      assert.equal(attempts.calls(), 1);
+      assert.equal(first.failed, 1);
+      assert.equal(queue.listPending().length, 3);
+    });
+
+    it('keeps sending stored GPS points after a point that only that point was refused for', async () => {
+      const queue = createInMemoryOfflineSubmissionQueue({ now: () => new Date('2026-10-10T09:59:00.000Z') });
+      for (const index of [1, 2, 3]) queue.enqueueDriverEvent(location(`gps-${index}`, `2026-10-10T09:5${index}:00.000Z`));
+      const attempts = retry(queue, (calls) => (calls === 1 ? createDriverApiHttpError({ endpoint: 'Driver event record', status: 400 }) : undefined));
+
+      const result = await attempts.run();
+
+      assert.equal(attempts.calls(), 3);
+      assert.equal(result.succeeded, 2);
+      assert.equal(result.failed, 1);
+      assert.deepEqual(queue.listPending().map((item) => item.queueItemId), ['driver-event:gps-1']);
+      assert.equal(queue.listPending()[0]?.attempts, 1);
+    });
+
+    it('does not let a failed GPS point change how workflow events are retried', async () => {
+      const queue = createInMemoryOfflineSubmissionQueue({ now: () => new Date('2026-10-10T09:59:00.000Z') });
+      queue.enqueueDriverEvent(location('gps-1', '2026-10-10T09:50:00.000Z'));
+      queue.enqueueDriverEvent({
+        clientEventId: 'note-1', eventType: 'ROUTE_STARTED', occurredAt: new Date('2026-10-10T09:51:00.000Z'), routePlanId: 'route-1',
+      });
+      const calls: string[] = [];
+
+      await retryOfflineSubmissions({
+        driverEventService: {
+          recordDriverEvent: async (event) => {
+            calls.push(event.eventType);
+            if (event.eventType === 'LOCATION_UPDATED') throw new Error('network request failed');
+            return { duplicate: false, eventId: event.clientEventId, status: 'recorded' };
+          },
+        },
+        now: () => new Date('2026-10-10T10:00:00.000Z'),
+        proofMediaUploadService: { uploadProofMedia: async () => { throw new Error('unused'); } },
+        queue,
+      });
+
+      assert.deepEqual(calls, ['LOCATION_UPDATED', 'ROUTE_STARTED']);
+    });
+  });
 });
