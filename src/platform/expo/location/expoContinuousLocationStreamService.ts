@@ -229,13 +229,21 @@ async function stopContinuousLocationTaskIfInactive(
 ): Promise<void> {
   await runLocationTaskOperation(async () => {
     const persistedAccess = await driverAccessTokenStore.loadActiveDriverAccess();
+    const signedIn = persistedAccess.kind === 'active' || persistedAccess.kind === 'refresh_required';
     const hasActiveRoute = (
-      (persistedAccess.kind === 'active' || persistedAccess.kind === 'refresh_required')
+      signedIn
       && persistedAccess.activeRouteSession !== undefined
       && persistedAccess.activeRouteSession.status === 'active'
       && persistedAccess.routeAccess?.routePlanId === persistedAccess.activeRouteSession.routePlanId
     );
-    if (!hasActiveRoute) {
+    // Tracking before Start keeps the task alive until the route is started, released or revoked.
+    const hasPreStartTracking = (
+      signedIn
+      && persistedAccess.activeRouteSession === undefined
+      && persistedAccess.preStartTracking !== undefined
+      && persistedAccess.routeAccess?.routePlanId === persistedAccess.preStartTracking.routePlanId
+    );
+    if (!hasActiveRoute && !hasPreStartTracking) {
       await stopExpoLocationUpdates(CONTINUOUS_LOCATION_TASK_NAME, observe);
     }
   });

@@ -18,7 +18,14 @@ export type PersistedDriverAccess = {
   activeRouteSession?: PersistedActiveRouteSession;
   driverAccess?: DriverAccessToken;
   driverProfile: PersistedDriverProfile;
+  /** GPS is collected for today's route from the moment the app shows it, before the driver presses Start. */
+  preStartTracking?: PersistedPreStartTracking;
   routeAccess?: Extract<RouteAccessLookupResult, { status: 'INVITED' }>['routeAccess'];
+};
+
+export type PersistedPreStartTracking = {
+  routePlanId: string;
+  startedAt: string;
 };
 
 export type PersistedActiveRouteSession = {
@@ -72,6 +79,7 @@ export type DriverAccessTokenStore = {
   clear(expected?: ExpectedDriverAccessIdentity): Promise<void>;
   clearActiveRouteSession(routePlanId?: string, startedAt?: string, assignmentGeneration?: string): Promise<boolean>;
   clearCachedRouteAccess(routePlanId?: string): Promise<boolean>;
+  clearPreStartTracking(routePlanId?: string): Promise<boolean>;
   loadActiveDriverAccess(): Promise<DriverAccessRestoreResult>;
   markActiveRouteStarted(routePlanId: string, startedAt: string): Promise<boolean>;
   markActiveRouteCompletionPending(input: {
@@ -94,6 +102,7 @@ export type DriverAccessTokenStore = {
   saveFromInvitedRouteAccess(
     routeAccess: Extract<RouteAccessLookupResult, { status: 'INVITED' }>,
   ): Promise<boolean>;
+  savePreStartTracking(input: { routePlanId: string }): Promise<boolean>;
   saveRefreshedAccountAccess(
     accountAccess: DriverAccountAccessToken,
     expected?: ExpectedDriverAccessIdentity,
@@ -190,9 +199,16 @@ export function createDriverAccessTokenStore(input: {
       const {
         activeRouteSession: _activeRouteSession,
         driverAccess: _driverAccess,
+        preStartTracking: _preStartTracking,
         routeAccess: _routeAccess,
         ...rest
       } = payload;
+      return { ...rest, savedAt: now().toISOString() };
+    })),
+    clearPreStartTracking: (routePlanId) => runSerialized(() => updateStoredPayload((payload) => {
+      if (payload.preStartTracking === undefined) return null;
+      if (routePlanId !== undefined && payload.preStartTracking.routePlanId !== routePlanId) return null;
+      const { preStartTracking: _preStartTracking, ...rest } = payload;
       return { ...rest, savedAt: now().toISOString() };
     })),
     loadActiveDriverAccess: () => runSerialized(async () => {
@@ -284,8 +300,10 @@ export function createDriverAccessTokenStore(input: {
           && Number.isFinite(Date.parse(activeRouteSession.startedAt))
           ? activeRouteSession.startedAt
           : undefined;
+        // The started route takes over the location task; tracking before Start ends here.
+        const { preStartTracking: _preStartTracking, ...payloadWithoutPreStart } = payload;
         return {
-          ...payload,
+          ...payloadWithoutPreStart,
           savedAt: now().toISOString(),
           activeRouteSession: {
             ...(mergedCompletedStopIds === undefined ? {} : { completedStopIds: mergedCompletedStopIds }),
@@ -324,16 +342,37 @@ export function createDriverAccessTokenStore(input: {
       if (payload.activeRouteSession !== undefined
         && payload.activeRouteSession.routePlanId !== routeAccess.routeAccess.routePlanId) return null;
       const previousGeneration = payload.routeAccess?.assignmentGeneration;
-      let nextPayload = payload;
+      let nextPayload: StoredDriverAccessPayload = payload;
       // Missing legacy lineage keeps its existing restore policy; a known reassignment does not.
       if (previousGeneration !== undefined && previousGeneration !== routeAccess.routeAccess.assignmentGeneration) {
-        const { activeRouteSession: _activeRouteSession, ...rest } = payload;
+        const { activeRouteSession: _activeRouteSession, ...rest } = nextPayload;
+        nextPayload = rest;
+      }
+      // Tracking before Start belongs to one route; another route's access ends it.
+      if (nextPayload.preStartTracking !== undefined
+        && nextPayload.preStartTracking.routePlanId !== routeAccess.routeAccess.routePlanId) {
+        const { preStartTracking: _preStartTracking, ...rest } = nextPayload;
         nextPayload = rest;
       }
       return {
         ...nextPayload,
         driverAccess: routeAccess.driverAccess,
         routeAccess: routeAccess.routeAccess,
+        savedAt: now().toISOString(),
+      };
+    })),
+    savePreStartTracking: ({ routePlanId }) => runSerialized(() => updateStoredPayload((payload) => {
+      if (
+        payload.activeRouteSession !== undefined
+        || payload.driverAccess === undefined
+        || payload.routeAccess?.routePlanId !== routePlanId
+      ) {
+        return null;
+      }
+      if (payload.preStartTracking?.routePlanId === routePlanId) return payload;
+      return {
+        ...payload,
+        preStartTracking: { routePlanId, startedAt: now().toISOString() },
         savedAt: now().toISOString(),
       };
     })),
@@ -405,8 +444,16 @@ function isStoredDriverAccessPayload(value: unknown): value is StoredDriverAcces
     isPersistedDriverProfile(payload.driverProfile) &&
     (payload.driverAccess === undefined || isDriverAccessToken(payload.driverAccess)) &&
     (payload.routeAccess === undefined || isPersistedRouteAccess(payload.routeAccess)) &&
-    (payload.activeRouteSession === undefined || isPersistedActiveRouteSession(payload.activeRouteSession))
+    (payload.activeRouteSession === undefined || isPersistedActiveRouteSession(payload.activeRouteSession)) &&
+    (payload.preStartTracking === undefined || isPersistedPreStartTracking(payload.preStartTracking))
   );
+}
+
+function isPersistedPreStartTracking(value: unknown): value is PersistedPreStartTracking {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const tracking = value as Record<string, unknown>;
+  return typeof tracking.routePlanId === 'string' && tracking.routePlanId.trim() !== ''
+    && typeof tracking.startedAt === 'string' && Number.isFinite(Date.parse(tracking.startedAt));
 }
 
 function isDriverAccountAccessToken(value: unknown): value is DriverAccountAccessToken {
