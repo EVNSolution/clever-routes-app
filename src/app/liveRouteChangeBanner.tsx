@@ -26,6 +26,20 @@ export function LiveRouteChangeBanner({ busy, disabled, error, recovery, acknowl
     </View>
   );
 }
+/** A communication problem without any unapplied change: no Apply, only a retry. */
+export function LiveRouteCheckNotice({ message, onRetry }: { message: string; onRetry(): void }) {
+  return (
+    <View accessibilityRole="alert" style={styles.banner}>
+      <View style={styles.copy}>
+        <Text style={styles.title}>Could not check the delivery list</Text>
+        <Text style={styles.body}>{message}</Text>
+      </View>
+      <Pressable accessibilityRole="button" accessibilityLabel="Check the delivery list again" onPress={onRetry} style={styles.button}>
+        <Text style={styles.buttonText}>Retry</Text>
+      </Pressable>
+    </View>
+  );
+}
 const styles = StyleSheet.create({
   banner: { flexDirection: 'row', alignItems: 'center', gap: 12, marginHorizontal: 16, marginVertical: 8, padding: 12, borderRadius: 12, backgroundColor: '#fff4db', borderColor: '#e3ae42', borderWidth: 1 },
   routeName: { fontSize: 12, fontWeight: '600', color: '#533b00', marginBottom: 3 },
