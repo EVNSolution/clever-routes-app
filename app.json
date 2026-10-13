@@ -15,7 +15,7 @@
     "android": {
       "allowBackup": false,
       "package": "com.evnsolution.clever.routes",
-      "versionCode": 47,
+      "versionCode": 48,
       "icon": "./assets/icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
