@@ -7875,7 +7875,7 @@ function RouteSessionScreen({
       {routeStatus === 'active' && allStopsCompleted ? (
         <View style={styles.routeSessionSection}>
           <Text style={styles.sectionTitle}>{companyReturnCopy.title}</Text>
-          <Text style={styles.bodyText}>{companyReturnCopy.body}</Text>
+          {companyReturnCopy.body === '' ? null : <Text style={styles.bodyText}>{companyReturnCopy.body}</Text>}
           {requiresDepotReturn(route.routeEndMode) ? (
             <>
               <SecondaryButton
