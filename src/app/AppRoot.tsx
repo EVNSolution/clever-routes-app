@@ -148,8 +148,10 @@ import { createExpoSecureDriverAccessTokenStore } from '../platform/expo/secureS
 import { readInstalledDriverAppVersion } from '../platform/expo/application/expoAppVersionService';
 import { createExpoConvenienceNoticesStore } from '../platform/expo/storage/expoConvenienceNoticesStore';
 import { createExpoDetailedActiveRouteNotificationStore } from '../platform/expo/storage/expoDetailedActiveRouteNotificationStore';
+import { createExpoPreStartLocationNoticeStore } from '../platform/expo/storage/expoPreStartLocationNoticeStore';
 import { getConvenienceNoticesCopy } from '../domain/preferences/convenienceNotices';
 import { getDetailedActiveRouteNotificationCopy } from '../domain/preferences/detailedActiveRouteNotification';
+import { BACKGROUND_LOCATION_DISCLOSURE_TEXT } from '../domain/preferences/preStartLocationNotice';
 import { getCompanyReturnCopy } from '../domain/route/companyReturnCopy';
 import {
   classifyRouteCompletionLocation,
@@ -665,6 +667,8 @@ function DriverApp() {
   const stopArrivalNotificationService = useMemo(() => createExpoStopArrivalNotificationService(), []);
   const convenienceNoticesStore = useMemo(() => createExpoConvenienceNoticesStore(), []);
   const detailedActiveRouteNotificationStore = useMemo(() => createExpoDetailedActiveRouteNotificationStore(), []);
+  const preStartLocationNoticeStore = useMemo(() => createExpoPreStartLocationNoticeStore(), []);
+  const preStartLocationNoticeShownRef = useRef(false);
   const proofPhotoCaptureService = useMemo(() => createExpoProofPhotoCaptureService(), []);
   const mockDriverEventService = useMemo(() => {
     const firstStop = sampleAssignedRoute.stops[0]!;
@@ -723,6 +727,8 @@ function DriverApp() {
     setIsRequestingBackgroundLocation(true);
     setMessage(null);
     try {
+      // The disclosure the driver just accepted covers location before Start too.
+      await preStartLocationNoticeStore.accept().catch(() => undefined);
       const foregroundPermission = await foregroundLocationPermissionService.requestForegroundPermission();
       if (foregroundPermission.status !== 'granted') {
         setBackgroundLocationPermission('denied');
@@ -747,6 +753,7 @@ function DriverApp() {
     continuousLocationStreamService,
     foregroundLocationPermissionService,
     isRequestingBackgroundLocation,
+    preStartLocationNoticeStore,
     refreshBackgroundLocationPermission,
   ]);
 
@@ -757,7 +764,7 @@ function DriverApp() {
 
     showOperationalDialog(
       'Background location',
-      'CLEVER Routes collects precise location data to update delivery progress during an active route, even when the app is closed or not in use.',
+      BACKGROUND_LOCATION_DISCLOSURE_TEXT,
       [
         { style: 'cancel', text: 'Not Now' },
         {
@@ -3245,6 +3252,7 @@ function DriverApp() {
       // Tracking before Start (change control #344): today's route gets GPS from the moment the app
       // shows it, so the drive to the first stop is part of the route's path. It needs the background
       // permission granted earlier; without it nothing starts and the Start flow asks as before.
+      // A driver who granted that permission before 1.3.9 accepts the pre-start notice once first.
       if (
         restoredActiveSession === null
         && effectivePersistedActiveRouteSession === null
@@ -3254,10 +3262,10 @@ function DriverApp() {
         && isDeliveryDateToday(selectedSession.route.deliveryDate, selectedSession.route.timezone)
         && AppState.currentState === 'active'
       ) {
-        const preStartSaved = await driverAccessTokenStore.savePreStartTracking({ routePlanId: selectedSession.route.id })
-          .catch(() => false);
-        if (!isLoginAccountCurrent()) return;
-        if (preStartSaved) {
+        const startPreStartTracking = async (): Promise<void> => {
+          const preStartSaved = await driverAccessTokenStore.savePreStartTracking({ routePlanId: selectedSession.route.id })
+            .catch(() => false);
+          if (!isLoginAccountCurrent() || !preStartSaved) return;
           const preStartResult = await startContinuousLocationUpdatesBeforeDeliveryStart({
             notification: buildPreStartForegroundNotification(selectedSession.route),
             routePlanId: selectedSession.route.id,
@@ -3266,8 +3274,36 @@ function DriverApp() {
           if (!isLoginAccountCurrent()) return;
           if (preStartResult === null || preStartResult.kind === 'blocked') {
             await driverAccessTokenStore.clearPreStartTracking(selectedSession.route.id).catch(() => false);
-            if (!isLoginAccountCurrent()) return;
           }
+        };
+        if (await preStartLocationNoticeStore.isAccepted().catch(() => false)) {
+          await startPreStartTracking();
+          if (!isLoginAccountCurrent()) return;
+        } else if (
+          !preStartLocationNoticeShownRef.current
+          && await continuousLocationStreamService.getBackgroundPermission().catch(() => 'denied') === 'granted'
+        ) {
+          if (!isLoginAccountCurrent()) return;
+          preStartLocationNoticeShownRef.current = true;
+          showOperationalDialog(
+            'Location before Start',
+            BACKGROUND_LOCATION_DISCLOSURE_TEXT,
+            [
+              { style: 'cancel', text: 'Not Now' },
+              {
+                onPress: () => { void Linking.openURL(ROUTES_APP_PRIVACY_URL); },
+                style: 'cancel',
+                text: 'Privacy Policy',
+              },
+              {
+                onPress: () => {
+                  void preStartLocationNoticeStore.accept().then(startPreStartTracking).catch(() => undefined);
+                },
+                text: 'Continue',
+              },
+            ],
+            { cancelable: true },
+          );
         }
       }
       if (cachedActiveSession === null) void retryOfflineSubmissionsForSessions(loadedSessionsWithPendingEnds);
@@ -3498,6 +3534,7 @@ function DriverApp() {
     offlineSubmissionQueue,
     openVerifiedNoAssignedRoute,
     operationalPillValues,
+    preStartLocationNoticeStore,
     retryOfflineSubmissionsForSessions,
     routeAccessService,
     routeSyncState,
@@ -3506,6 +3543,7 @@ function DriverApp() {
     refreshRouteAccessTupleForSubmission,
     sendCompletionAcknowledgedHeartbeatBeforeCleanup,
     setScreen,
+    showOperationalDialog,
     submitAccountRouteAccess,
     syncOfflineQueueState,
     waitForOfflineQueuePersistence,
@@ -7202,7 +7240,7 @@ function MyRoutesPage({
           <View style={styles.backgroundLocationWarningCopy}>
             <Text style={styles.backgroundLocationWarningTitle}>Background location required</Text>
             <Text style={styles.backgroundLocationWarningBody}>
-              Used in the background during an active route to update delivery progress.
+              Used in the background for today&apos;s route, from before Start until the route ends, to update delivery progress.
             </Text>
           </View>
           <Pressable

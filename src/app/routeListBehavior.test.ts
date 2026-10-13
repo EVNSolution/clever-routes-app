@@ -102,7 +102,7 @@ describe('routes list behavior', () => {
     assert.match(source, />Background location required<\/Text>/u);
     assert.match(
       source,
-      />\s*Used in the background during an active route to update delivery progress\.\s*<\/Text>/u,
+      />\s*Used in the background for today&apos;s route, from before Start until the route ends, to update delivery progress\.\s*<\/Text>/u,
     );
     assert.doesNotMatch(source, /even when the app is closed or not in use/u);
     assert.match(source, /accessibilityLabel="Review background location access"/u);

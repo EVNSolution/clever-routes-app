@@ -181,10 +181,12 @@ mock work still requires `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock` with no server U
 
 `cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied
 to committed source. `cli.appVersionSource` is `remote`; the reviewed native
-source version is `1.3.8` (`versionCode` `44`, iOS build `1`). Version `43`
-(`1.3.7`) is the live Google Play production release (observed in Play Console on
-2026-10-10); `44` is its update and must not be promoted before its release
-record is complete. Android
+source version is `1.3.9` (`versionCode` `45`, iOS build `1`). Version `44`
+(`1.3.8`) is the live Google Play production release (live at 100% on
+2026-10-10); `45` is its update and must not be promoted before its release
+record is complete. `45` collects location before Start, so the in-app
+disclosure, the Routes privacy policy and the Play background location
+declaration must all describe that before its production rollout. Android
 `versionCode` `38` was reserved for the rejected diagnostic candidate and must
 not be submitted or promoted. Publication is
 proved separately by the public release manifest and downloadable artifact,
