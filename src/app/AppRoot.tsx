@@ -153,6 +153,8 @@ import { getConvenienceNoticesCopy } from '../domain/preferences/convenienceNoti
 import { getDetailedActiveRouteNotificationCopy } from '../domain/preferences/detailedActiveRouteNotification';
 import { BACKGROUND_LOCATION_DISCLOSURE_TEXT } from '../domain/preferences/preStartLocationNotice';
 import { getCompanyReturnCopy } from '../domain/route/companyReturnCopy';
+import { createAutomaticRouteCompletion, getAutomaticRouteCompletionSession } from './automaticRouteCompletion';
+import { createRouteFinishGuard } from './routeFinishGuard';
 import {
   classifyRouteCompletionLocation,
   requiresDepotReturn,
@@ -285,7 +287,7 @@ import {
 } from '../domain/notifications/stopArrivalNotifications';
 import { createExpoStopArrivalNotificationService } from '../platform/expo/notifications/expoStopArrivalNotificationService';
 import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
-import { requestActiveRouteSwitchConfirmation } from './activeRouteSwitchConfirmation';
+import { decideActiveRouteSwitch, requestActiveRouteSwitchConfirmation } from './activeRouteSwitchConfirmation';
 import { requestRouteReconciliationClearConfirmation } from './routeReconciliationClearConfirmation';
 import { persistOfflineQueueAndSyncState } from './offlineQueuePersistence';
 import {
@@ -446,6 +448,10 @@ function DriverApp() {
   const [liveRouteErrors, setLiveRouteErrors] = useState<Record<string, string>>({});
   const [isApplyingLiveRoute, setIsApplyingLiveRoute] = useState(false);
   const liveRoutePollRunningRef = useRef(false);
+  const automaticRouteCompletionRef = useRef(createAutomaticRouteCompletion());
+  const routeFinishGuardRef = useRef(createRouteFinishGuard());
+  const requestRouteCompletionRef = useRef<typeof requestRouteCompletion | null>(null);
+  requestRouteCompletionRef.current = requestRouteCompletion;
   const liveRouteApplyRunningRef = useRef(false);
   const liveRouteAccessBlockedRef = useRef(new Set<string>());
   const liveRouteSessionsRef = useRef<RouteSession[]>([]);
@@ -2063,6 +2069,15 @@ function DriverApp() {
     && !isCompletingStop
     && !isRecordingArrival;
   const allStopsCompleted = selectedRoute !== null && selectedRoute.stops.every((stop) => isStopCompleted(stop, completedStopIds));
+  const automaticCompletionSession = getAutomaticRouteCompletionSession({
+    activeRoutePlanId, completedStopIds, routeSessions, routeStatus,
+  });
+  const automaticCompletionRouteKey = automaticCompletionSession === null ? null
+    : `${automaticCompletionSession.route.id}:${automaticCompletionSession.routeAccess.assignmentGeneration ?? 'legacy'}`;
+  useEffect(() => {
+    automaticRouteCompletionRef.current.setRoute(automaticCompletionRouteKey);
+  }, [automaticCompletionRouteKey]);
+
   const currentCompany = selectedRouteSession?.companyGuidance ?? null;
   const isRouteBoundScreen = screen === 'arrivalCheck'
     || screen === 'completedDeliveries'
@@ -2647,6 +2662,35 @@ function DriverApp() {
           capturedAt: lastLocation.occurredAt.toISOString(),
         });
       }
+      // Return completion belongs to the active session, regardless of the visible route.
+      if (automaticCompletionSession !== null && automaticCompletionRouteKey !== null
+        && !isFinishingRoute && pendingRoutePlanId === null) {
+        const activeSession = automaticCompletionSession;
+        void automaticRouteCompletionRef.current.observe({
+          locations: locations.map(location => ({
+            accuracyMeters: location.accuracyMeters ?? null,
+            latitude: location.latitude,
+            longitude: location.longitude,
+            recordedAt: location.occurredAt,
+          })),
+          now: new Date(),
+          route: activeSession.route,
+          routeKey: automaticCompletionRouteKey,
+          complete: async (isCurrent) => {
+            const requestCompletion = requestRouteCompletionRef.current;
+            if (!isCurrent() || requestCompletion === null) return false;
+            let completed = true;
+            await requestCompletion(activeSession.route, undefined, () => {
+              completed = false;
+            }, {
+              automatic: true,
+              isCurrent,
+              routeSubmission: toCompanyGuidanceSubmission(activeSession),
+            });
+            return completed;
+          },
+        });
+      }
       const candidate = getStopArrivalNotificationCandidate({
         completedStopIds,
         currentStepIndex: navigationStepIndex,
@@ -2674,15 +2718,19 @@ function DriverApp() {
     return () => registerContinuousLocationTaskObserver(null);
   }, [
     activeRoutePlanId,
+    automaticCompletionRouteKey,
+    automaticCompletionSession,
     completedStopIds,
     convenienceNoticesEnabled,
     continuousLocationStreamService,
     detailedActiveRouteNotificationEnabled,
     deliveryFinishResult,
     deliveryStartResult,
+    isFinishingRoute,
     navigationStepIndex,
     offlineSubmissionQueue,
     operationalPillValues,
+    pendingRoutePlanId,
     routeStatus,
     selectedRoute,
     setScreen,
@@ -4698,43 +4746,28 @@ function DriverApp() {
     }
     if (activeRoutePlanId !== null && activeRoutePlanId !== routeSession.route.id) {
       const targetRoutePlanId = routeSession.route.id;
-      requestActiveRouteSwitchConfirmation({
-        alertApi: {
-          alert: showOperationalDialog,
-        },
-        onCancelCurrentDelivery: () => {
-          setPendingRoutePlanId(targetRoutePlanId);
-          if (currentStop === null) {
-            if (selectedRoute === null) {
-              setPendingRoutePlanId(null);
-              setMessage('The active route is no longer available. Refresh routes and try again.');
-              return;
-            }
-            void finishActiveRouteForSwitch(selectedRoute, targetRoutePlanId, true);
-            return;
-          }
-          void handleTerminalStop(currentStop, 'failed', {
-            failureNote: 'Driver cancelled the current delivery before switching routes.',
-            failureReason: 'OTHER',
-            switchToRoutePlanId: targetRoutePlanId,
-          });
-        },
-        onCompleteCurrentDelivery: () => {
-          if (currentStop === null) {
-            setSelectedRouteId(activeRoutePlanId);
-            setMessage('Complete Store Pickup before completing the current delivery.');
-            return;
-          }
-          setPendingRoutePlanId(targetRoutePlanId);
-          if (usesSingleCompletion(currentStop)) { void handleRequestStopCompletion(currentStop, targetRoutePlanId); return; }
-          void (async () => {
-            const arrivalOpened = await recordStopArrival(currentStop, 'mainTabs');
-            if (!arrivalOpened) {
-              setPendingRoutePlanId(null);
-            }
-          })();
-        },
-      });
+      const activeRoute = getRouteSessionForAction(routeSessions, activeRoutePlanId)?.route ?? selectedRoute;
+      if (activeRoute === null) {
+        setMessage('The active route is no longer available. Refresh routes and try again.');
+        return;
+      }
+      // Starting another route stops the active one by releasing it (ROUTE_PAUSED), then starts and shows the new route.
+      const stopActiveRoute = () => {
+        setPendingRoutePlanId(targetRoutePlanId);
+        void finishActiveRouteForSwitch(activeRoute, targetRoutePlanId);
+      };
+      if (decideActiveRouteSwitch({
+        activeDeliveryDate: activeRoute.deliveryDate,
+        targetDeliveryDate: routeSession.route.deliveryDate,
+      }) === 'switch_now') {
+        stopActiveRoute();
+      } else {
+        requestActiveRouteSwitchConfirmation({
+          alertApi: { alert: showOperationalDialog },
+          locale: selectedDriverLocale,
+          onStopActiveRoute: stopActiveRoute,
+        });
+      }
       return;
     }
     if (routeSession.pendingRouteEnd !== undefined) {
@@ -5801,10 +5834,7 @@ function DriverApp() {
       }));
 
       if (routeSwitchPlanId !== null) {
-        const remainingStops = selectedRoute.stops.some(
-          (routeStop) => !nextCompletedStopIds.includes(routeStop.deliveryStopId),
-        );
-        await finishActiveRouteForSwitch(selectedRoute, routeSwitchPlanId, remainingStops);
+        await finishActiveRouteForSwitch(selectedRoute, routeSwitchPlanId);
         return;
       }
 
@@ -5930,6 +5960,11 @@ function DriverApp() {
     route: AssignedRoute,
     onCompleted?: () => Promise<void>,
     onCancelled?: () => void,
+    options?: {
+      automatic?: boolean;
+      isCurrent?: () => boolean;
+      routeSubmission?: Extract<RouteAccessSubmissionResult, { kind: 'company_guidance' }>;
+    },
   ): Promise<void> {
     const occurredAt = new Date();
     const locationEvidence = await captureTrustedRouteEventLocation(route.id, occurredAt);
@@ -5942,14 +5977,24 @@ function DriverApp() {
       confirmedAt: Date,
       confirmedLocation: RouteEventLocationEvidence | null,
     ) => {
+      if (options?.isCurrent?.() === false) {
+        onCancelled?.();
+        return;
+      }
       const routeEnded = await finishRoute(route, {
+        ...(options?.routeSubmission === undefined ? {} : { routeSubmission: options.routeSubmission }),
         ...(confirmedLocation === null ? {} : { locationEvidence: confirmedLocation }),
         now: confirmedAt,
       });
       if (routeEnded) await onCompleted?.();
+      else if (options?.automatic === true) onCancelled?.();
     };
     if (completionLocation === 'confirmed' || completionLocation === 'not_required') {
       await finish(occurredAt, locationEvidence);
+      return;
+    }
+    if (options?.automatic === true) {
+      onCancelled?.();
       return;
     }
 
@@ -5973,25 +6018,12 @@ function DriverApp() {
   async function finishActiveRouteForSwitch(
     activeRoute: AssignedRoute,
     targetRoutePlanId: string,
-    hasRemainingStops: boolean,
   ): Promise<void> {
     const targetRouteSession = getRouteSessionForAction(routeSessions, targetRoutePlanId);
     const activeRouteSession = getRouteSessionForAction(routeSessions, activeRoute.id);
     if (targetRouteSession === null || activeRouteSession === null) {
       setPendingRoutePlanId(null);
       setMessage('The selected route is no longer available. Refresh routes and try again.');
-      return;
-    }
-
-    if (!hasRemainingStops) {
-      await requestRouteCompletion(
-        activeRoute,
-        async () => {
-          setPendingRoutePlanId(null);
-          await startRouteSessionAfterConfirmed(targetRoutePlanId);
-        },
-        () => setPendingRoutePlanId(null),
-      );
       return;
     }
 
@@ -6031,6 +6063,9 @@ function DriverApp() {
     if (deliveryStartResult?.kind !== 'delivery_active') {
       return false;
     }
+
+    const releaseRouteFinish = routeFinishGuardRef.current.tryAcquire();
+    if (releaseRouteFinish === null) return false;
 
     let routeSessionDeactivated = false;
     let queueForStateSync = offlineSubmissionQueue;
@@ -6196,6 +6231,7 @@ function DriverApp() {
       setMessage(`Route completion could not be finalized: ${errorMessage}`);
       return false;
     } finally {
+      releaseRouteFinish();
       setIsFinishingRoute(false);
       syncOfflineQueueState(queueForStateSync);
     }
@@ -6225,6 +6261,7 @@ function DriverApp() {
   }
 
   function resetActiveRouteProgress() {
+    automaticRouteCompletionRef.current.setRoute(null);
     setCashInput(null);
     setCashInputError(null);
     setIsStopDetailsInputFocused(false);

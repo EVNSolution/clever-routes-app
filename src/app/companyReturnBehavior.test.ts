@@ -37,7 +37,7 @@ describe('company return behavior', () => {
     assert.match(routeSession, /label: companyReturnCopy\.finish[\s\S]*onPress: onFinishRoute/u);
   });
 
-  it('enforces the route end mode for manual completion and route switching', () => {
+  it('preserves manual completion policy and always releases a switched route', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const completionRequest = source.slice(
       source.indexOf('async function requestRouteCompletion'),
@@ -55,7 +55,29 @@ describe('company return behavior', () => {
     assert.match(completionRequest, /const confirmedAt = new Date\(\)/u);
     assert.match(completionRequest, /captureTrustedRouteEventLocation\(route\.id, confirmedAt\)/u);
     assert.match(completionRequest, /finish\(confirmedAt, confirmedLocation\)/u);
-    assert.match(routeSwitch, /if \(!hasRemainingStops\) \{[\s\S]*requestRouteCompletion/u);
+    assert.doesNotMatch(routeSwitch, /requestRouteCompletion|hasRemainingStops/u);
+    assert.match(routeSwitch, /routeEnd: 'released'/u);
+  });
+
+  it('finishes the route by itself when the return location is reported, without the unverified dialog', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const observer = source.slice(
+      source.indexOf('// Return completion belongs to the active session'),
+      source.indexOf('const candidate = getStopArrivalNotificationCandidate'),
+    );
+    assert.match(source, /getAutomaticRouteCompletionSession\(\{\s*activeRoutePlanId, completedStopIds, routeSessions, routeStatus/u);
+    assert.match(observer, /automaticRouteCompletionRef\.current\.observe/u);
+    assert.match(observer, /locations: locations\.map/u);
+    assert.match(observer, /route: activeSession\.route/u);
+    assert.match(observer, /routeSubmission: toCompanyGuidanceSubmission\(activeSession\)/u);
+    assert.doesNotMatch(observer, /selectedRoute/u);
+    const completion = source.slice(
+      source.indexOf('async function requestRouteCompletion('),
+      source.indexOf('async function finishActiveRouteForSwitch('),
+    );
+    assert.match(completion, /options\?\.isCurrent\?\.\(\) === false/u);
+    assert.match(completion, /routeSubmission: options\.routeSubmission/u);
+    assert.match(completion, /if \(options\?\.automatic === true\) \{\s*onCancelled\?\.\(\);\s*return;\s*\}[\s\S]*showOperationalDialog\(copy\.unverifiedTitle/u);
   });
 
   it('localizes the company return controls and missing-depot guidance', () => {
