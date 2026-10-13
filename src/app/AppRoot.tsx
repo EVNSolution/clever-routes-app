@@ -47,7 +47,7 @@ import {
 import { CashCompletionModal, StopCompletionPanel } from './StopCompletionPanel';
 import { buildCashCompletion, formatCompletionAmount, getSingleCompletionAction, supportsSingleCompletion } from './kfoodSingleCompletion';
 import type { StopCompletion, StopCompletionInput } from '../domain/stop/stopCompletion';
-import { LiveRouteChangeBanner } from './liveRouteChangeBanner';
+import { LiveRouteChangeBanner, LiveRouteCheckNotice } from './liveRouteChangeBanner';
 import { applyLiveRouteChange, getLiveRouteRecoveryProgress, hasPendingLiveRouteChange, observeLiveRoutePublication, preserveLiveRouteStep, retryLiveRouteAcknowledgement, stageLiveRouteRefresh, supportsLiveRouteChanges, shouldCheckLiveRouteChange } from './liveRouteChangeController';
 import { emptyLiveRouteChangeState, type LiveRouteChangeState, type LiveRouteChangeUiDraft } from '../domain/route/liveRouteChangeStore';
 import { canRefreshCachedLiveRoute, getLiveRouteLoadDiagnostic, loadRouteAccessWithLiveCacheRecovery, pauseCachedLiveRouteTracking, shouldHydrateLiveRouteInputs, type CachedLiveRouteSession, type CachedLiveRouteValidation, type LiveRouteLoadStage } from './liveRouteCacheRecovery';
@@ -119,6 +119,7 @@ import {
   DriverApiHttpError,
   isDriverAccountDeletionActiveRouteError,
   isDriverApiUnauthorizedError,
+  isDriverRouteNotInProgressError,
 } from '../api/deliveryServer/driverApiError';
 import {
   applyDriverRouteEtaUpdate,
@@ -366,6 +367,7 @@ type RouteLoadOptions = {
 };
 
 const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
+const PULL_REFRESH_MAX_WAIT_MS = 20_000;
 const ROUTES_APP_PRIVACY_URL = 'https://clever-route-api.cleversystem.ai/routes-app/privacy';
 const ROUTES_APP_SUPPORT_URL = 'https://clever-route-api.cleversystem.ai/routes-app/support';
 const ROUTES_APP_ACCOUNT_DELETION_URL = 'https://clever-route-api.cleversystem.ai/routes-app/account-deletion';
@@ -448,6 +450,7 @@ function DriverApp() {
   const [liveRouteErrors, setLiveRouteErrors] = useState<Record<string, string>>({});
   const [isApplyingLiveRoute, setIsApplyingLiveRoute] = useState(false);
   const liveRoutePollRunningRef = useRef(false);
+  const endedRouteRefreshRequestedRef = useRef(new Set<string>());
   const automaticRouteCompletionRef = useRef(createAutomaticRouteCompletion());
   const routeFinishGuardRef = useRef(createRouteFinishGuard());
   const requestRouteCompletionRef = useRef<typeof requestRouteCompletion | null>(null);
@@ -1556,13 +1559,15 @@ function DriverApp() {
           expectedRouteVersionId: choice.routeAccess.expectedRouteVersionId,
         }));
       } else {
-        if (error instanceof DriverApiHttpError && (error.status === 403 || error.status === 409)) liveRouteAccessBlockedRef.current.add(key);
+        const serverEndedRoute = isDriverRouteNotInProgressError(error) && state?.pendingPublication == null;
+        if (!serverEndedRoute && error instanceof DriverApiHttpError && (error.status === 403 || error.status === 409)) liveRouteAccessBlockedRef.current.add(key);
         state = state ?? emptyLiveRouteChangeState(route.id, choice.routeAccess.assignmentGeneration);
         if (state.appliedRoute !== null) {
           try { state = { ...state, appliedRoute: mergeLiveRouteExecutionState(state.appliedRoute, route) }; }
           catch { state = { ...state, appliedRoute: null }; }
         }
-        setLiveRouteErrors(current => ({ ...current, [key]: 'The delivery list could not be checked. Retry when connected.' }));
+        // A route the server already ended is not a communication problem; the latest assignments decide its state.
+        if (!serverEndedRoute) setLiveRouteErrors(current => ({ ...current, [key]: 'The delivery list could not be checked. Retry when connected.' }));
       }
     }
     if (!isCurrent()) throw new Error('Driver account changed during route refresh.');
@@ -3757,6 +3762,15 @@ function DriverApp() {
         } catch (error) {
           if (!isCurrent()) return;
           if (error instanceof DriverApiHttpError && error.status === 404 && liveRouteStatesRef.current[key]?.pendingPublication == null) continue;
+          if (isDriverRouteNotInProgressError(error) && liveRouteStatesRef.current[key]?.pendingPublication == null) {
+            // The server ended this route: recover from the latest assignments instead of showing a change notice.
+            setLiveRouteErrors(current => { const next = { ...current }; delete next[key]; return next; });
+            if (!endedRouteRefreshRequestedRef.current.has(key)) {
+              endedRouteRefreshRequestedRef.current.add(key);
+              void handleRefreshRoutes();
+            }
+            continue;
+          }
           if (error instanceof DriverApiHttpError && (error.status === 403 || error.status === 409)) liveRouteAccessBlockedRef.current.add(key);
           setLiveRouteErrors(current => ({ ...current, [key]: 'The delivery list could not be checked. Retry when connected.' }));
         }
@@ -3810,11 +3824,15 @@ function DriverApp() {
     const key = liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration);
     const state = liveRouteStates[key];
     return (session.route.id === selectedRouteId || session.route.id === activeRoutePlanId)
-      && state !== undefined && (state.appliedRoute === null || hasPendingLiveRouteChange(state) || liveRouteErrors[key] !== undefined);
+      && state !== undefined && (state.appliedRoute === null || hasPendingLiveRouteChange(state));
   }) ?? routeSessions.find(session => {
     const state = liveRouteStates[liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration)];
     return state !== undefined && (state.appliedRoute === null || hasPendingLiveRouteChange(state));
   });
+  const liveCheckErrorMessage = routeSessions.reduce<string | null>((found, session) => {
+    if (found !== null || (session.route.id !== selectedRouteId && session.route.id !== activeRoutePlanId)) return found;
+    return liveRouteErrors[liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration)] ?? null;
+  }, null);
   const liveBannerKey = liveBannerSession === undefined ? null : liveRouteStateKey(liveBannerSession.route.id, liveBannerSession.routeAccess.assignmentGeneration);
   const liveBannerState = liveBannerKey === null ? undefined : liveRouteStates[liveBannerKey];
 
@@ -3822,9 +3840,16 @@ function DriverApp() {
     if (liveBannerSession === undefined || isNavigationInterruptionProtected || isRefreshingRoutes || isLoggingIn
       || liveRouteApplyRunningRef.current || offlineStorageState === 'STORAGE_DEGRADED') return;
     const release = routeProgressRefreshGuardRef.current.beginRefresh();
-    if (release === null) return;
+    if (release === null) {
+      setMessage('Finish the current delivery action before applying the update.');
+      return;
+    }
     const owner = driverSyncBoundAccountOwnerHashRef.current;
-    if (owner === null) { release(); return; }
+    if (owner === null) {
+      release();
+      setMessage('Sign in again to apply the update.');
+      return;
+    }
     const session = liveBannerSession;
     const routeId = session.route.id;
     const generation = session.routeAccess.assignmentGeneration;
@@ -3889,7 +3914,10 @@ function DriverApp() {
         });
         if (isCurrent()) publishLiveRouteState(owner, applied);
       }
-      if (isCurrent()) setLiveRouteErrors(errors => { const next = { ...errors }; delete next[key]; return next; });
+      if (isCurrent()) {
+        setLiveRouteErrors(errors => { const next = { ...errors }; delete next[key]; return next; });
+        setMessage('Delivery list updated.');
+      }
     } catch {
       if (isCurrent()) setLiveRouteErrors(errors => ({ ...errors, [key]: 'The route update is not fully confirmed. Keep this notice and retry.' }));
     } finally {
@@ -4538,12 +4566,18 @@ function DriverApp() {
 
     isPullRefreshingRef.current = true;
     pullRefreshOffset.value = withSpring(PULL_REFRESH_REVEAL_HEIGHT, PULL_REFRESH_SPRING_CONFIG);
+    let waitTimer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.all([
-        handleRefreshRoutes(),
-        checkForDriverAppUpdate(true, true),
+      // One request that never answers must not keep the pulled surface open and refresh locked until a restart.
+      await Promise.race([
+        Promise.all([
+          handleRefreshRoutes(),
+          checkForDriverAppUpdate(true, true),
+        ]),
+        new Promise<void>((resolve) => { waitTimer = setTimeout(resolve, PULL_REFRESH_MAX_WAIT_MS); }),
       ]);
     } finally {
+      clearTimeout(waitTimer);
       pullRefreshOffset.value = withSpring(0, PULL_REFRESH_SPRING_CONFIG);
       isPullRefreshingRef.current = false;
     }
@@ -6614,6 +6648,12 @@ function DriverApp() {
                 acknowledgementOnly={liveBannerState.ackPendingPublicationVersionId !== null}
                 error={liveBannerKey === null ? null : liveRouteErrors[liveBannerKey] ?? null}
                 onApply={() => { void handleApplyLiveRoute(); }} />
+            ) : null}
+            {liveBannerState === undefined && verifiedDriverPhoneE164 !== null && liveCheckErrorMessage !== null ? (
+              <LiveRouteCheckNotice
+                message={liveCheckErrorMessage}
+                onRetry={() => { void pollLiveRouteChanges(); }}
+              />
             ) : null}
             <View style={styles.scrollStage}>
             {screen === 'mainTabs' ? (
