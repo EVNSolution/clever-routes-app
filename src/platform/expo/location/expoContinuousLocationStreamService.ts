@@ -27,7 +27,10 @@ import { emitCompletionAssistanceChange, recordExpoCompletionLocations, startCom
 import { createExpoCompletionAssistanceStore, getCompletionAccountOwnerHash } from '../storage/expoCompletionAssistanceStore';
 import { synchronizeCompletionAssistance } from '../../../domain/completion/completionAssistanceSync';
 import { notifyCompletionCandidates } from '../../../domain/completion/completionAssistanceNotifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { runBoundedAsyncOperation } from '../../../domain/async/boundedAsyncOperation';
 import { decideServiceAfterTaskResult } from '../../../domain/location/trackingKeepAlive';
+import { decideGpsCheck, parseGpsCheckPush } from '../../../domain/notifications/gpsCheckPush';
 import { showCompletionCandidateNotification } from '../notifications/expoCompletionAssistanceNotifications';
 import {
   captureDriverDiagnosticEmitter,
@@ -415,6 +418,75 @@ async function executeContinuousLocationTask(input: {
       await continuousLocationTaskObserver?.(locations, taskResult);
     }
   }
+}
+
+const GPS_CHECK_STATE_KEY = 'clever.gpsCheckPush.v1';
+
+function readLastGpsCheck(raw: string | null): { at: number; pushId: string } | null {
+  if (raw === null) return null;
+  try {
+    const value = JSON.parse(raw) as { at?: unknown; pushId?: unknown };
+    return typeof value.at === 'number' && typeof value.pushId === 'string' ? { at: value.at, pushId: value.pushId } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Server GPS check push: for the started active route it restarts a stopped location task, or takes
+ * one position now and sends it through the same pipeline as a task batch. Anything else is ignored.
+ */
+export async function handleGpsCheckPushData(data: Record<string, unknown> | null | undefined): Promise<'handled' | 'ignored'> {
+  const push = parseGpsCheckPush(data);
+  if (push === null) return 'ignored';
+  const access = await driverAccessTokenStore.loadActiveDriverAccess();
+  const signedIn = access.kind === 'active' || access.kind === 'refresh_required';
+  const activeRoutePlanId = signedIn
+    && access.activeRouteSession !== undefined
+    && access.activeRouteSession.status === 'active'
+    && access.routeAccess?.routePlanId === access.activeRouteSession.routePlanId
+    ? access.activeRouteSession.routePlanId
+    : null;
+  const [permission, taskStarted, lastRaw] = await Promise.all([
+    Location.getBackgroundPermissionsAsync().catch(() => null),
+    Location.hasStartedLocationUpdatesAsync(CONTINUOUS_LOCATION_TASK_NAME).catch(() => false),
+    AsyncStorage.getItem(GPS_CHECK_STATE_KEY).catch(() => null),
+  ]);
+  const decision = decideGpsCheck({
+    activeRoutePlanId,
+    backgroundGranted: permission?.status === 'granted',
+    lastHandled: readLastGpsCheck(lastRaw),
+    nowMs: Date.now(),
+    push,
+    taskStarted,
+  });
+  if (decision.action === 'ignore') return 'ignored';
+  await AsyncStorage.setItem(GPS_CHECK_STATE_KEY, JSON.stringify({ at: Date.now(), pushId: push.pushId })).catch(() => undefined);
+  try {
+    startExpoDriverDiagnosticRuntime();
+  } catch {
+    // Diagnostic startup must never block recovering the GPS task.
+  }
+  if (decision.action === 'restart_task') {
+    captureDriverDiagnosticEmitter()({
+      blocker: { reasonCode: 'LOCATION_TASK_NOT_STARTED', routePlanId: push.routePlanId, stage: 'LOCATION' },
+      kind: 'STATE',
+      patch: { locationTask: 'STOPPED' },
+    });
+    const observe = captureLocationDiagnosticObserver();
+    await runLocationTaskOperation(() => runObservedLocationOperation({
+      execute: () => startExpoLocationUpdates(CONTINUOUS_LOCATION_TASK_NAME),
+      observe,
+      operation: 'START',
+    }));
+    return 'handled';
+  }
+  const position = await runBoundedAsyncOperation(
+    () => Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
+    { timeoutMs: 15_000 },
+  );
+  await executeContinuousLocationTask({ data: { locations: [position] }, error: null });
+  return 'handled';
 }
 
 if (!TaskManager.isTaskDefined(CONTINUOUS_LOCATION_TASK_NAME)) {
