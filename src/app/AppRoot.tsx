@@ -4744,6 +4744,10 @@ function DriverApp() {
       setMessage('No route is available to start.');
       return;
     }
+    if (routeSession.pendingRouteEnd !== undefined) {
+      setMessage('This route is waiting for its final status to sync. Refresh routes before starting it again.');
+      return;
+    }
     if (activeRoutePlanId !== null && activeRoutePlanId !== routeSession.route.id) {
       const targetRoutePlanId = routeSession.route.id;
       const activeRoute = getRouteSessionForAction(routeSessions, activeRoutePlanId)?.route ?? selectedRoute;
@@ -4770,11 +4774,6 @@ function DriverApp() {
       }
       return;
     }
-    if (routeSession.pendingRouteEnd !== undefined) {
-      setMessage('This route is waiting for its final status to sync. Refresh routes before starting it again.');
-      return;
-    }
-
     requestRouteStartSessionConfirmation({
       alertApi: {
         alert: showOperationalDialog,
@@ -6746,6 +6745,7 @@ function DriverApp() {
               backgroundLocationPermission={backgroundLocationPermission}
               isRefreshingRoutes={isRefreshingRoutes}
               isRequestingBackgroundLocation={isRequestingBackgroundLocation}
+              isRouteActionPending={isStartingRoute || isFinishingRoute || pendingRoutePlanId !== null || routeStartRecoveryState !== 'idle'}
               offlineStorageState={offlineStorageState}
               onOpenCompletedDeliveries={(routeId) => {
                 const routeSession = getRouteSessionForAction(routeSessions, routeId);
@@ -6761,6 +6761,7 @@ function DriverApp() {
               onClearRouteReconciliation={handleRequestRouteReconciliationClear}
               onRetryRouteSync={() => { void handleRefreshRoutes(); }}
               onRetryStorage={() => { void recoverOfflineEvidenceStorage(); }}
+              onStartRoute={handleStartRoute}
               routeSessions={routeSessions}
               routeReconciliationCount={routeReconciliationCount}
               routeStatus={routeStatus}
@@ -7175,6 +7176,7 @@ function MyRoutesPage({
   backgroundLocationPermission,
   isRefreshingRoutes,
   isRequestingBackgroundLocation,
+  isRouteActionPending,
   offlineStorageState,
   onOpenCompletedDeliveries,
   onOpenBackgroundLocationSettings,
@@ -7182,6 +7184,7 @@ function MyRoutesPage({
   onClearRouteReconciliation,
   onRetryRouteSync,
   onRetryStorage,
+  onStartRoute,
   routeSessions,
   routeReconciliationCount,
   routeStatus,
@@ -7193,6 +7196,7 @@ function MyRoutesPage({
   backgroundLocationPermission: BackgroundLocationPermissionState;
   isRefreshingRoutes: boolean;
   isRequestingBackgroundLocation: boolean;
+  isRouteActionPending: boolean;
   offlineStorageState: 'READY' | 'STORAGE_DEGRADED';
   onOpenCompletedDeliveries(routeId: string): void;
   onOpenBackgroundLocationSettings(): void;
@@ -7200,6 +7204,7 @@ function MyRoutesPage({
   onClearRouteReconciliation(): void;
   onRetryRouteSync(): void;
   onRetryStorage(): void;
+  onStartRoute(routeId: string): void;
   routeSessions: RouteSession[];
   routeReconciliationCount: number;
   routeStatus: RouteStatus;
@@ -7329,6 +7334,15 @@ function MyRoutesPage({
                   ? 'active'
                   : classifiedRouteCardStatus;
             const isRouteCardExpanded = expandedRouteKey === session.route.id;
+            const isAnotherReadyRoute = routeCardStatus === 'ready'
+              && activeRoutePlanId !== null
+              && activeRoutePlanId !== session.route.id;
+            const isStartDisabled = isRouteActionPending
+              || isRefreshingRoutes
+              || routeSyncState !== 'ready'
+              || offlineStorageState === 'STORAGE_DEGRADED'
+              || backgroundLocationPermission !== 'granted'
+              || session.pendingRouteEnd !== undefined;
 
             return (
               <Pressable
@@ -7338,6 +7352,10 @@ function MyRoutesPage({
                 onPress={() => {
                   if (routeCardStatus === 'completed') {
                     onOpenCompletedDeliveries(session.route.id);
+                    return;
+                  }
+                  if (isAnotherReadyRoute) {
+                    setExpandedRouteKey(session.route.id);
                     return;
                   }
                   onContinueRoute(session.route.id);
@@ -7377,6 +7395,20 @@ function MyRoutesPage({
                     <DataRow label="Stops" value={formatStopCount(session.route.stops.length)} />
                     <DataRow label="Estimated Distance" value={formatAssignedRouteDistance(session.route.routeMetrics)} />
                     <DataRow label="Estimated Time" value={formatAssignedRouteDuration(session.route.routeMetrics)} />
+                    {isAnotherReadyRoute ? (
+                      <Pressable
+                        accessibilityLabel={`Start ${session.route.name}`}
+                        accessibilityRole="button"
+                        disabled={isStartDisabled}
+                        onPress={(event) => {
+                          event.stopPropagation();
+                          onStartRoute(session.route.id);
+                        }}
+                        style={[styles.primaryButton, isStartDisabled && styles.buttonDisabled]}
+                      >
+                        <Text style={styles.primaryButtonText}>Start</Text>
+                      </Pressable>
+                    ) : null}
                   </>
                 ) : null}
               </Pressable>
