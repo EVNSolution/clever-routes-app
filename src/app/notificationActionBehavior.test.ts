@@ -83,7 +83,7 @@ describe('notification action behavior', () => {
       /notifiedStopIds: notifiedStopArrivalIdsRef\.current/gu,
     )?.length ?? 0;
 
-    assert.equal(foregroundNotificationBuildCount, 4);
+    assert.equal(foregroundNotificationBuildCount, 5);
     assert.equal(notifiedStopInputCount, 0);
     assert.doesNotMatch(appRootSource, /showStopActions:/u);
   });

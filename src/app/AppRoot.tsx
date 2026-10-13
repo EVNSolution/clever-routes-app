@@ -150,6 +150,8 @@ import { readInstalledDriverAppVersion } from '../platform/expo/application/expo
 import { createExpoConvenienceNoticesStore } from '../platform/expo/storage/expoConvenienceNoticesStore';
 import { createExpoDetailedActiveRouteNotificationStore } from '../platform/expo/storage/expoDetailedActiveRouteNotificationStore';
 import { createExpoPreStartLocationNoticeStore } from '../platform/expo/storage/expoPreStartLocationNoticeStore';
+import { createExpoBatteryGuidanceStore } from '../platform/expo/storage/expoBatteryGuidanceStore';
+import { getBatteryGuidanceCopy } from '../domain/preferences/batteryGuidance';
 import { getConvenienceNoticesCopy } from '../domain/preferences/convenienceNotices';
 import { getDetailedActiveRouteNotificationCopy } from '../domain/preferences/detailedActiveRouteNotification';
 import { BACKGROUND_LOCATION_DISCLOSURE_TEXT } from '../domain/preferences/preStartLocationNotice';
@@ -368,6 +370,7 @@ type RouteLoadOptions = {
 
 const COMPANY_STEP_INDEX = ROUTE_COMPANY_STEP_INDEX;
 const PULL_REFRESH_MAX_WAIT_MS = 20_000;
+const TRACKING_WATCHDOG_INTERVAL_MS = 60_000;
 const ROUTES_APP_PRIVACY_URL = 'https://clever-route-api.cleversystem.ai/routes-app/privacy';
 const ROUTES_APP_SUPPORT_URL = 'https://clever-route-api.cleversystem.ai/routes-app/support';
 const ROUTES_APP_ACCOUNT_DELETION_URL = 'https://clever-route-api.cleversystem.ai/routes-app/account-deletion';
@@ -2645,7 +2648,23 @@ function DriverApp() {
           setMessage('Route ended or released on server. Unsynced delivery results were preserved for reconciliation.');
         } else {
           setRouteRecoveryRefreshReason('driver_access_expired');
-          setMessage('Driver access expired. Live location tracking stopped while route assignments refresh.');
+          setMessage('Driver access expired. Route assignments are refreshing.');
+        }
+        if (taskResult.reason !== 'pre_start_ended') {
+          // Tracking is never turned off behind the driver's back: it stops when the driver confirms.
+          showOperationalDialog(
+            taskResult.reason === 'route_not_in_progress' ? 'Route ended' : 'Route access ended',
+            taskResult.reason === 'route_not_in_progress'
+              ? 'The office ended this route. Location tracking stays on until you confirm.'
+              : 'Your access to this route ended. Location tracking stays on until you confirm.',
+            [{
+              onPress: () => {
+                void continuousLocationStreamService.stopLocationUpdates(CONTINUOUS_LOCATION_TASK_NAME).catch(() => undefined);
+              },
+              text: 'Confirm',
+            }],
+            { cancelable: false },
+          );
         }
         return;
       }
@@ -2739,9 +2758,87 @@ function DriverApp() {
     routeStatus,
     selectedRoute,
     setScreen,
+    showOperationalDialog,
     stopArrivalNotificationService,
     syncOfflineQueueState,
   ]);
+
+  // After Start the location task is kept alive: restart it when the OS stopped it and post its notification again.
+  const trackingWatchdogRunningRef = useRef(false);
+  const batteryGuidanceStore = useMemo(() => createExpoBatteryGuidanceStore(), []);
+  useEffect(() => {
+    if (routeStatus !== 'active' || deliveryStartResult?.kind !== 'delivery_active'
+      || selectedRoute === null || activeRoutePlanId === null || isFinishingRoute || pendingRoutePlanId !== null) {
+      return undefined;
+    }
+    const route = selectedRoute;
+    const deliveryStart = deliveryStartResult;
+    const check = async (): Promise<void> => {
+      if (trackingWatchdogRunningRef.current || AppState.currentState !== 'active') return;
+      trackingWatchdogRunningRef.current = true;
+      try {
+        const notification = buildActiveRouteForegroundNotification({
+          currentStepIndex: navigationStepIndex,
+          detailed: detailedActiveRouteNotificationEnabled,
+          operationalState: operationalPillValues,
+          route,
+        });
+        if (await continuousLocationStreamService.hasStartedLocationUpdates(CONTINUOUS_LOCATION_TASK_NAME)) {
+          await continuousLocationStreamService.updateLocationNotification?.({
+            notification,
+            taskName: CONTINUOUS_LOCATION_TASK_NAME,
+          });
+          return;
+        }
+        await startContinuousLocationUpdatesAfterDeliveryStart({
+          deliveryStart,
+          notification,
+          routePlanId: route.id,
+          streamService: continuousLocationStreamService,
+        });
+      } catch {
+        // The next check retries; a failing restart must never surface as a route error.
+      } finally {
+        trackingWatchdogRunningRef.current = false;
+      }
+    };
+    void check();
+    const timer = setInterval(() => { void check(); }, TRACKING_WATCHDOG_INTERVAL_MS);
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void check();
+    });
+    return () => {
+      clearInterval(timer);
+      subscription.remove();
+    };
+  }, [
+    activeRoutePlanId,
+    continuousLocationStreamService,
+    deliveryStartResult,
+    detailedActiveRouteNotificationEnabled,
+    isFinishingRoute,
+    navigationStepIndex,
+    operationalPillValues,
+    pendingRoutePlanId,
+    routeStatus,
+    selectedRoute,
+  ]);
+
+  // One-time Android guidance so the battery setting does not stop tracking before the route is finished.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || routeStatus !== 'active' || deliveryStartResult?.kind !== 'delivery_active') return undefined;
+    let cancelled = false;
+    void (async () => {
+      if (await batteryGuidanceStore.isShown().catch(() => true) || cancelled) return;
+      const copy = getBatteryGuidanceCopy(selectedDriverLocale);
+      await batteryGuidanceStore.markShown().catch(() => undefined);
+      showOperationalDialog(copy.title, copy.message, [
+        { style: 'cancel', text: copy.laterLabel },
+        { onPress: () => { void Linking.openSettings(); }, text: copy.openSettingsLabel },
+      ], { cancelable: true });
+    })();
+    return () => { cancelled = true; };
+  }, [batteryGuidanceStore, deliveryStartResult?.kind, routeStatus, selectedDriverLocale, showOperationalDialog]);
 
   function handlePhoneInputChange(value: string) {
     setNationalPhoneInput(formatDriverNationalPhoneInput({
