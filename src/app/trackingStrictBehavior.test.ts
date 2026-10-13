@@ -29,6 +29,7 @@ describe('tracking stays on after Start until the driver finishes', () => {
     assert.match(watchdog, /hasStartedLocationUpdates\(CONTINUOUS_LOCATION_TASK_NAME\)/u);
     assert.match(watchdog, /startContinuousLocationUpdatesAfterDeliveryStart\(\{[\s\S]*deliveryStart,/u);
     assert.match(watchdog, /updateLocationNotification\?\.\(/u);
+    assert.match(watchdog, /emitDriverDiagnosticObservation\(\{[\s\S]*reasonCode: 'LOCATION_TASK_NOT_STARTED'[\s\S]*stage: 'LOCATION'[\s\S]*startContinuousLocationUpdatesAfterDeliveryStart/u);
     assert.match(watchdog, /AppState\.addEventListener\('change'[\s\S]*state === 'active'/u);
     assert.match(watchdog, /TRACKING_WATCHDOG_INTERVAL_MS/u);
     assert.match(appRoot, /const TRACKING_WATCHDOG_INTERVAL_MS = 60_000/u);

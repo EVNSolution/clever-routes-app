@@ -2790,6 +2790,12 @@ function DriverApp() {
           });
           return;
         }
+        // The task was found stopped while the route is active (OS or vendor stop): record it, then restart.
+        emitDriverDiagnosticObservation({
+          blocker: { reasonCode: 'LOCATION_TASK_NOT_STARTED', routePlanId: route.id, stage: 'LOCATION' },
+          kind: 'STATE',
+          patch: { locationTask: 'STOPPED' },
+        });
         await startContinuousLocationUpdatesAfterDeliveryStart({
           deliveryStart,
           notification,
