@@ -30,6 +30,26 @@ keeps the locally applied addresses and order until selecting Apply changes.
 See [KFood live route changes](./kfood-live-route-change.md) for persistence,
 acknowledgement retry, and the same-assignment offline-event boundary.
 
+### Route switching and automatic return completion
+
+Starting a different route releases the active route with the existing
+`ROUTE_PAUSED` event, then starts and focuses the selected route. The released
+route returns to `READY`; completed stops retain their results. A different
+delivery date switches immediately. The same delivery date requires the driver
+to confirm Stop and Start. Opening a route card alone does not switch routes.
+This release applies even when the old route has no remaining stops.
+
+After all stops have terminal results, a return-to-depot route can complete
+automatically while the app receives continuous location callbacks. The app
+requires two distinct, consecutive, trustworthy fixes within 150 m of the depot.
+An outside or untrusted fix resets the count. The decision belongs to the active
+route and its assignment, regardless of which route the driver is viewing.
+Completion uses the existing durable `ROUTE_COMPLETED` path and stops tracking.
+The manual Finish Route action remains available. `END_AT_LAST_STOP` retains its
+existing finish behavior. An app process that is not receiving the callback
+cannot perform this automatic completion; native background acceptance is part
+of release validation, not established by source tests.
+
 ## Local mock boundary
 
 `src/app/AppRoot.tsx` uses mock account-auth, route-access, consent, and assigned-route services only when `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock` is explicitly configured. The mock runs the same phone + PIN → account-authenticated route choice → route details → live tracking → stop proof/completion flow without a live server. It never pretends that an SMS was sent. Missing live API configuration stops startup instead of silently showing fixture routes.

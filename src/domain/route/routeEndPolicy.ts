@@ -94,6 +94,34 @@ export function nextDepotArrivalStreak(input: {
   return arrived ? input.previousStreak + 1 : 0;
 }
 
+export type DepotArrivalState = {
+  lastFixAt: number | null;
+  streak: number;
+};
+
+/** Evaluate every distinct fix in time order, including misses between arrivals. */
+export function nextDepotArrivalState(input: {
+  depot: AssignedRouteCoordinates | null;
+  locations: readonly RouteEventLocationCandidate[];
+  now: Date;
+  previousState?: DepotArrivalState;
+  routeEndMode: AssignedRouteEndMode | undefined;
+}): DepotArrivalState {
+  let { lastFixAt, streak } = input.previousState ?? { lastFixAt: null, streak: 0 };
+  if (lastFixAt !== null && input.now.getTime() - lastFixAt > MAX_ROUTE_EVENT_LOCATION_AGE_MS) streak = 0;
+  for (const location of [...input.locations].sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime())) {
+    const fixAt = location.recordedAt.getTime();
+    if (!Number.isFinite(fixAt) || fixAt > input.now.getTime() + MAX_FOREGROUND_LOCATION_DELAY_MS) {
+      streak = 0;
+      continue;
+    }
+    if (lastFixAt !== null && fixAt <= lastFixAt) continue;
+    streak = nextDepotArrivalStreak({ ...input, location, previousStreak: streak });
+    lastFixAt = fixAt;
+  }
+  return { lastFixAt, streak };
+}
+
 function isValidLocation(location: RouteEventLocationCandidate): location is RouteEventLocationEvidence {
   return location.accuracyMeters !== null
     && Number.isFinite(location.accuracyMeters)

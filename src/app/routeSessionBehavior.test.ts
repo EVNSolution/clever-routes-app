@@ -521,7 +521,7 @@ describe('route session current task behavior', () => {
     );
   });
 
-  it('switches routes only after the active stop and applicable route-end policy are durably completed', () => {
+  it('starts the target route only after the active route release is durably recorded', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const startBegin = appSource.indexOf('function handleStartRoute(');
     const startEnd = appSource.indexOf('\n\n  async function startRouteSessionAfterConfirmed(', startBegin);
@@ -539,14 +539,14 @@ describe('route session current task behavior', () => {
     assert.match(startSource, /pendingRoutePlanId !== null/u);
     assert.doesNotMatch(startSource, /Finish the active route before starting another route/u);
     assert.match(terminalSource, /recordStopProofEventAfterDeliveryStart/u);
-    assert.match(terminalSource, /await finishActiveRouteForSwitch\(selectedRoute, routeSwitchPlanId, remainingStops\)/u);
+    assert.match(terminalSource, /await finishActiveRouteForSwitch\(selectedRoute, routeSwitchPlanId\)/u);
     const switchBegin = appSource.indexOf('async function finishActiveRouteForSwitch(');
     const switchEnd = appSource.indexOf('\n\n  async function finishRoute(', switchBegin);
     const switchSource = appSource.slice(switchBegin, switchEnd);
     assert.match(switchSource, /await finishRoute\([\s\S]*routeEnd: 'released'/u);
     assert.match(switchSource, /await startRouteSessionAfterConfirmed\(targetRoutePlanId/u);
     assert.ok(terminalSource.indexOf('recordStopProofEventAfterDeliveryStart') < terminalSource.indexOf('finishActiveRouteForSwitch'));
-    assert.match(switchSource, /if \(!hasRemainingStops\) \{[\s\S]*requestRouteCompletion\([\s\S]*startRouteSessionAfterConfirmed\(targetRoutePlanId\)[\s\S]*return;/u);
+    assert.doesNotMatch(switchSource, /requestRouteCompletion|hasRemainingStops/u);
     assert.match(switchSource, /if \(!routeEnded\) \{[\s\S]*setPendingRoutePlanId\(null\);[\s\S]*return;[\s\S]*\}[\s\S]*startRouteSessionAfterConfirmed/u);
   });
 
@@ -556,7 +556,7 @@ describe('route session current task behavior', () => {
     const startEnd = appSource.indexOf('\n\n  async function startRouteSessionAfterConfirmed(', startBegin);
     const startSource = appSource.slice(startBegin, startEnd);
 
-    assert.match(startSource, /const stopActiveRoute = \(\) => \{[\s\S]*finishActiveRouteForSwitch\(\s*activeRoute,\s*targetRoutePlanId,/u);
+    assert.match(startSource, /const stopActiveRoute = \(\) => \{[\s\S]*finishActiveRouteForSwitch\(activeRoute, targetRoutePlanId\)/u);
     assert.match(startSource, /decideActiveRouteSwitch\(\{[\s\S]*activeRoute\.deliveryDate[\s\S]*routeSession\.route\.deliveryDate[\s\S]*=== 'switch_now'\) \{\s*stopActiveRoute\(\);/u);
     assert.match(startSource, /\} else \{\s*requestActiveRouteSwitchConfirmation\(\{[\s\S]*onStopActiveRoute: stopActiveRoute/u);
     assert.doesNotMatch(startSource, /onCancelCurrentDelivery|onCompleteCurrentDelivery/u);
