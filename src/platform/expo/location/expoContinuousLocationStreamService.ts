@@ -27,6 +27,7 @@ import { emitCompletionAssistanceChange, recordExpoCompletionLocations, startCom
 import { createExpoCompletionAssistanceStore, getCompletionAccountOwnerHash } from '../storage/expoCompletionAssistanceStore';
 import { synchronizeCompletionAssistance } from '../../../domain/completion/completionAssistanceSync';
 import { notifyCompletionCandidates } from '../../../domain/completion/completionAssistanceNotifications';
+import { decideServiceAfterTaskResult } from '../../../domain/location/trackingKeepAlive';
 import { showCompletionCandidateNotification } from '../notifications/expoCompletionAssistanceNotifications';
 import {
   captureDriverDiagnosticEmitter,
@@ -181,6 +182,14 @@ function runLocationTaskOperation<T>(operation: () => Promise<T>): Promise<T> {
   return result;
 }
 
+// ponytail: process memory only; after a process restart the next batch stops an inactive service as before.
+let serverEndedTrackingAt: number | null = null;
+
+const SERVER_ENDED_NOTIFICATION: ContinuousLocationNotificationContent = {
+  body: 'The office ended this route. Open CLEVER Routes and confirm to stop tracking.',
+  title: 'Route ended',
+};
+
 const DEFAULT_ACTIVE_ROUTE_NOTIFICATION: ContinuousLocationNotificationContent = {
   body: 'Next stop details are available in CLEVER Routes.',
   title: 'Route in progress',
@@ -215,6 +224,7 @@ async function stopExpoLocationUpdates(
 ): Promise<void> {
   await runObservedLocationOperation({
     execute: async () => {
+      serverEndedTrackingAt = null;
       if (await Location.hasStartedLocationUpdatesAsync(taskName)) {
         await Location.stopLocationUpdatesAsync(taskName);
       }
@@ -372,7 +382,23 @@ async function executeContinuousLocationTask(input: {
           emitDiagnostic({ kind: 'STATE', persistedAt: new Date().toISOString() });
         }
         observeLocationTaskResult(taskResult, observeDiagnostic);
-        if (taskResult.kind === 'deactivated' || taskResult.kind === 'ignored') {
+        const keepDecision = decideServiceAfterTaskResult({
+          now: Date.now(),
+          result: taskResult,
+          serverEndedAt: serverEndedTrackingAt,
+        });
+        serverEndedTrackingAt = keepDecision.serverEndedAt;
+        if (keepDecision.notifyServerEnded && expoLocationNotificationModule !== null) {
+          // The driver confirms in the app; the service is not turned off behind the driver's back.
+          await expoLocationNotificationModule.updateLocationTaskNotificationAsync(CONTINUOUS_LOCATION_TASK_NAME, {
+            notificationBody: SERVER_ENDED_NOTIFICATION.body,
+            notificationTitle: SERVER_ENDED_NOTIFICATION.title,
+          }).catch(() => undefined);
+        }
+        if (
+          (taskResult.kind === 'deactivated' || taskResult.kind === 'ignored')
+          && keepDecision.action === 'stop_if_inactive'
+        ) {
           await stopContinuousLocationTaskIfInactive(observeDiagnostic);
         }
         processingWatchdog.complete();

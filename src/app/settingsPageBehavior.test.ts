@@ -101,7 +101,7 @@ describe('Settings page behavior', () => {
     assert.match(source, /createExpoDetailedActiveRouteNotificationStore/u);
     assert.match(source, /detailedActiveRouteNotificationStore\.load\(\)\.then\(\(enabled\) => \{[\s\S]*setDetailedActiveRouteNotificationEnabled\(enabled\)/u);
     assert.match(source, /function handleChangeDetailedActiveRouteNotification\(enabled: boolean\): void/u);
-    assert.equal((source.match(/detailed: detailedActiveRouteNotificationEnabled/g) ?? []).length, 4);
+    assert.equal((source.match(/detailed: detailedActiveRouteNotificationEnabled/g) ?? []).length, 5);
   });
 
   it('keeps provider-specific choices out of Settings while Android owns selection', () => {
