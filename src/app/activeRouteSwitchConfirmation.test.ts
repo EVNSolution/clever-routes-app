@@ -2,46 +2,38 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  ACTIVE_ROUTE_SWITCH_CONFIRMATION,
+  decideActiveRouteSwitch,
+  getActiveRouteSwitchCopy,
   requestActiveRouteSwitchConfirmation,
 } from './activeRouteSwitchConfirmation';
 
-describe('active route switch confirmation', () => {
-  it('offers go back, cancel, and the existing completion flow without changing state on dismiss', () => {
-    const actions: string[] = [];
-    let alertPayload: Parameters<
-      Parameters<typeof requestActiveRouteSwitchConfirmation>[0]['alertApi']['alert']
-    > | null = null;
+describe('active route switch', () => {
+  it('switches at once for another delivery date and asks first for the same date', () => {
+    assert.equal(decideActiveRouteSwitch({ activeDeliveryDate: '2026-10-12', targetDeliveryDate: '2026-10-13' }), 'switch_now');
+    assert.equal(decideActiveRouteSwitch({ activeDeliveryDate: '2026-10-13', targetDeliveryDate: '2026-10-13' }), 'confirm');
+  });
 
+  it('asks Go Back or Stop and Start, and only Stop and Start stops the route', () => {
+    let stopped = 0;
+    const dialogs: { buttons: { onPress?: () => void; text: string }[]; message: string; title: string }[] = [];
     requestActiveRouteSwitchConfirmation({
-      alertApi: {
-        alert: (...args) => {
-          alertPayload = args;
-        },
-      },
-      onCancelCurrentDelivery: () => actions.push('cancel'),
-      onCompleteCurrentDelivery: () => actions.push('complete'),
+      alertApi: { alert: (title, message, buttons) => { dialogs.push({ buttons, message, title }); } },
+      locale: 'ko-KR',
+      onStopActiveRoute: () => { stopped += 1; },
     });
 
-    assert.notEqual(alertPayload, null);
-    const [title, message, buttons, options] = alertPayload!;
-    assert.equal(title, ACTIVE_ROUTE_SWITCH_CONFIRMATION.title);
-    assert.match(message, /delivery.*in progress/i);
-    assert.match(message, /cancel or complete/i);
-    assert.deepEqual(options, { cancelable: true });
-    assert.deepEqual(
-      buttons.map(({ style, text }) => ({ style, text })),
-      [
-        { style: 'cancel', text: ACTIVE_ROUTE_SWITCH_CONFIRMATION.backLabel },
-        { style: 'destructive', text: ACTIVE_ROUTE_SWITCH_CONFIRMATION.cancelDeliveryLabel },
-        { style: 'default', text: ACTIVE_ROUTE_SWITCH_CONFIRMATION.completeDeliveryLabel },
-      ],
-    );
+    const [dialog] = dialogs;
+    assert.ok(dialog !== undefined);
+    assert.equal(dialog.title, '진행 중인 경로가 있습니다');
+    assert.equal(dialog.message, '새 경로를 시작하면 현재 경로는 중단됩니다.');
+    assert.deepEqual(dialog.buttons.map((button) => button.text), ['취소', '중단하고 시작']);
+    dialog.buttons[0]?.onPress?.();
+    assert.equal(stopped, 0);
+    dialog.buttons[1]?.onPress?.();
+    assert.equal(stopped, 1);
+  });
 
-    buttons[0]?.onPress?.();
-    assert.deepEqual(actions, []);
-    buttons[1]?.onPress?.();
-    buttons[2]?.onPress?.();
-    assert.deepEqual(actions, ['cancel', 'complete']);
+  it('keeps an English copy for non-Korean locales', () => {
+    assert.equal(getActiveRouteSwitchCopy('en-CA').stopAndStartLabel, 'Stop and Start');
   });
 });

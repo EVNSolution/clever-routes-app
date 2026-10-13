@@ -58,6 +58,19 @@ describe('company return behavior', () => {
     assert.match(routeSwitch, /if \(!hasRemainingStops\) \{[\s\S]*requestRouteCompletion/u);
   });
 
+  it('finishes the route by itself when the return location is reported, without the unverified dialog', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const observer = source.slice(source.indexOf('// After the last stop the route finishes by itself'));
+    assert.match(observer, /routeStatus === 'active' && selectedRoute !== null && allStopsCompleted && !autoFinishRequestedRef\.current/u);
+    assert.match(observer, /nextDepotArrivalStreak\(\{[\s\S]*depot: selectedRoute\.depot/u);
+    assert.match(observer, /depotArrivalStreakRef\.current >= DEPOT_ARRIVAL_CONSECUTIVE_FIXES[\s\S]*requestRouteCompletionRef\.current\?\.\(selectedRoute, undefined, \(\) => \{[\s\S]*\{ automatic: true \}/u);
+    const completion = source.slice(
+      source.indexOf('async function requestRouteCompletion('),
+      source.indexOf('async function finishActiveRouteForSwitch('),
+    );
+    assert.match(completion, /if \(options\?\.automatic === true\) \{\s*onCancelled\?\.\(\);\s*return;\s*\}[\s\S]*showOperationalDialog\(copy\.unverifiedTitle/u);
+  });
+
   it('localizes the company return controls and missing-depot guidance', () => {
     assert.deepEqual(getCompanyReturnCopy('ko-KR'), {
       body: '',

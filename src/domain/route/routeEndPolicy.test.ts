@@ -3,6 +3,8 @@ import { describe, it } from 'node:test';
 
 import {
   classifyRouteCompletionLocation,
+  DEPOT_ARRIVAL_CONSECUTIVE_FIXES,
+  nextDepotArrivalStreak,
   requiresDepotReturn,
   resolveTrustedRouteEventLocation,
 } from './routeEndPolicy';
@@ -106,5 +108,19 @@ describe('route end policy', () => {
     }), 'outside');
     assert.equal(classifyRouteCompletionLocation({ depot: null, location, routeEndMode: 'RETURN_TO_DEPOT' }), 'unverified');
     assert.equal(classifyRouteCompletionLocation({ depot: null, location: null, routeEndMode: 'END_AT_LAST_STOP' }), 'not_required');
+  });
+
+  it('counts consecutive accurate fixes at the return location and resets on any miss', () => {
+    const now = new Date('2026-09-13T01:00:00.000Z');
+    const atDepot = { accuracyMeters: 12, latitude: depot.latitude, longitude: depot.longitude, recordedAt: new Date(now.getTime() - 2_000) };
+    const base = { depot, now, routeEndMode: 'RETURN_TO_DEPOT' as const };
+    assert.equal(DEPOT_ARRIVAL_CONSECUTIVE_FIXES, 2);
+    assert.equal(nextDepotArrivalStreak({ ...base, location: atDepot, previousStreak: 0 }), 1);
+    assert.equal(nextDepotArrivalStreak({ ...base, location: atDepot, previousStreak: 1 }), 2);
+    assert.equal(nextDepotArrivalStreak({ ...base, location: { ...atDepot, latitude: depot.latitude + 0.01 }, previousStreak: 1 }), 0);
+    assert.equal(nextDepotArrivalStreak({ ...base, location: { ...atDepot, accuracyMeters: 250 }, previousStreak: 1 }), 0);
+    assert.equal(nextDepotArrivalStreak({ ...base, location: null, previousStreak: 1 }), 0);
+    assert.equal(nextDepotArrivalStreak({ ...base, depot: null, location: atDepot, previousStreak: 1 }), 0);
+    assert.equal(nextDepotArrivalStreak({ ...base, location: atDepot, previousStreak: 1, routeEndMode: 'END_AT_LAST_STOP' }), 0);
   });
 });

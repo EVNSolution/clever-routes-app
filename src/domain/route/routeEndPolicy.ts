@@ -71,6 +71,29 @@ export function classifyRouteCompletionLocation(input: {
   return getLocationDistanceMeters(input.location, input.depot) <= 150 ? 'confirmed' : 'outside';
 }
 
+export const DEPOT_ARRIVAL_CONSECUTIVE_FIXES = 2;
+
+/** Consecutive accurate fixes at the return location; any miss starts over. */
+export function nextDepotArrivalStreak(input: {
+  depot: AssignedRouteCoordinates | null;
+  location: RouteEventLocationCandidate | null;
+  now: Date;
+  previousStreak: number;
+  routeEndMode: AssignedRouteEndMode | undefined;
+}): number {
+  const trusted = resolveTrustedRouteEventLocation({
+    actionAt: input.now,
+    currentLocation: input.location,
+    routePlanId: '',
+  });
+  const arrived = classifyRouteCompletionLocation({
+    depot: input.depot,
+    location: trusted,
+    routeEndMode: input.routeEndMode,
+  }) === 'confirmed';
+  return arrived ? input.previousStreak + 1 : 0;
+}
+
 function isValidLocation(location: RouteEventLocationCandidate): location is RouteEventLocationEvidence {
   return location.accuracyMeters !== null
     && Number.isFinite(location.accuracyMeters)

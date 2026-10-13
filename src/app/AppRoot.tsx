@@ -155,6 +155,8 @@ import { BACKGROUND_LOCATION_DISCLOSURE_TEXT } from '../domain/preferences/preSt
 import { getCompanyReturnCopy } from '../domain/route/companyReturnCopy';
 import {
   classifyRouteCompletionLocation,
+  DEPOT_ARRIVAL_CONSECUTIVE_FIXES,
+  nextDepotArrivalStreak,
   requiresDepotReturn,
   resolveTrustedRouteEventLocation,
   type RouteEventLocationEvidence,
@@ -285,7 +287,7 @@ import {
 } from '../domain/notifications/stopArrivalNotifications';
 import { createExpoStopArrivalNotificationService } from '../platform/expo/notifications/expoStopArrivalNotificationService';
 import { requestRouteStartSessionConfirmation } from './routeStartConfirmation';
-import { requestActiveRouteSwitchConfirmation } from './activeRouteSwitchConfirmation';
+import { decideActiveRouteSwitch, requestActiveRouteSwitchConfirmation } from './activeRouteSwitchConfirmation';
 import { requestRouteReconciliationClearConfirmation } from './routeReconciliationClearConfirmation';
 import { persistOfflineQueueAndSyncState } from './offlineQueuePersistence';
 import {
@@ -446,6 +448,10 @@ function DriverApp() {
   const [liveRouteErrors, setLiveRouteErrors] = useState<Record<string, string>>({});
   const [isApplyingLiveRoute, setIsApplyingLiveRoute] = useState(false);
   const liveRoutePollRunningRef = useRef(false);
+  const depotArrivalStreakRef = useRef(0);
+  const autoFinishRequestedRef = useRef(false);
+  const requestRouteCompletionRef = useRef<typeof requestRouteCompletion | null>(null);
+  requestRouteCompletionRef.current = requestRouteCompletion;
   const liveRouteApplyRunningRef = useRef(false);
   const liveRouteAccessBlockedRef = useRef(new Set<string>());
   const liveRouteSessionsRef = useRef<RouteSession[]>([]);
@@ -2647,6 +2653,31 @@ function DriverApp() {
           capturedAt: lastLocation.occurredAt.toISOString(),
         });
       }
+      // After the last stop the route finishes by itself once the phone reports the return location.
+      if (routeStatus === 'active' && selectedRoute !== null && allStopsCompleted && !autoFinishRequestedRef.current) {
+        depotArrivalStreakRef.current = nextDepotArrivalStreak({
+          depot: selectedRoute.depot,
+          location: lastLocation === null ? null : {
+            accuracyMeters: lastLocation.accuracyMeters ?? null,
+            latitude: lastLocation.latitude,
+            longitude: lastLocation.longitude,
+            recordedAt: lastLocation.occurredAt,
+          },
+          now: new Date(),
+          previousStreak: depotArrivalStreakRef.current,
+          routeEndMode: selectedRoute.routeEndMode,
+        });
+        if (depotArrivalStreakRef.current >= DEPOT_ARRIVAL_CONSECUTIVE_FIXES) {
+          autoFinishRequestedRef.current = true;
+          void requestRouteCompletionRef.current?.(selectedRoute, undefined, () => {
+            autoFinishRequestedRef.current = false;
+            depotArrivalStreakRef.current = 0;
+          }, { automatic: true });
+        }
+      } else if (routeStatus !== 'active' || !allStopsCompleted) {
+        depotArrivalStreakRef.current = 0;
+        autoFinishRequestedRef.current = false;
+      }
       const candidate = getStopArrivalNotificationCandidate({
         completedStopIds,
         currentStepIndex: navigationStepIndex,
@@ -2674,6 +2705,7 @@ function DriverApp() {
     return () => registerContinuousLocationTaskObserver(null);
   }, [
     activeRoutePlanId,
+    allStopsCompleted,
     completedStopIds,
     convenienceNoticesEnabled,
     continuousLocationStreamService,
@@ -4698,43 +4730,32 @@ function DriverApp() {
     }
     if (activeRoutePlanId !== null && activeRoutePlanId !== routeSession.route.id) {
       const targetRoutePlanId = routeSession.route.id;
-      requestActiveRouteSwitchConfirmation({
-        alertApi: {
-          alert: showOperationalDialog,
-        },
-        onCancelCurrentDelivery: () => {
-          setPendingRoutePlanId(targetRoutePlanId);
-          if (currentStop === null) {
-            if (selectedRoute === null) {
-              setPendingRoutePlanId(null);
-              setMessage('The active route is no longer available. Refresh routes and try again.');
-              return;
-            }
-            void finishActiveRouteForSwitch(selectedRoute, targetRoutePlanId, true);
-            return;
-          }
-          void handleTerminalStop(currentStop, 'failed', {
-            failureNote: 'Driver cancelled the current delivery before switching routes.',
-            failureReason: 'OTHER',
-            switchToRoutePlanId: targetRoutePlanId,
-          });
-        },
-        onCompleteCurrentDelivery: () => {
-          if (currentStop === null) {
-            setSelectedRouteId(activeRoutePlanId);
-            setMessage('Complete Store Pickup before completing the current delivery.');
-            return;
-          }
-          setPendingRoutePlanId(targetRoutePlanId);
-          if (usesSingleCompletion(currentStop)) { void handleRequestStopCompletion(currentStop, targetRoutePlanId); return; }
-          void (async () => {
-            const arrivalOpened = await recordStopArrival(currentStop, 'mainTabs');
-            if (!arrivalOpened) {
-              setPendingRoutePlanId(null);
-            }
-          })();
-        },
-      });
+      const activeRoute = getRouteSessionForAction(routeSessions, activeRoutePlanId)?.route ?? selectedRoute;
+      if (activeRoute === null) {
+        setMessage('The active route is no longer available. Refresh routes and try again.');
+        return;
+      }
+      // Starting another route stops the active one by releasing it (ROUTE_PAUSED), then starts and shows the new route.
+      const stopActiveRoute = () => {
+        setPendingRoutePlanId(targetRoutePlanId);
+        void finishActiveRouteForSwitch(
+          activeRoute,
+          targetRoutePlanId,
+          !activeRoute.stops.every((stop) => isStopCompleted(stop, completedStopIds)),
+        );
+      };
+      if (decideActiveRouteSwitch({
+        activeDeliveryDate: activeRoute.deliveryDate,
+        targetDeliveryDate: routeSession.route.deliveryDate,
+      }) === 'switch_now') {
+        stopActiveRoute();
+      } else {
+        requestActiveRouteSwitchConfirmation({
+          alertApi: { alert: showOperationalDialog },
+          locale: selectedDriverLocale,
+          onStopActiveRoute: stopActiveRoute,
+        });
+      }
       return;
     }
     if (routeSession.pendingRouteEnd !== undefined) {
@@ -5930,6 +5951,7 @@ function DriverApp() {
     route: AssignedRoute,
     onCompleted?: () => Promise<void>,
     onCancelled?: () => void,
+    options?: { automatic?: boolean },
   ): Promise<void> {
     const occurredAt = new Date();
     const locationEvidence = await captureTrustedRouteEventLocation(route.id, occurredAt);
@@ -5947,9 +5969,14 @@ function DriverApp() {
         now: confirmedAt,
       });
       if (routeEnded) await onCompleted?.();
+      else if (options?.automatic === true) onCancelled?.();
     };
     if (completionLocation === 'confirmed' || completionLocation === 'not_required') {
       await finish(occurredAt, locationEvidence);
+      return;
+    }
+    if (options?.automatic === true) {
+      onCancelled?.();
       return;
     }
 
