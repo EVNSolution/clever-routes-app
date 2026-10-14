@@ -57,6 +57,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Test artifact verification failures
+        run: python3 scripts/test-verify-play-aab.py
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -150,6 +153,9 @@ jobs:
           java -jar "$bundletool" dump manifest --bundle="$aab" > "$RUNNER_TEMP/routes-aab/manifest.xml"
           jarsigner -verify "$aab" > "$RUNNER_TEMP/routes-aab/jarsigner.txt"
           grep -q '^jar verified\.' "$RUNNER_TEMP/routes-aab/jarsigner.txt"
+          if grep -qi 'unsigned entries' "$RUNNER_TEMP/routes-aab/jarsigner.txt"; then
+            echo 'AAB contains unsigned entries'; exit 1
+          fi
           actual="$(keytool -printcert -jarfile "$aab" | sed -n 's/^[[:space:]]*SHA256: //p' | head -1)"
           version_name="$(node -p "require('./app.json').expo.version")"
           python3 scripts/verify-play-aab.py --artifact "$aab" \
