@@ -1,0 +1,103 @@
+name: Android Release APK
+
+# Manual only. Builds the direct-install APK on a GitHub runner and verifies the
+# signing certificate. The APK is uploaded as a short-lived artifact; it is already
+# distributed by a public Drive link and signed with the public Expo template debug key.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: android-release-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # sha256 of the public Expo/React Native template debug.keystore (SHA1 5E:8F:16:06:...).
+  DEBUG_KEYSTORE_SHA256: 221e0a3106aa4c3ccc154e0a418b55020b3f9ea6e84f92e8749cd9e2f39f5e58
+  # sha256 of the signing certificate inside that keystore.
+  EXPECTED_SIGNER_SHA256: fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c
+
+jobs:
+  build:
+    name: Build and verify release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: android-release
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('package-lock.json', 'app.json') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore Firebase config
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > "$RUNNER_TEMP/google-services.json"
+          echo "CLEVER_ROUTES_GOOGLE_SERVICES_FILE=$RUNNER_TEMP/google-services.json" >> "$GITHUB_ENV"
+
+      - name: Fetch public debug keystore
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/tpl"
+          (cd "$RUNNER_TEMP/tpl" && npm pack expo-template-bare-minimum@sdk-56 --silent \
+            && tar -xzf expo-template-bare-minimum-*.tgz package/android/app/debug.keystore)
+          echo "$DEBUG_KEYSTORE_SHA256  $RUNNER_TEMP/tpl/package/android/app/debug.keystore" | sha256sum -c -
+          cp "$RUNNER_TEMP/tpl/package/android/app/debug.keystore" android/app/debug.keystore
+
+      - name: Prepare distribution source
+        run: npm run prebuild:android:distribution
+
+      - name: Build release APK
+        run: npm run build:android:distribution
+
+      - name: Verify APK signer and ABIs
+        run: |
+          set -euo pipefail
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          apksigner="$(find "$ANDROID_HOME"/build-tools -name apksigner -type f | sort -V | tail -1)"
+          actual="$("$apksigner" verify --print-certs "$apk" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)"
+          echo "expected=$EXPECTED_SIGNER_SHA256"
+          echo "actual=$actual"
+          test "$EXPECTED_SIGNER_SHA256" = "$actual"
+          if unzip -l "$apk" | grep -E 'lib/(x86|x86_64)/'; then echo 'emulator ABI found'; exit 1; fi
+          sha256sum "$apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: clever-routes-apk-${{ github.sha }}
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Remove secret files
+        if: always()
+        run: rm -f "$RUNNER_TEMP/google-services.json" android/app/google-services.json
