@@ -7477,12 +7477,6 @@ function MyRoutesPage({
             const isAnotherReadyRoute = routeCardStatus === 'ready'
               && activeRoutePlanId !== null
               && activeRoutePlanId !== session.route.id;
-            const isStartDisabled = isRouteActionPending
-              || isRefreshingRoutes
-              || routeSyncState !== 'ready'
-              || offlineStorageState === 'STORAGE_DEGRADED'
-              || backgroundLocationPermission !== 'granted'
-              || session.pendingRouteEnd !== undefined;
 
             return (
               <Pressable
@@ -7494,8 +7488,10 @@ function MyRoutesPage({
                     onOpenCompletedDeliveries(session.route.id);
                     return;
                   }
+                  // The card tap is the selection. Another Ready route cannot be previewed while a route
+                  // is active, so the tap runs the switch flow (Start stays gated by the same checks).
                   if (isAnotherReadyRoute) {
-                    setExpandedRouteKey(session.route.id);
+                    if (!isRouteActionPending && !isRefreshingRoutes && routeSyncState === 'ready') onStartRoute(session.route.id);
                     return;
                   }
                   onContinueRoute(session.route.id);
@@ -7535,20 +7531,6 @@ function MyRoutesPage({
                     <DataRow label="Stops" value={formatStopCount(session.route.stops.length)} />
                     <DataRow label="Estimated Distance" value={formatAssignedRouteDistance(session.route.routeMetrics)} />
                     <DataRow label="Estimated Time" value={formatAssignedRouteDuration(session.route.routeMetrics)} />
-                    {isAnotherReadyRoute ? (
-                      <Pressable
-                        accessibilityLabel={`Start ${session.route.name}`}
-                        accessibilityRole="button"
-                        disabled={isStartDisabled}
-                        onPress={(event) => {
-                          event.stopPropagation();
-                          onStartRoute(session.route.id);
-                        }}
-                        style={[styles.primaryButton, isStartDisabled && styles.buttonDisabled]}
-                      >
-                        <Text style={styles.primaryButtonText}>Start</Text>
-                      </Pressable>
-                    ) : null}
                   </>
                 ) : null}
               </Pressable>

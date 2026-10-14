@@ -121,7 +121,7 @@ describe('routes list behavior', () => {
     assert.match(source, /executionStatus === 'IN_PROGRESS'[\s\S]*pendingRouteEnd === undefined/u);
   });
 
-  it('expands another ready route without opening or selecting it, while preserving active and completed actions', () => {
+  it('starts the switch flow when another ready route card is tapped, without opening or selecting it', () => {
     const source = getRoutesPageSource();
     const cardHandler = source.match(/onPress=\{\(\) => \{([\s\S]*?)\n\s{16}\}\}/u)?.[1];
     assert.ok(cardHandler);
@@ -131,59 +131,53 @@ describe('routes list behavior', () => {
       runInNewContext(`(() => { ${cardHandler} })()`, {
         routeCardStatus,
         isAnotherReadyRoute: routeCardStatus === 'ready',
+        isRouteActionPending: false,
+        isRefreshingRoutes: false,
+        routeSyncState: 'ready',
         session: { route: { id: 'target-route' } },
-        setExpandedRouteKey: (id: string) => actions.push(`expand:${id}`),
+        onStartRoute: (id: string) => actions.push(`start:${id}`),
         onContinueRoute: (id: string) => actions.push(`continue:${id}`),
         onOpenCompletedDeliveries: (id: string) => actions.push(`completed:${id}`),
       });
-      assert.deepEqual(actions, [`${routeCardStatus === 'ready' ? 'expand' : routeCardStatus === 'active' ? 'continue' : 'completed'}:target-route`]);
+      assert.deepEqual(actions, [`${routeCardStatus === 'ready' ? 'start' : routeCardStatus === 'active' ? 'continue' : 'completed'}:target-route`]);
     }
 
     assert.match(source, /const isAnotherReadyRoute = routeCardStatus === 'ready'\s*&& activeRoutePlanId !== null\s*&& activeRoutePlanId !== session\.route\.id/u);
-    assert.doesNotMatch(cardHandler, /setSelectedRouteId|setSubmission|onStartRoute/u);
+    assert.doesNotMatch(cardHandler, /setSelectedRouteId|setSubmission/u);
   });
 
-  it('exposes an isolated Start action only inside another ready route card and wires it to the existing switch flow', () => {
-    const appSource = readFileSync(appRootPath, 'utf8');
+  it('keeps a route card tap inert for another ready route during mutations, refresh, or a failed route sync', () => {
     const source = getRoutesPageSource();
-    const startHandler = source.match(/accessibilityLabel=\{`Start \$\{session\.route\.name\}`\}[\s\S]*?onPress=\{\(event\) => \{([\s\S]*?)\n\s*\}\}/u)?.[1];
-    assert.ok(startHandler);
-    const actions: string[] = [];
-    runInNewContext(`((event) => { ${startHandler} })(event)`, {
-      event: { stopPropagation: () => actions.push('stopPropagation') },
-      session: { route: { id: 'target-route' } },
-      onStartRoute: (id: string) => actions.push(`start:${id}`),
-    });
-    assert.deepEqual(actions, ['stopPropagation', 'start:target-route']);
-    assert.match(source, /isRouteCardExpanded \? \([\s\S]*isAnotherReadyRoute \? \([\s\S]*accessibilityLabel=\{`Start/u);
-    assert.match(appSource, /<MyRoutesPage[\s\S]*?isRouteActionPending=\{isStartingRoute \|\| isFinishingRoute \|\| pendingRoutePlanId !== null \|\| routeStartRecoveryState !== 'idle'\}[\s\S]*?onStartRoute=\{handleStartRoute\}/u);
-  });
-
-  it('disables Start during mutations, refresh, permission or storage recovery, and target final-status sync', () => {
-    const source = getRoutesPageSource();
-    const disabledExpression = source.match(/const isStartDisabled = ([\s\S]*?);/u)?.[1];
-    assert.ok(disabledExpression);
-    const ready = {
-      isRouteActionPending: false,
-      isRefreshingRoutes: false,
-      routeSyncState: 'ready',
-      offlineStorageState: 'READY',
-      backgroundLocationPermission: 'granted',
-      session: {},
-    };
-    assert.equal(runInNewContext(disabledExpression, ready), false);
+    const cardHandler = source.match(/onPress=\{\(\) => \{([\s\S]*?)\n\s{16}\}\}/u)?.[1];
+    assert.ok(cardHandler);
+    const ready = { isRouteActionPending: false, isRefreshingRoutes: false, routeSyncState: 'ready' };
     for (const blocked of [
       { isRouteActionPending: true },
       { isRefreshingRoutes: true },
       { routeSyncState: 'loading' },
       { routeSyncState: 'error' },
-      { offlineStorageState: 'STORAGE_DEGRADED' },
-      { backgroundLocationPermission: 'denied' },
-      { session: { pendingRouteEnd: 'released' } },
     ]) {
-      assert.equal(runInNewContext(disabledExpression, { ...ready, ...blocked }), true);
+      const actions: string[] = [];
+      runInNewContext(`(() => { ${cardHandler} })()`, {
+        routeCardStatus: 'ready',
+        isAnotherReadyRoute: true,
+        ...ready,
+        ...blocked,
+        session: { route: { id: 'target-route' } },
+        onStartRoute: (id: string) => actions.push(`start:${id}`),
+        onContinueRoute: (id: string) => actions.push(`continue:${id}`),
+        onOpenCompletedDeliveries: (id: string) => actions.push(`completed:${id}`),
+      });
+      assert.deepEqual(actions, []);
     }
-    assert.match(source, /accessibilityLabel=\{`Start[\s\S]*?disabled=\{isStartDisabled\}/u);
+  });
+
+  it('has no Start button inside an expanded route card and wires the card tap to the existing switch flow', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const source = getRoutesPageSource();
+    assert.doesNotMatch(source, /accessibilityLabel=\{`Start \$\{session\.route\.name\}`\}/u);
+    assert.doesNotMatch(source, /isStartDisabled/u);
+    assert.match(appSource, /<MyRoutesPage[\s\S]*?isRouteActionPending=\{isStartingRoute \|\| isFinishingRoute \|\| pendingRoutePlanId !== null \|\| routeStartRecoveryState !== 'idle'\}[\s\S]*?onStartRoute=\{handleStartRoute\}/u);
   });
 
   it('rejects a target with pending final status before releasing the active route', () => {
