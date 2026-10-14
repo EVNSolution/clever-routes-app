@@ -183,6 +183,7 @@ import {
 } from '../domain/offline/offlineRetryTrigger';
 import { createOfflineRetryScheduler } from '../domain/offline/offlineRetryScheduler';
 import { runBoundedAsyncOperation } from '../domain/async/boundedAsyncOperation';
+import { waitUntil } from '../domain/async/waitUntil';
 import { classifyGpsOperationalState } from '../domain/location/gpsOperationalState';
 import {
   combineDriverSyncAbortSignals,
@@ -6183,7 +6184,19 @@ function DriverApp() {
       return;
     }
 
+    // The release keeps the active session as completion pending until the server acknowledges it, and
+    // another route cannot be saved meanwhile: wait for the session to clear before starting the new route.
+    const sessionCleared = await waitUntil(async () => {
+      const access = await driverAccessTokenStore.loadActiveDriverAccess();
+      return !(access.kind === 'active' || access.kind === 'refresh_required')
+        || access.activeRouteSession === undefined
+        || access.activeRouteSession.routePlanId !== activeRoute.id;
+    }, { pollMs: 250, timeoutMs: 15_000 });
     setPendingRoutePlanId(null);
+    if (!sessionCleared) {
+      setMessage('The route was released and is still syncing. Start the next route again in a moment.');
+      return;
+    }
     await startRouteSessionAfterConfirmed(targetRoutePlanId);
   }
 
