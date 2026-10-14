@@ -18,16 +18,15 @@ function between(startMarker: string, endMarker: string): string {
 
 describe('live route banner, Apply and pull refresh recovery', () => {
   it('selects the changed-list banner only for a real unapplied change, never for an error alone', () => {
-    const selection = between('const liveBannerSession = routeSessions.find(', 'const liveCheckErrorMessage =');
+    const selection = between('const liveBannerSession = routeSessions.find(', 'const liveBannerKey =');
     assert.doesNotMatch(selection, /liveRouteErrors\[/u);
     assert.match(selection, /hasPendingLiveRouteChange\(state\)/u);
   });
 
-  it('shows a communication error without a change as its own notice with a retry', () => {
+  it('shows no extra banner for a communication error without a change', () => {
     const banner = readFileSync(bannerPath, 'utf8');
-    assert.match(banner, /export function LiveRouteCheckNotice\(/u);
-    assert.match(source, /liveBannerState === undefined[\s\S]*<LiveRouteCheckNotice[\s\S]*onRetry=\{\(\) => \{ void pollLiveRouteChanges\(\); \}\}/u);
-    assert.match(source, /const liveCheckErrorMessage = routeSessions\.reduce[\s\S]*selectedRouteId[\s\S]*activeRoutePlanId/u);
+    assert.doesNotMatch(banner, /LiveRouteCheckNotice/u);
+    assert.doesNotMatch(source, /LiveRouteCheckNotice|liveCheckErrorMessage/u);
   });
 
   it('recovers a route the server ended from the latest assignments instead of showing a change notice', () => {
@@ -41,7 +40,7 @@ describe('live route banner, Apply and pull refresh recovery', () => {
     const apply = between('async function handleApplyLiveRoute(', 'useEffect(() => {\n    const receiveRouteNotification');
     assert.match(apply, /if \(release === null\) \{\s*setMessage\('Finish the current delivery action before applying the update\.'\);/u);
     assert.match(apply, /if \(owner === null\) \{\s*release\(\);\s*setMessage\('Sign in again to apply the update\.'\);/u);
-    assert.match(apply, /setMessage\('Delivery list updated\.'\)/u);
+    assert.doesNotMatch(apply, /Delivery list updated/u);
     assert.match(apply, /The route update is not fully confirmed/u);
   });
 
