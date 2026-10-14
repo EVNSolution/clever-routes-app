@@ -184,7 +184,7 @@ describe('routes list behavior', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const start = source.indexOf('function handleStartRoute(');
     const end = source.indexOf('async function startRouteSessionAfterConfirmed(', start);
-    const compiled = transpileModule(`${source.slice(start, end)}\nstartRouteAfterBatteryCheck('target-route');`, {});
+    const compiled = transpileModule(`${source.slice(start, end)}\nhandleStartRoute('target-route');`, {});
     const actions: string[] = [];
     runInNewContext(compiled.outputText, {
       blockMutationWhileStorageDegraded: () => false,
