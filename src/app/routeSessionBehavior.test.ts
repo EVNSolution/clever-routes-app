@@ -562,6 +562,17 @@ describe('route session current task behavior', () => {
     assert.doesNotMatch(startSource, /onCancelCurrentDelivery|onCompleteCurrentDelivery/u);
   });
 
+  it('starts the new route only after the released route session is cleared', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const begin = appSource.indexOf('async function finishActiveRouteForSwitch(');
+    const end = appSource.indexOf('\n\n  async function finishRoute(', begin);
+    const switchSource = appSource.slice(begin, end);
+
+    assert.match(switchSource, /routeEnd: 'released'[\s\S]*waitUntil\(async \(\) => \{[\s\S]*loadActiveDriverAccess\(\)[\s\S]*activeRouteSession\.routePlanId !== activeRoute\.id/u);
+    assert.match(switchSource, /if \(!sessionCleared\) \{[\s\S]*still syncing[\s\S]*return;/u);
+    assert.ok(switchSource.indexOf('waitUntil(') < switchSource.indexOf('startRouteSessionAfterConfirmed(targetRoutePlanId)'));
+  });
+
   it('keeps Store Pickup and out-of-order arrival work from overriding Back', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const arrivedBegin = appSource.indexOf('async function handleArrivedAtStep()');
