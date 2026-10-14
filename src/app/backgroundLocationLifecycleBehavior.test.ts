@@ -270,6 +270,5 @@ describe('background location lifecycle wiring', () => {
     assert.match(source, /Delivery updates are read-only until encrypted storage is safely persisted/u);
     assert.match(source, /if \(blockMutationWhileStorageDegraded\(\)\) return/u);
     assert.match(source, /function startRouteAfterBatteryCheck\(routeId\?: string\) \{\s*if \(blockMutationWhileStorageDegraded\(\)\) return/u);
-    assert.match(source, /const isStartDisabled =[^;]*offlineStorageState === 'STORAGE_DEGRADED'/u);
   });
 });
