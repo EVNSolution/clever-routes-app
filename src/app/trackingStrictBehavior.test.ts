@@ -16,11 +16,12 @@ describe('tracking stays on after Start until the driver finishes', () => {
     assert.match(stream, /serverEndedTrackingAt = null;\s*if \(await Location\.hasStartedLocationUpdatesAsync\(taskName\)\)/u);
   });
 
-  it('stops tracking only after the driver confirms a server-ended route', () => {
+  it('stops the service quietly when the app is open and a server-ended route is reported', () => {
     const observer = appRoot.slice(appRoot.indexOf('registerContinuousLocationTaskObserver(async (locations, taskResult) => {'));
-    assert.match(observer, /taskResult\.reason !== 'pre_start_ended'[\s\S]*showOperationalDialog\([\s\S]*cancelable: false/u);
-    assert.match(observer, /text: 'Confirm'[\s\S]*onPress[\s\S]*stopLocationUpdates\(CONTINUOUS_LOCATION_TASK_NAME\)/u);
-    assert.doesNotMatch(observer.slice(0, observer.indexOf('syncOfflineQueueState(offlineSubmissionQueue);')), /Live location tracking stopped/u);
+    const ended = observer.slice(0, observer.indexOf('syncOfflineQueueState(offlineSubmissionQueue);'));
+    assert.match(ended, /taskResult\.reason !== 'pre_start_ended'[\s\S]*stopLocationUpdates\(CONTINUOUS_LOCATION_TASK_NAME\)/u);
+    assert.doesNotMatch(ended, /showOperationalDialog|Confirm/u);
+    assert.doesNotMatch(ended, /Live location tracking stopped/u);
   });
 
   it('restarts a stopped location task of an active route and posts its notification again', () => {
@@ -35,11 +36,9 @@ describe('tracking stays on after Start until the driver finishes', () => {
     assert.match(appRoot, /const TRACKING_WATCHDOG_INTERVAL_MS = 60_000/u);
   });
 
-  it('shows the battery guidance once on Android after Start', () => {
-    const guidance = appRoot.slice(appRoot.indexOf('batteryGuidanceStore.isShown()'));
-    assert.match(guidance, /Platform\.OS !== 'android'|Platform\.OS === 'android'/u);
-    assert.match(guidance, /markShown\(\)/u);
-    assert.match(guidance, /Linking\.openSettings\(\)/u);
-    assert.match(appRoot, /getBatteryGuidanceCopy\(selectedDriverLocale\)/u);
+  it('shows the battery setting as one fixed Settings line and no popup', () => {
+    assert.match(appRoot, /getBatterySettingsCopy\(selectedDriverLocale\)/u);
+    assert.match(appRoot, /accessibilityLabel=\{batterySettingsCopy\.label\}[\s\S]*Linking\.openSettings\(\)/u);
+    assert.doesNotMatch(appRoot, /batteryGuidanceStore|getBatteryGuidanceCopy|Keep tracking on/u);
   });
 });

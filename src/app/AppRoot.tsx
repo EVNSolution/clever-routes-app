@@ -47,7 +47,7 @@ import {
 import { CashCompletionModal, StopCompletionPanel } from './StopCompletionPanel';
 import { buildCashCompletion, formatCompletionAmount, getSingleCompletionAction, supportsSingleCompletion } from './kfoodSingleCompletion';
 import type { StopCompletion, StopCompletionInput } from '../domain/stop/stopCompletion';
-import { LiveRouteChangeBanner, LiveRouteCheckNotice } from './liveRouteChangeBanner';
+import { LiveRouteChangeBanner } from './liveRouteChangeBanner';
 import { applyLiveRouteChange, getLiveRouteRecoveryProgress, hasPendingLiveRouteChange, observeLiveRoutePublication, preserveLiveRouteStep, retryLiveRouteAcknowledgement, stageLiveRouteRefresh, supportsLiveRouteChanges, shouldCheckLiveRouteChange } from './liveRouteChangeController';
 import { emptyLiveRouteChangeState, type LiveRouteChangeState, type LiveRouteChangeUiDraft } from '../domain/route/liveRouteChangeStore';
 import { canRefreshCachedLiveRoute, getLiveRouteLoadDiagnostic, loadRouteAccessWithLiveCacheRecovery, pauseCachedLiveRouteTracking, shouldHydrateLiveRouteInputs, type CachedLiveRouteSession, type CachedLiveRouteValidation, type LiveRouteLoadStage } from './liveRouteCacheRecovery';
@@ -150,8 +150,7 @@ import { readInstalledDriverAppVersion } from '../platform/expo/application/expo
 import { createExpoConvenienceNoticesStore } from '../platform/expo/storage/expoConvenienceNoticesStore';
 import { createExpoDetailedActiveRouteNotificationStore } from '../platform/expo/storage/expoDetailedActiveRouteNotificationStore';
 import { createExpoPreStartLocationNoticeStore } from '../platform/expo/storage/expoPreStartLocationNoticeStore';
-import { createExpoBatteryGuidanceStore } from '../platform/expo/storage/expoBatteryGuidanceStore';
-import { getBatteryGuidanceCopy } from '../domain/preferences/batteryGuidance';
+import { getBatterySettingsCopy } from '../domain/preferences/batteryGuidance';
 import { getConvenienceNoticesCopy } from '../domain/preferences/convenienceNotices';
 import { getDetailedActiveRouteNotificationCopy } from '../domain/preferences/detailedActiveRouteNotification';
 import { BACKGROUND_LOCATION_DISCLOSURE_TEXT } from '../domain/preferences/preStartLocationNotice';
@@ -2652,20 +2651,8 @@ function DriverApp() {
           setMessage('Driver access expired. Route assignments are refreshing.');
         }
         if (taskResult.reason !== 'pre_start_ended') {
-          // Tracking is never turned off behind the driver's back: it stops when the driver confirms.
-          showOperationalDialog(
-            taskResult.reason === 'route_not_in_progress' ? 'Route ended' : 'Route access ended',
-            taskResult.reason === 'route_not_in_progress'
-              ? 'The office ended this route. Location tracking stays on until you confirm.'
-              : 'Your access to this route ended. Location tracking stays on until you confirm.',
-            [{
-              onPress: () => {
-                void continuousLocationStreamService.stopLocationUpdates(CONTINUOUS_LOCATION_TASK_NAME).catch(() => undefined);
-              },
-              text: 'Confirm',
-            }],
-            { cancelable: false },
-          );
+          // The app is open and shows the message above: the service for the ended route stops quietly.
+          void continuousLocationStreamService.stopLocationUpdates(CONTINUOUS_LOCATION_TASK_NAME).catch(() => undefined);
         }
         return;
       }
@@ -2759,14 +2746,12 @@ function DriverApp() {
     routeStatus,
     selectedRoute,
     setScreen,
-    showOperationalDialog,
     stopArrivalNotificationService,
     syncOfflineQueueState,
   ]);
 
   // After Start the location task is kept alive: restart it when the OS stopped it and post its notification again.
   const trackingWatchdogRunningRef = useRef(false);
-  const batteryGuidanceStore = useMemo(() => createExpoBatteryGuidanceStore(), []);
   useEffect(() => {
     if (routeStatus !== 'active' || deliveryStartResult?.kind !== 'delivery_active'
       || selectedRoute === null || activeRoutePlanId === null || isFinishingRoute || pendingRoutePlanId !== null) {
@@ -2830,22 +2815,6 @@ function DriverApp() {
     routeStatus,
     selectedRoute,
   ]);
-
-  // One-time Android guidance so the battery setting does not stop tracking before the route is finished.
-  useEffect(() => {
-    if (Platform.OS !== 'android' || routeStatus !== 'active' || deliveryStartResult?.kind !== 'delivery_active') return undefined;
-    let cancelled = false;
-    void (async () => {
-      if (await batteryGuidanceStore.isShown().catch(() => true) || cancelled) return;
-      const copy = getBatteryGuidanceCopy(selectedDriverLocale);
-      await batteryGuidanceStore.markShown().catch(() => undefined);
-      showOperationalDialog(copy.title, copy.message, [
-        { style: 'cancel', text: copy.laterLabel },
-        { onPress: () => { void Linking.openSettings(); }, text: copy.openSettingsLabel },
-      ], { cancelable: true });
-    })();
-    return () => { cancelled = true; };
-  }, [batteryGuidanceStore, deliveryStartResult?.kind, routeStatus, selectedDriverLocale, showOperationalDialog]);
 
   function handlePhoneInputChange(value: string) {
     setNationalPhoneInput(formatDriverNationalPhoneInput({
@@ -3933,10 +3902,6 @@ function DriverApp() {
     const state = liveRouteStates[liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration)];
     return state !== undefined && (state.appliedRoute === null || hasPendingLiveRouteChange(state));
   });
-  const liveCheckErrorMessage = routeSessions.reduce<string | null>((found, session) => {
-    if (found !== null || (session.route.id !== selectedRouteId && session.route.id !== activeRoutePlanId)) return found;
-    return liveRouteErrors[liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration)] ?? null;
-  }, null);
   const liveBannerKey = liveBannerSession === undefined ? null : liveRouteStateKey(liveBannerSession.route.id, liveBannerSession.routeAccess.assignmentGeneration);
   const liveBannerState = liveBannerKey === null ? undefined : liveRouteStates[liveBannerKey];
 
@@ -4018,10 +3983,7 @@ function DriverApp() {
         });
         if (isCurrent()) publishLiveRouteState(owner, applied);
       }
-      if (isCurrent()) {
-        setLiveRouteErrors(errors => { const next = { ...errors }; delete next[key]; return next; });
-        setMessage('Delivery list updated.');
-      }
+      if (isCurrent()) setLiveRouteErrors(errors => { const next = { ...errors }; delete next[key]; return next; });
     } catch {
       if (isCurrent()) setLiveRouteErrors(errors => ({ ...errors, [key]: 'The route update is not fully confirmed. Keep this notice and retry.' }));
     } finally {
@@ -6765,12 +6727,6 @@ function DriverApp() {
                 error={liveBannerKey === null ? null : liveRouteErrors[liveBannerKey] ?? null}
                 onApply={() => { void handleApplyLiveRoute(); }} />
             ) : null}
-            {liveBannerState === undefined && verifiedDriverPhoneE164 !== null && liveCheckErrorMessage !== null ? (
-              <LiveRouteCheckNotice
-                message={liveCheckErrorMessage}
-                onRetry={() => { void pollLiveRouteChanges(); }}
-              />
-            ) : null}
             <View style={styles.scrollStage}>
             {screen === 'mainTabs' ? (
               <View pointerEvents="none" style={styles.pullRefreshReveal}>
@@ -6936,6 +6892,7 @@ function DriverApp() {
               convenienceNoticesCopy={getConvenienceNoticesCopy(selectedDriverLocale)}
               convenienceNoticesEnabled={convenienceNoticesEnabled}
               detailedActiveRouteNotificationCopy={getDetailedActiveRouteNotificationCopy(selectedDriverLocale)}
+              batterySettingsCopy={getBatterySettingsCopy(selectedDriverLocale)}
               detailedActiveRouteNotificationEnabled={detailedActiveRouteNotificationEnabled}
               isLoadingAccountProfile={isLoadingAccountProfile}
               isRequestingAccountDeletion={isRequestingAccountDeletion}
@@ -7589,6 +7546,7 @@ function SettingsPage({
   appVersion,
   convenienceNoticesCopy,
   convenienceNoticesEnabled,
+  batterySettingsCopy,
   detailedActiveRouteNotificationCopy,
   detailedActiveRouteNotificationEnabled,
   isLoadingAccountProfile,
@@ -7610,6 +7568,7 @@ function SettingsPage({
   appVersion: string;
   convenienceNoticesCopy: ReturnType<typeof getConvenienceNoticesCopy>;
   convenienceNoticesEnabled: boolean;
+  batterySettingsCopy: ReturnType<typeof getBatterySettingsCopy>;
   detailedActiveRouteNotificationCopy: ReturnType<typeof getDetailedActiveRouteNotificationCopy>;
   detailedActiveRouteNotificationEnabled: boolean;
   isLoadingAccountProfile: boolean;
@@ -7707,6 +7666,17 @@ function SettingsPage({
               value={detailedActiveRouteNotificationEnabled}
             />
           </View>
+          <Pressable
+            accessibilityLabel={batterySettingsCopy.label}
+            accessibilityRole="button"
+            onPress={() => { void Linking.openSettings(); }}
+            style={({ pressed }) => [styles.settingsRow, pressed && styles.settingsRowPressed]}
+          >
+            <View style={styles.settingsPreferenceCopy}>
+              <Text style={styles.settingsRowLabel}>{batterySettingsCopy.label}</Text>
+              <Text style={styles.settingsPreferenceDescription}>{batterySettingsCopy.description}</Text>
+            </View>
+          </Pressable>
         </View>
       </View>
 
