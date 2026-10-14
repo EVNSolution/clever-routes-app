@@ -150,8 +150,6 @@ import { readInstalledDriverAppVersion } from '../platform/expo/application/expo
 import { createExpoConvenienceNoticesStore } from '../platform/expo/storage/expoConvenienceNoticesStore';
 import { createExpoDetailedActiveRouteNotificationStore } from '../platform/expo/storage/expoDetailedActiveRouteNotificationStore';
 import { createExpoPreStartLocationNoticeStore } from '../platform/expo/storage/expoPreStartLocationNoticeStore';
-import { getBatteryGateCopy, shouldBlockStartForBattery } from '../domain/preferences/batteryGate';
-import { openBatteryOptimizationSettings, readBatteryOptimizationEnabled } from '../platform/expo/battery/expoBatteryOptimization';
 import { getConvenienceNoticesCopy } from '../domain/preferences/convenienceNotices';
 import { getDetailedActiveRouteNotificationCopy } from '../domain/preferences/detailedActiveRouteNotification';
 import { BACKGROUND_LOCATION_DISCLOSURE_TEXT } from '../domain/preferences/preStartLocationNotice';
@@ -2753,7 +2751,6 @@ function DriverApp() {
 
   // After Start the location task is kept alive: restart it when the OS stopped it and post its notification again.
   const trackingWatchdogRunningRef = useRef(false);
-  const [batteryOptimizationEnabled, setBatteryOptimizationEnabled] = useState<boolean | null>(null);
   useEffect(() => {
     if (routeStatus !== 'active' || deliveryStartResult?.kind !== 'delivery_active'
       || selectedRoute === null || activeRoutePlanId === null || isFinishingRoute || pendingRoutePlanId !== null) {
@@ -2817,15 +2814,6 @@ function DriverApp() {
     routeStatus,
     selectedRoute,
   ]);
-
-  // Battery optimization state: read at start-up and again when the driver returns from the system settings.
-  useEffect(() => {
-    if (Platform.OS !== 'android') return undefined;
-    const refresh = () => { void readBatteryOptimizationEnabled().then(setBatteryOptimizationEnabled); };
-    refresh();
-    const subscription = AppState.addEventListener('change', (state) => { if (state === 'active') refresh(); });
-    return () => { subscription.remove(); };
-  }, []);
 
   function handlePhoneInputChange(value: string) {
     setNationalPhoneInput(formatDriverNationalPhoneInput({
@@ -4837,21 +4825,7 @@ function DriverApp() {
     return undefined;
   }, [isDriverRestoreComplete, refreshBackgroundLocationPermission, screen, verifiedDriverPhoneE164]);
 
-  // Start is blocked while battery optimization is on: the settings screen opens at once, with one line.
   function handleStartRoute(routeId?: string) {
-    void (async () => {
-      const optimizationEnabled = await readBatteryOptimizationEnabled();
-      setBatteryOptimizationEnabled(optimizationEnabled);
-      if (shouldBlockStartForBattery({ optimizationEnabled, platform: Platform.OS })) {
-        setMessage(getBatteryGateCopy(selectedDriverLocale).message);
-        await openBatteryOptimizationSettings();
-        return;
-      }
-      startRouteAfterBatteryCheck(routeId);
-    })();
-  }
-
-  function startRouteAfterBatteryCheck(routeId?: string) {
     if (blockMutationWhileStorageDegraded()) return;
     if (routeStartRecoveryState !== 'idle') {
       setMessage('This route remains active while its start records recover. Do not start it again; refresh My Routes when online.');
@@ -6917,9 +6891,6 @@ function DriverApp() {
               convenienceNoticesCopy={getConvenienceNoticesCopy(selectedDriverLocale)}
               convenienceNoticesEnabled={convenienceNoticesEnabled}
               detailedActiveRouteNotificationCopy={getDetailedActiveRouteNotificationCopy(selectedDriverLocale)}
-              batteryGateCopy={getBatteryGateCopy(selectedDriverLocale)}
-              batteryOptimizationEnabled={batteryOptimizationEnabled}
-              onOpenBatterySettings={() => { void openBatteryOptimizationSettings(); }}
               detailedActiveRouteNotificationEnabled={detailedActiveRouteNotificationEnabled}
               isLoadingAccountProfile={isLoadingAccountProfile}
               isRequestingAccountDeletion={isRequestingAccountDeletion}
@@ -7555,9 +7526,6 @@ function SettingsPage({
   appVersion,
   convenienceNoticesCopy,
   convenienceNoticesEnabled,
-  batteryGateCopy,
-  batteryOptimizationEnabled,
-  onOpenBatterySettings,
   detailedActiveRouteNotificationCopy,
   detailedActiveRouteNotificationEnabled,
   isLoadingAccountProfile,
@@ -7579,9 +7547,6 @@ function SettingsPage({
   appVersion: string;
   convenienceNoticesCopy: ReturnType<typeof getConvenienceNoticesCopy>;
   convenienceNoticesEnabled: boolean;
-  batteryGateCopy: ReturnType<typeof getBatteryGateCopy>;
-  batteryOptimizationEnabled: boolean | null;
-  onOpenBatterySettings(): void;
   detailedActiveRouteNotificationCopy: ReturnType<typeof getDetailedActiveRouteNotificationCopy>;
   detailedActiveRouteNotificationEnabled: boolean;
   isLoadingAccountProfile: boolean;
@@ -7679,19 +7644,6 @@ function SettingsPage({
               value={detailedActiveRouteNotificationEnabled}
             />
           </View>
-          {batteryOptimizationEnabled === true ? (
-            <Pressable
-              accessibilityLabel={batteryGateCopy.settingsLabel}
-              accessibilityRole="button"
-              onPress={onOpenBatterySettings}
-              style={({ pressed }) => [styles.settingsRow, pressed && styles.settingsRowPressed]}
-            >
-              <View style={styles.settingsPreferenceCopy}>
-                <Text style={styles.settingsRowLabel}>{batteryGateCopy.settingsLabel}</Text>
-                <Text style={styles.settingsPreferenceDescription}>{batteryGateCopy.settingsDescription}</Text>
-              </View>
-            </Pressable>
-          ) : null}
         </View>
       </View>
 

@@ -36,15 +36,7 @@ describe('tracking stays on after Start until the driver finishes', () => {
     assert.match(appRoot, /const TRACKING_WATCHDOG_INTERVAL_MS = 60_000/u);
   });
 
-  it('blocks Start while battery optimization is on and opens the battery settings at once', () => {
-    const start = appRoot.slice(appRoot.indexOf('function handleStartRoute(routeId?: string) {'), appRoot.indexOf('function startRouteAfterBatteryCheck('));
-    assert.match(start, /readBatteryOptimizationEnabled\(\)[\s\S]*shouldBlockStartForBattery\(\{ optimizationEnabled, platform: Platform\.OS \}\)/u);
-    assert.match(start, /setMessage\(getBatteryGateCopy\(selectedDriverLocale\)\.message\);\s*await openBatteryOptimizationSettings\(\);\s*return;/u);
-    assert.match(start, /startRouteAfterBatteryCheck\(routeId\)/u);
-  });
-
-  it('shows the battery line in Settings only while optimization is on, and no popup', () => {
-    assert.match(appRoot, /batteryOptimizationEnabled === true \? \([\s\S]*onPress=\{onOpenBatterySettings\}/u);
-    assert.doesNotMatch(appRoot, /batteryGuidanceStore|getBatteryGuidanceCopy|getBatterySettingsCopy|Keep tracking on/u);
+  it('has no battery gate, battery guidance popup or battery settings line', () => {
+    assert.doesNotMatch(appRoot, /atteryGuidance|atterySettings|atteryOptimization|getBatteryGateCopy/u);
   });
 });
