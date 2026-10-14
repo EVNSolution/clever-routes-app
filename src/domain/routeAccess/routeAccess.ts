@@ -150,42 +150,6 @@ export const sampleInvitedRouteAccess: Extract<RouteAccessLookupResult, { status
   },
 };
 
-export const sampleMultipleRouteAccess: Extract<RouteAccessLookupResult, { status: 'MULTIPLE_MATCHES' }> = {
-  status: 'MULTIPLE_MATCHES',
-  matches: [
-    {
-      companyDisplayName: 'Tomatono Toronto',
-      deliveryDate: '2026-05-12',
-      operatorSupportContact: '+14165550000',
-      pickupGuidance: 'Contact dispatch if this route assignment looks unfamiliar.',
-      routeName: 'Tuesday AM Route',
-      shopDomain: 'tomatono.myshopify.com',
-      timezone: 'America/Toronto',
-    },
-    {
-      companyDisplayName: 'North Market',
-      deliveryDate: '2026-05-12',
-      operatorSupportContact: '+14165550001',
-      pickupGuidance: 'Contact dispatch to confirm the North Market assignment.',
-      routeName: 'North PM Route',
-      shopDomain: 'north-market.myshopify.com',
-      timezone: 'America/Toronto',
-    },
-  ],
-  resolutionHint: 'Use the account route list or contact dispatch.',
-};
-
-export const samplePhoneRouteChoices: Extract<RouteAccessLookupResult, { status: 'ROUTES_FOUND' }> = {
-  status: 'ROUTES_FOUND',
-  routes: [
-    {
-      routeAccess: sampleInvitedRouteAccess.routeAccess,
-      companyGuidance: sampleInvitedRouteAccess.companyGuidance,
-      driverAccess: sampleInvitedRouteAccess.driverAccess,
-    },
-  ],
-};
-
 export function createMockRouteAccessService(
   result: RouteAccessLookupResult = sampleInvitedRouteAccess,
 ): RouteAccessService {
