@@ -1,0 +1,200 @@
+name: Android Release AAB
+
+# Build only. Play submission remains a separate operator action.
+on:
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: 'Unused Android versionCode, reserved in the EAS counter before running'
+        required: true
+        type: string
+      profile:
+        description: 'Match the intended EAS production runtime profile'
+        required: true
+        type: choice
+        default: production-kfood-on
+        options:
+          - production-kfood-on
+          - production
+
+concurrency:
+  group: routes-android-release-aab
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_ENV: production
+  EXPO_NO_DOTENV: '1'
+  EXPO_PUBLIC_DRIVER_RUNTIME_MODE: live
+  EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL: https://clever-route.cleversystem.ai
+  EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA: ${{ inputs.profile == 'production-kfood-on' && 'true' || 'false' }}
+  # Existing EAS/Play upload certificate. This is not the Play app-signing key.
+  EXPECTED_UPLOAD_CERT_SHA256: 55c14543e167a55efe4f0153c9fee0e52d2fd3ae567a255356c40aee8893ee48
+
+jobs:
+  build:
+    name: Build and verify Play AAB
+    if: github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: android-release
+    steps:
+      - name: Validate inputs
+        env:
+          VERSION_CODE: ${{ inputs.version_code }}
+          BUILD_PROFILE: ${{ inputs.profile }}
+        run: |
+          python3 - <<'PY'
+          import os
+          value = os.environ['VERSION_CODE']
+          assert value.isascii() and value.isdecimal() and not value.startswith('0'), 'Invalid versionCode'
+          assert 1 <= int(value) <= 2100000000, 'versionCode exceeds the Play limit'
+          assert os.environ['BUILD_PROFILE'] in ('production', 'production-kfood-on'), 'Invalid profile'
+          PY
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Test artifact verification failures
+        run: python3 scripts/test-verify-play-aab.py
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-aab-${{ runner.os }}-${{ hashFiles('package-lock.json', 'app.json', 'android/gradle.properties', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-aab-${{ runner.os }}-
+            gradle-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore Firebase configuration and upload key
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+          UPLOAD_KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$GOOGLE_SERVICES_JSON_B64"
+          test -n "$UPLOAD_KEYSTORE_B64"
+          mkdir -p "$RUNNER_TEMP/routes-aab/metro"
+          printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > "$RUNNER_TEMP/routes-aab/google-services.json"
+          printf '%s' "$UPLOAD_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/routes-aab/upload.jks"
+          echo "CLEVER_ROUTES_GOOGLE_SERVICES_FILE=$RUNNER_TEMP/routes-aab/google-services.json" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP/routes-aab/metro" >> "$GITHUB_ENV"
+
+      - name: Verify official source and prepare Firebase
+        run: npm run prebuild:android:distribution
+
+      - name: Build AAB with the existing upload key
+        env:
+          VERSION_CODE: ${{ inputs.version_code }}
+          CLEVER_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/routes-aab/upload.jks
+          CLEVER_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          CLEVER_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+          CLEVER_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$CLEVER_ANDROID_KEYSTORE_PASSWORD"
+          test -n "$CLEVER_ANDROID_KEY_ALIAS"
+          test -n "$CLEVER_ANDROID_KEY_PASSWORD"
+          # android/ is committed. Do not regenerate it with Expo prebuild.
+          # Override signing for this invocation only; direct-install APKs keep their key.
+          cat > "$RUNNER_TEMP/routes-aab/signing.init.gradle" <<'GRADLE'
+          allprojects { p ->
+            p.afterEvaluate {
+              if (p.plugins.hasPlugin('com.android.application')) {
+                def sc = p.android.signingConfigs.maybeCreate('playUpload')
+                sc.storeFile = new File(System.getenv('CLEVER_ANDROID_KEYSTORE_PATH'))
+                sc.storePassword = System.getenv('CLEVER_ANDROID_KEYSTORE_PASSWORD')
+                sc.keyAlias = System.getenv('CLEVER_ANDROID_KEY_ALIAS')
+                sc.keyPassword = System.getenv('CLEVER_ANDROID_KEY_PASSWORD')
+                p.android.buildTypes.getByName('release').signingConfig = sc
+                p.android.defaultConfig.versionCode = Integer.parseInt(System.getenv('VERSION_CODE'))
+              }
+            }
+          }
+          GRADLE
+          cd android
+          ./gradlew app:bundleRelease --no-daemon --build-cache --max-workers=2 \
+            -PreactNativeArchitectures=armeabi-v7a,arm64-v8a \
+            -I "$RUNNER_TEMP/routes-aab/signing.init.gradle" \
+            -Dorg.gradle.jvmargs='-Xmx3072m -XX:MaxMetaspaceSize=1g'
+
+      - name: Verify AAB signature, manifest, ABIs and runtime
+        env:
+          VERSION_CODE: ${{ inputs.version_code }}
+        run: |
+          set -euo pipefail
+          aab=android/app/build/outputs/bundle/release/app-release.aab
+          bundletool="$RUNNER_TEMP/routes-aab/bundletool.jar"
+          curl --fail --location --retry 3 --silent --show-error \
+            https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar -o "$bundletool"
+          echo "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29  $bundletool" | sha256sum -c -
+          java -jar "$bundletool" validate --bundle="$aab"
+          java -jar "$bundletool" dump manifest --bundle="$aab" > "$RUNNER_TEMP/routes-aab/manifest.xml"
+          jarsigner -verify "$aab" > "$RUNNER_TEMP/routes-aab/jarsigner.txt"
+          grep -q '^jar verified\.' "$RUNNER_TEMP/routes-aab/jarsigner.txt"
+          if grep -qi 'unsigned entries' "$RUNNER_TEMP/routes-aab/jarsigner.txt"; then
+            echo 'AAB contains unsigned entries'; exit 1
+          fi
+          actual="$(keytool -printcert -jarfile "$aab" | sed -n 's/^[[:space:]]*SHA256: //p' | head -1)"
+          version_name="$(node -p "require('./app.json').expo.version")"
+          python3 scripts/verify-play-aab.py --artifact "$aab" \
+            --manifest "$RUNNER_TEMP/routes-aab/manifest.xml" \
+            --version-code "$VERSION_CODE" --version-name "$version_name" \
+            --expected-signer "$EXPECTED_UPLOAD_CERT_SHA256" --actual-signer "$actual" \
+            | tee "$RUNNER_TEMP/routes-aab/artifact-verification.json"
+          python3 scripts/verify-android-artifact-runtime.py --artifact "$aab" \
+            | tee "$RUNNER_TEMP/routes-aab/runtime-verification.json"
+          {
+            echo "Source: $GITHUB_SHA"
+            echo "Version: $version_name ($VERSION_CODE)"
+            echo "Profile: ${{ inputs.profile }}"
+            echo "Upload signer: $actual"
+            sha256sum "$aab"
+            echo 'Build only. Not submitted to Google Play.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload verified AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: clever-routes-aab-${{ github.sha }}-${{ inputs.version_code }}
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload non-secret verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: clever-routes-aab-verification-${{ github.sha }}-${{ inputs.version_code }}
+          path: |
+            ${{ runner.temp }}/routes-aab/artifact-verification.json
+            ${{ runner.temp }}/routes-aab/runtime-verification.json
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Remove temporary signing and Firebase files
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/routes-aab/upload.jks" \
+            "$RUNNER_TEMP/routes-aab/google-services.json" \
+            "$RUNNER_TEMP/routes-aab/signing.init.gradle" android/app/google-services.json
