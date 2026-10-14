@@ -105,6 +105,7 @@ import {
   type ContinuousLocationStreamStartResult,
 } from '../domain/location/continuousLocationStream';
 import { isDeliveryDateToday } from '../domain/route/deliveryDay';
+import { selectLoadedRouteSession } from '../domain/route/loadedRouteSelection';
 import { finishDeliveryAfterActive, type DeliveryFinishResult } from '../domain/delivery/deliveryFinish';
 import {
   resolveRouteStartRefreshRecovery,
@@ -3357,14 +3358,14 @@ function DriverApp() {
       }
       setRouteSyncState(cachedActiveSession === null ? 'ready' : 'error');
       if (cachedActiveSession === null) setLastRoutesUpdatedAt(new Date());
-      const nextSelectedRouteId = restoredActiveSession !== null
-        ? restoredActiveSession.route.id
-        : currentSelectedRouteId !== null && loadedSessionsWithPendingEnds.some((session) => session.route.id === currentSelectedRouteId)
-          ? currentSelectedRouteId
-          : loadedSessionsWithPendingEnds[0].route.id;
-      setSelectedRouteId(nextSelectedRouteId);
-      const selectedSession = loadedSessionsWithPendingEnds.find((session) => session.route.id === nextSelectedRouteId)
-        ?? loadedSessionsWithPendingEnds[0];
+      const selectedSession = selectLoadedRouteSession(loadedSessionsWithPendingEnds, {
+        currentSelectedRouteId,
+        restoredActiveRouteId: restoredActiveSession?.route.id ?? null,
+        preferTodayReadyRoute: restoredActiveSession === null
+          && effectivePersistedActiveRouteSession === null
+          && cachedActiveSession === null,
+      }) ?? loadedSessionsWithPendingEnds[0];
+      setSelectedRouteId(selectedSession.route.id);
       const firstSubmission = toCompanyGuidanceSubmission(selectedSession);
       setSubmission(firstSubmission);
       await driverAccessTokenStore.saveFromInvitedRouteAccess(toInvitedRouteAccess(firstSubmission)).catch(() => {
