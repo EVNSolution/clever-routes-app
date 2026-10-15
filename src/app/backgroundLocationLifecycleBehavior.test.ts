@@ -131,7 +131,7 @@ describe('background location lifecycle wiring', () => {
     assert.match(restoreSource, /AppState\.currentState !== 'active'[\s\S]*return/u);
     assert.match(restoreSource, /startContinuousLocationUpdatesAfterDeliveryStart/u);
     assert.match(restoreSource, /continuousResult\.kind === 'blocked'[\s\S]*server route remains active/u);
-    assert.match(restoreSource, /catch \(error\)[\s\S]*server route remains active/u);
+    assert.match(restoreSource, /catch \{[\s\S]*if \(!isLoginAccountCurrent\(\)\) return;[\s\S]*setContinuousLocationResult\(null\);[\s\S]*Route remains active/u);
     assert.doesNotMatch(restoreSource, /clearAndStopActiveLocationSession/u);
     assert.doesNotMatch(restoreSource, /setDeliveryStartResult\(null\)/u);
     assert.match(loadSource, /if \(activeRouteWasRemoved\) \{[\s\S]*clearAndStopActiveLocationSession/u);
