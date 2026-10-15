@@ -105,8 +105,8 @@ android {
         applicationId 'com.evnsolution.clever.routes'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 53
-        if (isKfoodQaBuild && project.hasProperty('kfoodProofQa')) versionCode 53
+        versionCode 54
+        if (isKfoodQaBuild && project.hasProperty('kfoodProofQa')) versionCode 54
         versionName "1.3.9"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""

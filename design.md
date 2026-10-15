@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-08-14
+- Last refreshed: 2026-10-15
 - Primary product surfaces: authentication, My Routes, route session, stop details, completed deliveries, settings
 - Evidence reviewed: `src/app/AppRoot.tsx`, `src/app/routeVisualState.ts`, existing screen contracts in this file
 
@@ -69,7 +69,9 @@
 
 ## Interaction states
 
-- Loading: show route retrieval without implying logout
+- Loading: show a blur and spinner for an initial empty route load, explicit refresh, or Apply. Keep the current screen mounted. Manual refresh uses its existing 20-second wait limit. Any loading cover releases after 20 seconds without cancelling or duplicating the request. Initial load or Apply still pending at that point shows a small nonblocking delay notice. Manual refresh simply restores the screen at its existing deadline. Background refresh and durable offline queues never hold a full-screen loader.
+- Feedback: route start and completion screens show the outcome without persistent success banners. Routine background ETA refresh is silent. Unconfirmed local results remain labeled “Saved on device”; pending route completion/release keeps a short explanation and Retry.
+- Blur: use Expo BlurView with a BlurTargetView on Android. Android 12+ uses the native blur; older Android uses the supported translucent fallback. See https://docs.expo.dev/versions/latest/sdk/blur-view/.
 - Empty: distinguish no assignments from failed retrieval
 - Error: keep 401 access recovery separate from 409 route reconciliation
 - Success: remove recovery state only when its preserved evidence is explicitly reconciled
@@ -88,7 +90,7 @@
 - Framework/styling system: React Native and the existing `StyleSheet` patterns
 - Design-token constraints: reuse existing palette and surface conventions
 - Performance constraints: no polling or animation for reconciliation status
-- Compatibility constraints: background GPS must stop immediately on terminal route state; operational dialogs must not depend on iOS/Android manufacturer alert layouts
+- Compatibility constraints: this feedback change preserves the existing GPS lifecycle and queued route-end recovery; operational dialogs must not depend on iOS/Android manufacturer alert layouts
 - Test/screenshot expectations: source behavior tests plus queue and lifecycle tests; connected-device checks cover dialog layout, action order, Back dismissal, and destructive flow
 
 ## Open questions

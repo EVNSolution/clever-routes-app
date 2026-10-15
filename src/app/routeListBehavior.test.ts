@@ -289,3 +289,20 @@ describe('routes list behavior', () => {
     assert.doesNotMatch(appStateRefreshSource, /selectedMainTab === 'routes'/u);
   });
 });
+
+
+describe('foreground route loading', () => {
+  it('bounds manual loading and leaves background refresh and offline queues interactive', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const start = source.indexOf('<LoadingSurface loading={');
+    const end = source.indexOf('}>', start);
+    assert.ok(start >= 0 && end > start);
+    const loading = source.slice(start, end);
+    assert.match(loading, /shouldShowRouteLoading/u);
+    assert.doesNotMatch(loading, /isRefreshingRoutes|isLoggingIn|pendingRouteEnd|offlineQueueCount|pendingRoutePlanId/u);
+    const refresh = source.slice(source.indexOf('const handlePullRefresh ='), source.indexOf('const retryDriverRestore ='));
+    assert.match(refresh, /setIsManualRouteRefresh\(true\)/u);
+    assert.match(refresh, /options\?\.checkForAppUpdate === false \? Promise\.resolve\(\)/u);
+    assert.match(refresh, /Promise\.race[\s\S]*PULL_REFRESH_MAX_WAIT_MS[\s\S]*finally[\s\S]*setIsManualRouteRefresh\(false\)/u);
+  });
+});

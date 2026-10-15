@@ -73,7 +73,8 @@ describe('driver login flow', () => {
     assert.match(source, /reportExpoDriverDiagnosticIssue\(\)/u);
     assert.match(source, /handle\.subscribe\(status/u);
     assert.match(source, /getDriverReportFeedback\(report\.status\)/u);
-    assert.match(source, /routeSyncState === 'loading'[\s\S]*Loading routes/u);
+    assert.match(source, /<LoadingSurface loading=\{shouldShowRouteLoading\(/u);
+    assert.doesNotMatch(source, /Your login is active\. Fetching the latest assignments\./u);
     assert.match(source, /routeSyncState === 'error'[\s\S]*Routes temporarily unavailable[\s\S]*Retry/u);
     assert.match(source, /previousDriverRestoreNetworkRef[\s\S]*networkReachability === 'online'[\s\S]*retryDriverRestore/u);
     assert.match(source, /previousRouteSyncNetworkRef[\s\S]*networkReachability === 'online'[\s\S]*handleRefreshRoutes/u);

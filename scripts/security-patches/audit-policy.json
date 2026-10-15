@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "lockfileSha256": "9dce754b5e819596088c27eb8d71bf633271ccc724951bcc213f95be0a7f4a21",
+  "lockfileSha256": "12edab000af1cead98f68a9665ed613e551dc7db604ec1113210f3b494f4d79e",
   "patchManifestSha256": "e37cd2a51e3528c59ba6e2ab7ff22b0e947592c8ebdc28fab33fad6c0cbbb589",
   "advisories": {
     "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm": {

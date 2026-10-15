@@ -76,11 +76,18 @@ describe('route session current task behavior', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const componentSource = getRouteSessionComponentSource();
 
-    assert.match(appSource, /<RouteSessionScreen[\s\S]*isRefreshingRoutes=\{isRefreshingRoutes\}[\s\S]*onRetryRouteSync=\{\(\) => \{ void handleRefreshRoutes\(\); \}\}[\s\S]*pendingRouteEnd=\{selectedRouteSession\?\.pendingRouteEnd\}/u);
+    assert.match(appSource, /<RouteSessionScreen[\s\S]*isRefreshingRoutes=\{isRefreshingRoutes\}[\s\S]*onRetryRouteSync=\{\(\) => \{ void handlePullRefresh\(\{ checkForAppUpdate: false \}\); \}\}[\s\S]*pendingRouteEnd=\{selectedRouteSession\?\.pendingRouteEnd\}/u);
     assert.match(componentSource, /pendingRouteEnd\?: PendingRouteEnd/u);
     assert.match(componentSource, /routeStatus === 'ready' && pendingRouteEnd === undefined \? \([\s\S]*styles\.routeSessionPrestartOverlay[\s\S]*label="Start"/u);
-    assert.match(componentSource, /routeStatus === 'ready' && pendingRouteEnd !== undefined \? \([\s\S]*Final status syncing[\s\S]*Retry Sync/u);
-    assert.doesNotMatch(componentSource, /StatusChip[^\n]*Final status syncing/u);
+    assert.match(componentSource, /routeStatus === 'ready' && pendingRouteEnd !== undefined \? \([\s\S]*Update pending[\s\S]*Retry/u);
+    assert.doesNotMatch(componentSource, /StatusChip[^\n]*Update pending/u);
+  });
+
+  it('does not keep successful event acknowledgements on the route screen', () => {
+    const componentSource = getRouteSessionComponentSource();
+    assert.doesNotMatch(componentSource, /routeStartedEventResult|deliveryFinishResult|Route start event recorded/u);
+    assert.match(componentSource, /pendingRouteEnd !== undefined/u);
+    assert.match(componentSource, /primaryProgressAction/u);
   });
 
   it('clears previous route progress before a new route starts', () => {
@@ -226,7 +233,7 @@ describe('route session current task behavior', () => {
   it('keeps Store information out of Stops and lists delivery addresses only', () => {
     const componentSource = getRouteSessionComponentSource();
     const sequenceStart = componentSource.indexOf("{selectedRouteContent === 'stops' ? (");
-    const sequenceEnd = componentSource.indexOf("{routeStartedEventResult?.kind === 'recorded'", sequenceStart);
+    const sequenceEnd = componentSource.indexOf('<View style={styles.routeSessionActions}>', sequenceStart);
     const sequenceSource = componentSource.slice(sequenceStart, sequenceEnd);
 
     assert.notEqual(sequenceStart, -1);
@@ -768,7 +775,7 @@ describe('route session current task behavior', () => {
 
     assert.match(appSource, /projectRouteProgress\(\{[\s\S]*localCompletedStopIds: completedStopIds,[\s\S]*serverConfirmedStopIds/u);
     assert.match(appSource, /result\.serverConfirmedStopIds/u);
-    assert.match(appSource, /completed \? serverConfirmed \? 'Done' : 'Syncing'/u);
+    assert.match(appSource, /completed \? serverConfirmed \? 'Done' : 'Saved on device'/u);
     assert.match(appSource, /locationInferredStopIds\.includes\(stop\.deliveryStopId\) \? 'Location inferred · review'/u);
   });
 
