@@ -1,7 +1,6 @@
 import { CONTINUOUS_LOCATION_TASK_NAME, type ContinuousLocationStreamService } from '../location/continuousLocationStream';
 import type { DeliveryStartResult } from './deliveryStart';
 import {
-  formatDriverApiErrorForDriver,
   getDriverApiRequiresRouteLookup,
   getDriverApiRequiresRouteReconciliation,
 } from '../../api/deliveryServer/driverApiError';
@@ -222,7 +221,11 @@ export async function finishDeliveryAfterActive(input: {
       flowState: 'delivery_finished',
       kind: 'recorded',
       message: routeReleased
-        ? 'Route session ended and the route returned to Ready.'
+        ? releaseLocationStop.state === 'stopped'
+          ? 'Route session ended and the route returned to Ready.'
+          : releaseLocationStop.state === 'failed'
+            ? 'Route returned to Ready. GPS stop could not be confirmed.'
+            : 'Route returned to Ready. GPS tracking is stopping.'
         : discardedQueuedItems > 0
         ? `Delivery finished. ${discardedQueuedItems} queued route submission${discardedQueuedItems === 1 ? '' : 's'} discarded after route completion was recorded.`
         : 'Delivery finished and route completion was recorded.',
@@ -255,26 +258,36 @@ export async function finishDeliveryAfterActive(input: {
       }
     }
     reportPhase('finish_resolved');
+    const requiresRouteLookup = getDriverApiRequiresRouteLookup(error);
+    const monitoringMode = routeReleased
+      ? releaseLocationStop.state === 'stopped'
+        ? 'stopped'
+        : releaseLocationStop.state === 'failed'
+          ? 'reduced'
+          : 'stopping'
+      : completionLocationStopped ? 'stopped' : 'reduced';
+    const confirmationMessage = requiresRouteReconciliation === true
+      ? 'Refresh routes to review its status.'
+      : requiresRouteLookup === true
+        ? 'Refresh routes to confirm it.'
+        : 'Confirmation will retry.';
+    const trackingMessage = monitoringMode === 'stopped'
+      ? 'GPS tracking stopped.'
+      : monitoringMode === 'stopping'
+        ? 'GPS tracking is stopping.'
+        : 'GPS stop could not be confirmed.';
     return {
       flowState: 'delivery_finished',
       kind: 'queued',
-      message: routeReleased
-        ? `Route session ended locally and returning the route to Ready was queued for retry: ${formatDriverApiErrorForDriver(error)}`
-        : `Delivery finished locally and route completion was queued for retry: ${formatDriverApiErrorForDriver(error)}`,
+      message: `Route ${routeReleased ? 'release' : 'completion'} saved on this device. ${confirmationMessage} ${trackingMessage}`,
       queueItemId: queued.queueItemId,
       reason: 'record_failed',
-      ...(getDriverApiRequiresRouteLookup(error) === undefined ? {} : { requiresRouteLookup: true as const }),
+      ...(requiresRouteLookup === undefined ? {} : { requiresRouteLookup: true as const }),
       ...(requiresRouteReconciliation === undefined
         ? {}
         : { requiresRouteReconciliation: true as const }),
       stoppedTaskName: taskName,
-      monitoringMode: routeReleased
-        ? releaseLocationStop.state === 'stopped'
-          ? 'stopped'
-          : releaseLocationStop.state === 'failed'
-            ? 'reduced'
-            : 'stopping'
-        : completionLocationStopped ? 'stopped' : 'reduced',
+      monitoringMode,
     };
   }
 }

@@ -273,7 +273,7 @@ import {
 } from './activeRouteNotification';
 import { NativeRouteMapPreview } from './NativeRouteMapPreview';
 import { getBottomChromeOffset, getBottomChromePadding } from './appLayoutMetrics';
-import { formatRouteListUpdatedAt } from './routeListBehavior';
+import { formatRouteListUpdatedAt, getRouteListStatus } from './routeListBehavior';
 import { buildRouteMapGeoJson, readDriverMapStyleUrl } from './routeMapGeoJson';
 import { ROUTE_VISUAL_STATE_COLORS, ROUTE_VISUAL_STATE_SURFACES } from './routeVisualState';
 import { splitStopItemName } from './stopItemDisplay';
@@ -343,6 +343,7 @@ type StopProofDraft = {
 };
 
 type RouteSession = RouteAccessRouteChoice & {
+  localRouteEnd?: { assignmentGeneration: string; kind: PendingRouteEnd };
   pendingRouteEnd?: PendingRouteEnd;
   route: AssignedRoute;
 };
@@ -1933,6 +1934,11 @@ function DriverApp() {
       if (!isCurrent()) return false;
       setRouteSessions((current) => current.map((session) => ({
         ...session,
+        localRouteEnd: queue.listPending().some(item => item.kind === 'driver_event'
+          && (item.event.eventType === 'ROUTE_COMPLETED' || item.event.eventType === 'ROUTE_PAUSED')
+          && item.event.routePlanId === session.route.id
+          && item.event.assignmentGeneration === session.routeAccess.assignmentGeneration
+          && item.reconciliation !== undefined) ? undefined : session.localRouteEnd,
         pendingRouteEnd: getPendingRouteEnd(queue, session.route.id) ?? undefined,
       })));
     } catch (error) {
@@ -2998,6 +3004,21 @@ function DriverApp() {
       accountQueueForLogin = accountQueue;
       loginAccountOwnerHash = accountOwnerHash;
       driverSyncBoundAccountOwnerHashRef.current = accountOwnerHash;
+      const endedRouteAssignments = new Map<string, PendingRouteEnd>();
+      if (liveRouteOwnerRef.current === accountOwnerHash) {
+        for (const session of liveRouteSessionsRef.current) {
+          if (session.localRouteEnd?.assignmentGeneration === session.routeAccess.assignmentGeneration) {
+            endedRouteAssignments.set(liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration), session.localRouteEnd.kind);
+          }
+        }
+      }
+      for (const item of accountQueue.listPending()) {
+        if (item.kind === 'driver_event' && (item.event.eventType === 'ROUTE_COMPLETED' || item.event.eventType === 'ROUTE_PAUSED')
+          && item.event.routePlanId != null && item.event.assignmentGeneration !== undefined
+          && item.reconciliation === undefined) {
+          endedRouteAssignments.set(liveRouteStateKey(item.event.routePlanId, item.event.assignmentGeneration), item.event.eventType === 'ROUTE_COMPLETED' ? 'completed' : 'released');
+        }
+      }
       if (liveRouteOwnerRef.current !== accountOwnerHash) {
         liveRouteOwnerRef.current = accountOwnerHash;
         liveRouteStatesRef.current = {};
@@ -3114,7 +3135,7 @@ function DriverApp() {
         if (persistedActiveRouteSession?.status !== 'completion_pending') return false;
         setRouteSyncState('error');
         setScreen('mainTabs');
-        setMessage('Route completion is still pending server confirmation. GPS tracking stays stopped while receipt recovery retries.');
+        setMessage('Route completion saved on device. GPS stopped. Waiting for confirmation.');
         return true;
       };
       if (lookupResult === null) {
@@ -3290,15 +3311,27 @@ function DriverApp() {
           completionResolvedDuringRestore = pendingEndItem === undefined || pendingEndItem.reconciliation !== undefined;
         }
       }
-      const loadedSessionsWithPendingEnds = loadedSessions.map((session): RouteSession => ({
-        ...session,
-        pendingRouteEnd: getPendingRouteEnd(queue, session.route.id) ?? undefined,
-      }));
+      for (const item of queue.listPending()) {
+        if (item.kind === 'driver_event' && (item.event.eventType === 'ROUTE_COMPLETED' || item.event.eventType === 'ROUTE_PAUSED')
+          && item.event.routePlanId != null
+          && item.event.assignmentGeneration !== undefined && item.reconciliation !== undefined) {
+          endedRouteAssignments.delete(liveRouteStateKey(item.event.routePlanId, item.event.assignmentGeneration));
+        }
+      }
+      const loadedSessionsWithPendingEnds = loadedSessions.map((session): RouteSession => {
+        const localEnd = endedRouteAssignments.get(liveRouteStateKey(session.route.id, session.routeAccess.assignmentGeneration));
+        return {
+          ...session,
+          localRouteEnd: localEnd === undefined ? undefined : { assignmentGeneration: session.routeAccess.assignmentGeneration, kind: localEnd },
+          pendingRouteEnd: getPendingRouteEnd(queue, session.route.id) ?? undefined,
+        };
+      });
 
       const effectivePersistedActiveRouteSession = completionResolvedDuringRestore ? null : persistedActiveRouteSession;
       const serverActiveRouteSession = effectivePersistedActiveRouteSession === null && !completionResolvedDuringRestore
         ? loadedSessionsWithPendingEnds.find((session) => (
             session.companyGuidance.executionStatus === 'IN_PROGRESS' && session.pendingRouteEnd === undefined
+            && session.localRouteEnd === undefined
           )) ?? null
         : null;
       const serverActiveProgress = serverActiveRouteSession === null
@@ -3384,6 +3417,7 @@ function DriverApp() {
         && cachedActiveSession === null
         && selectedSession.companyGuidance.executionStatus === 'READY'
         && selectedSession.pendingRouteEnd === undefined
+        && selectedSession.localRouteEnd?.kind !== 'completed'
         && isDeliveryDateToday(selectedSession.route.deliveryDate, selectedSession.route.timezone)
         && AppState.currentState === 'active'
       ) {
@@ -3552,7 +3586,7 @@ function DriverApp() {
         if (liveState?.appliedRoute === null) return;
         if (restoredActiveSession.pendingRouteEnd !== undefined) {
           setContinuousLocationResult({ kind: 'stopped', taskName: CONTINUOUS_LOCATION_TASK_NAME });
-          setMessage('Route completion is still pending server confirmation. GPS tracking stays stopped while receipt recovery retries.');
+          setMessage('Route completion saved on device. GPS stopped. Waiting for confirmation.');
           return;
         }
         if (AppState.currentState !== 'active') {
@@ -4922,6 +4956,9 @@ function DriverApp() {
           const markRouteStartDurablyCommitted = () => {
             routeStartDurablyCommitted = true;
             markDurablyCommitted();
+            setRouteSessions(current => current.map(session => session.route.id === routeSession.route.id
+              && session.routeAccess.assignmentGeneration === routeSession.routeAccess.assignmentGeneration
+              ? { ...session, localRouteEnd: undefined } : session));
           };
           const deliveryStart = await startDeliveryWithForegroundPermission({
         flowState: 'route_ready',
@@ -5952,11 +5989,9 @@ function DriverApp() {
         }
         setMessage(result.kind === 'queued'
           ? requiresDepotReturn(selectedRoute.routeEndMode)
-            ? 'Final stop saved offline. Return to the company while it syncs, then finish the route.'
-            : 'Final stop saved offline. Finish the route when ready.'
-          : requiresDepotReturn(selectedRoute.routeEndMode)
-            ? 'All stops completed. Return to the company, then finish the route.'
-            : 'All stops completed. Finish the route when ready.');
+            ? 'Final stop saved on device. Return to the company, then finish the route.'
+            : 'Final stop saved on device. Finish the route when ready.'
+          : null);
         return;
       }
 
@@ -6292,6 +6327,15 @@ function DriverApp() {
             }
           : session));
       }
+      if (isFinishCurrent()) {
+        const endedAssignmentGeneration = completionSubmission?.routeAccess.assignmentGeneration;
+        setRouteSessions((current) => current.map((session): RouteSession => (
+          session.route.id === route.id
+          && endedAssignmentGeneration !== undefined && session.routeAccess.assignmentGeneration === endedAssignmentGeneration
+            ? { ...session, localRouteEnd: { assignmentGeneration: endedAssignmentGeneration, kind: options?.routeEnd === 'released' ? 'released' : 'completed' } }
+            : session
+        )));
+      }
       if (finishResult.monitoringMode === 'stopped') {
         setContinuousLocationResult({ kind: 'stopped', taskName: finishResult.stoppedTaskName });
       }
@@ -6303,6 +6347,7 @@ function DriverApp() {
                 ...session.companyGuidance,
                 executionStatus: 'READY',
               },
+              localRouteEnd: { assignmentGeneration: session.routeAccess.assignmentGeneration, kind: 'released' },
               ...(finishResult.kind === 'queued' ? { pendingRouteEnd: 'released' as const } : {}),
             }
           : session);
@@ -6316,12 +6361,12 @@ function DriverApp() {
         setCompletedStopTimes({});
         setNavigationStepIndex(COMPANY_STEP_INDEX);
         setScreen('mainTabs');
-        setMessage(finishResult.kind === 'recorded'
+        setMessage(finishResult.kind === 'recorded' && finishResult.monitoringMode === 'stopped'
           ? 'Route session deleted. Route returned to Ready.'
-          : 'Route session deleted locally. Returning the route to Ready is queued.');
+          : finishResult.message);
       } else {
         setScreen('completedDeliveries');
-        setMessage(finishResult.message);
+        setMessage(finishResult.kind === 'queued' || finishResult.monitoringMode !== 'stopped' ? finishResult.message : null);
       }
       return true;
     } catch (error) {
@@ -7326,10 +7371,8 @@ function MyRoutesPage({
   const visibleRouteSessions = routeSessions
     .map((session, originalIndex) => ({ originalIndex, session }))
     .sort((left, right) => {
-      const leftIsActive = left.session.route.id === activeRoutePlanId
-        || (left.session.companyGuidance.executionStatus === 'IN_PROGRESS' && left.session.pendingRouteEnd === undefined);
-      const rightIsActive = right.session.route.id === activeRoutePlanId
-        || (right.session.companyGuidance.executionStatus === 'IN_PROGRESS' && right.session.pendingRouteEnd === undefined);
+      const leftIsActive = getRouteListStatus(left.session, left.session.route.id === activeRoutePlanId ? 'active' : 'ready') === 'active';
+      const rightIsActive = getRouteListStatus(right.session, right.session.route.id === activeRoutePlanId ? 'active' : 'ready') === 'active';
       if (leftIsActive !== rightIsActive) {
         return leftIsActive ? -1 : 1;
       }
@@ -7430,13 +7473,7 @@ function MyRoutesPage({
               selectedRouteId: effectiveSelectedRouteId,
               selectedRouteStatus: routeStatus,
             });
-            const routeCardStatus = session.pendingRouteEnd === 'completed'
-              ? 'completed'
-              : session.pendingRouteEnd === 'released'
-                ? 'ready'
-                : session.companyGuidance.executionStatus === 'IN_PROGRESS'
-                  ? 'active'
-                  : classifiedRouteCardStatus;
+            const routeCardStatus = getRouteListStatus(session, classifiedRouteCardStatus);
             const isRouteCardExpanded = expandedRouteKey === session.route.id;
             const isAnotherReadyRoute = routeCardStatus === 'ready'
               && activeRoutePlanId !== null
