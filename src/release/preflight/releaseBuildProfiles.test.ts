@@ -82,7 +82,7 @@ test('keeps source-controlled Android versions aligned across Expo and Gradle', 
   const versionName = androidBuildGradle.match(/\bversionName\s+"([^"]+)"/u)?.[1];
 
   assert.equal(appConfig.expo?.version, '1.3.9');
-  assert.equal(appConfig.expo?.android?.versionCode, 55);
+  assert.equal(appConfig.expo?.android?.versionCode, 56);
   assert.equal(appConfig.expo?.ios?.bundleIdentifier, 'com.evnsolution.clever.routes');
   assert.equal(appConfig.expo?.ios?.buildNumber, '1');
   assert.equal(appConfig.expo?.android?.package, 'com.evnsolution.clever.routes');
@@ -164,7 +164,8 @@ test('separates Android development, QA, and self-contained smoke commands', () 
   assert.equal(scripts.android, undefined);
   assert.match(scripts['android:dev:install'] ?? '', /expo run:android --device --variant debugOptimized/u);
   assert.match(scripts['android:dev:install'] ?? '', /reactNativeArchitectures=arm64-v8a/u);
-  assert.match(scripts['android:dev:start'] ?? '', /expo start --dev-client --localhost --android/u);
+  assert.match(scripts['android:dev:install'] ?? '', /--app-id com\.evnsolution\.clever\.routes\.dev/u);
+  assert.equal(scripts['android:dev:start'], 'expo start --dev-client --localhost');
   assert.match(scripts['android:qa:build'] ?? '', /eas-cli build --platform android --profile preview/u);
   assert.match(scripts['prebuild:android:device-smoke'] ?? '', /prepare:android:firebase:local/u);
   assert.match(scripts['prepare:android:firebase:local'] ?? '', /prepare-google-services\.mjs --allow-existing/u);

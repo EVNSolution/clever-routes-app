@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import { buildAuthFailureMessage, shouldDiscardSavedLoginAfterRefreshFailure } from './authDiagnostics';
 import { createDriverApiHttpError } from '../api/deliveryServer/driverApiError';
+import { createRouteAccessApiClient, RouteAccessTransportError } from '../domain/routeAccess/routeAccess';
 import type { AuthPhase } from './authDiagnostics';
 import type { DriverRuntimeConfig } from './config/driverRuntimeConfig';
 
@@ -41,6 +42,40 @@ describe('authDiagnostics', () => {
     });
 
     assert.equal(result.kind, 'network_failure');
+  });
+
+  it('gives offline route refresh a connection retry action without internal lookup or dispatch wording', async () => {
+    const client = createRouteAccessApiClient({
+      baseUrl: liveConfig.deliveryServerBaseUrl,
+      fetchImpl: async () => { throw new Error('java.net.UnknownHostException: https://private.example/routes'); },
+    });
+    await assert.rejects(client.lookupRouteAccess({ accountAccessToken: 'test-account-token' }), (error: unknown) => {
+      assert.ok(error instanceof RouteAccessTransportError);
+      const result = buildAuthFailureMessage({ runtimeConfig: liveConfig, phase: 'route_access', error });
+      assert.equal(result.kind, 'network_failure');
+      assert.equal(result.message, 'Routes could not refresh. Try again when connected.');
+      assert.equal(shouldDiscardSavedLoginAfterRefreshFailure(error), false);
+      return true;
+    });
+  });
+
+  it('uses the same route retry wording for known network failures without changing their classification', () => {
+    for (const [error, kind] of [
+      [new TypeError('fetch failed'), 'request_not_sent'],
+      [new Error('network request failed'), 'network_failure'],
+    ] as const) {
+      const result = buildAuthFailureMessage({ runtimeConfig: liveConfig, phase: 'route_access', error });
+      assert.equal(result.kind, kind);
+      assert.equal(result.message, 'Routes could not refresh. Try again when connected.');
+    }
+  });
+
+  it('keeps a server permission failure outside the network retry classification', () => {
+    const error = createDriverApiHttpError({ endpoint: 'Route Access Lookup', status: 403 });
+    const result = buildAuthFailureMessage({ runtimeConfig: liveConfig, phase: 'route_access', error });
+    assert.equal(result.kind, 'server_other_error');
+    assert.equal(result.message, 'Route access lookup: server returned HTTP 403.');
+    assert.equal(shouldDiscardSavedLoginAfterRefreshFailure(error), false);
   });
 
   it('classifies invalid response payload as stale_build', () => {

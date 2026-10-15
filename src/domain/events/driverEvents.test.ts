@@ -608,7 +608,7 @@ describe('driver event API boundary', () => {
     });
   });
 
-  it('queues STOP_ARRIVED when the server cannot receive the arrival signal', async () => {
+  it('preserves queued STOP_ARRIVED evidence without exposing a native network error', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     const orderedEventContract = {
       appVersion: '1.2.3',
@@ -622,13 +622,17 @@ describe('driver event API boundary', () => {
       deliveryStopId: 'stop-1',
       driverEventService: {
         prepareDriverEvent: (event) => ({ ...event, ...orderedEventContract }),
-        recordDriverEvent: async () => { throw new Error('network offline'); },
+        recordDriverEvent: async () => { throw new Error('java.net.UnknownHostException: https://route.example.test/events HTTP 503'); },
       },
       offlineQueue: queue,
       routePlanId: 'route-1',
     });
 
     assert.equal(result.kind, 'queued');
+    assert.equal(result.requiresRouteLookup, undefined);
+    assert.doesNotMatch(result.message, /UnknownHostException|https?:|route\.example|HTTP|503/u);
+    assert.match(result.message, /queued for retry/u);
+    assert.equal(queue.listPending().length, 1);
     const pending = queue.listPending()[0];
     assert.equal(pending?.kind === 'driver_event' ? pending.event.eventType : null, 'STOP_ARRIVED');
     assert.deepEqual(pending?.kind === 'driver_event' ? {
@@ -700,7 +704,8 @@ describe('driver event API boundary', () => {
     assert.equal(result.reason, 'record_failed');
     assert.equal(result.requiresRouteLookup, true);
     assert.match(result.message, /Driver session expired/iu);
-    assert.match(result.message, /HTTP 401/iu);
+    assert.match(result.message, /Refresh routes/iu);
+    assert.doesNotMatch(result.message, /HTTP|401|bearer token/iu);
     assert.equal(queue.listPending().length, 1);
   });
 
@@ -828,7 +833,8 @@ describe('driver event API boundary', () => {
     });
 
     assert.equal(result.kind, 'queued');
-    assert.match(result.message, /ETA snapshot/iu);
+    assert.match(result.message, /could not be confirmed/iu);
+    assert.doesNotMatch(result.message, /ETA snapshot/iu);
     const pending = queue.listPending();
     assert.equal(pending.length, 1);
     assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null, 'PICKUP_COMPLETED');

@@ -1,10 +1,16 @@
-name: Android Release APK
+name: Android APK
 
 # Manual only. Builds the direct-install APK on a GitHub runner and verifies the
 # signing certificate. The APK is uploaded as a short-lived artifact; it is already
 # distributed by a public Drive link and signed with the public Expo template debug key.
 on:
   workflow_dispatch:
+    inputs:
+      variant:
+        description: 'Development client for USB/Metro iteration, or direct release APK'
+        type: choice
+        default: release
+        options: [release, development]
 
 concurrency:
   group: android-release-apk-${{ github.ref }}
@@ -21,10 +27,10 @@ env:
 
 jobs:
   build:
-    name: Build and verify release APK
+    name: Build and verify APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    environment: android-release
+    environment: ${{ inputs.variant == 'development' && 'android-development' || 'android-release' }}
 
     steps:
       - name: Checkout repository
@@ -55,6 +61,7 @@ jobs:
         run: npm ci
 
       - name: Restore Firebase config
+        if: inputs.variant != 'development'
         env:
           GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
         run: |
@@ -73,15 +80,37 @@ jobs:
           cp "$RUNNER_TEMP/tpl/package/android/app/debug.keystore" android/app/debug.keystore
 
       - name: Prepare distribution source
+        if: inputs.variant != 'development'
         run: npm run prebuild:android:distribution
 
       - name: Build release APK
+        if: inputs.variant != 'development'
         run: npm run build:android:distribution
 
+      - name: Build isolated development client
+        if: inputs.variant == 'development'
+        working-directory: android
+        env:
+          NODE_ENV: development
+        run: >-
+          ./gradlew app:assembleDebugOptimized -PreactNativeArchitectures=arm64-v8a
+          --max-workers=2 --build-cache --no-daemon
+          -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=1024m"
+
       - name: Verify APK signer and ABIs
+        env:
+          BUILD_VARIANT: ${{ inputs.variant }}
         run: |
           set -euo pipefail
           apk=android/app/build/outputs/apk/release/app-release.apk
+          if [ "$BUILD_VARIANT" = development ]; then
+            apk=android/app/build/outputs/apk/debugOptimized/app-debugOptimized.apk
+            aapt="$(find "$ANDROID_HOME"/build-tools -name aapt -type f | sort -V | tail -1)"
+            "$aapt" dump badging "$apk" > "$RUNNER_TEMP/dev-apk-badging.txt"
+            grep -q "package: name='com.evnsolution.clever.routes.dev'" "$RUNNER_TEMP/dev-apk-badging.txt"
+            grep -q 'application-debuggable' "$RUNNER_TEMP/dev-apk-badging.txt"
+          fi
+          echo "APK_PATH=$apk" >> "$GITHUB_ENV"
           apksigner="$(find "$ANDROID_HOME"/build-tools -name apksigner -type f | sort -V | tail -1)"
           actual="$("$apksigner" verify --print-certs "$apk" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)"
           echo "expected=$EXPECTED_SIGNER_SHA256"
@@ -93,8 +122,8 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: clever-routes-apk-${{ github.sha }}
-          path: android/app/build/outputs/apk/release/app-release.apk
+          name: clever-routes-${{ inputs.variant || 'release' }}-apk-${{ github.sha }}
+          path: ${{ env.APK_PATH }}
           retention-days: 7
           if-no-files-found: error
 

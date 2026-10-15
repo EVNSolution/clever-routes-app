@@ -6,8 +6,8 @@
   "scripts": {
     "postinstall": "node scripts/patch-host-security.mjs && node scripts/patch-expo-location-notification.mjs",
     "start": "expo start",
-    "android:dev:install": "ORG_GRADLE_PROJECT_reactNativeArchitectures=arm64-v8a expo run:android --device --variant debugOptimized",
-    "android:dev:start": "expo start --dev-client --localhost --android",
+    "android:dev:install": "ORG_GRADLE_PROJECT_reactNativeArchitectures=arm64-v8a expo run:android --device --variant debugOptimized --app-id com.evnsolution.clever.routes.dev",
+    "android:dev:start": "expo start --dev-client --localhost",
     "android:qa:build": "npx eas-cli build --platform android --profile preview",
     "ios": "expo run:ios",
     "lint": "expo lint",

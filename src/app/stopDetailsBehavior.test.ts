@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
+import { createContext, runInContext } from 'node:vm';
+import ts from 'typescript';
 
 const appRootPath = join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx');
 
@@ -22,6 +24,66 @@ function getStopDetailsComponentSource(): string {
 }
 
 describe('stop details simplification', () => {
+  it('starts each different route stop at the top and preserves the same stop return position', () => {
+    const source = getAppRootSource();
+    const tree = ts.createSourceFile('AppRoot.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let resetEffect: ts.CallExpression | undefined;
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && node.expression.getText(tree) === 'useEffect'
+        && node.arguments[0]?.getText(tree).includes('stopDetailsScrollIdentityRef')) resetEffect = node;
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
+    assert.ok(resetEffect, 'Changing the displayed stop must reset the shared scroll position');
+    assert.match(resetEffect.arguments[1]?.getText(tree) ?? '', /screen/u);
+    assert.match(resetEffect.arguments[1]?.getText(tree) ?? '', /selectedRouteId/u);
+    assert.match(resetEffect.arguments[1]?.getText(tree) ?? '', /selectedStopDetailsId/u);
+    assert.match(source, /<ScrollView[\s\S]*ref=\{standardScrollRef\}/u);
+
+    let scrollY = 320;
+    let resets = 0;
+    const context = createContext({
+      screen: 'mainTabs', selectedRouteId: 'route-1', selectedStopDetailsId: 'stop-1',
+      stopDetailsScrollIdentityRef: { current: null },
+      standardScrollRef: { current: { scrollTo: ({ y, animated }: { y: number; animated: boolean }) => {
+        assert.equal(animated, false);
+        scrollY = y;
+        resets += 1;
+      } } },
+    });
+    runInContext(ts.transpileModule(`var resetScroll = ${resetEffect.arguments[0]!.getText(tree)};`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText, context);
+    context.resetScroll();
+    assert.equal(scrollY, 320);
+    assert.equal(resets, 0);
+
+    context.screen = 'stopDetails';
+    context.resetScroll();
+    assert.equal(scrollY, 0);
+    assert.equal(resets, 1);
+
+    scrollY = 480;
+    context.resetScroll();
+    context.screen = 'arrivalCheck';
+    context.resetScroll();
+    context.screen = 'stopDetails';
+    context.resetScroll();
+    assert.equal(scrollY, 480);
+    assert.equal(resets, 1);
+
+    context.selectedStopDetailsId = 'stop-2';
+    context.resetScroll();
+    assert.equal(scrollY, 0);
+    assert.equal(resets, 2);
+
+    scrollY = 260;
+    context.selectedRouteId = 'route-2';
+    context.resetScroll();
+    assert.equal(scrollY, 0);
+    assert.equal(resets, 3);
+  });
+
   it('renders the selected order details and the server customer note', () => {
     const componentSource = getStopDetailsComponentSource();
     const source = getAppRootSource();

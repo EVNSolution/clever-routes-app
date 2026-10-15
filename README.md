@@ -127,8 +127,11 @@ The direct release-mode commands inject `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live` a
 `EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://clever-route.cleversystem.ai` on the
 Gradle process itself. They therefore do not require `.env.local`, and a local mock
 override cannot leak into their bundled runtime. The ambiguous `npm run android`
-command is intentionally absent. Development builds require Metro and must not be
-installed on QA devices.
+command is intentionally absent. The isolated `Routes Dev` client (`.dev` package)
+requires Metro and can be installed beside the Play app for rapid device iteration.
+Use the `Android APK` Actions workflow with `variant=development` once, then follow
+[USB/Metro iteration](docs/release-readiness.md#fast-android-device-iteration).
+Development-client checks do not replace final Play-build acceptance.
 
 Run `npm run check:native-release` before EAS builds or release PRs. It validates source-controlled Expo/EAS identity, permission, profile, and public runtime env baseline only; owner-controlled Expo/EAS project values, Apple/Google signing authority, store/private distribution approval, privacy copy, and license decisions remain external release blockers.
 
