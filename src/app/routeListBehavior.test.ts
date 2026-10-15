@@ -22,6 +22,70 @@ function getRoutesPageSource(): string {
 }
 
 describe('routes list behavior', () => {
+  it('opens a ready route after another completion without carrying the completed screen state', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const start = source.indexOf('function handleOpenRouteSession(');
+    const end = source.indexOf('async function handleCallStop(', start);
+    const compiled = transpileModule(`${source.slice(start, end)}\nhandleOpenRouteSession('ready-route');`, {});
+    for (const selectedRouteId of ['finished-route', 'ready-route']) {
+      for (const pendingRouteEnd of [undefined, 'released']) {
+        const session = {
+          route: { id: 'ready-route' }, routeAccess: { assignmentGeneration: 'assignment-1' },
+          companyGuidance: { executionStatus: 'READY' }, pendingRouteEnd,
+          localRouteEnd: { assignmentGeneration: 'assignment-1', kind: 'released' as const },
+        };
+        const state = { finish: { flowState: 'delivery_finished' } as { flowState: string } | null, screen: '', selected: selectedRouteId };
+        const context = {
+          routeSessions: [session], selectedRouteId, activeRoutePlanId: null,
+          deliveryFinishResult: state.finish, getRouteListStatus,
+          getRouteSessionForAction: () => session,
+          resetActiveRouteProgress: () => { state.finish = null; },
+          setSelectedRouteId: (id: string) => { state.selected = id; },
+          toCompanyGuidanceSubmission: (value: unknown) => value,
+          setSubmission: () => undefined,
+          setScreen: (screen: string) => { state.screen = screen; },
+          setMessage: () => assert.fail('Ready route must remain available'),
+        };
+        runInNewContext(compiled.outputText, context);
+        assert.equal(state.finish, null, 'Start must not inherit the last completed route');
+        assert.equal(state.selected, 'ready-route');
+        assert.equal(state.screen, 'routeSession');
+        assert.equal(session.pendingRouteEnd, pendingRouteEnd, 'Pending release must still block Start');
+        assert.equal(session.localRouteEnd.kind, 'released');
+      }
+    }
+  });
+
+  it('preserves active progress and uncompleted drafts when opening route sessions', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const start = source.indexOf('function handleOpenRouteSession(');
+    const end = source.indexOf('async function handleCallStop(', start);
+    const compiled = transpileModule(`${source.slice(start, end)}\nhandleOpenRouteSession('target-route');`, {});
+    for (const scenario of [
+      { active: 'target-route', status: 'IN_PROGRESS', finished: false, exists: true, opens: true },
+      { active: 'another-route', status: 'READY', finished: true, exists: true, opens: false },
+      { active: null, status: 'IN_PROGRESS', finished: true, exists: true, opens: true },
+      { active: null, status: 'READY', finished: false, exists: true, opens: true },
+      { active: null, status: 'READY', finished: true, exists: false, opens: false },
+    ]) {
+      let opened = false;
+      runInNewContext(compiled.outputText, {
+        routeSessions: [], selectedRouteId: 'target-route', activeRoutePlanId: scenario.active,
+        deliveryFinishResult: scenario.finished ? { flowState: 'delivery_finished' } : null,
+        getRouteListStatus,
+        getRouteSessionForAction: () => scenario.exists ? {
+          route: { id: 'target-route' }, routeAccess: { assignmentGeneration: 'assignment-1' },
+          companyGuidance: { executionStatus: scenario.status },
+        } : null,
+        resetActiveRouteProgress: () => assert.fail('Existing progress must be preserved'),
+        setSelectedRouteId: () => undefined, setSubmission: () => undefined,
+        toCompanyGuidanceSubmission: (value: unknown) => value,
+        setScreen: () => { opened = true; }, setMessage: () => undefined,
+      });
+      assert.equal(opened, scenario.opens);
+    }
+  });
+
   it('keeps a finished assignment completed after ACK and when another route is selected', () => {
     const finished = {
       companyGuidance: { executionStatus: 'IN_PROGRESS' },

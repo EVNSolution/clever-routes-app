@@ -5155,6 +5155,11 @@ function DriverApp() {
       return;
     }
 
+    if (activeRoutePlanId === null
+      && deliveryFinishResult?.flowState === 'delivery_finished'
+      && getRouteListStatus(routeSession, 'ready') === 'ready') {
+      resetActiveRouteProgress();
+    }
     setSelectedRouteId(routeSession.route.id);
     setSubmission(toCompanyGuidanceSubmission(routeSession));
     setScreen('routeSession');
