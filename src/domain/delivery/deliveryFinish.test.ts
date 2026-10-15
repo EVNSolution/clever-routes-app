@@ -338,6 +338,41 @@ describe('delivery finish route cleanup', () => {
     }]);
   });
 
+  for (const stopState of ['failed', 'pending'] as const) {
+    it(`keeps GPS feedback accurate after a recorded route release when stop is ${stopState}`, async () => {
+      const queue = createInMemoryOfflineSubmissionQueue();
+      const driverEvents = createMockDriverEventService();
+      const stream = createMockStreamService();
+      let stopCalls = 0;
+      let finishStop: () => void = () => undefined;
+      stream.service.stopLocationUpdates = async () => {
+        stopCalls += 1;
+        if (stopState === 'failed') throw new Error('native GPS stop failure');
+        await new Promise<void>((resolve) => { finishStop = resolve; });
+      };
+
+      const result = await finishDeliveryAfterActive({
+        deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+        driverEventService: driverEvents,
+        offlineQueue: queue,
+        routeEnd: 'released',
+        routePlanId: 'route-1',
+        streamService: stream.service,
+      });
+      finishStop();
+
+      assert.equal(result.kind, 'recorded');
+      if (result.kind !== 'recorded') throw new Error('Expected a recorded route release');
+      assert.equal(result.monitoringMode, 'stopping');
+      assert.equal(result.message, `Route returned to Ready. ${stopState === 'failed' ? 'GPS stop could not be confirmed.' : 'GPS tracking is stopping.'}`);
+      assert.doesNotMatch(result.message, /native GPS|GPS tracking stopped/u);
+      assert.equal(stopCalls, 1);
+      assert.equal(queue.listPending().length, 0);
+      assert.equal(driverEvents.recordedEvents.length, 1);
+      assert.equal(driverEvents.recordedEvents[0]?.eventType, 'ROUTE_PAUSED');
+    });
+  }
+
   it('queues only the route release transition when returning to Ready fails live', async () => {
     const queue = createInMemoryOfflineSubmissionQueue();
     queue.enqueueDriverEvent({
@@ -368,7 +403,7 @@ describe('delivery finish route cleanup', () => {
     });
 
     assert.equal(result.kind, 'queued');
-    assert.match(result.message, /returning the route to Ready was queued/iu);
+    assert.equal(result.message, 'Route release saved on this device. Confirmation will retry. GPS tracking stopped.');
     const pendingItems = queue.listPending();
     assert.equal(pendingItems.length, 1);
     const pending = pendingItems[0];
@@ -421,10 +456,69 @@ describe('delivery finish route cleanup', () => {
     assert.equal(result.kind, 'queued');
     assert.equal(result.requiresRouteLookup, undefined);
     assert.equal(result.requiresRouteReconciliation, true);
+    assert.equal(result.message, 'Route release saved on this device. Refresh routes to review its status. GPS tracking stopped.');
+    assert.doesNotMatch(result.message, /HTTP|409|Confirmation will retry/u);
     assert.equal(queue.listPending().length, 3);
     assert.equal(queue.listPending().every((item) => (
       item.reconciliation?.reason === 'route_not_in_progress'
     )), true);
+  });
+
+  for (const routeEnd of ['completed', 'released'] as const) {
+    for (const stopFails of [false, true]) {
+      it(`keeps ${routeEnd} feedback private and accurate when GPS stop ${stopFails ? 'fails' : 'succeeds'}`, async () => {
+        const queue = createInMemoryOfflineSubmissionQueue();
+        const stream = createMockStreamService();
+        let stopCalls = 0;
+        stream.service.stopLocationUpdates = async () => {
+          stopCalls += 1;
+          if (stopFails) throw new Error('native GPS stop failure');
+        };
+
+        const result = await finishDeliveryAfterActive({
+          deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+          driverEventService: { recordDriverEvent: async () => {
+            throw new Error('java.net.UnknownHostException: https://route.example.test/driver/events');
+          } },
+          offlineQueue: queue,
+          routeEnd,
+          routePlanId: 'route-1',
+          streamService: stream.service,
+        });
+
+        assert.equal(result.kind, 'queued');
+        if (result.kind !== 'queued') throw new Error('Expected a saved route end');
+        assert.equal(result.monitoringMode, stopFails ? 'reduced' : 'stopped');
+        assert.equal(result.message, `Route ${routeEnd === 'released' ? 'release' : 'completion'} saved on this device. Confirmation will retry. ${stopFails ? 'GPS stop could not be confirmed.' : 'GPS tracking stopped.'}`);
+        assert.doesNotMatch(result.message, /UnknownHostException|https?:|route\.example|native GPS/u);
+        assert.equal(stopCalls, 1);
+        const pending = queue.listPending();
+        assert.equal(pending.length, 1);
+        assert.equal(pending[0]?.kind === 'driver_event' ? pending[0].event.eventType : null,
+          routeEnd === 'released' ? 'ROUTE_PAUSED' : 'ROUTE_COMPLETED');
+      });
+    }
+  }
+
+  it('does not claim GPS has stopped while a queued route release stop is still pending', async () => {
+    const queue = createInMemoryOfflineSubmissionQueue();
+    const stream = createMockStreamService();
+    let finishStop: () => void = () => undefined;
+    stream.service.stopLocationUpdates = () => new Promise<void>((resolve) => { finishStop = resolve; });
+    const result = await finishDeliveryAfterActive({
+      deliveryStart: { flowState: 'delivery_active', kind: 'delivery_active', locationPermission: 'foreground', message: 'active' },
+      driverEventService: { recordDriverEvent: async () => { throw new Error('network unavailable'); } },
+      offlineQueue: queue,
+      routeEnd: 'released',
+      routePlanId: 'route-1',
+      streamService: stream.service,
+    });
+    finishStop();
+
+    assert.equal(result.kind, 'queued');
+    if (result.kind !== 'queued') throw new Error('Expected a saved route release');
+    assert.equal(result.monitoringMode, 'stopping');
+    assert.equal(result.message, 'Route release saved on this device. Confirmation will retry. GPS tracking is stopping.');
   });
 
   it('queues route completion when live event recording fails, keeps the evidence, and stops tracking', async () => {
@@ -557,8 +651,8 @@ describe('delivery finish route cleanup', () => {
 
     assert.equal(result.kind, 'queued');
     assert.equal(result.requiresRouteLookup, true);
-    assert.match(result.message, /Driver session expired/iu);
-    assert.match(result.message, /HTTP 401/iu);
+    assert.equal(result.message, 'Route completion saved on this device. Refresh routes to confirm it. GPS tracking stopped.');
+    assert.doesNotMatch(result.message, /HTTP|401|Driver event/u);
   });
 
   it('discards route-scoped queued submissions only after route completion is recorded', async () => {

@@ -69,7 +69,7 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /pendingRouteEnd: getPendingRouteEnd\(queue, session\.route\.id\) \?\? undefined/u);
     assert.match(appSource, /session\.companyGuidance\.executionStatus === 'IN_PROGRESS' && session\.pendingRouteEnd === undefined/u);
     assert.match(appSource, /session\.route\.id === activeRoutePlanIdToRestore[\s\S]*session\.pendingRouteEnd === undefined/u);
-    assert.match(appSource, /session\.pendingRouteEnd === 'completed'[\s\S]*'completed'[\s\S]*session\.pendingRouteEnd === 'released'[\s\S]*'ready'/u);
+    assert.match(appSource, /getRouteListStatus\(session, classifiedRouteCardStatus\)/u);
   });
 
   it('shows final-status recovery instead of Start Session while a route end is pending', () => {

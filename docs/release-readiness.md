@@ -181,7 +181,7 @@ mock work still requires `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock` with no server U
 
 `cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied
 to committed source. `cli.appVersionSource` is `remote`; the reviewed native
-source version is `1.3.9` (`versionCode` `54`, iOS build `1`). Version `44`
+source version is `1.3.9` (`versionCode` `55`, iOS build `1`). Version `44`
 (`1.3.8`) is the live Google Play production release (live at 100% on
 2026-10-10). Version `45` was provided to internal testers; its open-testing
 submission was withdrawn on 2026-10-13. Version `46` was provided to internal

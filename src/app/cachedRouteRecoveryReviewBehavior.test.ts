@@ -126,6 +126,7 @@ describe('reviewed cached route recovery boundaries', () => {
       routeSyncState, setRouteSyncState: (value: string) => { routeSyncState = value; }, setRouteRecoveryCode: () => undefined,
       setMessage: () => undefined, setVerifiedDriverPhoneE164: () => undefined,
       bindExpoOfflineSubmissionQueueAccount: async () => queue, liveRouteOwnerRef: { current: 'owner' },
+      liveRouteSessionsRef: { current: [] },
       setOfflineSubmissionQueue: () => undefined, syncOfflineQueueState: () => undefined,
       offlineSubmissionQueue: queue, setIsInitialRouteRestoreComplete: () => undefined,
       createExpoLiveRouteChangeStore: () => undefined,

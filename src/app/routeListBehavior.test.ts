@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { transpileModule } from 'typescript';
 
-import { formatRouteListUpdatedAt } from './routeListBehavior';
+import { formatRouteListUpdatedAt, getRouteListStatus } from './routeListBehavior';
 
 const appRootPath = join(dirname(fileURLToPath(import.meta.url)), 'AppRoot.tsx');
 
@@ -22,6 +22,93 @@ function getRoutesPageSource(): string {
 }
 
 describe('routes list behavior', () => {
+  it('keeps a finished assignment completed after ACK and when another route is selected', () => {
+    const finished = {
+      companyGuidance: { executionStatus: 'IN_PROGRESS' },
+      routeAccess: { assignmentGeneration: 'assignment-1' },
+      localRouteEnd: { assignmentGeneration: 'assignment-1', kind: 'completed' as const },
+      pendingRouteEnd: 'completed' as const,
+    };
+    assert.equal(getRouteListStatus(finished, 'active'), 'completed');
+    const acknowledged = { ...finished, pendingRouteEnd: undefined };
+    assert.equal(getRouteListStatus(acknowledged, 'active'), 'completed');
+    assert.equal(getRouteListStatus(acknowledged, 'ready'), 'completed');
+    assert.notEqual(getRouteListStatus(acknowledged, 'active'), 'active');
+    assert.equal(getRouteListStatus({ ...acknowledged, routeAccess: { assignmentGeneration: 'assignment-2' } }, 'ready'), 'active');
+  });
+
+  it('keeps released routes ready and company-return routes active until Finish', () => {
+    const returning = {
+      companyGuidance: { executionStatus: 'IN_PROGRESS' },
+      routeAccess: { assignmentGeneration: 'assignment-1' },
+    };
+    assert.equal(getRouteListStatus(returning, 'ready'), 'active');
+    assert.equal(getRouteListStatus({ ...returning, pendingRouteEnd: 'released' }, 'active'), 'ready');
+    assert.equal(getRouteListStatus({ ...returning, companyGuidance: { executionStatus: 'READY' } }, 'ready'), 'ready');
+  });
+
+  it('marks only the ended assignment after durable persistence and distinguishes releases', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const finishStart = source.indexOf('async function finishRoute(');
+    const start = source.indexOf("if (isFinishCurrent()) {\n        const endedAssignmentGeneration", finishStart);
+    const end = source.indexOf("if (finishResult.monitoringMode === 'stopped')", start);
+    const persistence = source.indexOf('await waitForOfflineQueuePersistence(queue);', finishStart);
+    assert.ok(persistence > finishStart && start > persistence && end > start);
+    const compiled = transpileModule(source.slice(start, end), {});
+    const sessions = ['assignment-1', 'assignment-2'].map(assignmentGeneration => ({
+      route: { id: 'finished-route' },
+      routeAccess: { assignmentGeneration },
+      companyGuidance: { executionStatus: 'IN_PROGRESS' },
+    }));
+    for (const routeEnd of ['completed', 'released']) {
+      let updated = sessions;
+      runInNewContext(compiled.outputText, {
+        options: { routeEnd },
+        isFinishCurrent: () => true,
+        completionSubmission: { routeAccess: { assignmentGeneration: 'assignment-1' } },
+        route: { id: 'finished-route' },
+        setRouteSessions: (update: (current: typeof sessions) => typeof sessions) => { updated = update(sessions); },
+      });
+      assert.equal(getRouteListStatus(updated[0], 'ready'), routeEnd === 'completed' ? 'completed' : 'ready');
+      assert.equal(getRouteListStatus(updated[1], 'ready'), 'active');
+    }
+  });
+
+  it('preserves terminal assignments across hydration ACK without inheriting rejected or replaced endings', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const snapshotStart = source.indexOf('const endedRouteAssignments = new Map');
+    const snapshotEnd = source.indexOf('if (liveRouteOwnerRef.current !== accountOwnerHash)', snapshotStart);
+    const hydrationStart = source.indexOf('for (const item of queue.listPending())', snapshotEnd);
+    const hydrationEnd = source.indexOf('const effectivePersistedActiveRouteSession', hydrationStart);
+    assert.ok(snapshotStart > 0 && snapshotEnd > snapshotStart && hydrationStart > snapshotEnd && hydrationEnd > hydrationStart);
+    const compiled = transpileModule(`(() => { ${source.slice(snapshotStart, snapshotEnd)} ${source.slice(hydrationStart, hydrationEnd)} return loadedSessionsWithPendingEnds; })()`, {});
+    const event = (eventType: string, reconciliation?: object) => ({
+      kind: 'driver_event', event: { eventType, routePlanId: 'ended-route', assignmentGeneration: 'assignment-1' }, reconciliation,
+    });
+    const staleSession = {
+      route: { id: 'ended-route' }, routeAccess: { assignmentGeneration: 'assignment-1' },
+      companyGuidance: { executionStatus: 'IN_PROGRESS' },
+    };
+    const project = (before: unknown[], after: unknown[], previous: unknown[] = [], generation = 'assignment-1', previousOwner = 'owner-1') => runInNewContext(compiled.outputText, {
+      accountOwnerHash: 'owner-1', liveRouteOwnerRef: { current: previousOwner }, liveRouteSessionsRef: { current: previous },
+      accountQueue: { listPending: () => before }, queue: { listPending: () => after },
+      liveRouteStateKey: (id: string, generation: string) => `${id}:${generation}`,
+      loadedSessions: [{ ...staleSession, routeAccess: { assignmentGeneration: generation } }],
+      getPendingRouteEnd: () => undefined,
+    })[0];
+    assert.equal(getRouteListStatus(project([event('ROUTE_COMPLETED')], []), 'active'), 'completed');
+    assert.equal(getRouteListStatus(project([event('ROUTE_PAUSED')], []), 'active'), 'ready');
+    assert.equal(getRouteListStatus(project([event('ROUTE_COMPLETED')], [event('ROUTE_COMPLETED', {})]), 'ready'), 'active');
+    assert.equal(getRouteListStatus(project([event('ROUTE_COMPLETED')], [event('STOP_DELIVERED', {})]), 'ready'), 'completed');
+    assert.equal(getRouteListStatus(project([event('ROUTE_COMPLETED')], [], [], 'assignment-2'), 'ready'), 'active');
+    const previous = [{ ...staleSession, localRouteEnd: { assignmentGeneration: 'assignment-1', kind: 'completed' } }];
+    assert.equal(getRouteListStatus(project([], [], previous), 'ready'), 'completed');
+    assert.equal(getRouteListStatus(project([], [], previous, 'assignment-1', 'other-owner'), 'ready'), 'active');
+    assert.match(source, /const serverActiveRouteSession[\s\S]*session\.localRouteEnd === undefined/u);
+    assert.match(source, /selectedSession\.localRouteEnd\?\.kind !== 'completed'/u);
+    assert.match(source, /const markRouteStartDurablyCommitted[\s\S]*localRouteEnd: undefined/u);
+  });
+
   it('uses a routes-first shell with a gear-only Settings action and a revealed pull-refresh area', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const routesPage = getRoutesPageSource();
@@ -116,9 +203,9 @@ describe('routes list behavior', () => {
   it('keeps a server in-progress route on Continue while tracking permission is unresolved', () => {
     const source = getRoutesPageSource();
 
-    assert.match(source, /session\.companyGuidance\.executionStatus === 'IN_PROGRESS'[\s\S]*\? 'active'/u);
+    assert.match(source, /getRouteListStatus\(session, classifiedRouteCardStatus\)/u);
     assert.match(source, /onContinueRoute\(session\.route\.id\)/u);
-    assert.match(source, /executionStatus === 'IN_PROGRESS'[\s\S]*pendingRouteEnd === undefined/u);
+    assert.match(source, /getRouteListStatus\(left\.session,[^\n]+=== 'active'/u);
   });
 
   it('starts the switch flow when another ready route card is tapped, without opening or selecting it', () => {
