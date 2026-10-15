@@ -34,6 +34,13 @@ The app targets native iPhone and Android phone runtime. The existing direct APK
 channel remains the fallback until the Google Play production release is live.
 The current Android candidate is promoted as one immutable AAB through Play
 internal testing and production review; it is not rebuilt between tracks.
+Promote the exact internally tested AAB to production. Update the operational
+`ROUTES_APP_ANDROID_LATEST_VERSION_CODE` and `ROUTES_APP_ANDROID_LATEST_VERSION_NAME`
+only after Play confirms that the production release is available. Keep
+`ROUTES_APP_ANDROID_MIN_SUPPORTED_VERSION_CODE` unchanged unless a separate
+mandatory-update decision authorizes a change. Verify the public release manifest,
+its legacy alias, and API health after applying the environment values.
+
 `eas.json` defines the store build profile used for that candidate:
 
 - Android fallback channel: stable `/routes-app` browser handoff to the managed
