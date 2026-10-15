@@ -130,7 +130,6 @@ import {
   recordStopArrivedAfterDeliveryStart,
   type DriverEventService,
   type DriverRouteEtaUpdate,
-  type RouteStartedRecordResult,
   type StopArrivalEvidence,
   type StopArrivedRecordResult,
 } from '../domain/events/driverEvents';
@@ -257,6 +256,8 @@ import { DriverUpdateScreen } from '../ui/components/DriverUpdateScreen';
 import { FixedScreenHeader } from '../ui/components/FixedScreenHeader';
 import { TransientToast } from '../ui/components/TransientToast';
 import { scheduleTransientToastDismiss } from '../ui/components/transientToastBehavior';
+import { LoadingSurface } from '../ui/components/LoadingSurface';
+import { shouldShowRouteLoading } from './routeLoadingFeedback';
 import {
   classifyDriverAppUpdate,
   shouldPresentDriverAppUpdate,
@@ -473,7 +474,6 @@ function DriverApp() {
   const [activeRoutePlanId, setActiveRoutePlanId] = useState<string | null>(null);
   const [pendingRoutePlanId, setPendingRoutePlanId] = useState<string | null>(null);
   const [operationalDialog, setOperationalDialog] = useState<OperationalDialogState | null>(null);
-  const [routeStartedEventResult, setRouteStartedEventResult] = useState<RouteStartedRecordResult | null>(null);
   const [, setContinuousLocationResult] = useState<ContinuousLocationStreamStartResult | ContinuousLocationStopResult | null>(null);
   const [stopProofResults, setStopProofResults] = useState<Record<string, StopProofEventResult>>({});
   const [proofDrafts, setProofDrafts] = useState<Record<string, StopProofDraft>>({});
@@ -524,6 +524,7 @@ function DriverApp() {
   const [isRequestingAccountDeletion, setIsRequestingAccountDeletion] = useState(false);
   const [isSavingAccountName, setIsSavingAccountName] = useState(false);
   const [isRefreshingRoutes, setIsRefreshingRoutes] = useState(false);
+  const [isManualRouteRefresh, setIsManualRouteRefresh] = useState(false);
   const [routeProgressGuardIdleRevision, setRouteProgressGuardIdleRevision] = useState(0);
   const [isRequestingBackgroundLocation, setIsRequestingBackgroundLocation] = useState(false);
   const [isStartingRoute, setIsStartingRoute] = useState(false);
@@ -1920,10 +1921,8 @@ function DriverApp() {
         } else if (result.requiresRouteLookup === true) {
           if (result.routeLookupReason === 'rolling_eta_snapshot_synced') {
             setRouteRecoveryRefreshReason('rolling_eta_snapshot_synced');
-            setMessage('Stop completion synced. Refreshing route ETA.');
           } else if (result.routeLookupReason === 'pickup_eta_snapshot_synced') {
             setRouteRecoveryRefreshReason('pickup_eta_snapshot_synced');
-            setMessage('Pickup synced. Refreshing route ETA.');
           } else {
             setRouteRecoveryRefreshReason('driver_access_expired');
             setMessage('Driver access expired. Refreshing route assignments.');
@@ -4148,10 +4147,6 @@ function DriverApp() {
       void handleRefreshRoutes().finally(() => {
         if (recoveryReason === 'route_not_in_progress') {
           setMessage('Route ended or released on server. Unsynced delivery results were preserved for reconciliation.');
-        } else if (recoveryReason === 'pickup_eta_snapshot_synced') {
-          setMessage('Pickup synced. Route ETA refreshed.');
-        } else if (recoveryReason === 'rolling_eta_snapshot_synced') {
-          setMessage('Stop completion synced. Route ETA refreshed.');
         }
       });
     }, 0);
@@ -4625,12 +4620,13 @@ function DriverApp() {
     sendDriverSyncHeartbeat,
   ]);
 
-  const handlePullRefresh = useCallback(async () => {
+  const handlePullRefresh = useCallback(async (options?: { checkForAppUpdate: boolean }) => {
     if (isPullRefreshingRef.current) {
       return;
     }
 
     isPullRefreshingRef.current = true;
+    setIsManualRouteRefresh(true);
     pullRefreshOffset.value = withSpring(PULL_REFRESH_REVEAL_HEIGHT, PULL_REFRESH_SPRING_CONFIG);
     let waitTimer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -4638,12 +4634,13 @@ function DriverApp() {
       await Promise.race([
         Promise.all([
           handleRefreshRoutes(),
-          checkForDriverAppUpdate(true, true),
+          options?.checkForAppUpdate === false ? Promise.resolve() : checkForDriverAppUpdate(true, true),
         ]),
         new Promise<void>((resolve) => { waitTimer = setTimeout(resolve, PULL_REFRESH_MAX_WAIT_MS); }),
       ]);
     } finally {
       clearTimeout(waitTimer);
+      setIsManualRouteRefresh(false);
       pullRefreshOffset.value = withSpring(0, PULL_REFRESH_SPRING_CONFIG);
       isPullRefreshingRef.current = false;
     }
@@ -5027,7 +5024,6 @@ function DriverApp() {
         offlineQueue: queue,
         routePlanId: routeSession.route.id,
       });
-      setRouteStartedEventResult(routeStartedResult);
       if (routeStartedResult.kind === 'recorded') {
         markRouteStartDurablyCommitted();
         const marked = await driverAccessTokenStore.markActiveRouteStarted(
@@ -6005,7 +6001,7 @@ function DriverApp() {
       setMessage(
         isSkipped
           ? 'Stop skipped and reported to the administrator. Next stop is ready.'
-          : result.kind === 'queued' ? 'Completion saved on this device. Awaiting server confirmation. Next stop is ready.' : 'Stop completed. Next stop is ready.',
+          : result.kind === 'queued' ? 'Saved on this device. It will send when connected.' : null,
       );
     } catch (error) {
       if (isRouteSwitch) {
@@ -6383,7 +6379,6 @@ function DriverApp() {
     setCompletionPendingRestoreIdentity(null);
     setActiveRoutePlanId(null);
     setPendingRoutePlanId(null);
-    setRouteStartedEventResult(null);
     setRouteStartRecoveryState('idle');
     setContinuousLocationResult(null);
     notifiedStopArrivalIdsRef.current.clear();
@@ -6718,6 +6713,10 @@ function DriverApp() {
             }}
           />
         ) : (
+          <LoadingSurface loading={shouldShowRouteLoading({
+            isApplyingLiveRoute, isInitialRouteRestoreComplete, isManualRouteRefresh,
+            routeCount: routeSessions.length, routeSyncState, screen,
+          })}>
           <View style={styles.standardScreenFrame}>
             {standardScreenHeader}
             {liveBannerState !== undefined && verifiedDriverPhoneE164 !== null ? (
@@ -6871,7 +6870,7 @@ function DriverApp() {
               onOpenBackgroundLocationSettings={() => { void handleOpenBackgroundLocationSettings(); }}
               onContinueRoute={handleOpenRouteSession}
               onClearRouteReconciliation={handleRequestRouteReconciliationClear}
-              onRetryRouteSync={() => { void handleRefreshRoutes(); }}
+              onRetryRouteSync={() => { void handlePullRefresh({ checkForAppUpdate: false }); }}
               onRetryStorage={() => { void recoverOfflineEvidenceStorage(); }}
               onStartRoute={handleStartRoute}
               routeSessions={routeSessions}
@@ -6936,7 +6935,6 @@ function DriverApp() {
                 routeIdentity={selectedRouteSession?.routeAccess}
                 onOpenInferred={() => setScreen('completionAssistance')}
                 currentNavigationStepIndex={navigationStepIndex}
-                deliveryFinishResult={deliveryFinishResult}
                 isFinishingRoute={isFinishingRoute}
                 isRecordingArrival={isRecordingArrival}
                 isRefreshingRoutes={isRefreshingRoutes}
@@ -6951,12 +6949,11 @@ function DriverApp() {
                 onOpenNavigation={() => handleOpenNavigationForStop(currentStop)}
                 onOpenRouteNavigation={() => handleOpenRouteNavigation(selectedRoute)}
                 onOpenStop={handleOpenStopFromRouteSession}
-                onRetryRouteSync={() => { void handleRefreshRoutes(); }}
+                onRetryRouteSync={() => { void handlePullRefresh({ checkForAppUpdate: false }); }}
                 onStartRoute={() => handleStartRoute(selectedRoute.id)}
                 pendingRouteEnd={selectedRouteSession?.pendingRouteEnd}
                 route={selectedRoute}
                 routeProgress={routeProgress}
-                routeStartedEventResult={routeStartedEventResult}
                 routeStatus={routeStatus}
                 stop={currentStop}
               />
@@ -7032,6 +7029,7 @@ function DriverApp() {
             </GestureDetector>
             </View>
           </View>
+          </LoadingSurface>
         )}
           </KeyboardAvoidingView>
           <DeliveryPhotoActionSheet
@@ -7416,13 +7414,7 @@ function MyRoutesPage({
         </View>
       ) : null}
 
-      {routeSyncState === 'loading' && visibleRouteSessions.length === 0 ? (
-        <View style={styles.routeSyncState}>
-          <ActivityIndicator color="#0b57d0" size="small" />
-          <Text style={styles.routeSyncTitle}>Loading routes</Text>
-          <Text style={styles.routeSyncBody}>Your login is active. Fetching the latest assignments.</Text>
-        </View>
-      ) : routeSyncState === 'error' && visibleRouteSessions.length === 0 ? (
+      {routeSyncState === 'loading' && visibleRouteSessions.length === 0 ? null : routeSyncState === 'error' && visibleRouteSessions.length === 0 ? (
         <View style={styles.routeSyncState}>
           <Text style={styles.routeSyncTitle}>Routes temporarily unavailable</Text>
           <Text style={styles.routeSyncBody}>Your login is still active. Check your connection and retry.</Text>
@@ -7812,7 +7804,6 @@ function RouteSessionScreen({
   routeIdentity,
   onOpenInferred,
   currentNavigationStepIndex,
-  deliveryFinishResult,
   isFinishingRoute,
   isRecordingArrival,
   isRefreshingRoutes,
@@ -7830,7 +7821,6 @@ function RouteSessionScreen({
   pendingRouteEnd,
   route,
   routeProgress,
-  routeStartedEventResult,
   routeStatus,
   stop,
 }: {
@@ -7844,7 +7834,6 @@ function RouteSessionScreen({
   routeIdentity?: CompletionAssignmentIdentity;
   onOpenInferred(): void;
   currentNavigationStepIndex: number;
-  deliveryFinishResult: DeliveryFinishResult | null;
   isFinishingRoute: boolean;
   isRecordingArrival: boolean;
   isRefreshingRoutes: boolean;
@@ -7862,7 +7851,6 @@ function RouteSessionScreen({
   pendingRouteEnd?: PendingRouteEnd;
   route: AssignedRoute;
   routeProgress: RouteProgressProjection;
-  routeStartedEventResult: RouteStartedRecordResult | null;
   routeStatus: RouteStatus;
   stop: AssignedRouteStop | null;
 }) {
@@ -7959,17 +7947,17 @@ function RouteSessionScreen({
       {routeStatus === 'ready' && pendingRouteEnd !== undefined ? (
         <View accessibilityRole="alert" style={styles.backgroundLocationWarning}>
           <View style={styles.backgroundLocationWarningCopy}>
-            <Text style={styles.backgroundLocationWarningTitle}>Final status syncing</Text>
+            <Text style={styles.backgroundLocationWarningTitle}>Update pending</Text>
             <Text style={styles.backgroundLocationWarningBody}>
               {pendingRouteEnd === 'released'
-                ? 'This session was deleted on this device, but the server has not confirmed the route release. Start is unavailable until sync finishes.'
-                : 'This route is waiting for server completion confirmation. Start is unavailable until sync finishes.'}
+                ? 'Route release saved on this device. Waiting for confirmation before it can start again.'
+                : 'Route completion saved on this device. Waiting for confirmation.'}
             </Text>
           </View>
           <SecondaryButton
             compact
             disabled={isRefreshingRoutes}
-            label="Retry Sync"
+            label="Retry"
             loading={isRefreshingRoutes}
             onPress={onRetryRouteSync}
           />
@@ -8090,7 +8078,7 @@ function RouteSessionScreen({
               const state = completed ? 'completed' : isProcessing ? 'current' : 'upcoming';
               const serverConfirmed = routeProgress.serverConfirmedStopIds.includes(stop.deliveryStopId);
               const progressMeta = locationInferredStopIds.includes(stop.deliveryStopId) ? 'Location inferred · review'
-                : completed ? serverConfirmed ? 'Done' : 'Syncing' : isProcessing ? 'Current' : undefined;
+                : completed ? serverConfirmed ? 'Done' : 'Saved on device' : isProcessing ? 'Current' : undefined;
               const metaTone = completed ? 'neutral' : isProcessing ? 'green' : 'neutral';
               return (
                 <TimelineRow
@@ -8152,9 +8140,6 @@ function RouteSessionScreen({
           </View>
         )}
       </View>
-
-      {routeStartedEventResult?.kind === 'recorded' ? <StatusBanner tone="green" text="Route start event recorded." /> : null}
-      {deliveryFinishResult?.flowState === 'delivery_finished' ? <StatusBanner tone="green" text={deliveryFinishResult.message} /> : null}
 
       <View style={styles.routeSessionActions}>
         {primaryProgressAction !== null ? (

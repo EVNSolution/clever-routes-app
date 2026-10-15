@@ -127,8 +127,9 @@ describe('driver operations resilience runtime', () => {
 
     assert.match(retrySource, /result\.routeLookupReason === 'rolling_eta_snapshot_synced'/u);
     assert.match(retrySource, /setRouteRecoveryRefreshReason\('rolling_eta_snapshot_synced'\)/u);
-    assert.match(retrySource, /Stop completion synced\. Refreshing route ETA\./u);
-    assert.match(source, /recoveryReason === 'rolling_eta_snapshot_synced'[\s\S]*Stop completion synced\. Route ETA refreshed\./u);
+    assert.doesNotMatch(retrySource, /Stop completion synced|Pickup synced/u);
+    assert.match(source, /const recoveryReason = routeRecoveryRefreshReason;[\s\S]*void handleRefreshRoutes\(\)\.finally/u);
+    assert.doesNotMatch(source, /Route ETA refreshed\./u);
   });
 
   it('does not invalidate durable route-end recovery when the active route epoch changes', () => {
