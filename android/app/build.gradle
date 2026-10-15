@@ -4,6 +4,9 @@ apply plugin: "com.facebook.react"
 
 def googleServicesConfigFile = file("google-services.json")
 def isDevelopmentBuild = gradle.startParameter.taskNames.any { it.toLowerCase().contains('debug') }
+if (isDevelopmentBuild && gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }) {
+    throw new GradleException('Run development and release tasks in separate Gradle invocations.')
+}
 // The local QA package has no production Firebase registration or provider access.
 def isKfoodQaBuild = gradle.startParameter.taskNames.any { it.toLowerCase().contains('qa') }
 if (isKfoodQaBuild && gradle.startParameter.taskNames.any { !it.toLowerCase().contains('qa') }) {

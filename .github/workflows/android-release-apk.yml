@@ -30,7 +30,7 @@ jobs:
     name: Build and verify APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    environment: android-release
+    environment: ${{ inputs.variant == 'development' && 'android-development' || 'android-release' }}
 
     steps:
       - name: Checkout repository

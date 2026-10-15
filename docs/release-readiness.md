@@ -374,6 +374,9 @@ the task branch once. It builds an ARM64 `debugOptimized` client with the debug
 certificate. The package is `com.evnsolution.clever.routes.dev` (`Routes Dev`),
 so the installed Play app and its data remain intact. No production Firebase
 configuration is embedded in this client; FCM acceptance uses the final Play build.
+Production update prompts are skipped only in this debug package. Delivery-proof
+capability registration remains restricted to the production package. This loop
+uses private demo routes without required proof; it is not proof-provider acceptance.
 
 1. Download and install the development APK with ADB.
 2. Run Metro with the intended runtime environment and one worker:

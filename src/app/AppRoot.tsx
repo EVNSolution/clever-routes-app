@@ -867,9 +867,10 @@ function DriverApp() {
   }, [networkReachability]);
   const driverAppReleaseService = useMemo(() => (
     runtimeConfig.mode === 'live' && Platform.OS === 'android'
+      && !(__DEV__ && installedDriverAppVersion?.packageId === 'com.evnsolution.clever.routes.dev')
       ? createDriverAppReleaseApiClient({ baseUrl: runtimeConfig.deliveryServerBaseUrl })
       : null
-  ), [runtimeConfig]);
+  ), [installedDriverAppVersion, runtimeConfig]);
   const checkForDriverAppUpdate = useCallback(async (
     force = false,
     explicitRefreshRequested = false,
