@@ -282,6 +282,21 @@ describe('driver diagnostic manual report', () => {
     harness.transport.stop();
   });
 
+  it('gives a first-open storage operation 30 s before it counts as a storage failure', async () => {
+    const timeouts: number[] = [];
+    const outbox = createDriverDiagnosticOutbox({
+      accountOwnerHash: 'account-a',
+      scheduleTimeout: (_expire, timeoutMs) => {
+        timeouts.push(timeoutMs);
+        return {};
+      },
+      storage: { append: async () => undefined, quarantine: async () => undefined, read: async () => [], remove: async () => undefined },
+    });
+    await outbox.hydrate();
+    assert.deepEqual(timeouts, [30_000]);
+    assert.equal(outbox.getStorageFailure(), null);
+  });
+
   it('bounds retained statuses and never treats a missing status as an ACK', async () => {
     const reportIds = [
       '20000000-0000-4000-8000-000000000011',

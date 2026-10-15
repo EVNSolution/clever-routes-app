@@ -38,7 +38,9 @@ export type DriverDiagnosticReportStatus =
 
 const defaultRetentionMs = 7 * 24 * 60 * 60 * 1_000;
 const defaultMaxRecords = 1_000;
-const defaultOperationTimeoutMs = 5_000;
+// The encrypted store is created and keyed on first use, which can take longer than 5 s while a route starts.
+// A write that is only slow must not raise DIAGNOSTIC_STORAGE_FAILED; the blocker is for stores that really hang.
+const defaultOperationTimeoutMs = 30_000;
 
 export function createDriverDiagnosticOutbox(input: {
   accountOwnerHash: string;

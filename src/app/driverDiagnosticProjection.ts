@@ -34,6 +34,7 @@ export function createDriverDiagnosticProjection(now: () => Date = () => new Dat
       ...('clientEventId' in event && event.clientEventId ? { clientEventId: event.clientEventId } : {}),
       ...('requestId' in event && event.requestId ? { requestId: event.requestId } : {}),
       ...('httpStatus' in event && event.httpStatus ? { httpStatus: event.httpStatus } : {}),
+      ...('detail' in event && typeof event.detail === 'string' && event.detail ? { detail: event.detail } : {}),
     });
     // The event outbox retains history; the live snapshot contains at most ten
     // current blockers, matching the wire contract's bound.

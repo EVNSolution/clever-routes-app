@@ -306,6 +306,7 @@ async function executeContinuousLocationTask(input: {
 
   if (locations.length > 0) {
     let taskResult: ContinuousLocationTaskResult | null = null;
+    let completionSyncing = false;
     const processingWatchdog = startLocationTaskProcessingWatchdog({
       observe: observeDiagnostic,
     });
@@ -405,11 +406,14 @@ async function executeContinuousLocationTask(input: {
           await stopContinuousLocationTaskIfInactive(observeDiagnostic);
         }
         processingWatchdog.complete();
+        completionSyncing = true;
         await syncCompletionAfterGps?.();
       }
     } catch (error) {
+      // Only the error class is sent: messages can carry addresses or tokens.
+      const errorName = error instanceof Error && /^[A-Za-z0-9_]{1,40}$/u.test(error.name) ? error.name : 'Unknown';
       emitDiagnostic({
-        blocker: { reasonCode: 'LOCATION_PROCESSING_FAILED', stage: 'PROCESSING' },
+        blocker: { detail: `${completionSyncing ? 'COMPLETION_SYNC' : 'LOCATION'}:${errorName}`, reasonCode: 'LOCATION_PROCESSING_FAILED', stage: 'PROCESSING' },
         kind: 'STATE',
       });
       throw error;
