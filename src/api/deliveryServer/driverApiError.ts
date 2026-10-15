@@ -76,25 +76,25 @@ export function getDriverApiRequiresRouteReconciliation(error: unknown): true | 
 
 export function formatDriverApiErrorForDriver(error: unknown): string {
   if (isDriverApiUnauthorizedError(error)) {
-    return `${DRIVER_ACCESS_EXPIRED_MESSAGE} (HTTP 401)`;
+    return 'Driver session expired. Refresh routes to continue.';
   }
   if (isDriverRouteNotInProgressError(error)) {
-    return 'This route was ended or released by the server and needs reconciliation. (HTTP 409)';
+    return 'This route was ended or released by the server and needs reconciliation.';
   }
   if (error instanceof DriverApiHttpError) {
     switch (error.code) {
       case 'CASH_RECEIVED_REQUIRED':
-        return 'The server requires the actual Cash amount. The saved request needs review. (HTTP 400)';
+        return 'The server requires the actual Cash amount. The saved request needs review.';
       case 'CASH_COMPLETION_INVALID':
-        return 'The Cash amount or currency was rejected. Check the saved request with Dispatch. (HTTP 400)';
+        return 'The Cash amount or currency was rejected. Check the saved request with Dispatch.';
       case 'CASH_COMPLETION_CONFLICT':
-        return 'Dispatch must review the completion conflict. The original Cash request is retained. (HTTP 409)';
+        return 'Dispatch must review the completion conflict. The original Cash request is retained.';
       case 'ROUTE_ASSIGNMENT_CHANGED':
-        return 'The route assignment changed. Dispatch must review the saved completion. (HTTP 409)';
+        return 'The route assignment changed. Dispatch must review the saved completion.';
       case 'ROUTE_VERSION_MISMATCH':
-        return 'The route version changed. Dispatch must review the saved completion. (HTTP 409)';
+        return 'The route version changed. Dispatch must review the saved completion.';
     }
   }
 
-  return error instanceof Error ? error.message : 'unknown error';
+  return 'The update could not be confirmed. Check your connection.';
 }

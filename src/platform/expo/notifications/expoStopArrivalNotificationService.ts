@@ -3,6 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 
+import { GPS_CHECK_PUSH_TYPE } from '../../../domain/notifications/gpsCheckPush';
+import { handleGpsCheckPushData } from '../location/expoContinuousLocationStreamService';
 import {
   formatStopArrivalNotificationContent,
   parseDriverRouteNotificationData,
@@ -30,7 +32,15 @@ if (!TaskManager.isTaskDefined(DRIVER_NOTIFICATION_BACKGROUND_TASK)) {
       if (error !== undefined) {
         return Notifications.BackgroundNotificationTaskResult.Failed;
       }
-      const routeNotification = parseDriverRouteNotificationData(readBackgroundNotificationData(data));
+      const backgroundData = readBackgroundNotificationData(data);
+      if (backgroundData?.type === GPS_CHECK_PUSH_TYPE) {
+        // Server GPS check: revive location sending; WARNING shows nothing.
+        const checked = await handleGpsCheckPushData(backgroundData).catch(() => 'ignored' as const);
+        return checked === 'handled'
+          ? Notifications.BackgroundNotificationTaskResult.NewData
+          : Notifications.BackgroundNotificationTaskResult.NoData;
+      }
+      const routeNotification = parseDriverRouteNotificationData(backgroundData);
       if (routeNotification === null) {
         return Notifications.BackgroundNotificationTaskResult.NoData;
       }
@@ -48,6 +58,10 @@ export function createExpoStopArrivalNotificationService(): StopArrivalNotificat
   return {
     addDriverRouteNotificationReceivedListener: (listener) => {
       const subscription = Notifications.addNotificationReceivedListener((notification) => {
+        if (notification.request.content.data?.type === GPS_CHECK_PUSH_TYPE) {
+          void handleGpsCheckPushData(notification.request.content.data).catch(() => undefined);
+          return;
+        }
         const data = parseDriverRouteNotificationData(notification.request.content.data);
         if (data !== null) {
           void Promise.resolve(listener(data)).catch(() => undefined);

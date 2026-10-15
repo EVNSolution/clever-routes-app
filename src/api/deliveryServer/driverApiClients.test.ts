@@ -110,6 +110,7 @@ describe('driver API client token handoff', () => {
     });
     const clients = createDriverApiClientsFromRouteAccess({
       baseUrl: 'https://delivery.example.com/',
+      now: () => Date.parse('2026-05-12T06:00:00.000Z'),
       fetchImpl: async (url, init) => {
         requests.push({ headers: init?.headers ?? {}, url: String(url) });
 
@@ -160,6 +161,7 @@ describe('driver API client token handoff', () => {
     let resolveRefresh!: () => void;
     const clients = createDriverApiClientsFromRouteAccess({
       baseUrl: 'https://delivery.example.com/',
+      now: () => Date.parse('2026-05-12T06:00:00.000Z'),
       fetchImpl: async (_url, init) => {
         requests.push(init?.headers?.Authorization ?? 'missing');
         return {
@@ -226,6 +228,7 @@ describe('driver API client token handoff', () => {
     const requests: { authorization: string | undefined; signal: AbortSignal | undefined }[] = [];
     const clients = createDriverApiClientsFromRouteAccess({
       baseUrl: 'https://delivery.example.com/',
+      now: () => Date.parse('2026-05-12T06:00:00.000Z'),
       routeAccess: sampleInvitedRouteAccess,
       refreshDriverAccess: async (refreshSignal) => {
         assert.equal(refreshSignal, signal);
@@ -255,6 +258,7 @@ describe('driver API client token handoff', () => {
     const latestId = '90000000-0000-4000-8000-000000000002';
     const clients = createDriverApiClientsFromRouteAccess({
       baseUrl: 'https://delivery.example.com/',
+      now: () => Date.parse('2026-05-12T06:00:00.000Z'),
       routeAccess: sampleInvitedRouteAccess,
       refreshDriverAccess: async () => sampleInvitedRouteAccess.driverAccess,
       fetchImpl: async (_url, init) => {
@@ -287,6 +291,7 @@ describe('driver API client token handoff', () => {
     const lifecycle = new AbortController();
     const clients = createDriverApiClientsFromRouteAccess({
       baseUrl: 'https://delivery.example.com/',
+      now: () => Date.parse('2026-05-12T06:00:00.000Z'),
       routeAccess: sampleInvitedRouteAccess,
       fetchImpl: async () => {
         calls += 1;
@@ -308,5 +313,116 @@ describe('driver API client token handoff', () => {
     resolveRefresh();
     await assert.rejects(pending, /HTTP 401/u);
     assert.equal(calls, 1);
+  });
+
+  it('refreshes the driver access ahead of a request when the token expires within two minutes', async () => {
+    const requests: string[] = [];
+    let refreshCount = 0;
+    const clients = createDriverApiClientsFromRouteAccess({
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async (_url, init) => {
+        requests.push(init?.headers?.Authorization ?? 'missing');
+        return { ok: true, json: async () => ({ data: { status: 'NO_ASSIGNED_ROUTE' }, error: null }) };
+      },
+      now: () => Date.parse('2026-05-12T06:54:00.000Z'),
+      refreshDriverAccess: async () => {
+        refreshCount += 1;
+        return { ...sampleInvitedRouteAccess.driverAccess, accessToken: 'ahead-token', expiresAt: '2026-05-12T07:09:00.000Z' };
+      },
+      routeAccess: sampleInvitedRouteAccess,
+    });
+
+    await clients.assignedRouteService.getAssignedRoute({ routeContext: sampleInvitedRouteAccess.routeAccess.routeContext });
+    await clients.assignedRouteService.getAssignedRoute({ routeContext: sampleInvitedRouteAccess.routeAccess.routeContext });
+
+    assert.equal(refreshCount, 1);
+    assert.deepEqual(requests, ['Bearer ahead-token', 'Bearer ahead-token']);
+  });
+
+  it('does not refresh ahead while more than two minutes of the token remain', async () => {
+    const requests: string[] = [];
+    let refreshCount = 0;
+    const clients = createDriverApiClientsFromRouteAccess({
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async (_url, init) => {
+        requests.push(init?.headers?.Authorization ?? 'missing');
+        return { ok: true, json: async () => ({ data: { status: 'NO_ASSIGNED_ROUTE' }, error: null }) };
+      },
+      now: () => Date.parse('2026-05-12T06:52:00.000Z'),
+      refreshDriverAccess: async () => {
+        refreshCount += 1;
+        return sampleInvitedRouteAccess.driverAccess;
+      },
+      routeAccess: sampleInvitedRouteAccess,
+    });
+
+    await clients.assignedRouteService.getAssignedRoute({ routeContext: sampleInvitedRouteAccess.routeAccess.routeContext });
+
+    assert.equal(refreshCount, 0);
+    assert.deepEqual(requests, ['Bearer fixture-driver-access-token']);
+  });
+
+  it('one ahead refresh serves the requests that arrive while it runs', async () => {
+    const requests: string[] = [];
+    let refreshCount = 0;
+    const clients = createDriverApiClientsFromPersistedDriverAccess({
+      baseUrl: 'https://delivery.example.com/',
+      fetchImpl: async (_url, init) => {
+        requests.push(init?.headers?.Authorization ?? 'missing');
+        return { ok: true, json: async () => ({ data: { status: 'NO_ASSIGNED_ROUTE' }, error: null }) };
+      },
+      now: () => Date.parse('2026-05-12T06:55:30.000Z'),
+      persistedAccess: {
+        accountAccess: {
+          accessToken: 'account-access-token',
+          expiresAt: '2026-05-12T07:10:00.000Z',
+          refreshToken: 'account-refresh-token',
+          refreshTokenExpiresAt: '2026-06-12T07:00:00.000Z',
+          tokenType: 'Bearer',
+          ttlSeconds: 900,
+          use: 'driver_account',
+        },
+        driverAccess: sampleInvitedRouteAccess.driverAccess,
+        driverProfile: { phoneE164: '+14165550123' },
+        routeAccess: sampleInvitedRouteAccess.routeAccess,
+      },
+      refreshDriverAccess: () => new Promise((resolve) => {
+        refreshCount += 1;
+        setTimeout(() => resolve({
+          ...sampleInvitedRouteAccess.driverAccess, accessToken: 'ahead-token', expiresAt: '2026-05-12T07:10:30.000Z',
+        }), 5);
+      }),
+    });
+
+    await Promise.all([
+      clients.assignedRouteService.getAssignedRoute({ routeContext: sampleInvitedRouteAccess.routeAccess.routeContext }),
+      clients.assignedRouteService.getAssignedRoute({ routeContext: sampleInvitedRouteAccess.routeAccess.routeContext }),
+    ]);
+
+    assert.equal(refreshCount, 1);
+    assert.deepEqual(requests, ['Bearer ahead-token', 'Bearer ahead-token']);
+  });
+
+  it('sends the request with the current token when the ahead refresh fails or returns nothing', async () => {
+    for (const refreshDriverAccess of [
+      async () => { throw new Error('route access lookup unavailable'); },
+      async () => null,
+    ]) {
+      const requests: string[] = [];
+      const clients = createDriverApiClientsFromRouteAccess({
+        baseUrl: 'https://delivery.example.com/',
+        fetchImpl: async (_url, init) => {
+          requests.push(init?.headers?.Authorization ?? 'missing');
+          return { ok: true, json: async () => ({ data: { status: 'NO_ASSIGNED_ROUTE' }, error: null }) };
+        },
+        now: () => Date.parse('2026-05-12T06:54:30.000Z'),
+        refreshDriverAccess,
+        routeAccess: sampleInvitedRouteAccess,
+      });
+
+      await clients.assignedRouteService.getAssignedRoute({ routeContext: sampleInvitedRouteAccess.routeAccess.routeContext });
+
+      assert.deepEqual(requests, ['Bearer fixture-driver-access-token']);
+    }
   });
 });

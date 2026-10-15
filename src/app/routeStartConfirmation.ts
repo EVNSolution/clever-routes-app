@@ -1,7 +1,7 @@
 export const ROUTE_START_SESSION_CONFIRMATION = {
   title: 'Start this session?',
   baseMessage:
-    'Start here at Store Pickup. GPS tracking begins now. Stop 1 becomes the active task after pickup is confirmed.',
+    'Confirm pickup and continue to the first delivery.',
   cancelLabel: 'Cancel',
   confirmLabel: 'Start Session',
 } as const;

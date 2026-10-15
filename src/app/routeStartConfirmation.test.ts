@@ -34,10 +34,9 @@ describe('route start session confirmation', () => {
     assert.notEqual(alertPayload, null);
     const [title, message, buttons, options] = alertPayload!;
     assert.equal(title, ROUTE_START_SESSION_CONFIRMATION.title);
-    assert.match(message, /at Store Pickup/i);
-    assert.match(message, /GPS tracking begins/i);
-    assert.match(message, /pickup is confirmed/i);
-    assert.match(message, /Stop 1 becomes the active task/i);
+    assert.match(message, /Confirm pickup/i);
+    assert.match(message, /continue to the first delivery/i);
+    assert.doesNotMatch(message, /GPS tracking begins/i);
     assert.doesNotMatch(message, /inside Route Details/i);
     assert.doesNotMatch(message, /Start pickup/i);
     assert.doesNotMatch(message, /Warning:/i);

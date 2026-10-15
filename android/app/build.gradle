@@ -3,6 +3,10 @@ apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
 def googleServicesConfigFile = file("google-services.json")
+def isDevelopmentBuild = gradle.startParameter.taskNames.any { it.toLowerCase().contains('debug') }
+if (isDevelopmentBuild && gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }) {
+    throw new GradleException('Run development and release tasks in separate Gradle invocations.')
+}
 // The local QA package has no production Firebase registration or provider access.
 def isKfoodQaBuild = gradle.startParameter.taskNames.any { it.toLowerCase().contains('qa') }
 if (isKfoodQaBuild && gradle.startParameter.taskNames.any { !it.toLowerCase().contains('qa') }) {
@@ -11,7 +15,7 @@ if (isKfoodQaBuild && gradle.startParameter.taskNames.any { !it.toLowerCase().co
 if (isKfoodQaBuild && !file('src/qa/res/raw/kfood_qa_ca.pem').exists()) {
     throw new GradleException('Prepare the local QA certificate with scripts/build-kfood-native-qa.mjs before building QA.')
 }
-if (googleServicesConfigFile.exists() && !isKfoodQaBuild) {
+if (googleServicesConfigFile.exists() && !isKfoodQaBuild && !isDevelopmentBuild) {
     apply plugin: "com.google.gms.google-services"
 }
 
@@ -105,9 +109,9 @@ android {
         applicationId 'com.evnsolution.clever.routes'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 44
-        if (isKfoodQaBuild && project.hasProperty('kfoodProofQa')) versionCode 44
-        versionName "1.3.8"
+        versionCode 56
+        if (isKfoodQaBuild && project.hasProperty('kfoodProofQa')) versionCode 56
+        versionName "1.3.9"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -122,6 +126,8 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            applicationIdSuffix '.dev'
+            resValue 'string', 'app_name', 'Routes Dev'
         }
         release {
             // Caution! In production, you need to generate your own keystore file.

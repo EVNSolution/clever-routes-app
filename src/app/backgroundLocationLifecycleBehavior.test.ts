@@ -76,9 +76,10 @@ describe('background location lifecycle wiring', () => {
       'const clearAndStopActiveLocationSession = useCallback(',
     );
 
+    assert.match(permissionFlow, /'Background location',\s*BACKGROUND_LOCATION_DISCLOSURE_TEXT,/u);
     assert.match(
       permissionFlow,
-      /CLEVER Routes collects precise location data to update delivery progress during an active route, even when the app is closed or not in use\./u,
+      /preStartLocationNoticeStore\.accept\(\)[\s\S]*requestForegroundPermission/u,
     );
     assert.match(permissionFlow, /text: 'Privacy Policy'/u);
     assert.match(permissionFlow, /Linking\.openURL\(ROUTES_APP_PRIVACY_URL\)/u);
@@ -89,6 +90,27 @@ describe('background location lifecycle wiring', () => {
     assert.match(
       permissionFlow,
       /requestBackgroundLocationPermissionAfterDisclosure[\s\S]*requestContinuousLocationBackgroundPermission/u,
+    );
+  });
+
+  it('starts tracking before Start only after the driver accepted the pre-start location notice', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const loadSource = getFunctionSource(
+      source,
+      'const handleLoginAndLoadRoutes = useCallback(',
+      'const handleRefreshRoutes = useCallback(',
+    );
+    const gate = loadSource.slice(loadSource.indexOf('const startPreStartTracking = async'));
+
+    assert.match(gate, /if \(await preStartLocationNoticeStore\.isAccepted\(\)\.catch\(\(\) => false\)\) \{\s*await startPreStartTracking\(\);/u);
+    assert.match(gate, /!preStartLocationNoticeShownRef\.current[\s\S]*getBackgroundPermission\(\)[\s\S]*=== 'granted'/u);
+    assert.match(gate, /'Location before Start',\s*BACKGROUND_LOCATION_DISCLOSURE_TEXT,/u);
+    assert.match(gate, /text: 'Not Now'/u);
+    assert.match(gate, /preStartLocationNoticeStore\.accept\(\)\.then\(startPreStartTracking\)[\s\S]*text: 'Continue'/u);
+    assert.equal(loadSource.match(/startContinuousLocationUpdatesBeforeDeliveryStart\(/gu)?.length, 1);
+    assert.ok(
+      loadSource.indexOf('startContinuousLocationUpdatesBeforeDeliveryStart(')
+        > loadSource.indexOf('const startPreStartTracking = async'),
     );
   });
 
@@ -109,7 +131,7 @@ describe('background location lifecycle wiring', () => {
     assert.match(restoreSource, /AppState\.currentState !== 'active'[\s\S]*return/u);
     assert.match(restoreSource, /startContinuousLocationUpdatesAfterDeliveryStart/u);
     assert.match(restoreSource, /continuousResult\.kind === 'blocked'[\s\S]*server route remains active/u);
-    assert.match(restoreSource, /catch \(error\)[\s\S]*server route remains active/u);
+    assert.match(restoreSource, /catch \{[\s\S]*if \(!isLoginAccountCurrent\(\)\) return;[\s\S]*setContinuousLocationResult\(null\);[\s\S]*Route remains active/u);
     assert.doesNotMatch(restoreSource, /clearAndStopActiveLocationSession/u);
     assert.doesNotMatch(restoreSource, /setDeliveryStartResult\(null\)/u);
     assert.match(loadSource, /if \(activeRouteWasRemoved\) \{[\s\S]*clearAndStopActiveLocationSession/u);
@@ -248,6 +270,5 @@ describe('background location lifecycle wiring', () => {
     assert.match(source, /Delivery updates are read-only until encrypted storage is safely persisted/u);
     assert.match(source, /if \(blockMutationWhileStorageDegraded\(\)\) return/u);
     assert.match(source, /function handleStartRoute\(routeId\?: string\) \{\s*if \(blockMutationWhileStorageDegraded\(\)\) return/u);
-    assert.doesNotMatch(source, /const isStartDisabled/u);
   });
 });

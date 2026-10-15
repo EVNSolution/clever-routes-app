@@ -69,18 +69,25 @@ describe('route session current task behavior', () => {
     assert.match(appSource, /pendingRouteEnd: getPendingRouteEnd\(queue, session\.route\.id\) \?\? undefined/u);
     assert.match(appSource, /session\.companyGuidance\.executionStatus === 'IN_PROGRESS' && session\.pendingRouteEnd === undefined/u);
     assert.match(appSource, /session\.route\.id === activeRoutePlanIdToRestore[\s\S]*session\.pendingRouteEnd === undefined/u);
-    assert.match(appSource, /session\.pendingRouteEnd === 'completed'[\s\S]*'completed'[\s\S]*session\.pendingRouteEnd === 'released'[\s\S]*'ready'/u);
+    assert.match(appSource, /getRouteListStatus\(session, classifiedRouteCardStatus\)/u);
   });
 
   it('shows final-status recovery instead of Start Session while a route end is pending', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const componentSource = getRouteSessionComponentSource();
 
-    assert.match(appSource, /<RouteSessionScreen[\s\S]*isRefreshingRoutes=\{isRefreshingRoutes\}[\s\S]*onRetryRouteSync=\{\(\) => \{ void handleRefreshRoutes\(\); \}\}[\s\S]*pendingRouteEnd=\{selectedRouteSession\?\.pendingRouteEnd\}/u);
+    assert.match(appSource, /<RouteSessionScreen[\s\S]*isRefreshingRoutes=\{isRefreshingRoutes\}[\s\S]*onRetryRouteSync=\{\(\) => \{ void handlePullRefresh\(\{ checkForAppUpdate: false \}\); \}\}[\s\S]*pendingRouteEnd=\{selectedRouteSession\?\.pendingRouteEnd\}/u);
     assert.match(componentSource, /pendingRouteEnd\?: PendingRouteEnd/u);
     assert.match(componentSource, /routeStatus === 'ready' && pendingRouteEnd === undefined \? \([\s\S]*styles\.routeSessionPrestartOverlay[\s\S]*label="Start"/u);
-    assert.match(componentSource, /routeStatus === 'ready' && pendingRouteEnd !== undefined \? \([\s\S]*Final status syncing[\s\S]*Retry Sync/u);
-    assert.doesNotMatch(componentSource, /StatusChip[^\n]*Final status syncing/u);
+    assert.match(componentSource, /routeStatus === 'ready' && pendingRouteEnd !== undefined \? \([\s\S]*Update pending[\s\S]*Retry/u);
+    assert.doesNotMatch(componentSource, /StatusChip[^\n]*Update pending/u);
+  });
+
+  it('does not keep successful event acknowledgements on the route screen', () => {
+    const componentSource = getRouteSessionComponentSource();
+    assert.doesNotMatch(componentSource, /routeStartedEventResult|deliveryFinishResult|Route start event recorded/u);
+    assert.match(componentSource, /pendingRouteEnd !== undefined/u);
+    assert.match(componentSource, /primaryProgressAction/u);
   });
 
   it('clears previous route progress before a new route starts', () => {
@@ -146,10 +153,10 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const remainingRouteEta = etaSnapshot\?\.remainingRouteEta \?\? null/u);
     assert.match(componentSource, /const currentTaskNextStopEta = nextStopEta === null[\s\S]*formatAssignedRouteEta\(nextStopEta\.estimatedArrivalAt, route\.timezone\)/u);
     assert.match(componentSource, /const currentTaskRouteCompletionEta = remainingRouteEta === null[\s\S]*formatAssignedRouteEta\(remainingRouteEta\.estimatedCompletionAt, route\.timezone\)/u);
-    assert.match(componentSource, /const currentTaskEtaFailure = etaSnapshot\?\.status === 'FAILED'[\s\S]*ETA unavailable/u);
-    assert.match(componentSource, /const showRouteEtaRows = !isPickupTask[\s\S]*etaSnapshot !== null[\s\S]*etaSnapshot\.status === 'READY' \|\| etaSnapshot\.status === 'FAILED'/u);
+    assert.doesNotMatch(componentSource, /currentTaskEtaFailure|failureMessage/u);
+    assert.match(componentSource, /const showRouteEtaRows = !isPickupTask[\s\S]*etaSnapshot\?\.status === 'READY'/u);
     assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*label=\{singleCompletion \? "Complete Delivery" : "Arrive"\}[\s\S]*label="Navigate"[\s\S]*<\/View>[\s\S]*showRouteEtaRows \? \(/u);
-    assert.match(componentSource, /currentTaskEtaFailure !== null \? \([\s\S]*currentTaskEtaWarningText[\s\S]*\) : \(\s*<>[\s\S]*currentTaskNextStopEta !== null/u);
+    assert.match(componentSource, /showRouteEtaRows \? \([\s\S]*currentTaskNextStopEta !== null/u);
     assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Estimated arrival time at next stop: \{currentTaskNextStopEta\}<\/Text>/u);
     assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Estimated completion time: \{currentTaskRouteCompletionEta\}<\/Text>/u);
     assert.doesNotMatch(componentSource, /Next stop:|Route complete:|currentTaskNextStopDistance|currentTaskRouteCompletionDistance/u);
@@ -196,9 +203,9 @@ describe('route session current task behavior', () => {
     const arrivedSource = appSource.slice(arrivedBegin, arrivedEnd);
 
     assert.match(arrivedSource, /const pickupStopLabel = pickupStop === undefined \? 'the next stop' : `Stop \$\{pickupStop\.sequence\}`/u);
-    assert.match(arrivedSource, /let pickupMessage = `Store Pickup completed\. Continue to \$\{pickupStopLabel\}\.`/u);
-    assert.match(arrivedSource, /if \(result\.kind === 'queued'\) \{[\s\S]*pickupMessage = `Store Pickup saved offline\. Continue to \$\{pickupStopLabel\} while syncing\.`/u);
-    assert.match(arrivedSource, /if \(result\.requiresRouteLookup === true\) \{[\s\S]*setRouteRecoveryRefreshReason\('driver_access_expired'\);[\s\S]*pickupMessage = 'Store Pickup saved offline\. Driver access expired, so route assignments are refreshing\.'/u);
+    assert.match(arrivedSource, /let pickupMessage: string \| null = null/u);
+    assert.match(arrivedSource, /if \(result\.kind === 'queued'\) \{[\s\S]*pickupMessage = `Pickup saved on this device\. Continue to \$\{pickupStopLabel\}\.`/u);
+    assert.match(arrivedSource, /if \(result\.requiresRouteLookup === true\) \{[\s\S]*setRouteRecoveryRefreshReason\('driver_access_expired'\);[\s\S]*pickupMessage = 'Pickup saved on this device\. Refreshing route access\.'/u);
     assert.match(arrivedSource, /setMessage\(pickupMessage\);/u);
     assert.doesNotMatch(arrivedSource, /setMessage\('Store Pickup queued[\s\S]*setMessage\('Store Pickup completed/u);
   });
@@ -226,7 +233,7 @@ describe('route session current task behavior', () => {
   it('keeps Store information out of Stops and lists delivery addresses only', () => {
     const componentSource = getRouteSessionComponentSource();
     const sequenceStart = componentSource.indexOf("{selectedRouteContent === 'stops' ? (");
-    const sequenceEnd = componentSource.indexOf("{routeStartedEventResult?.kind === 'recorded'", sequenceStart);
+    const sequenceEnd = componentSource.indexOf('<View style={styles.routeSessionActions}>', sequenceStart);
     const sequenceSource = componentSource.slice(sequenceStart, sequenceEnd);
 
     assert.notEqual(sequenceStart, -1);
@@ -521,7 +528,7 @@ describe('route session current task behavior', () => {
     );
   });
 
-  it('switches routes only after the active stop and applicable route-end policy are durably completed', () => {
+  it('starts the target route only after the active route release is durably recorded', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const startBegin = appSource.indexOf('function handleStartRoute(');
     const startEnd = appSource.indexOf('\n\n  async function startRouteSessionAfterConfirmed(', startBegin);
@@ -539,29 +546,38 @@ describe('route session current task behavior', () => {
     assert.match(startSource, /pendingRoutePlanId !== null/u);
     assert.doesNotMatch(startSource, /Finish the active route before starting another route/u);
     assert.match(terminalSource, /recordStopProofEventAfterDeliveryStart/u);
-    assert.match(terminalSource, /await finishActiveRouteForSwitch\(selectedRoute, routeSwitchPlanId, remainingStops\)/u);
+    assert.match(terminalSource, /await finishActiveRouteForSwitch\(selectedRoute, routeSwitchPlanId\)/u);
     const switchBegin = appSource.indexOf('async function finishActiveRouteForSwitch(');
     const switchEnd = appSource.indexOf('\n\n  async function finishRoute(', switchBegin);
     const switchSource = appSource.slice(switchBegin, switchEnd);
     assert.match(switchSource, /await finishRoute\([\s\S]*routeEnd: 'released'/u);
     assert.match(switchSource, /await startRouteSessionAfterConfirmed\(targetRoutePlanId/u);
     assert.ok(terminalSource.indexOf('recordStopProofEventAfterDeliveryStart') < terminalSource.indexOf('finishActiveRouteForSwitch'));
-    assert.match(switchSource, /if \(!hasRemainingStops\) \{[\s\S]*requestRouteCompletion\([\s\S]*startRouteSessionAfterConfirmed\(targetRoutePlanId\)[\s\S]*return;/u);
+    assert.doesNotMatch(switchSource, /requestRouteCompletion|hasRemainingStops/u);
     assert.match(switchSource, /if \(!routeEnded\) \{[\s\S]*setPendingRoutePlanId\(null\);[\s\S]*return;[\s\S]*\}[\s\S]*startRouteSessionAfterConfirmed/u);
-    assert.match(startSource, /failureReason: 'OTHER'/u);
-    assert.match(startSource, /Driver cancelled the current delivery before switching routes\./u);
   });
 
-  it('opens the existing proof and payment screen before completing a switch', () => {
+  it('stops the active route when another route starts: at once for another date, after a warning for the same date', () => {
     const appSource = readFileSync(appRootPath, 'utf8');
     const startBegin = appSource.indexOf('function handleStartRoute(');
     const startEnd = appSource.indexOf('\n\n  async function startRouteSessionAfterConfirmed(', startBegin);
     const startSource = appSource.slice(startBegin, startEnd);
 
-    assert.match(startSource, /onCompleteCurrentDelivery:[\s\S]*recordStopArrival\(currentStop, 'mainTabs'\)/u);
-    assert.doesNotMatch(startSource, /onCompleteCurrentDelivery:[\s\S]*handleTerminalStop\([^)]*'delivered'/u);
-    assert.match(appSource, /const recordStopArrival = useCallback\(async \([\s\S]*setArrivalCheckReturnScreen\(returnScreen\)[\s\S]*setScreen\('arrivalCheck'\)/u);
-    assert.match(appSource, /case 'arrivalCheck':[\s\S]*setPendingRoutePlanId\(null\)[\s\S]*setScreen\(arrivalCheckReturnScreen\)/u);
+    assert.match(startSource, /const stopActiveRoute = \(\) => \{[\s\S]*finishActiveRouteForSwitch\(activeRoute, targetRoutePlanId\)/u);
+    assert.match(startSource, /decideActiveRouteSwitch\(\{[\s\S]*activeRoute\.deliveryDate[\s\S]*routeSession\.route\.deliveryDate[\s\S]*=== 'switch_now'\) \{\s*stopActiveRoute\(\);/u);
+    assert.match(startSource, /\} else \{\s*requestActiveRouteSwitchConfirmation\(\{[\s\S]*onStopActiveRoute: stopActiveRoute/u);
+    assert.doesNotMatch(startSource, /onCancelCurrentDelivery|onCompleteCurrentDelivery/u);
+  });
+
+  it('starts the new route only after the released route session is cleared', () => {
+    const appSource = readFileSync(appRootPath, 'utf8');
+    const begin = appSource.indexOf('async function finishActiveRouteForSwitch(');
+    const end = appSource.indexOf('\n\n  async function finishRoute(', begin);
+    const switchSource = appSource.slice(begin, end);
+
+    assert.match(switchSource, /routeEnd: 'released'[\s\S]*waitUntil\(async \(\) => \{[\s\S]*loadActiveDriverAccess\(\)[\s\S]*activeRouteSession\.routePlanId !== activeRoute\.id/u);
+    assert.match(switchSource, /if \(!sessionCleared\) \{[\s\S]*still syncing[\s\S]*return;/u);
+    assert.ok(switchSource.indexOf('waitUntil(') < switchSource.indexOf('startRouteSessionAfterConfirmed(targetRoutePlanId)'));
   });
 
   it('keeps Store Pickup and out-of-order arrival work from overriding Back', () => {
@@ -759,7 +775,7 @@ describe('route session current task behavior', () => {
 
     assert.match(appSource, /projectRouteProgress\(\{[\s\S]*localCompletedStopIds: completedStopIds,[\s\S]*serverConfirmedStopIds/u);
     assert.match(appSource, /result\.serverConfirmedStopIds/u);
-    assert.match(appSource, /completed \? serverConfirmed \? 'Done' : 'Syncing'/u);
+    assert.match(appSource, /completed \? serverConfirmed \? 'Done' : 'Saved on device'/u);
     assert.match(appSource, /locationInferredStopIds\.includes\(stop\.deliveryStopId\) \? 'Location inferred · review'/u);
   });
 

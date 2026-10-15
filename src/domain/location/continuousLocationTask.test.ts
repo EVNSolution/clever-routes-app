@@ -47,6 +47,112 @@ async function saveActiveRoute(store: ReturnType<typeof createTokenStore>, route
   }
 }
 
+async function savePreStartRoute(store: ReturnType<typeof createTokenStore>, routePlanId = sampleInvitedRouteAccess.routeAccess.routePlanId) {
+  await store.saveAuthenticatedDriver({ accountAccess, phoneE164: '+14165550123' });
+  await store.saveFromInvitedRouteAccess(sampleInvitedRouteAccess);
+  assert.equal(await store.savePreStartTracking({ routePlanId }), true);
+}
+
+describe('continuous location background task before Start', () => {
+  it('records locations against the saved route before Start without a route-start event', async () => {
+    const store = createTokenStore();
+    await savePreStartRoute(store);
+    const eventService = createMockDriverEventService();
+    const queue = createInMemoryOfflineSubmissionQueue();
+
+    const result = await processContinuousLocationTaskBatch({
+      createDriverEventService: () => eventService,
+      driverAccessTokenStore: store,
+      driverAuthService: createMockDriverAuthService(),
+      locations: [
+        { accuracyMeters: 8, latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-07-16T10:01:00.000Z') },
+        { accuracyMeters: 8, latitude: 43.6540, longitude: -79.3840, occurredAt: new Date('2026-07-16T10:01:10.000Z') },
+      ],
+      now: () => Date.parse('2026-07-16T10:01:15.000Z'),
+      offlineQueue: queue,
+      routeAccessService: createMockRouteAccessService(),
+    });
+
+    assert.deepEqual(result, { kind: 'processed', recordedCount: 2, routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId });
+    assert.deepEqual(eventService.recordedEvents.map((event) => event.eventType), ['LOCATION_UPDATED', 'LOCATION_UPDATED']);
+    assert.ok(eventService.recordedEvents.every((event) => event.routePlanId === sampleInvitedRouteAccess.routeAccess.routePlanId));
+    const persisted = await store.loadActiveDriverAccess();
+    assert.equal(persisted.kind === 'active' ? persisted.preStartTracking?.routePlanId : null, sampleInvitedRouteAccess.routeAccess.routePlanId);
+    assert.equal(persisted.kind === 'active' ? persisted.activeRouteSession : 'set', undefined);
+  });
+
+  it('ends tracking before Start after a working day', async () => {
+    const store = createTokenStore();
+    await savePreStartRoute(store);
+    const eventService = createMockDriverEventService();
+
+    const result = await processContinuousLocationTaskBatch({
+      createDriverEventService: () => eventService,
+      driverAccessTokenStore: store,
+      driverAuthService: createMockDriverAuthService(),
+      locations: [{ latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-07-17T07:00:00.000Z') }],
+      now: () => Date.parse('2026-07-17T07:00:01.000Z'),
+      offlineQueue: createInMemoryOfflineSubmissionQueue(),
+      routeAccessService: createMockRouteAccessService(),
+    });
+
+    assert.deepEqual(result, {
+      kind: 'deactivated',
+      reason: 'pre_start_ended',
+      routePlanId: sampleInvitedRouteAccess.routeAccess.routePlanId,
+      sessionGeneration: '2026-07-16T10:00:00.000Z',
+    });
+    assert.deepEqual(eventService.recordedEvents, []);
+    const persisted = await store.loadActiveDriverAccess();
+    assert.equal(persisted.kind === 'active' ? persisted.preStartTracking : 'kept', undefined);
+    assert.equal(persisted.kind === 'active' ? persisted.routeAccess?.routePlanId : null, sampleInvitedRouteAccess.routeAccess.routePlanId);
+  });
+
+  it('ends tracking before Start when the route is released or revoked on the server', async () => {
+    const releasedStore = createTokenStore();
+    await savePreStartRoute(releasedStore);
+    const released = await processContinuousLocationTaskBatch({
+      createDriverEventService: () => ({
+        recordDriverEvent: async () => {
+          throw createDriverApiHttpError({ code: 'ROUTE_NOT_IN_PROGRESS', endpoint: 'Driver event record', status: 409 });
+        },
+      }),
+      driverAccessTokenStore: releasedStore,
+      driverAuthService: createMockDriverAuthService(),
+      locations: [{ latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-07-16T10:01:00.000Z') }],
+      now: () => Date.parse('2026-07-16T10:01:05.000Z'),
+      offlineQueue: createInMemoryOfflineSubmissionQueue(),
+      routeAccessService: createMockRouteAccessService(),
+    });
+    assert.equal(released.kind, 'deactivated');
+    assert.equal(released.kind === 'deactivated' ? released.reason : null, 'route_not_in_progress');
+    const releasedAccess = await releasedStore.loadActiveDriverAccess();
+    assert.equal(releasedAccess.kind === 'active' ? releasedAccess.preStartTracking : 'kept', undefined);
+
+    const revokedStore = createTokenStore();
+    await savePreStartRoute(revokedStore);
+    const revoked = await processContinuousLocationTaskBatch({
+      createDriverEventService: ({ refreshDriverAccess }) => ({
+        recordDriverEvent: async () => {
+          await refreshDriverAccess();
+          throw new Error('driver access expired');
+        },
+      }),
+      driverAccessTokenStore: revokedStore,
+      driverAuthService: createMockDriverAuthService(),
+      locations: [{ latitude: 43.6532, longitude: -79.3832, occurredAt: new Date('2026-07-16T10:01:00.000Z') }],
+      now: () => Date.parse('2026-07-16T10:01:05.000Z'),
+      offlineQueue: createInMemoryOfflineSubmissionQueue(),
+      routeAccessService: createMockRouteAccessService({ status: 'NOT_FOUND' }),
+    });
+    assert.equal(revoked.kind, 'deactivated');
+    assert.equal(revoked.kind === 'deactivated' ? revoked.reason : null, 'route_revoked');
+    const revokedAccess = await revokedStore.loadActiveDriverAccess();
+    assert.equal(revokedAccess.kind === 'active' ? revokedAccess.preStartTracking : 'kept', undefined);
+    assert.equal(revokedAccess.kind === 'active' ? revokedAccess.routeAccess : 'kept', undefined);
+  });
+});
+
 describe('continuous location background task', () => {
   it('records the durable route start before the first location batch', async () => {
     const store = createTokenStore();

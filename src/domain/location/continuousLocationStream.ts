@@ -128,8 +128,6 @@ export async function startContinuousLocationUpdatesAfterDeliveryStart(input: {
   streamService: ContinuousLocationStreamService;
   taskName?: string;
 }): Promise<ContinuousLocationStreamStartResult> {
-  const taskName = input.taskName ?? CONTINUOUS_LOCATION_TASK_NAME;
-
   if (input.deliveryStart.kind !== 'delivery_active') {
     return {
       kind: 'blocked',
@@ -137,6 +135,30 @@ export async function startContinuousLocationUpdatesAfterDeliveryStart(input: {
       reason: 'delivery_not_active',
     };
   }
+  return startContinuousLocationUpdates(input);
+}
+
+/**
+ * Tracking before Start: the same task, started as soon as the app shows today's route, so the
+ * drive to the first stop is part of the route's path. It needs the background permission that
+ * was granted earlier; without it nothing starts and the Start flow asks as before.
+ */
+export async function startContinuousLocationUpdatesBeforeDeliveryStart(input: {
+  notification?: ContinuousLocationNotificationContent;
+  routePlanId: string;
+  streamService: ContinuousLocationStreamService;
+  taskName?: string;
+}): Promise<ContinuousLocationStreamStartResult> {
+  return startContinuousLocationUpdates(input);
+}
+
+async function startContinuousLocationUpdates(input: {
+  notification?: ContinuousLocationNotificationContent;
+  routePlanId: string | null;
+  streamService: ContinuousLocationStreamService;
+  taskName?: string;
+}): Promise<ContinuousLocationStreamStartResult> {
+  const taskName = input.taskName ?? CONTINUOUS_LOCATION_TASK_NAME;
 
   if (!(await input.streamService.getBackgroundAvailability())) {
     return {

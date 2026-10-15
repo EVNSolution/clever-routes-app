@@ -612,7 +612,9 @@ describe('stop proof event flow', () => {
     assert.equal(result.kind, 'queued');
     assert.equal(result.requiresRouteLookup, true);
     assert.match(result.message, /Driver session expired/iu);
-    assert.match(result.message, /HTTP 401/iu);
+    assert.match(result.message, /Refresh routes/iu);
+    assert.doesNotMatch(result.message, /HTTP|401/iu);
+    assert.equal(queue.listPending().length, 1);
   });
 
   it('blocks terminal stop proof for reconciliation when the server route is no longer in progress', async () => {
@@ -648,6 +650,7 @@ describe('stop proof event flow', () => {
     assert.equal(result.requiresRouteLookup, undefined);
     assert.equal(result.requiresRouteReconciliation, true);
     assert.match(result.message, /ended or released/iu);
+    assert.doesNotMatch(result.message, /HTTP|409/iu);
     assert.deepEqual(queue.listPending().map((item) => ({
       kind: item.kind,
       reconciliation: item.reconciliation,

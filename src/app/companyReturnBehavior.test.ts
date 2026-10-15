@@ -32,11 +32,12 @@ describe('company return behavior', () => {
 
     assert.match(source, /openDepotNavigation\(\{[\s\S]*depot: selectedRoute\.depot/u);
     assert.match(routeSession, /companyReturnCopy\.title/u);
+    assert.match(routeSession, /companyReturnCopy\.body === '' \? null : <Text style=\{styles\.bodyText\}>\{companyReturnCopy\.body\}<\/Text>/u);
     assert.match(routeSession, /label=\{companyReturnCopy\.navigate\}/u);
     assert.match(routeSession, /label: companyReturnCopy\.finish[\s\S]*onPress: onFinishRoute/u);
   });
 
-  it('enforces the route end mode for manual completion and route switching', () => {
+  it('preserves manual completion policy and always releases a switched route', () => {
     const source = readFileSync(appRootPath, 'utf8');
     const completionRequest = source.slice(
       source.indexOf('async function requestRouteCompletion'),
@@ -54,20 +55,42 @@ describe('company return behavior', () => {
     assert.match(completionRequest, /const confirmedAt = new Date\(\)/u);
     assert.match(completionRequest, /captureTrustedRouteEventLocation\(route\.id, confirmedAt\)/u);
     assert.match(completionRequest, /finish\(confirmedAt, confirmedLocation\)/u);
-    assert.match(routeSwitch, /if \(!hasRemainingStops\) \{[\s\S]*requestRouteCompletion/u);
+    assert.doesNotMatch(routeSwitch, /requestRouteCompletion|hasRemainingStops/u);
+    assert.match(routeSwitch, /routeEnd: 'released'/u);
+  });
+
+  it('finishes the route by itself when the return location is reported, without the unverified dialog', () => {
+    const source = readFileSync(appRootPath, 'utf8');
+    const observer = source.slice(
+      source.indexOf('// Return completion belongs to the active session'),
+      source.indexOf('const candidate = getStopArrivalNotificationCandidate'),
+    );
+    assert.match(source, /getAutomaticRouteCompletionSession\(\{\s*activeRoutePlanId, completedStopIds, routeSessions, routeStatus/u);
+    assert.match(observer, /automaticRouteCompletionRef\.current\.observe/u);
+    assert.match(observer, /locations: locations\.map/u);
+    assert.match(observer, /route: activeSession\.route/u);
+    assert.match(observer, /routeSubmission: toCompanyGuidanceSubmission\(activeSession\)/u);
+    assert.doesNotMatch(observer, /selectedRoute/u);
+    const completion = source.slice(
+      source.indexOf('async function requestRouteCompletion('),
+      source.indexOf('async function finishActiveRouteForSwitch('),
+    );
+    assert.match(completion, /options\?\.isCurrent\?\.\(\) === false/u);
+    assert.match(completion, /routeSubmission: options\.routeSubmission/u);
+    assert.match(completion, /if \(options\?\.automatic === true\) \{\s*onCancelled\?\.\(\);\s*return;\s*\}[\s\S]*showOperationalDialog\(copy\.unverifiedTitle/u);
   });
 
   it('localizes the company return controls and missing-depot guidance', () => {
     assert.deepEqual(getCompanyReturnCopy('ko-KR'), {
-      body: '모든 배송을 완료했습니다. 회사로 복귀해 경로를 종료할 때까지 위치 추적이 계속됩니다.',
+      body: '',
       continueReturn: '계속 복귀',
       finish: '경로 종료',
       finishUnverified: '복귀 미확인으로 종료',
-      missingDepot: '회사 복귀 위치를 확인할 수 없습니다. 경로를 종료하기 전에 배차 담당자에게 문의하세요.',
-      navigate: '회사로 길안내',
-      title: '회사로 복귀',
-      unverifiedBody: '현재 위치가 회사 도착 범위 안인지 확인되지 않았습니다. 계속 복귀하거나, 필요한 경우 위치 미확인 상태로 경로를 종료하세요.',
-      unverifiedTitle: '회사 복귀 미확인',
+      missingDepot: '복귀 위치를 확인할 수 없습니다. 경로를 종료하기 전에 배차 담당자에게 문의하세요.',
+      navigate: '복귀 길안내',
+      title: '배송 완료',
+      unverifiedBody: '현재 위치가 복귀 위치 도착 범위 안인지 확인되지 않았습니다. 계속 복귀하거나, 필요한 경우 위치 미확인 상태로 경로를 종료하세요.',
+      unverifiedTitle: '복귀 미확인',
     });
     assert.equal(getCompanyReturnCopy('en-CA').finish, 'Finish Route');
     assert.deepEqual(getCompanyReturnCopy('ko-KR', false), {

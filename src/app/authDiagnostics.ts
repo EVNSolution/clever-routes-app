@@ -1,4 +1,5 @@
 import { DriverApiHttpError, isDriverApiUnauthorizedError } from '../api/deliveryServer/driverApiError';
+import { RouteAccessTransportError } from '../domain/routeAccess/routeAccess';
 import type { DriverRuntimeConfig } from './config/driverRuntimeConfig';
 
 export type AuthPhase = 'route_access' | 'invite_verify' | 'pin_login';
@@ -37,14 +38,14 @@ function isRequestNotSentError(error: unknown): boolean {
 
 function isNetworkError(error: unknown): boolean {
   return (
-    error instanceof Error &&
+    error instanceof RouteAccessTransportError || (error instanceof Error &&
     [
       'network request failed',
       'failed to fetch',
       'networkerror',
       'network error',
       'econnreset',
-    ].some((token) => error.message.toLowerCase().includes(token))
+    ].some((token) => error.message.toLowerCase().includes(token)))
   );
 }
 
@@ -65,14 +66,18 @@ export function buildAuthFailureMessage(input: {
   if (isRequestNotSentError(input.error)) {
     return {
       kind: 'request_not_sent',
-      message: `${phaseLabel}: request was not sent. Verify the app bundle and live-server connectivity.`,
+      message: input.phase === 'route_access'
+        ? 'Routes could not refresh. Try again when connected.'
+        : `${phaseLabel}: request was not sent. Verify the app bundle and live-server connectivity.`,
     };
   }
 
   if (isNetworkError(input.error)) {
     return {
       kind: 'network_failure',
-      message: `${phaseLabel}: network request failed. Retry after checking connectivity.`,
+      message: input.phase === 'route_access'
+        ? 'Routes could not refresh. Try again when connected.'
+        : `${phaseLabel}: network request failed. Retry after checking connectivity.`,
     };
   }
 

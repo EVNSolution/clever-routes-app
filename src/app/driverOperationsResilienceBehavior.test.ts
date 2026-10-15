@@ -24,14 +24,16 @@ describe('driver operations resilience runtime', () => {
     const receiptHydrationIndex = source.indexOf('hydrateRoute: () => submitAccountRouteAccess(accountAccess)', receiptRecoveryIndex);
     const hydrationIndex = source.indexOf('await loadRouteAccessWithLiveCacheRecovery({', receiptRecoveryIndex);
     const routeLookupIndex = source.indexOf('lookup: () => submitAccountRouteAccess(accountAccess)', hydrationIndex);
-    const retryIndex = source.indexOf('await retryOfflineSubmissionsForSessions([pendingSession])');
+    const retryIndex = source.indexOf('await retryOfflineSubmissionsForSessions([{ ...pendingChoice');
+    const assignedRouteHydrationIndex = source.indexOf('await loadAssignedRouteAfterConsent(', retryIndex);
     const pendingProjectionIndex = source.indexOf('const loadedSessionsWithPendingEnds', retryIndex);
     const removalIndex = source.indexOf('const activeRouteWasRemoved', pendingProjectionIndex);
     assert.ok(receiptRecoveryIndex > 0 && receiptRecoveryIndex < receiptHydrationIndex && receiptHydrationIndex < hydrationIndex);
     assert.ok(routeLookupIndex > hydrationIndex && routeLookupIndex < retryIndex);
+    assert.ok(retryIndex < assignedRouteHydrationIndex);
     assert.ok(retryIndex > 0 && retryIndex < pendingProjectionIndex && pendingProjectionIndex < removalIndex);
     assert.match(source, /setDurableCompletionPendingRoutePlanId[\s\S]*pendingRouteEnd\?\.kind === 'driver_event'/u);
-    assert.match(source, /Route completion is still pending server confirmation. GPS tracking stays stopped/u);
+    assert.match(source, /Route completion saved on device. GPS stopped. Waiting for confirmation./u);
     assert.match(source, /activeRouteCompletionPending \|\| session\.pendingRouteEnd === undefined/u);
     assert.match(source, /completionResolvedDuringRestore \? null : persistedActiveRouteSession/u);
   });
@@ -127,8 +129,9 @@ describe('driver operations resilience runtime', () => {
 
     assert.match(retrySource, /result\.routeLookupReason === 'rolling_eta_snapshot_synced'/u);
     assert.match(retrySource, /setRouteRecoveryRefreshReason\('rolling_eta_snapshot_synced'\)/u);
-    assert.match(retrySource, /Stop completion synced\. Refreshing route ETA\./u);
-    assert.match(source, /recoveryReason === 'rolling_eta_snapshot_synced'[\s\S]*Stop completion synced\. Route ETA refreshed\./u);
+    assert.doesNotMatch(retrySource, /Stop completion synced|Pickup synced/u);
+    assert.match(source, /const recoveryReason = routeRecoveryRefreshReason;[\s\S]*void handleRefreshRoutes\(\)\.finally/u);
+    assert.doesNotMatch(source, /Route ETA refreshed\./u);
   });
 
   it('does not invalidate durable route-end recovery when the active route epoch changes', () => {

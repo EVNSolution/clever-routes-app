@@ -34,6 +34,13 @@ The app targets native iPhone and Android phone runtime. The existing direct APK
 channel remains the fallback until the Google Play production release is live.
 The current Android candidate is promoted as one immutable AAB through Play
 internal testing and production review; it is not rebuilt between tracks.
+Promote the exact internally tested AAB to production. Update the operational
+`ROUTES_APP_ANDROID_LATEST_VERSION_CODE` and `ROUTES_APP_ANDROID_LATEST_VERSION_NAME`
+only after Play confirms that the production release is available. Keep
+`ROUTES_APP_ANDROID_MIN_SUPPORTED_VERSION_CODE` unchanged unless a separate
+mandatory-update decision authorizes a change. Verify the public release manifest,
+its legacy alias, and API health after applying the environment values.
+
 `eas.json` defines the store build profile used for that candidate:
 
 - Android fallback channel: stable `/routes-app` browser handoff to the managed
@@ -181,10 +188,19 @@ mock work still requires `EXPO_PUBLIC_DRIVER_RUNTIME_MODE=mock` with no server U
 
 `cli.requireCommit` is enabled in `eas.json` so native evidence builds are tied
 to committed source. `cli.appVersionSource` is `remote`; the reviewed native
-source version is `1.3.8` (`versionCode` `44`, iOS build `1`). Version `43`
-(`1.3.7`) is the live Google Play production release (observed in Play Console on
-2026-10-10); `44` is its update and must not be promoted before its release
-record is complete. Android
+source version is `1.3.9` (`versionCode` `56`, iOS build `1`). Version `44`
+(`1.3.8`) is the live Google Play production release (live at 100% on
+2026-10-10). Version `45` was provided to internal testers; its open-testing
+submission was withdrawn on 2026-10-13. Version `46` was provided to internal
+testers, where a blocked route-switch entry was found on the physical device.
+Version `47` adds a Start action inside another ready route's card; version `51`
+removes it, so a tap on that card runs the switch flow. Version `47` retains
+automatic completion on return. Version `48` keeps the changed-list banner for
+real unapplied changes only, reports every Apply outcome and bounds the pull
+refresh. It must not be promoted before its release
+record is complete. Version `48` collects location before Start, so the in-app
+disclosure, the Routes privacy policy and the Play background location
+declaration must all describe that before its production rollout. Android
 `versionCode` `38` was reserved for the rejected diagnostic candidate and must
 not be submitted or promoted. Publication is
 proved separately by the public release manifest and downloadable artifact,
@@ -356,3 +372,32 @@ The baseline context-monorepo service pointer is complete:
 boundary changes should create a new context-monorepo issue/PR only if the
 durable service responsibility, public contract, deployment/runtime category, or
 cross-repo interpretation changes.
+
+## Fast Android device iteration
+
+For UI and JavaScript fixes, finish the device QA batch before generating the
+final AAB. Run the manual `Android APK` workflow with `variant=development` on
+the task branch once. It builds an ARM64 `debugOptimized` client with the debug
+certificate. The package is `com.evnsolution.clever.routes.dev` (`Routes Dev`),
+so the installed Play app and its data remain intact. No production Firebase
+configuration is embedded in this client; FCM acceptance uses the final Play build.
+Production update prompts are skipped only in this debug package. Delivery-proof
+capability registration remains restricted to the production package. This loop
+uses private demo routes without required proof; it is not proof-provider acceptance.
+
+1. Download and install the development APK with ADB.
+2. Run Metro with the intended runtime environment and one worker:
+   `EXPO_NO_DOTENV=1 EXPO_PUBLIC_DRIVER_RUNTIME_MODE=live EXPO_PUBLIC_DELIVERY_SERVER_BASE_URL=https://clever-route.cleversystem.ai EXPO_PUBLIC_KFOOD_SINGLE_COMPLETION_QA=true npm run android:dev:start -- --port 8081 --max-workers 1`.
+3. Run `adb reverse tcp:8081 tcp:8081`, then open the development client using
+   `adb shell am start -a android.intent.action.VIEW -d 'exp+clever-routes-app://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081' -p com.evnsolution.clever.routes.dev`.
+4. Use the private demo account and fixtures. Fast Refresh applies JavaScript
+   changes. After changes to state or session handlers, restart the app before
+   acceptance checks so retained development state does not affect the result.
+   Rebuild the development APK only when native dependencies change.
+   For isolated location checks, temporarily disable the other package with
+   `adb shell pm disable-user --user 0 <package>`; force-stop alone can be undone
+   by a scheduled background task. Preserve its data and re-enable it with
+   `adb shell pm enable --user 0 <package>` before returning the device.
+5. When the complete QA batch passes, run CI and build the final AAB once using
+   the existing Android Release AAB workflow. Release evidence must distinguish
+   development-client checks from final Play installation checks.

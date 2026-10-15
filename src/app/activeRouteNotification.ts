@@ -28,6 +28,14 @@ export type ActiveRouteNotificationOperationalState = {
   sync: string;
 };
 
+/** Shown by the foreground service while GPS is collected for today's route before the driver presses Start. */
+export function buildPreStartForegroundNotification(route: Pick<AssignedRoute, 'name'>): ContinuousLocationNotificationContent {
+  return {
+    body: 'Location is shared with the office before the route starts. Open CLEVER Routes to start the route.',
+    title: route.name.trim() === '' ? 'Route today' : route.name,
+  };
+}
+
 export function buildActiveRouteForegroundNotification(input: {
   currentStepIndex: number;
   detailed: boolean;

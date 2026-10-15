@@ -19,7 +19,7 @@ The app now has an interactive phone-first driver flow:
 9. Every Dispatch-published child route renders in `Ready` until delivery starts. Assignment alone does not expose it to the driver; after publication, a route card opens a pre-start session with an obscured map and explicit Start action.
 10. Delivery start requests foreground location permission, records `ROUTE_STARTED`, and moves the route to `In progress` only when permission is granted.
 11. Route choices carry the server execution status. If secure local progress is missing but the server reports `IN_PROGRESS`, the app restores that route as active and rebuilds completed-stop progress from assigned-route stop statuses instead of presenting another Start action.
-12. Live tracking starts at the company/pickup step, then proceeds through ordered stops without presenting turn-by-turn instruction UI.
+12. When no active or recovering route owns tracking, loading routes selects a today's `READY` route from the whole list, using each route's timezone. An already selected eligible route takes priority; otherwise the first eligible route is used. Pending-end routes are excluded. With background permission and the pre-start disclosure accepted, GPS starts while the route remains `READY`. `ROUTE_STARTED` and pickup still belong to the driver's start action. Active-route restoration takes priority over this selection.
 13. Each stop can play a local area tip, open stop details, capture required proof photo, and record optional delivery notes, location-specific tips, and additional notes.
 14. Delivery finish follows the assigned route's server-owned `routeEndMode`: `RETURN_TO_DEPOT` keeps tracking active through the depot return and verifies the 150 m arrival area before normal finish, while `END_AT_LAST_STOP` allows explicit finish without depot return. A missing legacy value preserves return-to-depot behavior. Finish records or queues `ROUTE_COMPLETED`, moves the route to `Completed`, and discards route-scoped local retry items only after route completion is recorded.
 15. An authoritative empty route list, `NOT_FOUND`, or a missing prior assignment removes that route from the app and clears only route-scoped cache. Network errors retain the last safe cache.
@@ -29,6 +29,26 @@ KFood office changes use a separate publication gate during delivery. The driver
 keeps the locally applied addresses and order until selecting Apply changes.
 See [KFood live route changes](./kfood-live-route-change.md) for persistence,
 acknowledgement retry, and the same-assignment offline-event boundary.
+
+### Route switching and automatic return completion
+
+Starting a different route releases the active route with the existing
+`ROUTE_PAUSED` event, then starts and focuses the selected route. The released
+route returns to `READY`; completed stops retain their results. A different
+delivery date switches immediately. The same delivery date requires the driver
+to confirm Stop and Start. Opening a route card alone does not switch routes.
+This release applies even when the old route has no remaining stops.
+
+After all stops have terminal results, a return-to-depot route can complete
+automatically while the app receives continuous location callbacks. The app
+requires two distinct, consecutive, trustworthy fixes within 150 m of the depot.
+An outside or untrusted fix resets the count. The decision belongs to the active
+route and its assignment, regardless of which route the driver is viewing.
+Completion uses the existing durable `ROUTE_COMPLETED` path and stops tracking.
+The manual Finish Route action remains available. `END_AT_LAST_STOP` retains its
+existing finish behavior. An app process that is not receiving the callback
+cannot perform this automatic completion; native background acceptance is part
+of release validation, not established by source tests.
 
 ## Local mock boundary
 

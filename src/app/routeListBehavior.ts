@@ -1,3 +1,19 @@
+import type { RouteSessionStatus } from '../domain/route/routeSessionClassification';
+
+export function getRouteListStatus(session: {
+  companyGuidance: { executionStatus?: string };
+  localRouteEnd?: { assignmentGeneration: string; kind: 'completed' | 'released' };
+  pendingRouteEnd?: 'completed' | 'released';
+  routeAccess: { assignmentGeneration: string };
+}, fallback: RouteSessionStatus): RouteSessionStatus {
+  const localEnd = session.localRouteEnd?.assignmentGeneration === session.routeAccess.assignmentGeneration
+    ? session.localRouteEnd?.kind : undefined;
+  const routeEnd = session.pendingRouteEnd ?? localEnd;
+  if (routeEnd === 'released') return 'ready';
+  if (routeEnd === 'completed') return 'completed';
+  return session.companyGuidance.executionStatus === 'IN_PROGRESS' ? 'active' : fallback;
+}
+
 export function formatRouteListUpdatedAt(date: Date): string {
   const datePart = [
     date.getFullYear(),
