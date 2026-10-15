@@ -17,7 +17,7 @@ import type {
   DriverDiagnosticRecord,
   DriverDiagnosticSnapshot,
 } from './driverDiagnosticContract';
-import { sanitizeDriverDiagnosticContext } from './driverDiagnosticContract';
+import { sanitizeDriverDiagnosticContext, sanitizeDriverDiagnosticSnapshot } from './driverDiagnosticContract';
 
 const context: DriverDiagnosticContext = {
   appVersion: '1.3.3',
@@ -1078,5 +1078,15 @@ describe('driver diagnostics', () => {
     assert.equal(envelopes.length, 3);
     assert.equal(envelopes[2]?.liveSnapshot.blockers?.some(({ reason }) => reason === 'DIAGNOSTIC_STORAGE_FAILED') ?? false, false);
     transport.stop();
+  });
+});
+
+describe('diagnostic blocker detail', () => {
+  it('keeps a short cause label and drops anything that could carry customer data', () => {
+    const base = { lastObservedAt: '2026-10-15T13:31:34.288Z', reason: 'LOCATION_PROCESSING_FAILED', since: '2026-10-15T13:31:34.285Z', stage: 'PROCESSING' };
+    const blocker = (detail: unknown) => sanitizeDriverDiagnosticSnapshot({ ...snapshot, blockers: [{ ...base, detail }] })?.blockers?.[0];
+    assert.equal(blocker('COMPLETION_SYNC:TypeError')?.detail, 'COMPLETION_SYNC:TypeError');
+    assert.equal(blocker('Failed for 100 Queen St W')?.detail, undefined);
+    assert.equal(blocker('x'.repeat(65))?.detail, undefined);
   });
 });

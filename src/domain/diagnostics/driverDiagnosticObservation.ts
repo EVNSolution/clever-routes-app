@@ -44,6 +44,8 @@ export type DriverDiagnosticOperationObservation = DriverDiagnosticOperationMeta
 export type DriverDiagnosticStateObservation = {
   blocker?: {
     clientEventId?: string;
+    /** Short cause label such as `LOCATION:TypeError`; never a message, so it carries no customer data. */
+    detail?: string;
     httpStatus?: number;
     reasonCode: DriverDiagnosticObservationReasonCode;
     requestId?: string;
@@ -314,10 +316,15 @@ function sanitizeOperationMetadata(metadata: DriverDiagnosticOperationMetadata):
   };
 }
 
+function safeDetail(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/u.test(value) ? value : undefined;
+}
+
 function sanitizeBlocker(blocker: DriverDiagnosticStateObservation['blocker']): DriverDiagnosticStateObservation['blocker'] | undefined {
   if (blocker === undefined || !REASON_CODES.has(blocker.reasonCode) || !STAGES.has(blocker.stage)) return undefined;
   return {
     ...(safeId(blocker.clientEventId) === undefined ? {} : { clientEventId: blocker.clientEventId }),
+    ...(safeDetail(blocker.detail) === undefined ? {} : { detail: blocker.detail }),
     ...(safeHttpStatus(blocker.httpStatus) === undefined ? {} : { httpStatus: blocker.httpStatus }),
     reasonCode: blocker.reasonCode,
     ...(safeRequestId(blocker.requestId) === undefined ? {} : { requestId: blocker.requestId?.toLowerCase() }),

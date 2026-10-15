@@ -59,6 +59,7 @@ export type DriverDiagnosticIdentifiers = {
 };
 
 export type DriverDiagnosticBlocker = DriverDiagnosticIdentifiers & {
+  detail?: string;
   httpStatus?: number;
   lastObservedAt: string;
   reason: DriverDiagnosticReasonCode;
@@ -221,8 +222,10 @@ function sanitizeBlocker(value: unknown): DriverDiagnosticBlocker | null {
   ) return null;
   const identifiers = sanitizeIdentifiers(value);
   const httpStatus = safeNonNegativeInteger(value.httpStatus);
+  const detail = typeof value.detail === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/u.test(value.detail) ? value.detail : undefined;
   return {
     ...(identifiers ?? {}),
+    ...(detail === undefined ? {} : { detail }),
     ...(httpStatus === undefined || httpStatus < 100 || httpStatus > 599 ? {} : { httpStatus }),
     lastObservedAt,
     reason: value.reason as DriverDiagnosticReasonCode,
