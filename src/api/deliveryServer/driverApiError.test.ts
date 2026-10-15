@@ -18,8 +18,26 @@ describe('driver API recovery classification', () => {
     assert.match(formatDriverApiErrorForDriver(error('CASH_COMPLETION_CONFLICT', 409)), /Dispatch must review/u);
     assert.match(formatDriverApiErrorForDriver(error('ROUTE_ASSIGNMENT_CHANGED', 409)), /assignment changed/u);
     assert.match(formatDriverApiErrorForDriver(error('ROUTE_VERSION_MISMATCH', 409)), /route version changed/u);
-    assert.match(formatDriverApiErrorForDriver(error('SERVER_ERROR', 503)), /HTTP 503/u);
-    assert.equal(formatDriverApiErrorForDriver(new Error('offline')), 'offline');
+    assert.match(formatDriverApiErrorForDriver(error('SERVER_ERROR', 503)), /could not be confirmed/u);
+    assert.equal(formatDriverApiErrorForDriver(new Error('offline')), 'The update could not be confirmed. Check your connection.');
+  });
+
+  it('never exposes transport text, endpoints, or HTTP numbers in driver feedback', () => {
+    const endpoint = 'https://route.example.test/private/events';
+    const failures: unknown[] = [
+      new Error(`java.net.UnknownHostException: ${endpoint} HTTP 503`),
+      `HTTP 500 ${endpoint}`,
+      null,
+      createDriverApiHttpError({ endpoint }),
+      createDriverApiHttpError({ endpoint, status: 401 }),
+      createDriverApiHttpError({ endpoint, status: 409, code: 'ROUTE_NOT_IN_PROGRESS' }),
+      ...['CASH_RECEIVED_REQUIRED', 'CASH_COMPLETION_INVALID', 'CASH_COMPLETION_CONFLICT', 'ROUTE_ASSIGNMENT_CHANGED', 'ROUTE_VERSION_MISMATCH']
+        .map(code => createDriverApiHttpError({ endpoint, status: code.includes('REQUIRED') || code.includes('INVALID') ? 400 : 409, code })),
+    ];
+    for (const error of failures) {
+      assert.doesNotMatch(formatDriverApiErrorForDriver(error), /UnknownHostException|https?:|route\.example|HTTP|\b(?:400|401|409|500|503)\b/u);
+    }
+    assert.equal(getDriverApiRecoveryReason(new Error('HTTP 401')), undefined);
   });
 
   it('keeps 401 access refresh separate from 409 terminal route reconciliation', () => {
@@ -33,6 +51,7 @@ describe('driver API recovery classification', () => {
     assert.equal(getDriverApiRecoveryReason(unauthorized), 'driver_access_expired');
     assert.equal(getDriverApiRequiresRouteLookup(unauthorized), true);
     assert.equal(getDriverApiRequiresRouteReconciliation(unauthorized), undefined);
+    assert.match(formatDriverApiErrorForDriver(unauthorized), /Refresh routes/u);
 
     assert.equal(getDriverApiRecoveryReason(routeEnded), 'route_not_in_progress');
     assert.equal(getDriverApiRequiresRouteLookup(routeEnded), undefined);

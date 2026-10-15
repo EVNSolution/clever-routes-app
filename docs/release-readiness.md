@@ -384,7 +384,13 @@ uses private demo routes without required proof; it is not proof-provider accept
 3. Run `adb reverse tcp:8081 tcp:8081`, then open the development client using
    `adb shell am start -a android.intent.action.VIEW -d 'exp+clever-routes-app://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081' -p com.evnsolution.clever.routes.dev`.
 4. Use the private demo account and fixtures. Fast Refresh applies JavaScript
-   changes. Rebuild the development APK only when native dependencies change.
+   changes. After changes to state or session handlers, restart the app before
+   acceptance checks so retained development state does not affect the result.
+   Rebuild the development APK only when native dependencies change.
+   For isolated location checks, temporarily disable the other package with
+   `adb shell pm disable-user --user 0 <package>`; force-stop alone can be undone
+   by a scheduled background task. Preserve its data and re-enable it with
+   `adb shell pm enable --user 0 <package>` before returning the device.
 5. When the complete QA batch passes, run CI and build the final AAB once using
    the existing Android Release AAB workflow. Release evidence must distinguish
    development-client checks from final Play installation checks.

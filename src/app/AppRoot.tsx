@@ -555,6 +555,15 @@ function DriverApp() {
     && screenRef.current !== 'arrivalCheck' && screenRef.current !== 'proofCamera', []);
   const selectedRouteIdRef = useRef<string | null>(null);
   const routesAtTopRef = useRef(true);
+  const standardScrollRef = useRef<ScrollView | null>(null);
+  const stopDetailsScrollIdentityRef = useRef<{ routeId: string; stopId: string } | null>(null);
+  useEffect(() => {
+    if (screen !== 'stopDetails' || selectedRouteId === null || selectedStopDetailsId === null) return;
+    const previous = stopDetailsScrollIdentityRef.current;
+    if (previous?.routeId === selectedRouteId && previous.stopId === selectedStopDetailsId) return;
+    stopDetailsScrollIdentityRef.current = { routeId: selectedRouteId, stopId: selectedStopDetailsId };
+    standardScrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [screen, selectedRouteId, selectedStopDetailsId]);
   const [areRoutesAtTop, setAreRoutesAtTop] = useState(true);
   const isPullRefreshingRef = useRef(false);
   const pullRefreshOffset = useSharedValue(0);
@@ -1739,7 +1748,7 @@ function DriverApp() {
     syncOfflineQueueState,
   ]);
 
-  const retryOfflineSubmissionsForSessions = useCallback(async (sessions: RouteSession[]): Promise<boolean> => {
+  const retryOfflineSubmissionsForSessions = useCallback(async (sessions: (RouteAccessRouteChoice & { route: Pick<AssignedRoute, 'id'> })[]): Promise<boolean> => {
     if (retryingOfflineSubmissionsEpochRef.current !== null) {
       return true;
     }
@@ -2460,7 +2469,7 @@ function DriverApp() {
         });
         setMessage(result.kind === 'queued'
           ? `${result.message} Completing the stop next.`
-          : 'Arrival confirmed. Completing this stop and opening the next stop details.');
+          : null);
         return true;
       }
 
@@ -2468,11 +2477,10 @@ function DriverApp() {
       setScreen('arrivalCheck');
       setMessage(result.kind === 'queued'
         ? result.message
-        : 'Arrival confirmed by server. Future stop ETAs were updated.');
+        : null);
       return true;
-    } catch (error) {
-      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
-      setMessage(`Arrival could not be recorded: ${errorMessage}`);
+    } catch {
+      setMessage('Arrival could not be confirmed. Refresh the route before continuing.');
       return false;
     } finally {
       isRecordingArrivalRef.current = false;
@@ -3181,11 +3189,56 @@ function DriverApp() {
         return;
       }
 
-      const choices = getRouteChoicesFromSubmission(lookupResult);
+      let choices = getRouteChoicesFromSubmission(lookupResult);
       if (choices.length === 0) {
         if (await preservePendingCompletionIfUnresolved()) return;
         await openVerifiedNoAssignedRoute();
         return;
+      }
+
+      let completionResolvedDuringRestore = false;
+      if (persistedActiveRouteSession?.status === 'completion_pending') {
+        const pendingRoutePlanId = persistedActiveRouteSession.routePlanId;
+        const pendingChoice = choices.find(choice => choice.routeAccess.routePlanId === pendingRoutePlanId
+          && choice.routeAccess.assignmentGeneration === options.persistedAccess?.routeAccess?.assignmentGeneration);
+        if (pendingChoice === undefined) {
+          await preservePendingCompletionIfUnresolved();
+          return;
+        }
+        const pendingEndBeforeRetry = accountQueue.listPending().find(item => item.kind === 'driver_event'
+          && item.event.routePlanId === pendingRoutePlanId
+          && item.event.clientEventId === persistedActiveRouteSession?.completionClientEventId
+          && item.event.assignmentGeneration === pendingChoice.routeAccess.assignmentGeneration
+          && (item.event.eventType === 'ROUTE_COMPLETED' || item.event.eventType === 'ROUTE_PAUSED'));
+        if (pendingEndBeforeRetry !== undefined) {
+          // An assigned route may disappear after its last stop, before the saved Finish reaches the server.
+          await retryOfflineSubmissionsForSessions([{ ...pendingChoice, route: { id: pendingRoutePlanId } }]);
+          if (!isLoginAccountCurrent()) return;
+          const pendingEndAfterRetry = accountQueue.listPending().find(item => item.queueItemId === pendingEndBeforeRetry.queueItemId);
+          completionResolvedDuringRestore = pendingEndAfterRetry === undefined || pendingEndAfterRetry.reconciliation !== undefined;
+          if (completionResolvedDuringRestore) persistedActiveRouteSession = null;
+        }
+      }
+      if (completionResolvedDuringRestore) {
+        routeLoadStage = 'LR02';
+        lookupResult = await submitAccountRouteAccess(accountAccess);
+        if (!isLoginAccountCurrent()) return;
+        setSubmission(lookupResult);
+        if (lookupResult.kind !== 'company_guidance' && lookupResult.kind !== 'route_choices') {
+          if (allowVerifiedDriverNoRoute && lookupResult.kind === 'denied' && lookupResult.status === 'NOT_FOUND') {
+            await openVerifiedNoAssignedRoute();
+          } else {
+            setMessage(formatRouteAccessProblem(lookupResult));
+            setRouteSyncState('error');
+            setScreen('mainTabs');
+          }
+          return;
+        }
+        choices = getRouteChoicesFromSubmission(lookupResult);
+        if (choices.length === 0) {
+          await openVerifiedNoAssignedRoute();
+          return;
+        }
       }
 
       const previousRouteId = persistedActiveRouteSession?.routePlanId ?? activeRoutePlanId;
@@ -3294,22 +3347,11 @@ function DriverApp() {
       if (offlineSubmissionQueue === null) {
         setOfflineSubmissionQueue(queue);
       }
-      let completionResolvedDuringRestore = false;
       if (persistedActiveRouteSession?.status === 'completion_pending') {
         const pendingRoutePlanId = persistedActiveRouteSession.routePlanId;
         const pendingSession = loadedSessions.find((session) => session.route.id === pendingRoutePlanId);
         if (pendingSession === undefined) {
           if (await preservePendingCompletionIfUnresolved()) return;
-          completionResolvedDuringRestore = persistedActiveRouteSession === null;
-        } else {
-          await retryOfflineSubmissionsForSessions([pendingSession]);
-          if (!isLoginAccountCurrent()) return;
-          const pendingEndItem = queue.listPending().find((item) => (
-            item.kind === 'driver_event'
-            && item.event.routePlanId === pendingRoutePlanId
-            && (item.event.eventType === 'ROUTE_COMPLETED' || item.event.eventType === 'ROUTE_PAUSED')
-          ));
-          completionResolvedDuringRestore = pendingEndItem === undefined || pendingEndItem.reconciliation !== undefined;
         }
       }
       for (const item of queue.listPending()) {
@@ -3616,11 +3658,10 @@ function DriverApp() {
             setMessage(`${continuousResult.message} The server route remains active and tracking will retry after permission is available.`);
             return;
           }
-        } catch (error) {
+        } catch {
           if (!isLoginAccountCurrent()) return;
           setContinuousLocationResult(null);
-          const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
-          setMessage(`Tracking could not resume (${errorMessage}); the server route remains active and tracking will retry when routes refresh.`);
+          setMessage('Tracking could not resume. Route remains active. Refresh My Routes to retry.');
           return;
         }
         return;
@@ -4133,7 +4174,7 @@ function DriverApp() {
           setSubmission(toCompanyGuidanceSubmission(routeSession));
           setScreen('routeSession');
         }
-        setMessage(data.action === 'assigned' ? 'Assigned route loaded.' : 'Updated route loaded.');
+        setMessage(null);
         return;
       }
       if (navigation === 'active_route_protected') {
@@ -4144,11 +4185,7 @@ function DriverApp() {
         setMessage('Routes refreshed, but that assignment is no longer available.');
         return;
       }
-      setMessage(
-        data.action === 'cancelled' || data.action === 'released'
-          ? 'Routes refreshed. The removed assignment is no longer shown.'
-          : 'Assigned routes are up to date.',
-      );
+      setMessage(null);
     }, 0);
     return () => clearTimeout(timeout);
   }, [
@@ -5121,21 +5158,19 @@ function DriverApp() {
       }
       setRouteStartRecoveryState('idle');
         },
-        recover: async (error) => {
+        recover: async () => {
           if (!routeStartDurablyCommitted) return;
-          const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
           setRouteStartRecoveryState('sync_pending');
-          setMessage(`Route started and remains active. Start confirmation is still syncing; do not restart the route. Refresh My Routes when online. (${errorMessage})`);
+          setMessage('Route remains active. Confirmation is pending. Do not restart. Refresh My Routes when online.');
         },
-        rollback: async (error) => {
+        rollback: async () => {
           if (routeStartDurablyCommitted) return;
-          const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
           await clearAndStopActiveLocationSession(routeSession.route.id);
           resetActiveRouteProgress();
           if (screenRef.current === 'routeSession') {
             setScreen(requestScreen);
           }
-          setMessage(`Route session could not start: ${errorMessage}`);
+          setMessage('Route could not start. Refresh My Routes and try again.');
         },
       });
     } finally {
@@ -5254,7 +5289,7 @@ function DriverApp() {
         const pickupProgress = getAssignedRouteProgressAfterPickup(selectedRoute);
         const pickupStop = selectedRoute.stops[pickupProgress.navigationStepIndex - 1];
         const pickupStopLabel = pickupStop === undefined ? 'the next stop' : `Stop ${pickupStop.sequence}`;
-        let pickupMessage = `Store Pickup completed. Continue to ${pickupStopLabel}.`;
+        let pickupMessage: string | null = null;
         const pickupOutcome = await runPickupRetryStateMachine({
           activateFirstStop: () => {
             setCompletedStopIds(pickupProgress.completedStopIds);
@@ -5269,10 +5304,10 @@ function DriverApp() {
                 applyEtaUpdateToRoute(selectedRoute.id, result.etaUpdate);
               }
             } else if (result.kind === 'queued') {
-              pickupMessage = `Store Pickup saved offline. Continue to ${pickupStopLabel} while syncing.`;
+              pickupMessage = `Pickup saved on this device. Continue to ${pickupStopLabel}.`;
               if (result.requiresRouteLookup === true) {
                 setRouteRecoveryRefreshReason('driver_access_expired');
-                pickupMessage = 'Store Pickup saved offline. Driver access expired, so route assignments are refreshing.';
+                pickupMessage = 'Pickup saved on this device. Refreshing route access.';
               }
             }
           },
@@ -6044,12 +6079,11 @@ function DriverApp() {
           ? 'Stop skipped and reported to the administrator. Next stop is ready.'
           : result.kind === 'queued' ? 'Saved on this device. It will send when connected.' : null,
       );
-    } catch (error) {
+    } catch {
       if (isRouteSwitch) {
         setPendingRoutePlanId(null);
       }
-      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
-      setMessage(`${isSkipped ? 'Stop skip' : 'Stop completion'} could not be saved: ${errorMessage}`);
+      setMessage(`${isSkipped ? 'Stop skip' : 'Completion'} could not be confirmed. Refresh the route before continuing.`);
     } finally {
       completionSubmissionRunningRef.current = false;
       setIsCompletingStop(false);
@@ -6375,7 +6409,7 @@ function DriverApp() {
         setMessage(finishResult.kind === 'queued' || finishResult.monitoringMode !== 'stopped' ? finishResult.message : null);
       }
       return true;
-    } catch (error) {
+    } catch {
       if (routeSessionDeactivated) {
         try {
           await continuousLocationStreamService.stopLocationUpdates(CONTINUOUS_LOCATION_TASK_NAME);
@@ -6385,8 +6419,7 @@ function DriverApp() {
         setDeliveryStartResult(null);
         setScreen('mainTabs');
       }
-      const errorMessage = error instanceof Error && error.message.trim() !== '' ? error.message : 'unknown error';
-      setMessage(`Route completion could not be finalized: ${errorMessage}`);
+      setMessage('Route completion could not be confirmed. Refresh My Routes to check its status.');
       return false;
     } finally {
       releaseRouteFinish();
@@ -6802,6 +6835,7 @@ function DriverApp() {
                 ]}
               >
                 <ScrollView
+                  ref={standardScrollRef}
                   bounces={screen !== 'mainTabs'}
                   contentContainerStyle={[
                     styles.container,
@@ -7935,12 +7969,8 @@ function RouteSessionScreen({
   const currentTaskRouteCompletionEta = remainingRouteEta === null || remainingRouteEta.estimatedCompletionAt === null
     ? null
     : formatAssignedRouteEta(remainingRouteEta.estimatedCompletionAt, route.timezone);
-  const currentTaskEtaFailure = etaSnapshot?.status === 'FAILED'
-    ? (etaSnapshot.failureMessage?.trim() || 'ETA unavailable')
-    : null;
   const showRouteEtaRows = !isPickupTask
-    && etaSnapshot !== null
-    && (etaSnapshot.status === 'READY' || etaSnapshot.status === 'FAILED');
+    && etaSnapshot?.status === 'READY';
   const primaryProgressAction = routeStatus === 'active' && allStopsCompleted
     ? { disabled: isFinishingRoute, label: companyReturnCopy.finish, loading: isFinishingRoute, onPress: onFinishRoute }
     : null;
@@ -8049,18 +8079,12 @@ function RouteSessionScreen({
           )}
           {showRouteEtaRows ? (
             <View style={styles.routeSessionEtaRows}>
-              {currentTaskEtaFailure !== null ? (
-                <Text style={styles.currentTaskEtaWarningText}>{currentTaskEtaFailure}</Text>
-              ) : (
-                <>
-                  {currentTaskNextStopEta !== null ? (
-                    <Text style={styles.currentTaskEtaText}>Estimated arrival time at next stop: {currentTaskNextStopEta}</Text>
-                  ) : null}
-                  {currentTaskRouteCompletionEta !== null ? (
-                    <Text style={styles.currentTaskEtaText}>Estimated completion time: {currentTaskRouteCompletionEta}</Text>
-                  ) : null}
-                </>
-              )}
+              {currentTaskNextStopEta !== null ? (
+                <Text style={styles.currentTaskEtaText}>Estimated arrival time at next stop: {currentTaskNextStopEta}</Text>
+              ) : null}
+              {currentTaskRouteCompletionEta !== null ? (
+                <Text style={styles.currentTaskEtaText}>Estimated completion time: {currentTaskRouteCompletionEta}</Text>
+              ) : null}
             </View>
           ) : null}
         </View>
@@ -9140,7 +9164,7 @@ function ProofCameraScreen({
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Camera capture failed.';
       console.warn(`[proof-camera] ${message}`);
-      setCameraError(message);
+      setCameraError('Could not take this photo. Try again.');
     } finally {
       setIsTakingPhoto(false);
     }
@@ -9174,7 +9198,7 @@ function ProofCameraScreen({
         onMountError={(event) => {
           const message = event.message || 'Camera could not start.';
           console.warn(`[proof-camera] ${message}`);
-          setCameraError(message);
+          setCameraError('Camera could not start. Reopen the camera or use Gallery.');
         }}
         ref={cameraRef}
         style={styles.proofCameraPreview}
@@ -10360,11 +10384,6 @@ const styles = StyleSheet.create({
   },
   currentTaskEtaText: {
     color: '#1d4ed8',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  currentTaskEtaWarningText: {
-    color: '#b45309',
     fontSize: 12,
     fontWeight: '800',
   },

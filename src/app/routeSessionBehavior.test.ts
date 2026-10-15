@@ -153,10 +153,10 @@ describe('route session current task behavior', () => {
     assert.match(componentSource, /const remainingRouteEta = etaSnapshot\?\.remainingRouteEta \?\? null/u);
     assert.match(componentSource, /const currentTaskNextStopEta = nextStopEta === null[\s\S]*formatAssignedRouteEta\(nextStopEta\.estimatedArrivalAt, route\.timezone\)/u);
     assert.match(componentSource, /const currentTaskRouteCompletionEta = remainingRouteEta === null[\s\S]*formatAssignedRouteEta\(remainingRouteEta\.estimatedCompletionAt, route\.timezone\)/u);
-    assert.match(componentSource, /const currentTaskEtaFailure = etaSnapshot\?\.status === 'FAILED'[\s\S]*ETA unavailable/u);
-    assert.match(componentSource, /const showRouteEtaRows = !isPickupTask[\s\S]*etaSnapshot !== null[\s\S]*etaSnapshot\.status === 'READY' \|\| etaSnapshot\.status === 'FAILED'/u);
+    assert.doesNotMatch(componentSource, /currentTaskEtaFailure|failureMessage/u);
+    assert.match(componentSource, /const showRouteEtaRows = !isPickupTask[\s\S]*etaSnapshot\?\.status === 'READY'/u);
     assert.match(componentSource, /<View style=\{styles\.routeActionRow\}>[\s\S]*label=\{singleCompletion \? "Complete Delivery" : "Arrive"\}[\s\S]*label="Navigate"[\s\S]*<\/View>[\s\S]*showRouteEtaRows \? \(/u);
-    assert.match(componentSource, /currentTaskEtaFailure !== null \? \([\s\S]*currentTaskEtaWarningText[\s\S]*\) : \(\s*<>[\s\S]*currentTaskNextStopEta !== null/u);
+    assert.match(componentSource, /showRouteEtaRows \? \([\s\S]*currentTaskNextStopEta !== null/u);
     assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Estimated arrival time at next stop: \{currentTaskNextStopEta\}<\/Text>/u);
     assert.match(componentSource, /<Text style=\{styles\.currentTaskEtaText\}>Estimated completion time: \{currentTaskRouteCompletionEta\}<\/Text>/u);
     assert.doesNotMatch(componentSource, /Next stop:|Route complete:|currentTaskNextStopDistance|currentTaskRouteCompletionDistance/u);
@@ -203,9 +203,9 @@ describe('route session current task behavior', () => {
     const arrivedSource = appSource.slice(arrivedBegin, arrivedEnd);
 
     assert.match(arrivedSource, /const pickupStopLabel = pickupStop === undefined \? 'the next stop' : `Stop \$\{pickupStop\.sequence\}`/u);
-    assert.match(arrivedSource, /let pickupMessage = `Store Pickup completed\. Continue to \$\{pickupStopLabel\}\.`/u);
-    assert.match(arrivedSource, /if \(result\.kind === 'queued'\) \{[\s\S]*pickupMessage = `Store Pickup saved offline\. Continue to \$\{pickupStopLabel\} while syncing\.`/u);
-    assert.match(arrivedSource, /if \(result\.requiresRouteLookup === true\) \{[\s\S]*setRouteRecoveryRefreshReason\('driver_access_expired'\);[\s\S]*pickupMessage = 'Store Pickup saved offline\. Driver access expired, so route assignments are refreshing\.'/u);
+    assert.match(arrivedSource, /let pickupMessage: string \| null = null/u);
+    assert.match(arrivedSource, /if \(result\.kind === 'queued'\) \{[\s\S]*pickupMessage = `Pickup saved on this device\. Continue to \$\{pickupStopLabel\}\.`/u);
+    assert.match(arrivedSource, /if \(result\.requiresRouteLookup === true\) \{[\s\S]*setRouteRecoveryRefreshReason\('driver_access_expired'\);[\s\S]*pickupMessage = 'Pickup saved on this device\. Refreshing route access\.'/u);
     assert.match(arrivedSource, /setMessage\(pickupMessage\);/u);
     assert.doesNotMatch(arrivedSource, /setMessage\('Store Pickup queued[\s\S]*setMessage\('Store Pickup completed/u);
   });

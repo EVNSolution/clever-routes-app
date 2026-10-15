@@ -64,6 +64,17 @@ describe('notification action behavior', () => {
     assert.doesNotMatch(appRootSource, /Active route session restored\./u);
   });
 
+  it('keeps notification navigation outcomes without repeating successful refresh messages', () => {
+    const notificationSource = appRootSource.slice(
+      appRootSource.indexOf('const { data, openRequested } = pendingDriverRouteNotification'),
+      appRootSource.indexOf('const retryPendingSubmissionsAfterNetworkRecovery'),
+    );
+    assert.doesNotMatch(notificationSource, /Assigned route loaded\.|Updated route loaded\.|Assigned routes are up to date\.|The removed assignment is no longer shown/u);
+    assert.match(notificationSource, /navigation === 'open_route'[\s\S]*setScreen\('routeSession'\);[\s\S]*setMessage\(null\);/u);
+    assert.match(notificationSource, /navigation === 'active_route_protected'[\s\S]*review the new assignment from My Routes/u);
+    assert.match(notificationSource, /navigation === 'target_unavailable'[\s\S]*assignment is no longer available/u);
+  });
+
   it('routes foreground-service action links into the arrival action handler', () => {
     const linkSource = appRootSource.slice(
       appRootSource.indexOf('const handleUrl = (url: string | null)'),
